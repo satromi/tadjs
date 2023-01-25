@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>JS Test</title>
+    <script src="start.js"></script>
+    <script src="encoding.min.js"></script>
+    <script src="ecl_array.js"></script>
+</head>
+<body >
+    <div style="height:500px;width:500px;" ondrop="onDrop(event);" ondragover="onDragOver(event);">
+        <input type="file" id="inputfile" onchange="onAddFile(event);" >
+        <p id="BainryInfo"></p>
+        <textarea rows="30" cols="80" id="tadDumpView" style="width:600px;font-family: Consolas, 'Courier New', Courier, Monaco, monospace;font-size:14px;" readonly>
+        </textarea>
+        <br>
+        <input type="button" value="Save" onclick="save()">
+        <input type="button" value="Test" onclick="ohayou()">  
+        <br>
+        <p id="tadTextView"></p>
+      </div>
+</body>
+</html>
