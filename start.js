@@ -1,5 +1,11 @@
 
 
+var ctx;
+var textNest = 0;
+var textCharList = new Array();
+var textCharPoint = new Array();
+var textFontSize = 9.6;
+
 // 特殊文字コードの定義
 const TNULL	    	= 0x0000
 const TC_TAB	    = 0x0009
@@ -118,43 +124,72 @@ function tadVer(tadSeg){
 
 }
 
-function tsText(tadSeg){
-    console.log('view\r\n');
-    console.log("left " + IntToHex((tadSeg[0]),4).replace('0x',''));
-    console.log("top " + IntToHex((tadSeg[1]),4).replace('0x',''));
-    console.log("right " + IntToHex((tadSeg[2]),4).replace('0x',''));
-    console.log("bottom " + IntToHex((tadSeg[3]),4).replace('0x',''));
-    console.log('draw\r\n');
-    console.log("left   " + IntToHex((tadSeg[4]),4).replace('0x',''));
-    console.log("top    " + IntToHex((tadSeg[5]),4).replace('0x',''));
-    console.log("right  " + IntToHex((tadSeg[6]),4).replace('0x',''));
-    console.log("bottom " + IntToHex((tadSeg[7]),4).replace('0x',''));
-    console.log("h_unit " + units(tadSeg[8]));
-    console.log("v_unit " + units(tadSeg[9]));
-    console.log("lang   " + IntToHex((tadSeg[10]),4).replace('0x',''));
-    console.log("bgpat  " + IntToHex((tadSeg[11]),4).replace('0x',''));
+function tsTextStart(tadSeg){
+    textNest++;
+    textCharList.push('');
+
+    var viewX = Number(tadSeg[0]);
+    var viewY = Number(tadSeg[1]);
+    var viewW = Number(tadSeg[2]) - viewX;
+    var viewH = Number(tadSeg[3]) - viewY;  
+    var drawX = Number(tadSeg[4]);
+    var drawY = Number(tadSeg[5]);
+    var drawW = Number(tadSeg[6]) - drawX;
+    var drawH = Number(tadSeg[7]) - drawY;
+
+    console.debug('view\r\n');
+    console.debug("left " + IntToHex((tadSeg[0]),4).replace('0x',''));
+    console.debug("top " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("right " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[3]),4).replace('0x',''));
+    console.debug('draw\r\n');
+    console.debug("left   " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("top    " + IntToHex((tadSeg[5]),4).replace('0x',''));
+    console.debug("right  " + IntToHex((tadSeg[6]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[7]),4).replace('0x',''));
+    console.debug("h_unit " + units(tadSeg[8]));
+    console.debug("v_unit " + units(tadSeg[9]));
+    console.debug("lang   " + IntToHex((tadSeg[10]),4).replace('0x',''));
+    console.debug("bgpat  " + IntToHex((tadSeg[11]),4).replace('0x',''));
+
+    textCharPoint.push([viewX,viewY,viewW,viewH,drawX,drawY,drawW,drawH]);
+}
+
+function tsTextEnd(tadSeg){
+
+    console.log("Text      : " + textCharList[textNest-1]);
+    console.log("TextPoint : " + textCharPoint[textNest-1][0],textCharPoint[textNest-1][1]);
+    
+    var textFontSet = textFontSize + 'px serif';
+    ctx.fillStyle = "black";
+    ctx.font = textFontSet;
+    ctx.fillText(textCharList[textNest-1],textCharPoint[textNest-1][0],textCharPoint[textNest-1][1]);
+
+    textCharList.pop();
+    textCharPoint.pop();
+    textNest--;
 }
 
 function tadSizeOfPaperSetFusen(segLen, tadSeg){
     if(segLen < Number(0x000E)){
         return;
     }
-    console.log("length " + IntToHex((tadSeg[1]),4).replace('0x',''));
-    console.log("width  " + IntToHex((tadSeg[2]),4).replace('0x',''));
-    console.log("top    " + IntToHex((tadSeg[3]),4).replace('0x',''));
-    console.log("bottom " + IntToHex((tadSeg[4]),4).replace('0x',''));
-    console.log("left   " + IntToHex((tadSeg[5]),4).replace('0x',''));
-    console.log("right  " + IntToHex((tadSeg[6]),4).replace('0x',''));
+    console.debug("length " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("width  " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("top    " + IntToHex((tadSeg[3]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("left   " + IntToHex((tadSeg[5]),4).replace('0x',''));
+    console.debug("right  " + IntToHex((tadSeg[6]),4).replace('0x',''));
 }
 
 function tadSizeOfMarginSetFusen(segLen, tadSeg){
     if(segLen < Number(0x000A)){
         return;
     }
-    console.log("top    " + IntToHex((tadSeg[1]),4).replace('0x',''));
-    console.log("bottom " + IntToHex((tadSeg[2]),4).replace('0x',''));
-    console.log("left   " + IntToHex((tadSeg[3]),4).replace('0x',''));
-    console.log("right  " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("top    " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("left   " + IntToHex((tadSeg[3]),4).replace('0x',''));
+    console.debug("right  " + IntToHex((tadSeg[4]),4).replace('0x',''));
 }
 
 function tadPageSetFusen(segLen, tadSeg){
@@ -184,7 +219,36 @@ function tadRulerSetFusen(segLen, tadSeg){
     }
 }
 
-function tadFontSetFusen(setLen, tadSeg){
+function tadFontNameSetFusen(segLen,tadSeg){
+    if(segLen < Number(0x0004)){
+        return;
+    }
+    for(var offsetLen=4;offsetLen<tadSeg.length;offsetLen++){
+        console.log(charTronCode(tadSeg[offsetLen]));
+    }
+}
+
+function tadFontSizeSetFusen(segLen,tadSeg){
+
+    var tadSize = ("0000000000000000" + tadSeg[1].toString(2)).slice( -16 );
+    
+    var U1 = 16384;
+    var U2 = 32768;
+    var U3 = 49152;
+    var sizeMask = 16383;
+    
+
+    if(tadSeg[1] & U2){
+        textFontSize = (tadSeg[1] & sizeMask) / 20;
+        console.debug("ptsize  " + textFontSize );
+    } else if (tadSize & U1){
+        console.debug("Qsize   " + tadSize);
+    }
+
+
+}
+
+function tadFontSetFusen(segLen, tadSeg){
     var SubID = tadSeg[0];
 
     console.log("subID_mode " + IntToHex((SubID),4).replace('0x',''));
@@ -194,6 +258,7 @@ function tadFontSetFusen(setLen, tadSeg){
         console.log("フォント属性指定付箋");
     } else if(SubID === Number(0x0200)){
         console.log("文字サイズ指定付箋");
+        tadFontSizeSetFusen(segLen,tadSeg);
     } else if(SubID === Number(0x0300)){
         console.log("文字拡大／縮小指定付箋");
     } else if(SubID === Number(0x0400)){
@@ -209,17 +274,17 @@ function tadFontSetFusen(setLen, tadSeg){
 
 function tsFig(tadSeg){
     // view
-    console.log("left   " + IntToHex((tadSeg[0]),4).replace('0x',''));
-    console.log("top    " + IntToHex((tadSeg[1]),4).replace('0x',''));
-    console.log("right  " + IntToHex((tadSeg[2]),4).replace('0x',''));
-    console.log("bottom " + IntToHex((tadSeg[3]),4).replace('0x',''));
+    console.debug("left   " + IntToHex((tadSeg[0]),4).replace('0x',''));
+    console.debug("top    " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("right  " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[3]),4).replace('0x',''));
     // draw
-    console.log("left   " + IntToHex((tadSeg[4]),4).replace('0x',''));
-    console.log("top    " + IntToHex((tadSeg[5]),4).replace('0x',''));
-    console.log("right  " + IntToHex((tadSeg[6]),4).replace('0x',''));
-    console.log("bottom " + IntToHex((tadSeg[7]),4).replace('0x',''));
-    console.log("h_unit " + units(tadSeg[8]));
-    console.log("v_unit " + units(tadSeg[9]));
+    console.debug("left   " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("top    " + IntToHex((tadSeg[5]),4).replace('0x',''));
+    console.debug("right  " + IntToHex((tadSeg[6]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[7]),4).replace('0x',''));
+    console.debug("h_unit " + units(tadSeg[8]));
+    console.debug("v_unit " + units(tadSeg[9]));
 }
 
 
@@ -227,14 +292,31 @@ function tsFigRectAngleDraw(segLen, tadSeg){
     if(segLen < Number(0x0012)){
         return;
     }
-    console.log("l_atr  " + IntToHex((tadSeg[1]),4).replace('0x',''));
-    console.log("l_pat  " + IntToHex((tadSeg[2]),4).replace('0x',''));
-    console.log("f_pat  " + IntToHex((tadSeg[3]),4).replace('0x',''));
-    console.log("angle  " + IntToHex((tadSeg[4]),4).replace('0x',''));
-    console.log("left   " + IntToHex((tadSeg[5]),4).replace('0x',''));
-    console.log("top    " + IntToHex((tadSeg[6]),4).replace('0x',''));
-    console.log("right  " + IntToHex((tadSeg[7]),4).replace('0x',''));
-    console.log("bottom " + IntToHex((tadSeg[8]),4).replace('0x',''));
+    var figX = Number(tadSeg[5]);
+    var figY = Number(tadSeg[6]);
+    var figW = Number(tadSeg[7]) - Number(tadSeg[5]);
+    var figH = Number(tadSeg[8]) - Number(tadSeg[6]);
+
+
+    console.debug("l_atr  " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("l_pat  " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("f_pat  " + IntToHex((tadSeg[3]),4).replace('0x',''));
+    console.debug("angle  " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("left   " + IntToHex((tadSeg[5]),4).replace('0x',''));
+    console.debug("top    " + IntToHex((tadSeg[6]),4).replace('0x',''));
+    console.debug("right  " + IntToHex((tadSeg[7]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[8]),4).replace('0x',''));
+
+
+
+    ctx.beginPath();
+    ctx.rect(figX , figY, figW, figH);
+    ctx.fillStyle = 'white';
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'black';
+    ctx.stroke();
+
 
     return;
 }
@@ -243,22 +325,38 @@ function tsFigPolygonDraw(segLen, tadSeg){
     if(segLen < Number(0x0016)){
         return;
     }
-    console.log("l_atr  " + IntToHex((tadSeg[1]),4).replace('0x',''));
-    console.log("l_pat  " + IntToHex((tadSeg[2]),4).replace('0x',''));
-    console.log("f_pat  " + IntToHex((tadSeg[3]),4).replace('0x',''));
-    console.log("round  " + IntToHex((tadSeg[4]),4).replace('0x',''));
-    console.log("np     " + IntToHex((tadSeg[5]),4).replace('0x',''));
+    console.debug("l_atr  " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("l_pat  " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("f_pat  " + IntToHex((tadSeg[3]),4).replace('0x',''));
+    console.debug("round  " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("np     " + IntToHex((tadSeg[5]),4).replace('0x',''));
+    console.debug("x      " + IntToHex((tadSeg[6]),4).replace('0x',''));
+    console.debug("y      " + IntToHex((tadSeg[7]),4).replace('0x',''));
+
+    var x = Number(tadSeg[6]);
+    var y = Number(tadSeg[7]);
+
+    ctx.strokeStyle = 'black';
+    ctx.beginPath();
+    ctx.moveTo(x,y);
 
     var polygonPoint = 'polygon ';
-    for(var offsetLen=6;offsetLen<tadSeg.length;offsetLen++){
+    for(var offsetLen=8;offsetLen<tadSeg.length;offsetLen++){
         if(offsetLen % 2 === 0){
             polygonPoint += ' x:';
+            x = Number(tadSeg[offsetLen]);
         } else {
             polygonPoint += ' y:';
+            y = Number(tadSeg[offsetLen]);
+            ctx.lineTo(x,y);
         }
         polygonPoint += IntToHex((tadSeg[offsetLen]),4).replace('0x','');
     }
     console.log(polygonPoint);
+    ctx.closePath();
+    ctx.stroke();
+
+
     return;
 }
 
@@ -266,19 +364,31 @@ function tsFigLineDraw(segLen, tadSeg){
     if(segLen < Number(0x000E)){
         return;
     }
-    console.log("l_atr  " + IntToHex((tadSeg[1]),4).replace('0x',''));
-    console.log("l_pat  " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("l_atr  " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("l_pat  " + IntToHex((tadSeg[2]),4).replace('0x',''));
+
+    var x = Number(tadSeg[3]);
+    var y = Number(tadSeg[4]);
+
+    ctx.strokeStyle = 'black';
+    ctx.beginPath();
+    ctx.moveTo(x,y);
 
     var linePoint = 'line   ';
-    for(var offsetLen=3;offsetLen<tadSeg.length;offsetLen++){
+    for(var offsetLen=5;offsetLen<tadSeg.length;offsetLen++){
         if(offsetLen % 2 === 0){
             linePoint += ' y:';
+            y = Number(tadSeg[offsetLen]);
+            ctx.lineTo(x,y);
         } else {
             linePoint += ' x:';
+            x = Number(tadSeg[offsetLen]);
         }
         linePoint += IntToHex((tadSeg[offsetLen]),4).replace('0x','');
     }
     console.log(linePoint);
+
+    ctx.stroke();
     return;
 }
 
@@ -286,13 +396,13 @@ function tsFigEllipticalArcDraw(segLen, tadSeg){
     if(segLen < Number(0x0018)){
         return;
     }
-    console.log("l_atr  " + IntToHex((tadSeg[1]),4).replace('0x',''));
-    console.log("l_pat  " + IntToHex((tadSeg[2]),4).replace('0x',''));
-    console.log("angle  " + IntToHex((tadSeg[3]),4).replace('0x',''));
-    console.log("left   " + IntToHex((tadSeg[4]),4).replace('0x',''));
-    console.log("top    " + IntToHex((tadSeg[5]),4).replace('0x',''));
-    console.log("right  " + IntToHex((tadSeg[6]),4).replace('0x',''));
-    console.log("bottom " + IntToHex((tadSeg[7]),4).replace('0x',''));
+    console.debug("l_atr  " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("l_pat  " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("angle  " + IntToHex((tadSeg[3]),4).replace('0x',''));
+    console.debug("left   " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("top    " + IntToHex((tadSeg[5]),4).replace('0x',''));
+    console.debug("right  " + IntToHex((tadSeg[6]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[7]),4).replace('0x',''));
 
     var linePoint = 'line   ';
     for(var offsetLen=8;offsetLen<tadSeg.length;offsetLen++){
@@ -345,9 +455,10 @@ function tadPerse(segID, segLen, tadSeg){
         tadVer(tadSeg);
     } else if(segID === Number(TS_TEXT)){
         console.log('文章開始セグメント');
-        tsText(tadSeg);
+        tsTextStart(tadSeg);
     } else if(segID === Number(TS_TEXTEND)){
         console.log('文章終了セグメント');
+        tsTextEnd(tadSeg);
     } else if(segID === Number(TS_FIG)){
         console.log('図形開始セグメント');
         tsFig(tadSeg);
@@ -369,7 +480,7 @@ function tadPerse(segID, segLen, tadSeg){
         tadRulerSetFusen(segLen, tadSeg);
     } else if(segID === Number(TS_TFONT)){
         console.log('文字指定付箋');
-        tadFontSetFusen(setLen, tadSeg);
+        tadFontSetFusen(segLen, tadSeg);
     } else if(segID === Number(TS_TCHAR)){
         console.log('特殊文字指定付箋');
     } else if(segID === Number(TS_TATTR)){
@@ -400,7 +511,6 @@ function tadPerse(segID, segLen, tadSeg){
     } else if(segID === Number(TS_FAPPL)){
         console.log('図形アプリケーション指定付箋');
     }
-
 }
 
 function charTronCode(char){
@@ -453,9 +563,18 @@ function charTronCode(char){
     return text;
 }
 
+function canvasInit() {
+    var canvas = document.getElementById('canvas');
+    if (canvas.getContext) {
+        ctx = canvas.getContext('2d');
+    }    
+}
+
 function onAddFile(event) {
     var files;
     var reader = new FileReader();
+
+    canvasInit();
     
     if(event.target.files){
         files = event.target.files;
@@ -503,9 +622,9 @@ function onAddFile(event) {
         var i2 = 0;
 
         while(i2<1000000){
+            var P4 = '';
             if(i2 >= raw.length) break;
             var raw16 = data_view.getUint16(i2,true);
-            //console.log(raw16);
 
             if (raw16 === Number(TNULL)) {
                 // 終端
@@ -589,9 +708,13 @@ function onAddFile(event) {
                 var char = charTronCode(raw8Plus1)
                 Ascii2 += char;
                 P3 += char;
+                P4 += char;
 
                 i2 += 2;
+
             }
+
+            textCharList[textNest-1] += P4;
 
 
             P2 += '  ' + Ascii2 +'\r\n';
@@ -607,7 +730,7 @@ function onAddFile(event) {
                 Ascii = '   ' +Ascii;
             }
             P += '  ' +Ascii;
-        }    
+        }
     
     document.getElementById('BainryInfo').innerHTML = 
         'This File Size : ' + setComma(raw.length) +' Byte<br>Maximum displaye Size : 1000KB(1,000,000 Byte)';            
@@ -615,7 +738,7 @@ function onAddFile(event) {
     
     document.getElementById('tadTextView').innerHTML = htmlspecialchars(P3) ;
     };
-    
+
     if (files[0]){    
         reader.readAsArrayBuffer(files[0]); 
         document.getElementById("inputfile").value = '';
