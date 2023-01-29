@@ -1,5 +1,8 @@
+/**
+    TADjs
+*/
 
-
+// global
 var ctx;
 var textNest = 0;
 var textCharList = new Array();
@@ -54,26 +57,38 @@ const TS_FPAGE  	= 0xffb5		// 図形ページ割り付け指定付箋
 const TS_FMEMO  	= 0xffbe		// 図形メモ指定付箋
 const TS_FAPPL  	= 0xffbf		// 図形アプリケーション指定付箋
 
-
-
+/**
+ * Unit計算
+ * @param {0x0000} unit 
+ * @returns 
+ */
 function units(unit){
     if(unit&0x8000) unit|= ~0xffff;
     return unit;
 }
 
-function ohayou() {
-    alert("Hello!");
-}
-
+/**
+ * onDrag
+ * @param {Event} event 
+ */
 function onDragOver(event){ 
     event.preventDefault(); 
 } 
-    
+
+/**
+ * onDrop
+ * @param {Event} event 
+ */
 function onDrop(event){
     onAddFile(event);
     event.preventDefault(); 
 }  
 
+/**
+ * HTML tag文字列変換
+ * @param {char} str 
+ * @returns 
+ */
 function htmlspecialchars(str){
     return (str + '').replace(/&/g,'&amp;')
     .replace(/"/g,'&quot;')
@@ -82,6 +97,12 @@ function htmlspecialchars(str){
     .replace(/>/g,'&gt;'); 
 }
 
+/**
+ * IntToHex
+ * @param {int} value 
+ * @param {int} digits 
+ * @returns 
+ */
 function IntToHex(value,digits){
     var result = value.toString(16).toUpperCase();
     var len = result.length;
@@ -93,6 +114,11 @@ function IntToHex(value,digits){
     return '0x' + result; 
 }
 
+/**
+ * カンマセット
+ * @param {char} S 
+ * @returns 
+ */
 function setComma(S){
     var result =''; 
     var cnt = 0; 
@@ -110,20 +136,30 @@ function setComma(S){
     return result;
 }
 
-  // エンディアン変換
+/**
+ * エンディアン変換（little2big）
+ * @param {int} n 
+ * @returns 
+ */
 function changeEndian(n){
     var r = n / 0x100;
     r += (n % 0x100) * 0x100;
     return r;
 }
 
+// 管理情報セグメントを処理
 function tadVer(tadSeg){
     if(tadSeg[0] === Number(0x0000)){
         console.log("TadVer " + IntToHex((tadSeg[2]),4).replace('0x',''));
     }
 
 }
-
+/**
+ * 文章開始セグメントを処理
+ * 文章開始セグメントは複数入れ子になるため、テキストの配列を追加して以後のテキストを格納。
+ * 文章終了セグメントで一括してテキストを表示
+ * @param {0x0000[]} tadSeg 
+ */
 function tsTextStart(tadSeg){
     textNest++;
     textCharList.push('');
@@ -155,6 +191,11 @@ function tsTextStart(tadSeg){
     textCharPoint.push([viewX,viewY,viewW,viewH,drawX,drawY,drawW,drawH]);
 }
 
+/**
+ * 文章終了セグメントを処理
+ * 文章開始セグメント以降格納されていたテキストを一括して表示
+ * @param {0x0000[]} tadSeg 
+ */
 function tsTextEnd(tadSeg){
 
     console.log("Text      : " + textCharList[textNest-1]);
@@ -170,6 +211,12 @@ function tsTextEnd(tadSeg){
     textNest--;
 }
 
+/**
+ * 用紙指定付箋を処理
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
 function tadSizeOfPaperSetFusen(segLen, tadSeg){
     if(segLen < Number(0x000E)){
         return;
@@ -182,6 +229,12 @@ function tadSizeOfPaperSetFusen(segLen, tadSeg){
     console.debug("right  " + IntToHex((tadSeg[6]),4).replace('0x',''));
 }
 
+/**
+ * マージン指定付箋を処理
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
 function tadSizeOfMarginSetFusen(segLen, tadSeg){
     if(segLen < Number(0x000A)){
         return;
@@ -192,6 +245,11 @@ function tadSizeOfMarginSetFusen(segLen, tadSeg){
     console.debug("right  " + IntToHex((tadSeg[4]),4).replace('0x',''));
 }
 
+/**
+ * ページ指定付箋共通から付箋を判定
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ */
 function tadPageSetFusen(segLen, tadSeg){
     var SubID = tadSeg[0];
 
@@ -206,6 +264,11 @@ function tadPageSetFusen(segLen, tadSeg){
 
 }
 
+/**
+ * 行書式指定付箋から付箋を判定
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ */
 function tadRulerSetFusen(segLen, tadSeg){
     var SubID = tadSeg[0];
 
@@ -217,6 +280,9 @@ function tadRulerSetFusen(segLen, tadSeg){
     } else if(SubID === Number(0x0200)){
         console.log("タブ書式指定付箋");
     }
+    // TODO: フィールド書式指定付箋
+    // TODO: 文字方向指定付箋
+    // TODO: 行頭移動指定付箋
 }
 
 function tadFontNameSetFusen(segLen,tadSeg){
@@ -228,6 +294,11 @@ function tadFontNameSetFusen(segLen,tadSeg){
     }
 }
 
+/**
+ * 文字サイズ指定付箋を処理
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ */
 function tadFontSizeSetFusen(segLen,tadSeg){
 
     var tadSize = ("0000000000000000" + tadSeg[1].toString(2)).slice( -16 );
@@ -241,13 +312,18 @@ function tadFontSizeSetFusen(segLen,tadSeg){
     if(tadSeg[1] & U2){
         textFontSize = (tadSeg[1] & sizeMask) / 20;
         console.debug("ptsize  " + textFontSize );
-    } else if (tadSize & U1){
+    } else if (tadSeg[1] & U1){
         console.debug("Qsize   " + tadSize);
     }
 
 
 }
 
+/**
+ * 文字指定付箋共通を判定
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ */
 function tadFontSetFusen(segLen, tadSeg){
     var SubID = tadSeg[0];
 
@@ -272,6 +348,10 @@ function tadFontSetFusen(segLen, tadSeg){
     }
 }
 
+/**
+ * 図形開始セグメントを処理
+ * @param {0x0000[]} tadSeg 
+ */
 function tsFig(tadSeg){
     // view
     console.debug("left   " + IntToHex((tadSeg[0]),4).replace('0x',''));
@@ -287,7 +367,12 @@ function tsFig(tadSeg){
     console.debug("v_unit " + units(tadSeg[9]));
 }
 
-
+/**
+ * 図形要素セグメント 長方形セグメントを描画
+ * @param {int} segLen 
+ * @param {{0x0000[]} tadSeg 
+ * @returns 
+ */
 function tsFigRectAngleDraw(segLen, tadSeg){
     if(segLen < Number(0x0012)){
         return;
@@ -321,6 +406,12 @@ function tsFigRectAngleDraw(segLen, tadSeg){
     return;
 }
 
+/**
+ * 図形セグメント 多角形セグメントを描画
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
 function tsFigPolygonDraw(segLen, tadSeg){
     if(segLen < Number(0x0016)){
         return;
@@ -360,6 +451,12 @@ function tsFigPolygonDraw(segLen, tadSeg){
     return;
 }
 
+/**
+ * 図形セグメント 直線セグメントを描画
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
 function tsFigLineDraw(segLen, tadSeg){
     if(segLen < Number(0x000E)){
         return;
@@ -392,6 +489,12 @@ function tsFigLineDraw(segLen, tadSeg){
     return;
 }
 
+/**
+ * 図形セグメント 楕円弧セグメントを描画
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
 function tsFigEllipticalArcDraw(segLen, tadSeg){
     if(segLen < Number(0x0018)){
         return;
@@ -417,6 +520,11 @@ function tsFigEllipticalArcDraw(segLen, tadSeg){
     return;
 }
 
+/**
+ * 図形要素セグメントを判定
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ */
 function tsFigDraw(segLen, tadSeg){
     var SubID = tadSeg[0];
 
@@ -448,6 +556,12 @@ function tsFigDraw(segLen, tadSeg){
     }
 }
 
+/**
+ * TADパーサー TADセグメントを判定
+ * @param {0x0000} segID 
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ */
 function tadPerse(segID, segLen, tadSeg){
     console.log("tadSeg " + IntToHex((segID),4).replace('0x',''));
     if(segID === Number(TS_INFO)){
@@ -513,6 +627,12 @@ function tadPerse(segID, segLen, tadSeg){
     }
 }
 
+/**
+ * TRONコードを判定
+ * TODO: 現状はTRON仕様日本文字コードの第1面 Aゾーン(JIS X 0208)のみ対応
+ * @param {char} char 
+ * @returns 
+ */
 function charTronCode(char){
     let buffer = new ArrayBuffer(2);
     let dv = new DataView(buffer);
@@ -524,6 +644,9 @@ function charTronCode(char){
     var int2 = Number(dv.getUint8(1,false));
 
     var text = '';
+
+    // TRONコード 第1面 Aゾーン(JIS X 0208)をjsのUNICODEに変換
+    // TODO: JIS2UNICODEが上手く動作しないため、JISをSJISに変換後、SJI2UNICODEを実施
     if((char >= Number(0x2121) && char <= Number(0x227e) )
     || (char >= Number(0x2420) && char <= Number(0x7e7e))){
         if(int1 && 1 >= 1){
@@ -547,22 +670,19 @@ function charTronCode(char){
             from: 'SJIS'
         });
 
-        text = ECL.charset.convert(char, "UTF16", "SJIS");
+        //text = ECL.charset.convert(char, "UTF16", "SJIS");
         text = Encoding.codeToString(unicodeArray);
-        //console.log('SJIS Code: ' + int1 + ' ' + int2);
-        //console.log(text);
-
 
     } else if(char >= Number(0x2320) && char <= Number(0x237f)){
-        //console.log('ASCII Zone');
-        //console.log(char8[1]);
         text = String.fromCharCode(char8[1]);
-        //text = String.fromCharCode(IntToHex(Number(char8[1]),4).replace('0x',''));
 
     }
     return text;
 }
 
+/**
+ * Canvas 描画領域を初期化
+ */
 function canvasInit() {
     var canvas = document.getElementById('canvas');
     if (canvas.getContext) {
@@ -570,6 +690,10 @@ function canvasInit() {
     }    
 }
 
+/**
+ * TADファイル読込処理
+ * @param {event} event 
+ */
 function onAddFile(event) {
     var files;
     var reader = new FileReader();
@@ -745,6 +869,11 @@ function onAddFile(event) {
     }
 }
 
+/**
+ * TAD保存処理
+ * TODO: 未実装
+ * @returns null
+ */
 function save() {
     // テキストエリアより文字列を取得
     const txt = document.getElementById('txt').value;
