@@ -8,6 +8,7 @@ var textNest = 0;
 var textCharList = new Array();
 var textCharPoint = new Array();
 var textFontSize = 9.6;
+var tronCodeMask = new Array();
 
 // 特殊文字コードの定義
 const TNULL	    	= 0x0000
@@ -115,6 +116,37 @@ function IntToHex(value,digits){
 }
 
 /**
+ * 
+ * @param {0x0000} uh 
+ */
+function uh2h(uh){
+    if(uh&0x8000) uh|= ~0xffff;
+    return uh
+}
+
+/**
+ * TADセグメント UH2UB
+ * 呼び出し例
+ *  var tadSeg8 = uh2ub(tadSeg);
+ *  for(var offsetLen=4;offsetLen<tadSeg8.length;offsetLen++){
+ *      console.log(charTronCode(tadSeg8[offsetLen]));
+ *  }
+ * @param {0x0000[]} uh
+ * @returns
+ */
+function uh2ub(uh){
+    let buffer = new ArrayBuffer(2);
+    var ra16db = new DataView(buffer);
+    var tadSeg = new Array();
+    for(var i=0;i<uh.length;i++){
+        ra16db.setUint16(0, uh[i]);
+        tadSeg.push(ra16db.getUint8(0));
+        tadSeg.push(ra16db.getUint8(1));
+    }
+    return tadSeg;
+}
+
+/**
  * カンマセット
  * @param {char} S 
  * @returns 
@@ -147,7 +179,22 @@ function changeEndian(n){
     return r;
 }
 
-// 管理情報セグメントを処理
+/**
+ * UHからUB SubIDを取得
+ * @param {UH} UH 
+ * @returns 
+ */
+function getUBinUH(UH){
+    var SubID = ( UH >> 8);
+    console.log("UB_SubID" + SubID);
+    return SubID;
+}
+
+/**
+ * 管理情報セグメントを処理
+ * ログにバージョン出力
+ * @param {0x0000[]} tadSeg 
+ */
 function tadVer(tadSeg){
     if(tadSeg[0] === Number(0x0000)){
         console.log("TadVer " + IntToHex((tadSeg[2]),4).replace('0x',''));
@@ -163,6 +210,7 @@ function tadVer(tadSeg){
 function tsTextStart(tadSeg){
     textNest++;
     textCharList.push('');
+    tronCodeMask.push(1);
 
     var viewX = Number(tadSeg[0]);
     var viewY = Number(tadSeg[1]);
@@ -198,16 +246,18 @@ function tsTextStart(tadSeg){
  */
 function tsTextEnd(tadSeg){
 
-    console.log("Text      : " + textCharList[textNest-1]);
-    console.log("TextPoint : " + textCharPoint[textNest-1][0],textCharPoint[textNest-1][1]);
+    console.debug("Text      : " + textCharList[textNest-1]);
+    console.debug("TextPoint : " + textCharPoint[textNest-1][0],textCharPoint[textNest-1][1]);
     
     var textFontSet = textFontSize + 'px serif';
     ctx.fillStyle = "black";
     ctx.font = textFontSet;
+    ctx.textBaseline = "top";
     ctx.fillText(textCharList[textNest-1],textCharPoint[textNest-1][0],textCharPoint[textNest-1][1]);
 
     textCharList.pop();
     textCharPoint.pop();
+    tronCodeMask.pop();
     textNest--;
 }
 
@@ -251,13 +301,12 @@ function tadSizeOfMarginSetFusen(segLen, tadSeg){
  * @param {0x0000[]} tadSeg 
  */
 function tadPageSetFusen(segLen, tadSeg){
-    var SubID = tadSeg[0];
+    var UB_SubID = getUBinUH(tadSeg[0]);
 
-    console.log("subID_mode " + IntToHex((SubID),4).replace('0x',''));
-    if(SubID === Number(0x0000)){
+    if(UB_SubID === Number(0x00)){
         console.log("用紙指定付箋");
         tadSizeOfPaperSetFusen(segLen, tadSeg);
-    } else if(SubID === Number(0x0100)){
+    } else if(UB_SubID === Number(0x01)){
         console.log("マージン指定付箋");
         tadSizeOfMarginSetFusen(segLen, tadSeg);
     } 
@@ -270,14 +319,13 @@ function tadPageSetFusen(segLen, tadSeg){
  * @param {0x0000[]} tadSeg 
  */
 function tadRulerSetFusen(segLen, tadSeg){
-    var SubID = tadSeg[0];
+    var UB_SubID = getUBinUH(tadSeg[0]);
 
-    console.log("subID_mode " + IntToHex((SubID),4).replace('0x',''));
-    if(SubID === Number(0x0000)){
+    if(UB_SubID === Number(0x00)){
         console.log("行間隔指定付箋");
-    } else if(SubID === Number(0x0100)){
+    } else if(UB_SubID === Number(0x01)){
         console.log("行揃え指定付箋");
-    } else if(SubID === Number(0x0200)){
+    } else if(UB_SubID === Number(0x02)){
         console.log("タブ書式指定付箋");
     }
     // TODO: フィールド書式指定付箋
@@ -285,11 +333,18 @@ function tadRulerSetFusen(segLen, tadSeg){
     // TODO: 行頭移動指定付箋
 }
 
+/**
+ * フォント指定付箋を処理
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
 function tadFontNameSetFusen(segLen,tadSeg){
     if(segLen < Number(0x0004)){
         return;
     }
-    for(var offsetLen=4;offsetLen<tadSeg.length;offsetLen++){
+    for(var offsetLen=2;offsetLen<tadSeg.length;offsetLen++){
+        console.log(IntToHex((tadSeg[offsetLen]),4).replace('0x',''));
         console.log(charTronCode(tadSeg[offsetLen]));
     }
 }
@@ -325,25 +380,25 @@ function tadFontSizeSetFusen(segLen,tadSeg){
  * @param {0x0000[]} tadSeg 
  */
 function tadFontSetFusen(segLen, tadSeg){
-    var SubID = tadSeg[0];
+    var UB_SubID = getUBinUH(tadSeg[0]);
 
-    console.log("subID_mode " + IntToHex((SubID),4).replace('0x',''));
-    if(SubID === Number(0x0000)){
+    if(UB_SubID === Number(0x00)){
         console.log("フォント指定付箋");
-    } else if(SubID === Number(0x0100)){
+        tadFontNameSetFusen(segLen,tadSeg);
+    } else if(UB_SubID === Number(0x01)){
         console.log("フォント属性指定付箋");
-    } else if(SubID === Number(0x0200)){
+    } else if(UB_SubID === Number(0x02)){
         console.log("文字サイズ指定付箋");
         tadFontSizeSetFusen(segLen,tadSeg);
-    } else if(SubID === Number(0x0300)){
+    } else if(UB_SubID === Number(0x03)){
         console.log("文字拡大／縮小指定付箋");
-    } else if(SubID === Number(0x0400)){
+    } else if(UB_SubID === Number(0x04)){
         console.log("文字間隔指定付箋");
-    } else if(SubID === Number(0x0500)){
+    } else if(UB_SubID === Number(0x05)){
         console.log("文字回転指定付箋");
-    } else if(SubID === Number(0x0600)){
+    } else if(UB_SubID === Number(0x06)){
         console.log("文字カラー指定付箋");
-    } else if(SubID === Number(0x0700)){
+    } else if(UB_SubID === Number(0x07)){
         console.log("文字基準位置移動付箋");
     }
 }
@@ -506,17 +561,42 @@ function tsFigEllipticalArcDraw(segLen, tadSeg){
     console.debug("top    " + IntToHex((tadSeg[5]),4).replace('0x',''));
     console.debug("right  " + IntToHex((tadSeg[6]),4).replace('0x',''));
     console.debug("bottom " + IntToHex((tadSeg[7]),4).replace('0x',''));
+    console.debug("startx " + IntToHex((tadSeg[8]),4).replace('0x',''));
+    console.debug("starty " + IntToHex((tadSeg[9]),4).replace('0x',''));
+    console.debug("endx   " + IntToHex((tadSeg[10]),4).replace('0x',''));
+    console.debug("endy   " + IntToHex((tadSeg[11]),4).replace('0x',''));
 
-    var linePoint = 'line   ';
-    for(var offsetLen=8;offsetLen<tadSeg.length;offsetLen++){
-        if(offsetLen % 2 === 0){
-            linePoint += ' x:';
-        } else {
-            linePoint += ' y:';
-        }
-        linePoint += IntToHex((tadSeg[offsetLen]),4).replace('0x','');
-    }
-    console.log(linePoint);
+    var angle = Number(uh2h(tadSeg[3]));
+    var frameLeft = Number(uh2h(tadSeg[4]));
+    var frameTop = Number(uh2h(tadSeg[5]));
+    var frameRight = Number(uh2h(tadSeg[6]));
+    var frameBottom = Number(uh2h(tadSeg[7]));
+    var startX = Number(uh2h(tadSeg[8]));
+    var startY = Number(uh2h(tadSeg[9]));
+    var endX = Number(uh2h(tadSeg[10]));
+    var endY = Number(uh2h(tadSeg[11]));
+    var radiusX = ( frameRight - frameLeft ) / 2;
+    var radiusY = (frameBottom - frameTop) / 2;
+    var frameCenterX = frameLeft + radiusX;
+    var frameCenterY = frameTop + radiusY;
+    var radianStart = Math.atan2(startY - frameCenterY, startX - frameCenterX)
+    var radianEnd = Math.atan2(endY - frameCenterY, endX - frameCenterX)
+    var radianAngle = angle * Math.PI / 180;
+
+    console.debug(radianAngle);
+    console.debug(frameCenterX);
+    console.debug(frameCenterY);
+    console.debug(startX);
+    console.debug(startY);
+    console.debug(radiusX);
+    console.debug(radiusY);
+    console.debug(radianStart);
+    console.debug(radianEnd);
+
+    ctx.beginPath();
+    ctx.ellipse(frameCenterX, frameCenterY, radiusX, radiusY, radianAngle, radianStart, radianEnd,false);
+    ctx.stroke();
+
     return;
 }
 
@@ -526,33 +606,56 @@ function tsFigEllipticalArcDraw(segLen, tadSeg){
  * @param {0x0000[]} tadSeg 
  */
 function tsFigDraw(segLen, tadSeg){
-    var SubID = tadSeg[0];
-
-    console.log("subID_mode " + IntToHex((SubID),4).replace('0x',''));
-    if(SubID === Number(0x0000)){
-        console.log("長方形");
+    var UB_SubID = getUBinUH(tadSeg[0]);
+    
+    if(UB_SubID === Number(0x00)){
+        console.log("長方形セグメント");
         tsFigRectAngleDraw(segLen, tadSeg);
-    } else if(SubID === Number(0x0100)){
-        console.log("角丸長方形");
-    } else if(SubID === Number(0x0200)){
-        console.log("楕円");
-    } else if(SubID === Number(0x0300)){
-        console.log("扇形");
-    } else if(SubID === Number(0x0400)){
-        console.log("弓形");
-    } else if(SubID === Number(0x0500)){
-        console.log("多角形");
+    // TODO :未対応
+    } else if(UB_SubID === Number(0x01)){
+        console.log("角丸長方形セグメント");
+    // TODO :未対応
+    } else if(UB_SubID === Number(0x02)){
+        console.log("楕円セグメント");
+    // TODO :未対応
+    } else if(UB_SubID === Number(0x03)){
+        console.log("扇形セグメント");
+    // TODO :未対応
+    } else if(UB_SubID === Number(0x04)){
+        console.log("弓形セグメント");
+    } else if(UB_SubID === Number(0x05)){
+        console.log("多角形セグメント");
         tsFigPolygonDraw(segLen, tadSeg);
-    } else if(SubID === Number(0x0600)){
-        console.log("直線");
+    } else if(UB_SubID === Number(0x06)){
+        console.log("直線セグメント");
         tsFigLineDraw(segLen, tadSeg);
-    } else if(SubID === Number(0x0700)){
-        console.log("楕円弧");
+    } else if(UB_SubID === Number(0x07)){
+        console.log("楕円弧セグメント");
         tsFigEllipticalArcDraw(segLen, tadSeg);
-    } else if(SubID === Number(0x0800)){
-        console.log("折れ線");
-    } else if(SubID === Number(0x09900)){
-        console.log("曲線");
+    // TODO :未対応
+    } else if(UB_SubID === Number(0x08)){
+        console.log("折れ線セグメント");
+    // TODO :未対応
+    } else if(UB_SubID === Number(0x09)){
+        console.log("曲線セグメント");
+    }
+}
+
+function tsLinkSegment(segLen, tadSeg){
+    if(segLen < Number(0x001E)){
+        return;
+    }
+    console.debug("left   " + IntToHex((tadSeg[0]),4).replace('0x',''));
+    console.debug("top    " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("right  " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[3]),4).replace('0x',''));
+    console.debug("height " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("chsz   " + IntToHex((tadSeg[5]),4).replace('0x',''));
+    console.debug("dlen   " + IntToHex((tadSeg[14]),4).replace('0x',''));
+
+    var linkRecordData = '';
+    for(var offsetLen=15;offsetLen<tadSeg.length;offsetLen++){
+        linkRecordData += tadSeg[offsetLen];
     }
 }
 
@@ -582,6 +685,7 @@ function tadPerse(segID, segLen, tadSeg){
         console.log('画像セグメント');
     } else if(segID === Number(TS_VOBJ)){
         console.log('仮身セグメント');
+        tsLinkSegment(segLen, tadSeg);
     } else if(segID === Number(TS_DFUSEN)){
         console.log('指定付箋セグメント');
     } else if(segID === Number(TS_FFUSEN)){
@@ -644,6 +748,14 @@ function charTronCode(char){
     var int2 = Number(dv.getUint8(1,false));
 
     var text = '';
+
+    // TRONコード 面切替
+    if((char >= Number(0xfe21) && char <= Number(0xfe7e) )
+    || (char >= Number(0xfe80) && char <= Number(0xfefe))){
+        tronCodeMask[textNest] = char - Number(0xfe21) + 1;
+        console.log("TRON Code面 :" + tronCodeMask[textNest])
+    }
+
 
     // TRONコード 第1面 Aゾーン(JIS X 0208)をjsのUNICODEに変換
     // TODO: JIS2UNICODEが上手く動作しないため、JISをSJISに変換後、SJI2UNICODEを実施
