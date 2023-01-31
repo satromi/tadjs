@@ -761,20 +761,20 @@ function charTronCode(char){
     // TODO: JIS2UNICODEが上手く動作しないため、JISをSJISに変換後、SJI2UNICODEを実施
     if((char >= Number(0x2121) && char <= Number(0x227e) )
     || (char >= Number(0x2420) && char <= Number(0x7e7e))){
-        if(int1 && 1 >= 1){
-            if(int2 <= Number(0x5F)){
-                int2 = int2 + Number(0x1F);
-            } else{
-                int2 = int2 + Number(0x20);
-            }
-        } else{
-            int2 = int2 + Number(0x7E);
+        if(int1 % 2){
+            int1 = ((int1 + 1) / 2) + Number(0x70);
+            int2 = int2 + Number(0x1f);
+        } else {
+            int1 = (int1 / 2) + Number(0x70);
+            int2 = int2 + Number(0x7d);
         }
-        if(int1 <= Number(0x5E)){
-            int1 = (int1 - Number(0x21)) / 2 + Number(0x81);
-        } else{
-            int1 = (int1 - Number(0x21)) / 2 + Number(0xC1);
+        if (int1 >= Number(0xa0)) {
+            int1 = int1 + Number(0x40);
         }
+        if (int2 >= Number(0x7f)) {
+            int2 = int2 + Number(1);
+        }
+        
         //console.log('JIS Zone');
 
         var unicodeArray = Encoding.convert([int1,int2], {
@@ -787,7 +787,6 @@ function charTronCode(char){
 
     } else if(char >= Number(0x2320) && char <= Number(0x237f)){
         text = String.fromCharCode(char8[1]);
-
     }
     return text;
 }
