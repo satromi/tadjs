@@ -58,6 +58,7 @@ const TS_FPAGE  	= 0xffb5		// 図形ページ割り付け指定付箋
 const TS_FMEMO  	= 0xffbe		// 図形メモ指定付箋
 const TS_FAPPL  	= 0xffbf		// 図形アプリケーション指定付箋
 
+
 /**
  * Unit計算
  * @param {0x0000} unit 
@@ -72,7 +73,7 @@ function units(unit){
  * onDrag
  * @param {Event} event 
  */
-function onDragOver(event){ 
+function onDragOver(event){
     event.preventDefault(); 
 } 
 
@@ -240,6 +241,46 @@ function tsTextStart(tadSeg){
 }
 
 /**
+ * 
+ * @param {*} context 
+ * @param {*} text 
+ * @param {*} x
+ * @param {*} y 
+ * @param {*} width 
+ * @param {*} lineHight 
+ * @param {*} align 
+ */
+function fixedFillText(context, text, x, y,width, lineHight, align) {
+
+	var column = [''], line = 0, padding;
+
+	for (var i = 0; i < text.length; i++) {
+		var char = text.charAt(i);
+		if (context.measureText(column[line] + char).width > width) {
+			line++;
+			column[line] = '';
+		}
+		column[line] += char;
+	}
+
+	var padding, lineWidth;
+	for (var i = 0; i < column.length; i++) {
+		var lineWidth = context.measureText(column[i]).width;
+		if (align == 'right') {
+			padding = width - lineWidth;
+		}
+		else if (align == 'center') {
+			padding = (width - lineWidth)/2;
+		}
+		else {
+			padding = 0;
+		}
+		context.fillText(column[i], 0 + padding + x, lineHight * i + y);
+	}
+
+}
+
+/**
  * 文章終了セグメントを処理
  * 文章開始セグメント以降格納されていたテキストを一括して表示
  * @param {0x0000[]} tadSeg 
@@ -249,11 +290,14 @@ function tsTextEnd(tadSeg){
     console.debug("Text      : " + textCharList[textNest-1]);
     console.debug("TextPoint : " + textCharPoint[textNest-1][0],textCharPoint[textNest-1][1]);
     
+    
+
     var textFontSet = textFontSize + 'px serif';
     ctx.fillStyle = "black";
     ctx.font = textFontSet;
     ctx.textBaseline = "top";
-    ctx.fillText(textCharList[textNest-1],textCharPoint[textNest-1][0],textCharPoint[textNest-1][1]);
+    fixedFillText(ctx, textCharList[textNest-1], textCharPoint[textNest-1][0],textCharPoint[textNest-1][1] ,textCharPoint[textNest-1][2], textFontSize * 1.2, "left")
+    //ctx.fillText(textCharList[textNest-1],textCharPoint[textNest-1][0],textCharPoint[textNest-1][1]);
 
     textCharList.pop();
     textCharPoint.pop();
@@ -764,20 +808,20 @@ function charTronCode(char){
         if(int1 % 2){
             int1 = ((int1 + 1) / 2) + Number(0x70);
             int2 = int2 + Number(0x1f);
-        } else {
+        } else{
             int1 = (int1 / 2) + Number(0x70);
             int2 = int2 + Number(0x7d);
         }
-        if (int1 >= Number(0xa0)) {
+        if (int1 >= Number(0xa0)){
             int1 = int1 + Number(0x40);
         }
-        if (int2 >= Number(0x7f)) {
+        if (int2 >= Number(0x7f)){
             int2 = int2 + Number(1);
         }
         
         //console.log('JIS Zone');
 
-        var unicodeArray = Encoding.convert([int1,int2], {
+        var unicodeArray = Encoding.convert([int1,int2],{
             to: 'UNICODE',
             from: 'SJIS'
         });
@@ -790,34 +834,98 @@ function charTronCode(char){
     }
     return text;
 }
+var moveflg = 0,
+    Xpoint,
+    Ypoint;
+
+//初期値（サイズ、色、アルファ値）の決定
+var defSize = 7,
+    defColor = "#555";
+
+function startPoint(e){
+    e.preventDefault();
+    ctx.beginPath();
+    Xpoint = e.pageX - canvas.offsetLeft;
+    Ypoint = e.pageY - canvas.offsetTop;
+    ctx.moveTo(Xpoint, Ypoint);
+}
+
+function movePoint(e){
+    if(e.buttons === 1 || e.witch === 1 || e.type == 'touchmove'){
+        Xpoint = e.pageX - canvas.offsetLeft;;
+        Ypoint = e.pageY - canvas.offsetTop;;
+        moveflg = 1;
+
+        ctx.lineTo(Xpoint, Ypoint);
+        ctx.lineCap = "round";
+        ctx.lineWidth = defSize * 2;
+        ctx.strokeStyle = defColor;
+        ctx.stroke(); 
+    }
+}
+
+function endPoint(e){
+    if(moveflg === 0){
+        ctx.lineTo(Xpoint-1, Ypoint-1);
+        ctx.lineCap = "round";
+        ctx.lineWidth = defSize * 2;
+        ctx.strokeStyle = defColor;
+        ctx.stroke();
+    }
+    moveflg = 0;
+}
 
 /**
  * Canvas 描画領域を初期化
  */
-function canvasInit() {
+function canvasInit(){
     var canvas = document.getElementById('canvas');
-    if (canvas.getContext) {
+    if (canvas.getContext){
         ctx = canvas.getContext('2d');
-    }    
+    }
+    ctx.clearRect(0, 0, ctx.canvas.clientWidth, ctx.canvas.clientHeight);
+    
+    // PC対応
+    canvas.addEventListener('mousedown', startPoint, false);
+    canvas.addEventListener('mousemove', movePoint, false);
+    canvas.addEventListener('mouseup', endPoint, false);
+    // スマホ対応
+    canvas.addEventListener('touchstart', startPoint, false);
+    canvas.addEventListener('touchmove', movePoint, false);
+    canvas.addEventListener('touchend', endPoint, false);
 }
 
 /**
  * TADファイル読込処理
  * @param {event} event 
  */
-function onAddFile(event) {
+function onAddFile(event){
     var files;
     var reader = new FileReader();
+    var tadRecord = ''
+    var linkRecord = ''
 
     canvasInit();
     
     if(event.target.files){
         files = event.target.files;
-    }else{ 
+    }else{
         files = event.dataTransfer.files;   
-    }    
+    }
+    var fileNum  = files.length;
+    tadRecord = files[0];
+    for(var numLoop=0;numLoop<fileNum;numLoop++){
+        if (files[numLoop].name.includes('.000')){
+            linkRecord = files[numLoop]
+            console.log("link Record" + linkRecord)
+        }
+        if (numLoop = fileNum - 1){
+            tadRecord = files[numLoop]
+            console.log("TAD Record" + tadRecord)
+        }
+    }
 
-    reader.onload = function (event) {
+    reader.onload = function (event){
         var raw = new Uint8Array(reader.result);
         var rawBuffer = raw.buffer;
         var data_view = new DataView( rawBuffer );
@@ -861,24 +969,24 @@ function onAddFile(event) {
             if(i2 >= raw.length) break;
             var raw16 = data_view.getUint16(i2,true);
 
-            if (raw16 === Number(TNULL)) {
+            if (raw16 === Number(TNULL)){
                 // 終端
                 P2 += 'buffer over.\r\n';
                 P3 += 'EOF\r\n';
                 break;
-            } else if(raw16 === TC_TAB) {
+            }else if(raw16 === TC_TAB){
 
-            } else if(raw16 === TC_SPEC) {
+            }else if(raw16 === TC_SPEC){
 
-            } else if(raw16 === TC_NL) {
+            }else if(raw16 === TC_NL){
                 console.log('NL');
                 Ascii2 += '\r';
                 P3 += '\r';
-            } else if(raw16 === TC_FF) {
+            }else if(raw16 === TC_FF){
                 console.log('Page');
                 Ascii2 += '\r\n';
                 P3 += '\r\n';
-            } else if(raw16 === TC_CR) {
+            }else if(raw16 === TC_CR){
                 console.log('CR');
                 Ascii2 += '\r\n';
                 P3 += '\r\n';
@@ -907,12 +1015,12 @@ function onAddFile(event) {
                             i2 += 2;
                         }
                     // 0x121 - 0x1FD
-                    } else {
+                    } else{
                         segID = data_view.getUint16(i2,true) + 0xff00; // + 0x100;  
                         i2 += 2;
                     }
                 // 0x80 - 0xFD
-                } else {
+                } else{
                     segID = data_view.getUint8(i2,true) + 0xff00;  
                     i2 += 2;
                 }
@@ -924,7 +1032,7 @@ function onAddFile(event) {
                     segLen = Number(data_view.getUint32(i2,true));
                     i2 += 4;
 
-                } else {
+                }else{
                     i2 += 2;
                 }
                 P2  += ' segLen = ( ' + IntToHex((segLen),4).replace('0x','') + ' ) ';
@@ -937,7 +1045,7 @@ function onAddFile(event) {
                 i2 += segLen;
                 tadPerse(segID, segLen, tadSeg);
 
-            } else {
+            }else{
                 var raw8Plus1 = Number(data_view.getUint16(i2,true));
                 P2  += 'char = ( ' + IntToHex((raw8Plus1),4).replace('0x','') + ' )';
                 var char = charTronCode(raw8Plus1)
@@ -974,10 +1082,11 @@ function onAddFile(event) {
     document.getElementById('tadTextView').innerHTML = htmlspecialchars(P3) ;
     };
 
-    if (files[0]){    
-        reader.readAsArrayBuffer(files[0]); 
+    if (fileNum > 0){
+        reader.readAsArrayBuffer(tadRecord);
         document.getElementById("inputfile").value = '';
     }
+
 }
 
 /**
@@ -985,13 +1094,13 @@ function onAddFile(event) {
  * TODO: 未実装
  * @returns null
  */
-function save() {
+function save(){
     // テキストエリアより文字列を取得
     const txt = document.getElementById('txt').value;
-    if (!txt) { return; }
+    if (!txt){return;}
 
     // 文字列をBlob化
-    const blob = new Blob([txt], { type: 'text/plain' });
+    const blob = new Blob([txt],{ type: 'text/plain' });
 
     // ダウンロード用のaタグ生成
     const a = document.createElement('a');
