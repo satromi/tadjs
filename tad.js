@@ -35,6 +35,19 @@ var tronCodeMask = new Array();
 var startTadSegment = false;
 var startByImageSegment = false;
 var tabCharNum = 4;
+var tabRulerLineMoveFlag = false;
+var tabRulerLineMove = 0;
+var tabRulerLinePos = 0;
+var tabRulerLineMoveNum = 0;
+var tabRulerLineMoveCount = 0;
+var tabRulerLineMovePoint = new Array();
+var textNumCount = 0;
+
+var tadDpiH = 72;
+var tadDpiV = 72;
+var tadDpiHFlag = false;
+var tadDpiVFlag = false;
+
 
 const canvasW = 1500;
 const canvasH = 800;
@@ -181,12 +194,32 @@ function uh2ub(UH) {
     var ra16db = new DataView(buffer);
     var tadSeg = new Array();
     for(var i=0;i<UH.length;i++) {
-        ra16db.setUint16(0, UH[i]);
+        ra16db.setUint16(i*2, UH[i]);
         tadSeg.push(ra16db.getUint8(0));
         tadSeg.push(ra16db.getUint8(1));
     }
     return tadSeg;
 }
+
+/**
+ * TADセグメント UH2UW
+ * @param {[UH, UH]} UH 
+ * @returns 
+ */
+function uh2uw(UH) {
+    let buffer = new ArrayBuffer(4);
+    var ra32db = new DataView(buffer);
+    var tadSeg = new Array();
+    for (var i=0;i<UH.length;i++) {
+        ra32db.setUint16(i*2, UH[i]);
+        if ((i % 2) != 0) {
+            tadSeg.push(ra32db.getUint32(i/2), false);
+        }
+    }    
+    return tadSeg;
+}
+
+
 
 /**
  * カンマセット
@@ -263,6 +296,16 @@ function tadVer(tadSeg) {
 function tsTextStart(tadSeg) {
     if (startTadSegment == false) {
         startTadSegment = true;
+        var h_unit = Number(uh2h(tadSeg[8]));
+        var v_unit = Number(uh2h(tadSeg[9]));
+        if (h_unit < 0) {
+            tadDpiHFlag = true;
+        }
+        if (v_unit < 0) {
+            tadDpiVFlag = true;
+        }
+        tadDpiH = h_unit; // h_unit
+        tadDpiV = v_unit; // v_unit
     }
 
     textNest++;
@@ -330,21 +373,64 @@ function fixedFillText(context, text, x, y,width, lineHight, align) {
 
 	for (var i = 0; i < text.length; i++) {
 		var char = text.charAt(i);
+
+        if (tabRulerLineMoveNum > 0 &&  tabRulerLinePos < tabRulerLineMoveNum) {
+            if (i == tabRulerLineMovePoint[tabRulerLinePos]) {
+                tabRulerLineMove = column[line].length;
+                console.debug("行頭移動指定付箋 pos :" + tabRulerLineMove);
+                tabRulerLineMoveFlag = true;
+                tabRulerLinePos++;
+            }
+        }
+
         //折り返し処理
 		if (context.measureText(column[line] + char).width > width) {
 			line++;
 			column[line] = '';
-        //改行処理
-		} else if (char == String.fromCharCode(Number(0x000a)) || char == String.fromCharCode(Number(0x000d))) {
+            if (tabRulerLineMoveFlag == true) {
+                for (var tabLoop = 0;tabLoop < tabRulerLineMove; tabLoop++) {
+                    column[line] += " ";
+                    console.debug("行頭移動処理");
+                }                
+            }
+        //改段落処理
+		} else if (char == String.fromCharCode(Number(TC_NL))) {
 			line++;
 			column[line] = '';
-        // Tab処理
-        } else if (char == String.fromCharCode(Number(0x0009))) {
-            for(var tabLoop = 0;tabLoop < tabCharNum; tabLoop++){
+            if (tabRulerLineMoveFlag == true){
+                tabRulerLineMoveFlag = false;
+            }
+
+            
+        // 改行処理
+        } else if (char == String.fromCharCode(Number(TC_CR))) {
+        line++;
+        column[line] = '';
+        if (tabRulerLineMoveFlag == true) {
+            for (var tabLoop = 0;tabLoop < tabRulerLineMove; tabLoop++) {
                 column[line] += " ";
+                console.debug("行頭移動処理");
+            }                
+        }
+
+        // 改ページ処理
+        } else if (char == String.fromCharCode(Number(TC_NC)
+        || char == String.fromCharCode(Number(TC_FF)))) {
+        line++;
+        column[line] = '';
+        if (tabRulerLineMoveFlag == true){
+            tabRulerLineMoveFlag = false;
+        }
+
+        // Tab処理
+        } else if (char == String.fromCharCode(Number(TC_TAB))) {
+            for (var tabLoop = 0;tabLoop < tabCharNum; tabLoop++) {
+                column[line] += " ";
+                console.debug("Tab処理");
             }
         }
 		column[line] += char;
+
 	}
 
 	var padding, lineWidth;
@@ -580,6 +666,18 @@ function tadRulerLineAlignmentSetFusen(segLen, tadSeg) {
 }
 
 /**
+ * 行頭移動指定付箋を処理
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ */
+function tadRulerLineMoveSetFusen(segLen, tadSeg) {
+    tabRulerLineMovePoint.push(textCharList[textNest-1].length);
+    console.debug("行頭移動指定付箋セット :" + tabRulerLineMovePoint[tabRulerLineMoveNum]);
+    tabRulerLineMoveNum++;
+}
+
+
+/**
  * 行書式指定付箋から付箋を判定
  * @param {int} segLen 
  * @param {0x0000[]} tadSeg 
@@ -606,6 +704,7 @@ function tadRulerSetFusen(segLen, tadSeg) {
         // TODO: 未実装
     } else if (UB_SubID === Number(0x05)) {
         console.log("行頭移動指定付箋");
+        tadRulerLineMoveSetFusen(segLen, tadSeg);
         // TODO: 未実装
     }
 }
@@ -689,6 +788,16 @@ function tsFig(tadSeg) {
     if (startTadSegment == false) {
         startTadSegment = true;
         startByImageSegment = true;
+        var h_unit = Number(uh2h(tadSeg[8]));
+        var v_unit = Number(uh2h(tadSeg[9]));
+        if (h_unit < 0) {
+            tadDpiHFlag = true;
+        }
+        if (v_unit < 0) {
+            tadDpiVFlag = true;
+        }
+        tadDpiH = h_unit; // h_unit
+        tadDpiV = v_unit; // v_unit
     }
     imageNest++;
 
@@ -784,6 +893,57 @@ function tsFigRectAngleDraw(segLen, tadSeg) {
 }
 
 /**
+ * 図形要素セグメント 長方形セグメントを描画
+ * @param {int} segLen 
+ * @param {{0x0000[]} tadSeg 
+* @returns 
+*/
+function tsFigRoundRectAngleDraw(segLen, tadSeg) {
+    if (segLen < Number(0x0016)) {
+        return;
+        }
+    var figRH = Number(tadSeg[5]);
+    var figRV = Number(tadSeg[6]);
+    var figX = Number(tadSeg[7]);
+    var figY = Number(tadSeg[8]);
+    var figW = Number(tadSeg[9]) - figX;
+    var figH = Number(tadSeg[10]) - figY;
+
+
+    console.debug("l_atr  " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("l_pat  " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("f_pat  " + IntToHex((tadSeg[3]),4).replace('0x',''));
+    console.debug("angle  " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("rh     " + IntToHex((tadSeg[5]),4).replace('0x',''));
+    console.debug("rv     " + IntToHex((tadSeg[6]),4).replace('0x',''));
+    console.debug("left   " + IntToHex((tadSeg[7]),4).replace('0x',''));
+    console.debug("top    " + IntToHex((tadSeg[8]),4).replace('0x',''));
+    console.debug("right  " + IntToHex((tadSeg[9]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[10]),4).replace('0x',''));
+
+    ctx.beginPath();
+    ctx.moveTo(figX + (figRH / 2), figY);
+    ctx.lineTo(figX + figW - (figRH / 2), figY);
+    ctx.arcTo(figX + figW, figY, figX + figW, figY + (figRV / 2), (figRH / 2));
+    ctx.lineTo(figX + figW, figY + figH - (figRV / 2));
+    ctx.arcTo(figX + figW, figY + figH, figX + figW - (figRH / 2) , figY + figH, (figRV / 2));
+    ctx.lineTo(figX + (figRH / 2), figY + figH); 
+    ctx.arcTo(figX, figY + figH, figX, figY + figH - (figRV / 2), (figRH / 2));
+    ctx.lineTo(figX, figY + (figRV / 2));
+    ctx.arcTo(figX, figY, figX + (figRH / 2), figY, (figRV / 2));
+    ctx.closePath();
+
+    ctx.fillStyle = 'white';
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'black';
+    ctx.stroke();
+
+
+    return;
+}
+
+/**
  * 図形セグメント 多角形セグメントを描画
  * @param {int} segLen 
  * @param {0x0000[]} tadSeg 
@@ -867,6 +1027,50 @@ function tsFigLineDraw(segLen, tadSeg) {
 }
 
 /**
+ * 図形セグメント 楕円セグメントを描画
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
+function tsFigEllipseDraw(segLen, tadSeg) {
+    if (segLen < Number(0x0012)) {
+        return;
+    }
+    console.debug("l_atr  " + IntToHex((tadSeg[1]),4).replace('0x',''));
+    console.debug("l_pat  " + IntToHex((tadSeg[2]),4).replace('0x',''));
+    console.debug("f_pat  " + IntToHex((tadSeg[3]),4).replace('0x',''));
+    console.debug("angle  " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("left   " + IntToHex((tadSeg[5]),4).replace('0x',''));
+    console.debug("top    " + IntToHex((tadSeg[6]),4).replace('0x',''));
+    console.debug("right  " + IntToHex((tadSeg[7]),4).replace('0x',''));
+    console.debug("bottom " + IntToHex((tadSeg[8]),4).replace('0x',''));
+
+    var angle = Number(uh2h(tadSeg[4]));
+    var frameLeft = Number(uh2h(tadSeg[5]));
+    var frameTop = Number(uh2h(tadSeg[6]));
+    var frameRight = Number(uh2h(tadSeg[7]));
+    var frameBottom = Number(uh2h(tadSeg[8]));
+    var radiusX = ( frameRight - frameLeft ) / 2;
+    var radiusY = (frameBottom - frameTop) / 2;
+    var frameCenterX = frameLeft + radiusX;
+    var frameCenterY = frameTop + radiusY;
+
+    var radianAngle = angle * Math.PI / 180;
+
+    console.debug(radianAngle);
+    console.debug(frameCenterX);
+    console.debug(frameCenterY);
+    console.debug(radiusX);
+    console.debug(radiusY);
+
+    ctx.beginPath();
+    ctx.ellipse(frameCenterX, frameCenterY, radiusX, radiusY, radianAngle, 0, Math.PI * 2,false);
+    ctx.stroke();
+
+    return;
+}
+
+/**
  * 図形セグメント 楕円弧セグメントを描画
  * @param {int} segLen 
  * @param {0x0000[]} tadSeg 
@@ -936,9 +1140,11 @@ function tsFigDraw(segLen, tadSeg) {
     // TODO :未対応
     } else if (UB_SubID === Number(0x01)) {
         console.log("角丸長方形セグメント");
+        tsFigRoundRectAngleDraw(segLen, tadSeg);
     // TODO :未対応
     } else if (UB_SubID === Number(0x02)) {
         console.log("楕円セグメント");
+        tsFigEllipseDraw(segLen, tadSeg);
     // TODO :未対応
     } else if (UB_SubID === Number(0x03)) {
         console.log("扇形セグメント");
@@ -991,7 +1197,13 @@ function tsDataSet(segLen, tadSeg) {
 
 }
 
-function tsLinkSegment(segLen, tadSeg) {
+/**
+ * 仮身セグメントを処理
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
+function tsVirtualObjSegment(segLen, tadSeg) {
     if (segLen < Number(0x001E)) {
         return;
     }
@@ -1007,6 +1219,65 @@ function tsLinkSegment(segLen, tadSeg) {
     for(var offsetLen=15;offsetLen<tadSeg.length;offsetLen++) {
         linkRecordData += tadSeg[offsetLen];
     }
+}
+
+/**
+ * 指定付箋セグメントを処理
+ * @param {*} segLen 
+ * @param {*} tadSeg 
+ */
+function tsSpecitySegment(segLen, tadSeg) {
+    if (segLen < Number(0x0042)) {
+        return;
+    }
+
+    console.debug("left   " + Number(uh2h(tadSeg[0])));
+    console.debug("top    " + Number(uh2h(tadSeg[1])));
+    console.debug("right  " + Number(uh2h(tadSeg[2])));
+    console.debug("bottom " + Number(uh2h(tadSeg[3])));
+    console.debug("chsz   " + IntToHex((tadSeg[4]),4).replace('0x',''));
+    console.debug("pict   " + Number(uh2h(tadSeg[11])));
+
+    var appl = IntToHex((tadSeg[12]),4).replace('0x','')
+        + IntToHex((tadSeg[13]),4).replace('0x','')
+        + IntToHex((tadSeg[14]),4).replace('0x','');
+    console.debug("appl   " + appl);
+
+    if (appl == "8000C0038000") {
+        console.debug("書庫形式");
+    }
+
+    for (var offsetLen=15;offsetLen<31;offsetLen++) {
+        console.log(charTronCode(tadSeg[offsetLen]));
+    }
+
+    var dlen = uh2uw([tadSeg[31], tadSeg[32]]);
+    console.debug("dlen   " + dlen[0]);
+
+    var compSeg = new Array();
+    for(var offsetLen=33;offsetLen<segLen;offsetLen++) {
+        compSeg.push(tadSeg[offsetLen]);
+    }
+    console.debug("headtype   " + IntToHex((getTopUBinUH(compSeg[0])),4).replace('0x',''));
+    console.debug("headtype   " + IntToHex((getLastUBinUH(compSeg[0])),4).replace('0x',''));
+    console.debug("version    " + IntToHex((compSeg[1]),4).replace('0x',''));
+    console.debug("crc        " + IntToHex((compSeg[2]),4).replace('0x',''));
+    console.debug("nfiles     " + IntToHex((compSeg[3]),4).replace('0x',''));
+    console.debug("compmethod " + IntToHex((compSeg[4]),4).replace('0x',''));
+    var time = uh2uw([compSeg[5], compSeg[6]]);
+    console.debug("time       " + time[0]);
+    var filesize = uh2uw([compSeg[7], compSeg[8]]);
+    console.debug("filesize   " + filesize[0]);
+    var orgsize = uh2uw([compSeg[9], compSeg[10]]);
+    console.debug("orgsize    " + orgsize[0]);
+    var compsize = uh2uw([compSeg[11], compSeg[12]]);
+    console.debug("compsize   " + compsize[0]);
+    var extsize = uh2uw([compSeg[13], compSeg[14]]);
+    console.debug("extsize    " + extsize[0]);
+
+    
+    
+
 }
 
 /**
@@ -1035,9 +1306,10 @@ function tadPerse(segID, segLen, tadSeg) {
         console.log('画像セグメント');
     } else if (segID === Number(TS_VOBJ)) {
         console.log('仮身セグメント');
-        tsLinkSegment(segLen, tadSeg);
+        tsVirtualObjSegment(segLen, tadSeg);
     } else if (segID === Number(TS_DFUSEN)) {
         console.log('指定付箋セグメント');
+        tsSpecitySegment(segLen, tadSeg);
     } else if (segID === Number(TS_FFUSEN)) {
         console.log('機能付箋セグメント');
     } else if (segID === Number(TS_TPAGE)) {
@@ -1133,12 +1405,14 @@ function charTronCode(char) {
             from: 'SJIS'
         });
 
-        //text = ECL.charset.convert(char, "UTF16", "SJIS");
         text = Encoding.codeToString(unicodeArray);
 
     } else if (char >= Number(0x2320) && char <= Number(0x237f)) {
         text = String.fromCharCode(char8[1]);
-    } else if (char == Number(0x000a)) {
+    } else if (char == Number(TC_NL)
+        || char == Number(TC_CR)
+        || char == Number(TC_TAB)
+        || char == Number(TC_FF)) {
         text = String.fromCharCode(char8[1]);
     }
     return text;
