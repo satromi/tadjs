@@ -10,11 +10,11 @@ const DICSIZ = (1 << DICBIT);
 const MATCHBIT = 8;
 const MAXMATCH = 256;
 const THRESHOLD = 3;
-const NC = 255 + MAXMATCH + 2 - THRESHOLD;
-const CBIT = 9;
 const CODE_BIT = 16;
 const CHAR_BIT = 8;
 const UCHAR_MAX = 255;
+const NC = UCHAR_MAX + MAXMATCH + 2 - THRESHOLD;
+const CBIT = 9;
 const BITBUFSIZ = 16;
 
 // Huffman coding parameters
@@ -154,7 +154,7 @@ class LH5Decoder {
             const len = bitlen[ch];
             if (len === 0) continue;
             
-            let nextcode = (start[len] + weight[len]) & 0xFFFF;
+            const nextcode = (start[len] + weight[len]) & 0xFFFF;
             
             if (len <= tablebits) {
                 // Short code
