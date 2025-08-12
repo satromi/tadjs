@@ -3,31 +3,135 @@
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
     <title>TADjs</title>
+    <!-- Include Lzh library -->
+    <script src="lh5.js"></script>
+    <!-- Include TAD Core (non-module version) -->
     <script src="tad.js"></script>
+    <!-- Include encoding library -->
     <script src="encoding.min.js"></script>
+    <script>
+            window.addEventListener("DOMContentLoaded", () => {
+            document.getElementById("save").addEventListener("click", save);
+            });
+            
+            let currentTabIndex = 0;
+            let tabCount = 0;
+            
+            function createNewTab(tabIndex) {
+                // Create tab button
+                const tabButton = document.createElement('button');
+                tabButton.className = 'tab-button';
+                tabButton.textContent = `Tab ${tabIndex + 1}`;
+                tabButton.onclick = () => switchTab(tabIndex);
+                if (tabIndex === 0) {
+                    tabButton.classList.add('active');
+                }
+                document.getElementById('tab-buttons').appendChild(tabButton);
+                
+                // Create canvas container
+                const canvasContainer = document.createElement('div');
+                canvasContainer.className = 'canvas-container';
+                canvasContainer.id = `canvas-container-${tabIndex}`;
+                canvasContainer.style.display = tabIndex === 0 ? 'block' : 'none';
+                
+                // Create canvas
+                const canvas = document.createElement('canvas');
+                canvas.id = `canvas-${tabIndex}`;
+                canvas.width = 800;
+                canvas.height = 450;
+                canvasContainer.appendChild(canvas);
+                
+                document.getElementById('canvas-area').appendChild(canvasContainer);
+                tabCount++;
+            }
+            
+            function switchTab(tabIndex) {
+                // Hide all canvases
+                const containers = document.querySelectorAll('.canvas-container');
+                containers.forEach(container => {
+                    container.style.display = 'none';
+                });
+                
+                // Remove active class from all buttons
+                const buttons = document.querySelectorAll('.tab-button');
+                buttons.forEach(button => {
+                    button.classList.remove('active');
+                });
+                
+                // Show selected canvas and mark button as active
+                document.getElementById(`canvas-container-${tabIndex}`).style.display = 'block';
+                buttons[tabIndex].classList.add('active');
+                currentTabIndex = tabIndex;
+            }
+            
+            // Initialize with first tab
+            window.addEventListener("DOMContentLoaded", () => {
+                createNewTab(0);
+            });
+    </script>
 </head>
 <style>
     body{
         background: #eee;
     }
 
-    #canvas {
+    canvas {
         background: #fff;
-
+    }
+    
+    #tab-buttons {
+        display: flex;
+        gap: 2px;
+        margin-bottom: 10px;
+    }
+    
+    .tab-button {
+        padding: 8px 16px;
+        background: #ddd;
+        border: 1px solid #ccc;
+        border-bottom: none;
+        cursor: pointer;
+        border-radius: 4px 4px 0 0;
+    }
+    
+    .tab-button:hover {
+        background: #e5e5e5;
+    }
+    
+    .tab-button.active {
+        background: #fff;
+        border-bottom: 1px solid #fff;
+        position: relative;
+        z-index: 1;
+    }
+    
+    #canvas-area {
+        border: 1px solid #ccc;
+        padding: 10px;
+        background: #fff;
+        margin-top: -1px;
+    }
+    
+    .canvas-container {
+        display: none;
     }
 </style>
 <body >
     <div ondrop="onDrop(event);" ondragover="onDragOver(event);" multiple >
         <input type="file" id="inputfile" onchange="onAddFile(event);" multiple>
-        <p id="BainryInfo"></p>
-        <canvas id="canvas" width="800" height="450"></canvas>
+        <a id="save" href="#" download="canvas.jpg">ダウンロード</a>
+        <br>
+        <div id="tab-buttons"></div>
+        <div id="canvas-area"></div>
         <hr>
+        <p id="BainryInfo"></p>
         <h2>Tad Dump View</h2>
-        <p id="tadTextView"></p>
         <textarea rows="30" cols="80" id="tadDumpView" style="width:600px;font-family: Consolas, 'Courier New', Courier, Monaco, monospace;font-size:14px;" readonly>
         </textarea>
+        <h2>Tad Text View</h2>
+        <p id="tadTextView"></p>
         <br>
-        <input type="button" value="Save" onclick="save()">
+
         <br>
         <hr>
 

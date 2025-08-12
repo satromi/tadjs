@@ -26,6 +26,8 @@
 // global
 let ctx;
 let canvas;
+let currentFileIndex = 0;  // Track current file index for multiple tabs
+let isProcessingBpk = false;  // Flag to indicate BPK processing
 let textNest = 0;
 let textCharList = new Array();
 let textCharPoint = new Array();
@@ -726,12 +728,15 @@ function pass2(LHEAD) {
     const finfoPath = 'file.inf';
     let finfoContent = 'No: f_type, name\n';
     
+    // Set BPK processing flag if multiple files
+    if (GHEAD.nfiles > 1) {
+        isProcessingBpk = true;
+        currentFileIndex = 0;
+    }
+    
     // Process all files
     for (let i = 0; i < GHEAD.nfiles; i++) {
         console.debug(`Processing file ${i}, GHEAD.nfiles=${GHEAD.nfiles}`);
-        // Read local header
-        const lheadData = new Uint8Array(LOCALHEADSIZE);
-        xRead(compMethod, lheadData, LOCALHEADSIZE);
         const lhead = LHEAD[i];
         const fileName = lhead.name;
         finfoContent += `${i}: 0${lhead.f_type.toString(8)}, ${fileName}\n`;
@@ -761,14 +766,14 @@ function pass2(LHEAD) {
             
             if (rhead.type === 0) {
                 // Link record
-                let linkData = new Uint8Array(52);  // sizeof(LINK)
+                const linkData = new Uint8Array(52);  // sizeof(LINK)
                 xRead(compMethod, linkData, 52);
                 
                 // Parse LINK structure
                 const linkView = new DataView(linkData.buffer);
                 const link = new LINK();
                 let k = 0;
-                for (k = 0; k < 20; k += 2) {
+                for (k = 0; k < 20; k+=2) {
                     link.fs_name = link.fs_name + charTronCode(Number(linkView.getUint16(k))); // TC[20] ファイル名
                 }
                 link.f_id = linkView.getUint16(k, true); k += 2;
@@ -779,7 +784,7 @@ function pass2(LHEAD) {
                 link.atr5 = linkView.getUint16(k, true); k += 2;
                 console.debug(`Link Record: fs_name=${link.fs_name}, f_id=${link.f_id}, atr1=${link.atr1}, atr2=${link.atr2}, atr3=${link.atr3}, atr4=${link.atr4}, atr5=${link.atr5}`);
 
-                recordData.set(linkData, rhead.size);
+                recordData = linkData;
             } else if (rhead.type === 1) {
                 // Regular record
                 let tempsize = 0;
@@ -795,6 +800,9 @@ function pass2(LHEAD) {
                     recordData.set(remaining, tempsize);
                 }
                 tadDataArray(recordData);
+                if (isProcessingBpk) {
+                    currentFileIndex++;
+                }
             } else {
                 // Regular record
                 let tempsize = 0;
@@ -2087,9 +2095,9 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
 
     // ローカルヘッダの読込 ここから解凍しながら読込
     LHEAD = new Array(GHEAD.nfiles);
-
+    console.log("localHead Num :" + GHEAD.nfiles);
     for (let localheadLoop=0;localheadLoop<GHEAD.nfiles;localheadLoop++) {
-        console.log("localHead Num :" + GHEAD.nfiles);
+        console.log("localHead No:" + localheadLoop);
         console.log("localHead tadPos" + tadPos);
 
         const lheadData = new Uint8Array(LOCALHEADSIZE);
@@ -2124,7 +2132,7 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
         lhead.crc = IntToHex(view.getUint16(offset, true), 4).replace('0x', ''); offset += 2;
         lhead.f_size = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
         lhead.offset = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
-        lhead.f_nrec = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
+        lhead.f_nrec = Number(uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]); offset += 4;
         lhead.f_ltime = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
         lhead.f_atime = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
         lhead.f_mtime = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
@@ -2363,20 +2371,25 @@ function clearCanvas(ctx, width, height) {
 /**
  * Canvas 描画領域を初期化
  */
-function canvasInit() {
-    canvas = document.getElementById('canvas');
-    if (canvas.getContext) {
+function canvasInit(canvasId) {
+    if (!canvasId) {
+        canvasId = 'canvas-0';
+    }
+    canvas = document.getElementById(canvasId);
+    if (canvas && canvas.getContext) {
         ctx = canvas.getContext('2d');
     }
 
     // キャンバスをクリア
-    clearCanvas(ctx, canvas.width, canvas.height);
-    
-    canvas.width = canvasW;
-    canvas.height = canvasH;
+    if (ctx && canvas) {
+        clearCanvas(ctx, canvas.width, canvas.height);
+        
+        canvas.width = canvasW;
+        canvas.height = canvasH;
 
-    ctx.fillStyle = 'white'; // 背景色を白に設定
-    ctx.fillRect(0, 0, ctx.canvas.clientWidth, ctx.canvas.clientHeight);
+        ctx.fillStyle = 'white'; // 背景色を白に設定
+        ctx.fillRect(0, 0, ctx.canvas.clientWidth, ctx.canvas.clientHeight);
+    }
     
     // PC対応
     canvas.addEventListener('mousedown', startPoint, false);
@@ -2391,6 +2404,14 @@ function canvasInit() {
 function tadDataArray(raw) {
     if (raw && raw.p instanceof Uint8Array) {
         raw = raw.p;
+    }
+
+    // Create new tab if processing BPK with multiple files
+    if (isProcessingBpk && currentFileIndex > 0) {
+        if (typeof createNewTab === 'function') {
+            createNewTab(currentFileIndex);
+        }
+        canvasInit(`canvas-${currentFileIndex}`);
     }
 
     let rawBuffer = raw.buffer;
@@ -2502,6 +2523,10 @@ function onAddFile(event) {
     let tadRecord = ''
     let linkRecord = ''
 
+    // Reset flags for new file
+    isProcessingBpk = false;
+    currentFileIndex = 0;
+    
     canvasInit();
     
     if (event.target.files) {
