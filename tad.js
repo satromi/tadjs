@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.03
+ * TADjs Ver0.04
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -82,6 +82,10 @@ let textSpacingPattern = 0; // 文字間隔パターン 0:文字送り量,文字
 let textSpacingPitch = 0.125; // SCALE 文字間隔のピッチ
 
 
+// リンクレコード対応
+let linkRecordList = new Array(); // リンクレコードリスト
+let linkNo = 0;
+
 
 let tadDpiH = 72;
 let tadDpiV = 72;
@@ -90,10 +94,251 @@ let tadDpiVFlag = false;
 
 let LOCALHEADSIZE = 96;
 
-const canvasW = 1500;
+const canvasW = 1200;
 const canvasH = 1000;
-const virtualW = 10000;
-const virtualH = 10000;
+let virtualW = 1200;
+let virtualH = 1000;
+
+// スクロール管理変数（レガシー、後方互換性のため残す）
+let scrollX = 0;
+let scrollY = 0;
+let scrollBarWidth = 16;
+let showHScrollBar = false;
+let showVScrollBar = false;
+
+// タブごとのスクロール状態管理
+let tabScrollStates = {};
+
+// 新設計：各TADファイル(nfiles)ごとの描画バッファシステム
+let tadFileCanvases = {};      // 各TADファイル(nfiles)ごとのcanvas
+let tadFileContexts = {};      // 各TADファイル(nfiles)ごとのcontext  
+let tadFileDrawBuffers = {};   // 各TADファイル(nfiles)ごとの描画バッファ領域（ImageData）
+let tadRawDataArray = {};      // 各TADファイル(nfiles)ごとのrawデータ保存
+
+// 仮身セグメント処理制御
+let isInTextSegment = false;   // 文章セグメント処理中かどうかの判定フラグ
+
+
+/**
+ * タブのスクロール状態を初期化
+ * @param {number} tabIndex
+ */
+function initTabScrollState(tabIndex) {
+    if (!tabScrollStates[tabIndex]) {
+        tabScrollStates[tabIndex] = {
+            scrollX: 0,
+            scrollY: 0,
+            virtualW: canvasW,
+            virtualH: canvasH,
+            showHScrollBar: false,
+            showVScrollBar: false
+        };
+        }
+}
+
+/**
+ * タブのスクロール状態をリセット
+ * @param {number} tabIndex
+ */
+function resetTabScrollState(tabIndex) {
+    tabScrollStates[tabIndex] = {
+        scrollX: 0,
+        scrollY: 0,
+        virtualW: canvasW,
+        virtualH: canvasH,
+        showHScrollBar: false,
+        showVScrollBar: false
+    };
+}
+
+/**
+ * 現在のタブのスクロール状態を取得
+ * @param {number} tabIndex
+ * @returns {object}
+ */
+function getTabScrollState(tabIndex) {
+    initTabScrollState(tabIndex);
+    return tabScrollStates[tabIndex];
+}
+
+/**
+ * 現在のタブのスクロール状態を更新
+ * @param {number} tabIndex
+ * @param {object} state
+ */
+function updateTabScrollState(tabIndex, state) {
+    initTabScrollState(tabIndex);
+    Object.assign(tabScrollStates[tabIndex], state);
+}
+
+/**
+ * 現在のタブインデックスを取得
+ * @returns {number}
+ */
+function getCurrentTabIndex() {
+    // HTMLのcurrentTabIndexが定義されていればそれを使用
+    // BPKファイル処理中でもユーザーが選択したタブを尊重
+    return typeof currentTabIndex !== 'undefined' ? currentTabIndex : currentFileIndex;
+}
+
+/**
+ * 現在のタブのスクロール状態をグローバル変数に同期
+ * @param {number} tabIndex
+ */
+function syncTabStateToGlobals(tabIndex) {
+    const state = getTabScrollState(tabIndex);
+    scrollX = state.scrollX;
+    scrollY = state.scrollY;
+    virtualW = state.virtualW;
+    virtualH = state.virtualH;
+    showHScrollBar = state.showHScrollBar;
+    showVScrollBar = state.showVScrollBar;
+}
+
+/**
+ * 各TADファイル(nfiles)ごとのcanvasを生成
+ * @param {number} fileIndex ファイルインデックス
+ * @param {number} width canvas幅
+ * @param {number} height canvas高さ
+ */
+function createTadFileCanvas(fileIndex, width = 2000, height = 2000) {
+    if (!tadFileCanvases[fileIndex]) {
+        console.debug(`Creating TAD file canvas for file ${fileIndex} (${width}x${height})`);
+        
+        // canvasを作成
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.style.display = 'none'; // 見えない状態で保持
+        
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, width, height);
+        
+        tadFileCanvases[fileIndex] = canvas;
+        tadFileContexts[fileIndex] = ctx;
+        
+        console.debug(`TAD file canvas created for file ${fileIndex}`);
+    }
+    
+    return tadFileCanvases[fileIndex];
+}
+
+/**
+ * TADファイルcanvasの描画内容を描画バッファ領域に保存
+ * @param {number} fileIndex ファイルインデックス
+ */
+function saveTadFileDrawBuffer(fileIndex) {
+    const canvas = tadFileCanvases[fileIndex];
+    const ctx = tadFileContexts[fileIndex];
+    
+    if (canvas && ctx) {
+        tadFileDrawBuffers[fileIndex] = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        console.debug(`Draw buffer saved for TAD file ${fileIndex}`);
+    }
+}
+
+/**
+ * 描画バッファ領域から表示用canvasに描画
+ * @param {number} fileIndex ファイルインデックス
+ * @param {number} tabIndex 表示先タブインデックス
+ * @param {number} scrollX スクロール位置X
+ * @param {number} scrollY スクロール位置Y
+ */
+function renderFromTadFileDrawBuffer(fileIndex, tabIndex, scrollX = 0, scrollY = 0) {
+    const drawBuffer = tadFileDrawBuffers[fileIndex];
+    if (!drawBuffer) {
+        console.warn(`No draw buffer found for TAD file ${fileIndex}`);
+        return;
+    }
+    
+    // 表示用canvasを取得
+    const displayCanvas = document.getElementById(`canvas-${tabIndex}`);
+    if (!displayCanvas) {
+        console.warn(`Display canvas not found for tab ${tabIndex}`);
+        return;
+    }
+    
+    const displayCtx = displayCanvas.getContext('2d');
+    
+    // 表示用canvasをクリア
+    displayCtx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
+    
+    // 一時的なcanvasに描画バッファを復元
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = drawBuffer.width;
+    tempCanvas.height = drawBuffer.height;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.putImageData(drawBuffer, 0, 0);
+    
+    // スクロール位置の有効性を確認
+    const maxScrollX = Math.max(0, drawBuffer.width - displayCanvas.width);
+    const maxScrollY = Math.max(0, drawBuffer.height - displayCanvas.height);
+    const validScrollX = Math.max(0, Math.min(maxScrollX, scrollX));
+    const validScrollY = Math.max(0, Math.min(maxScrollY, scrollY));
+    
+    // スクロール位置を考慮して表示用canvasに転送
+    displayCtx.drawImage(
+        tempCanvas,
+        validScrollX, validScrollY, displayCanvas.width, displayCanvas.height, // 元画像の切り取り範囲
+        0, 0, displayCanvas.width, displayCanvas.height                        // 転送先の範囲
+    );
+    
+    //console.debug(`Rendered from draw buffer: file ${fileIndex} -> tab ${tabIndex} (scroll: ${scrollX}, ${scrollY})`);
+}
+
+/**
+ * Canvas描画前のスクロールオフセット適用
+ */
+function applyScrollOffset() {
+    if (ctx) {
+        const tabIndex = getCurrentTabIndex();
+        const state = getTabScrollState(tabIndex);
+        ctx.save();
+        ctx.translate(-state.scrollX, -state.scrollY);
+    }
+}
+
+/**
+ * Canvas描画後のスクロールオフセット復元
+ */
+function restoreScrollOffset() {
+    if (ctx) {
+        ctx.restore();
+    }
+}
+
+/**
+ * 現在のTADファイルを再描画
+ */
+function redrawCurrentTAD() {
+    if (!ctx || !canvas) return;
+    
+    // 現在のタブのスクロール状態を確保
+    const tabIndex = getCurrentTabIndex();
+    const state = getTabScrollState(tabIndex);
+    
+    // グローバル変数を現在のタブ状態で同期（描画処理で必要）
+    syncTabStateToGlobals(tabIndex);
+    
+    // Canvas全体をクリア
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0); // リセット transform
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+    
+    // スクロールオフセットを適用
+    applyScrollOffset();
+    
+    // 既存のTADデータを再処理 (簡易版)
+    if (tadRaw && tadRaw.length > 0) {
+        const tabIndex = getCurrentTabIndex();
+        // 新設計：再描画時は現在のタブに対応するfileIndexで処理
+        tadDataArray(tadRaw, true, null, tabIndex);
+    }
+}
 
 
 // 特殊文字コードの定義
@@ -255,7 +500,7 @@ class VOBJSEG {
 // TADセグメント:リンク付箋
 class LINK {
     constructor() {
-        this.fs_name = new Array(20).fill(0);  // TC[20]
+        this.fs_name = "";  // TC[20]
         this.f_id = 0;      // UH (16-bit)
         this.atr1 = 0;      // UH (16-bit)
         this.atr2 = 0;      // UH (16-bit)
@@ -263,6 +508,25 @@ class LINK {
         this.atr4 = 0;      // UH (16-bit)
         this.atr5 = 0;      // UH (16-bit)
     }
+}
+
+// リンクレコード
+class LINKRECORD {
+    constructor() {
+        this.fs_name = "";  // TC[20]
+        this.link_name = ""; // TC[20]
+        this.link_id = 0;      // UH (16-bit)
+        this.atr1 = 0;      // UH (16-bit)
+        this.atr2 = 0;      // UH (16-bit)
+        this.atr3 = 0;      // UH (16-bit)
+        this.atr4 = 0;      // UH (16-bit)
+        this.atr5 = 0;      // UH (16-bit)
+        this.left = 0;         // UH (16-bit)
+        this.top = 0;          // UH (16-bit)
+        this.right = 0;       // UH (16-bit)
+        this.bottom = 0;      // UH (16-bit)
+    }
+
 }
 
 // TADセグメント:用紙サイズ付箋
@@ -305,7 +569,7 @@ class LocalHead {
     constructor() {
         this.f_type = null;                     // UH F_STATE 
         this.f_atype = null;                    // UH F_STATE
-        this.name = new Array(20).fill(0);      // UH TC[20] ファイル名
+        this.name = "";      // UH TC[20] ファイル名
         this.origId = null;                     // H 元ファイルのファイルID
         this.compMethod = null;                 // H ファイル別圧縮時の圧縮法
         this.origSize = null;                   // W ファイルのレコードパッキング後の非圧縮サイズ
@@ -407,7 +671,7 @@ function uh2h(uh) {
  * 呼び出し例
  *  let tadSeg8 = uh2ub(tadSeg);
  *  for(let offsetLen=4;offsetLen<tadSeg8.length;offsetLen++) {
- *      console.log(charTronCode(tadSeg8[offsetLen]));
+ *      console.debug(charTronCode(tadSeg8[offsetLen]));
  *  }
  * @param {0x0000[]} UH
  * @returns
@@ -499,7 +763,7 @@ function changeEndian(n) {
  */
 function getTopUBinUH(UH) {
     const SubID = ( UH >> 8);
-    console.log("UB_SubID" + SubID);
+    console.debug("UB_SubID" + SubID);
     return SubID;
 }
 
@@ -510,7 +774,7 @@ function getTopUBinUH(UH) {
  */
 function getLastUBinUH(UH) {
     const ATTR = ( UH & 0b00000011);
-    // console.log("UB_SubID" + ATTR);
+    console.debug("ATTR" + ATTR);
     return ATTR;
 }
 
@@ -550,7 +814,7 @@ function parseColor(raw, offset = 0) {
         const r = (raw >>> 16) & 0xFF;
         const g = (raw >>> 8) & 0xFF;
         const b = (raw >>> 0) & 0xFF;
-        //console.debug(`parseColor: transparent=${transparentMode}, modeBits=${modeBits}, r=${r}, g=${g}, b=${b}`);
+        console.debug(`parseColor: transparent=${transparentMode}, modeBits=${modeBits}, r=${r}, g=${g}, b=${b}`);
         return {
             transparent: transparentMode,
             mode: modeBits,    // 絶対RGB指定
@@ -566,38 +830,20 @@ function parseColor(raw, offset = 0) {
     };
 }
 
-/**
- * fgetc
- * @returns 
- */
-function fgetc() {
-    if (!tadDataView) {
-        throw new Error("tadDataViewが未初期化です");
-    }
-    if (tadPos >= tadDataView.byteLength) {
-        throw new Error("fgetc: ファイル終端に到達しました (tadPos=" + tadPos + ")");
-    }
-    const char = tadDataView.getUint8(tadPos); // & 0xFF;
-    const hexChar = IntToHex(char, 2);
-    console.debug("fgetc tadPos:" + tadPos + " char:" + char + " hex:" + hexChar);
-    tadPos++;
-    return char;
-}
 
 function fwrite (p, s, n) {
     const char = String.fromCharCode.apply(null, p.slice(0, s * n));
 }
 
 /* limits.h */
-const CHAR_BIT = 8;
-const UCHAR_MAX = 255;
+// CHAR_BIT参照用の関数
+function getCHAR_BIT() {
+    return (typeof window !== 'undefined' && window.CHAR_BIT) || 8;
+}
 const BUFFERSIZE = 8192;  /* Buffer size for file processing */
 
 /* ar.c */
 
-let origsize = 0;
-let compsize = 0;
-let tadCompSize;
 let compMethod = 0; // Global compression method
 
 /* io.c */
@@ -607,17 +853,25 @@ let crc;
 
 const CRCPOLY = 0xA001;  /* ANSI CRC-16 */
                        /* CCITT: 0x8408 */
-let crctable = new Uint16Array(UCHAR_MAX + 1);
+// UCHAR_MAX参照用の関数
+function getUCHAR_MAX() {
+    return (typeof window !== 'undefined' && window.UCHAR_MAX) || 255;
+}
 
+let crctable = null; // 初期化は必要時に実行
 
 /**
  * make_crctable: CRCテーブルを作成する
  */
 function make_crctable() {
     console.debug("make_crctable");
-    for (let i = 0; i <= UCHAR_MAX; i++) {
+    // 遅延初期化
+    if (crctable === null) {
+        crctable = new Uint16Array(getUCHAR_MAX() + 1);
+    }
+    for (let i = 0; i <= getUCHAR_MAX(); i++) {
         let r = i;
-        for (let j = 0; j < CHAR_BIT; j++) {
+        for (let j = 0; j < getCHAR_BIT(); j++) {
             if (r & 1) {
                 r = (r >>> 1) ^ CRCPOLY;
             } else {
@@ -633,36 +887,45 @@ function make_crctable() {
  */
 function updateCRC(c) {
     //console.debug("UPDATE_CRC");
-    crc = crctable[(crc ^ c) & 0xFF] ^ (crc >>> CHAR_BIT);
+    crc = crctable[(crc ^ c) & 0xFF] ^ (crc >>> getCHAR_BIT());
     crc &= 0xFFFF;
 }
-
-
 
 // LH5 decoder instance
 let lh5Decoder = null;
 
-// Decode state variables for improved implementation
-let decode_n = 0;      // Total bytes decoded
-let decode_buftop = 0; // Current position in decode buffer
-let decode_bufsize = 0; // Size of decoded data in buffer
+// Global static buffer for LZ77 dictionary (matching C implementation)
+let globalStaticN = 0;
+let globalStaticBufTop = 0; 
 
-// Constants needed for compatibility
-const DICBIT = 13;
-const DICSIZ = 1 << DICBIT;
-let xReadBuf = new Uint8Array(DICSIZ);
+// Global decoder state (static variables from decode.c)
+let globalDecodeJ = 0;  // static int j in decode.c
+let globalDecodeI = 0;  // static uint i in decode.c
 
-/**
- * ファイル解凍
- * @param {*} compMethod 
- * @param {*} l 
- * @returns 
- */
-function xRead(compMethod, p, l) {
-    console.debug(`xRead: length=${l}, mode=${compMethod}, tadPos=${tadPos}, tadDataView.byteLength=${tadDataView.byteLength}`);
+// Working unpack.js style decode buffer management
+let decode_buf = null;      // デコード専用バッファ
+let decode_n = 0;          // デコード済み総バイト数
+let decode_buftop = 0;     // バッファ内位置
+let decode_bufsize = 0;    // バッファ内有効データサイズ
 
+// Global decode state accessor functions
+let getGlobalDecodeJ = () => 0;
+let setGlobalDecodeJ = (value) => {};
+let getGlobalDecodeI = () => 0;
+let setGlobalDecodeI = (value) => {};
+let getGlobalStaticN = () => 0;
+
+// setGlobalDecodeAccessors function for compatibility
+function setGlobalDecodeAccessors(getJ, setJ, getI, setI, getN) {
+    getGlobalDecodeJ = getJ;
+    setGlobalDecodeJ = setJ;
+    getGlobalDecodeI = getI;
+    setGlobalDecodeI = setI;
+    getGlobalStaticN = getN;
+}
+function xRead(compMethod, p, l) {    
     if (compMethod == LH0) {
-        // 非圧縮の場合
+        // 非圧縮の場合 - Direct read for uncompressed data
         if (tadPos + l > tadDataView.byteLength) {
             throw new Error("xRead: 読み込み範囲がファイルサイズを超えています");
         }
@@ -671,36 +934,38 @@ function xRead(compMethod, p, l) {
             p[i] = tadDataView.getUint8(tadPos + i);
         }
         tadPos += l;
-        return 0;
+        return 0; // 成功
     } else {
-        // LH5 圧縮モード - バッファリングを使用した効率的な解凍
-        for (let i = 0; i < l; i++) {
-            if (decode_buftop >= decode_bufsize) {
-                // Buffer empty, decode more
-                if (origsize - decode_n > DICSIZ) {
-                    lh5Decoder.decode(DICSIZ, xReadBuf);
-                    decode_n += DICSIZ;
-                    decode_bufsize = DICSIZ;
-                } else {
-                    const remaining = origsize - decode_n;
-                    if (remaining > 0) {
-                        lh5Decoder.decode(remaining, xReadBuf);
-                        decode_bufsize = remaining;
-                        decode_n += remaining;
-                    } else {
-                        // No more data to decode
-                        console.error("xRead: No more data to decode");
-                        return -1;
-                    }
-                }
-                decode_buftop = 0;
-            }
-            p[i] = xReadBuf[decode_buftop++];
+        // LH5 圧縮モード
+        if (lh5Decoder === null) {
+            console.error("LH5Decoder is not initialized!");
+            return -1;
+        }
+
+        const bytesRead = lh5Decoder.decode(l, p);
+        
+        // Update CRC for all read bytes
+        for (let i = 0; i < bytesRead; i++) {
             updateCRC(p[i]);
         }
-        console.debug("xRead tadPos:" + tadPos + " decode_n:" + decode_n + " decode_buftop:" + decode_buftop + " decode_bufsize:" + decode_bufsize);
-        return 0;
+        
+        return bytesRead === l ? 0 : -1; // 成功の場合は0、エラーの場合は-1
     }
+}
+
+
+/**
+ * Initialize decompression
+ */
+function tadDecodeStart(currentFileIndex) {
+    crc = INIT_CRC;
+    decode_n = 0;
+    decode_buftop = 0;
+    decode_bufsize = 0;
+        
+    // Create unified LH5Decoder instance from lh5.js
+    lh5Decoder = new LH5Decoder();
+    lh5Decoder.init(tadRawDataArray[currentFileIndex], tadPos, GHEAD.compSize, GHEAD.origSize);
 }
 
 /**
@@ -734,6 +999,9 @@ function pass2(LHEAD) {
         currentFileIndex = 0;
     }
     
+    // Buffer for reading data
+    const buffer = new Uint8Array(BUFFERSIZE);
+    
     // Process all files
     for (let i = 0; i < GHEAD.nfiles; i++) {
         console.debug(`Processing file ${i}, GHEAD.nfiles=${GHEAD.nfiles}`);
@@ -755,7 +1023,7 @@ function pass2(LHEAD) {
             const view = new DataView(rheadData.buffer);
             rhead.type = view.getInt16(0, true);
             rhead.subtype = view.getUint16(2, true);
-            rhead.size = view.getUint32(4, true);
+            rhead.size = Number(uh2uw([view.getUint16(6, true), view.getUint16(4, true)])[0])
             console.debug(`Record Head: type=${rhead.type}, subtype=${rhead.subtype}, size=${rhead.size}`);
             
             recInfoContent += `${j}: ${rhead.type}, ${rhead.subtype}\n`;
@@ -771,18 +1039,26 @@ function pass2(LHEAD) {
                 
                 // Parse LINK structure
                 const linkView = new DataView(linkData.buffer);
-                const link = new LINK();
-                let k = 0;
-                for (k = 0; k < 20; k+=2) {
-                    link.fs_name = link.fs_name + charTronCode(Number(linkView.getUint16(k))); // TC[20] ファイル名
+                const link = new LINKRECORD();
+                let pos = 0;
+                for (let k = 0; k < 20; k++) {
+                    link.fs_name = link.fs_name + charTronCode(Number(linkView.getUint16(pos, true))); // TC[20] ファイル名
+                    pos += 2;
                 }
-                link.f_id = linkView.getUint16(k, true); k += 2;
-                link.atr1 = linkView.getUint16(k, true); k += 2;
-                link.atr2 = linkView.getUint16(k, true); k += 2;
-                link.atr3 = linkView.getUint16(k, true); k += 2;
-                link.atr4 = linkView.getUint16(k, true); k += 2;
-                link.atr5 = linkView.getUint16(k, true); k += 2;
-                console.debug(`Link Record: fs_name=${link.fs_name}, f_id=${link.f_id}, atr1=${link.atr1}, atr2=${link.atr2}, atr3=${link.atr3}, atr4=${link.atr4}, atr5=${link.atr5}`);
+                link.link_id = Number(linkView.getUint16(pos, true)) + 1; pos += 2;
+                link.atr1 = linkView.getUint16(pos, true); pos += 2;
+                link.atr2 = linkView.getUint16(pos, true); pos += 2;
+                link.atr3 = linkView.getUint16(pos, true); pos += 2;
+                link.atr4 = linkView.getUint16(pos, true); pos += 2;
+                link.atr5 = linkView.getUint16(pos, true); pos += 2;
+                
+                console.debug(`Link Record: fs_name=${link.fs_name}, link_id=${link.link_id}`);
+
+                // ファイルごとにlinkRecordListを管理
+                if (!linkRecordList[i]) {
+                    linkRecordList[i] = [];
+                }
+                linkRecordList[i].push(link); // リンクレコードを保存 (ファイルインデックス別)
 
                 recordData = linkData;
             } else if (rhead.type === 1) {
@@ -790,16 +1066,18 @@ function pass2(LHEAD) {
                 let tempsize = 0;
                 while (rhead.size - tempsize > BUFFERSIZE) {
                     xRead(compMethod, buffer, BUFFERSIZE);
-                    recordData.set(buffer.slice(0, BUFFERSIZE), tempsize);
+                    recordData.set(buffer.slice(), tempsize);
                     tempsize += BUFFERSIZE;
                 }
-                
+
                 if (rhead.size - tempsize > 0) {
                     const remaining = new Uint8Array(rhead.size - tempsize);
                     xRead(compMethod, remaining, rhead.size - tempsize);
                     recordData.set(remaining, tempsize);
                 }
-                tadDataArray(recordData);
+                // 新設計：nfilesとfileIndexを明示的に渡す
+                const nfiles = (typeof GHEAD !== 'undefined' && GHEAD.nfiles) ? GHEAD.nfiles : 1;
+                tadDataArray(recordData, false, nfiles, currentFileIndex);
                 if (isProcessingBpk) {
                     currentFileIndex++;
                 }
@@ -808,7 +1086,7 @@ function pass2(LHEAD) {
                 let tempsize = 0;
                 while (rhead.size - tempsize > BUFFERSIZE) {
                     xRead(compMethod, buffer, BUFFERSIZE);
-                    recordData.set(buffer.slice(0, BUFFERSIZE), tempsize);
+                    recordData.set(buffer.slice(), tempsize);
                     tempsize += BUFFERSIZE;
                 }
                 
@@ -832,7 +1110,8 @@ function pass2(LHEAD) {
  */
 function tadVer(tadSeg) {
     if (tadSeg[0] === Number(0x0000)) {
-        console.log("TadVer " + IntToHex((tadSeg[2]),4).replace('0x',''));
+        linkNo = 0;
+        console.debug("TadVer " + IntToHex((tadSeg[2]),4).replace('0x',''));
     }
 
 }
@@ -843,6 +1122,9 @@ function tadVer(tadSeg) {
  * @param {0x0000[]} tadSeg 
  */
 function tsTextStart(tadSeg) {
+    // 文章セグメント処理開始フラグをオン
+    isInTextSegment = true;
+    
     let textChar = new STARTTEXTSEG();
     if (startTadSegment == false) {
         startTadSegment = true;
@@ -937,7 +1219,7 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
 
     textFontSet = textFontSize + 'px serif';
     ctx.fillStyle = textFontColor;
-    console.debug("textFontColor:" + textFontColor);
+    //console.debug("textFontColor:" + textFontColor);
     ctx.font = textFontSet;
     ctx.textBaseline = "top";
 
@@ -1005,6 +1287,11 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
         textWidth += ctx.measureText(char).width * (1 + textPitch);
         textColumn++;
     }
+    
+    // virtual領域の拡大チェック
+    const right = startX + textWidth;
+    const bottom = startY + textHeight + lineHeight;
+    expandVirtualArea(startX, startY, right, bottom);
 }
 
 /**
@@ -1013,6 +1300,7 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
  * @param {0x0000[]} tadSeg 
  */
 function tsTextEnd(tadSeg) {
+    isInTextSegment = false;  // 文章セグメント終了
 
     const textChar = textCharData[textNest-1];
 
@@ -1170,31 +1458,31 @@ function tadPageSetFusen(segLen, tadSeg) {
     const UB_SubID = getTopUBinUH(tadSeg[0]);
 
     if (UB_SubID === Number(0x00)) {
-        console.log("用紙指定付箋");
+        console.debug("用紙指定付箋");
         tsSizeOfPaperSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x01)) {
-        console.log("マージン指定付箋");
+        console.debug("マージン指定付箋");
         tsSizeOfMarginSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x02)) {
-        console.log("コラム指定付箋");
+        console.debug("コラム指定付箋");
         tsSizeOfColumnSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x03)) {
-        console.log("用紙オーバーレイ定義付箋");
+        console.debug("用紙オーバーレイ定義付箋");
         tsSizeOfPaperOverlayDefineFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x04)) {
-        console.log("用紙オーバーレイ指定付箋");
+        console.debug("用紙オーバーレイ指定付箋");
         tsSizeOfPaperOverlaySetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x05)) {
-        console.log("枠あけ指定付箋");
+        console.debug("枠あけ指定付箋");
         // TODO: 未実装
     } else if (UB_SubID === Number(0x06)) {
-        console.log("ページ番号指定付箋");
+        console.debug("ページ番号指定付箋");
         // TODO: 未実装
     } else if (UB_SubID === Number(0x07)) {
-        console.log("条件改ページ指定付箋");
+        console.debug("条件改ページ指定付箋");
         // TODO: 未実装
     } else if (UB_SubID === Number(0x08)) {
-        console.log("充填行指定付箋");
+        console.debug("充填行指定付箋");
         // TODO: 未実装
     } 
 }
@@ -1280,23 +1568,23 @@ function tadRulerSetFusen(segLen, tadSeg) {
     const UB_SubID = getTopUBinUH(tadSeg[0]);
 
     if (UB_SubID === Number(0x00)) {
-        console.log("行間隔指定付箋");
+        console.debug("行間隔指定付箋");
         tsRulerLineSpacingSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x01)) {
-        console.log("行揃え指定付箋");
+        console.debug("行揃え指定付箋");
         tsRulerLineAlignmentSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x02)) {
-        console.log("タブ書式指定付箋");
+        console.debug("タブ書式指定付箋");
         // TODO: 未実装
     } else if (UB_SubID === Number(0x03)) {
-        console.log("フィールド書式指定付箋");
+        console.debug("フィールド書式指定付箋");
         // TODO: 未実装
     } else if (UB_SubID === Number(0x04)) {
-        console.log("文字方向指定付箋");
+        console.debug("文字方向指定付箋");
         tsRulerLineDirectionSetFusen(segLen, tadSeg);
         // TODO: 未実装
     } else if (UB_SubID === Number(0x05)) {
-        console.log("行頭移動指定付箋");
+        console.debug("行頭移動指定付箋");
         tsRulerLineMoveSetFusen(segLen, tadSeg);
     }
 }
@@ -1312,8 +1600,7 @@ function tsFontNameSetFusen(segLen,tadSeg) {
         return;
     }
     for(let offsetLen=2;offsetLen<tadSeg.length;offsetLen++) {
-        console.log(IntToHex((tadSeg[offsetLen]),4).replace('0x',''));
-        console.log(charTronCode(tadSeg[offsetLen]));
+        console.debug(charTronCode(tadSeg[offsetLen]));
     }
 }
 
@@ -1407,25 +1694,25 @@ function tadFontSetFusen(segLen, tadSeg) {
     const UB_SubID = getTopUBinUH(tadSeg[0]);
 
     if (UB_SubID === Number(0x00)) {
-        console.log("フォント指定付箋");
+        console.debug("フォント指定付箋");
         tsFontNameSetFusen(segLen,tadSeg);
     } else if (UB_SubID === Number(0x01)) {
-        console.log("フォント属性指定付箋");
+        console.debug("フォント属性指定付箋");
     } else if (UB_SubID === Number(0x02)) {
-        console.log("文字サイズ指定付箋");
+        console.debug("文字サイズ指定付箋");
         tsFontSizeSetFusen(segLen,tadSeg);
     } else if (UB_SubID === Number(0x03)) {
-        console.log("文字拡大／縮小指定付箋");
+        console.debug("文字拡大／縮小指定付箋");
     } else if (UB_SubID === Number(0x04)) {
-        console.log("文字間隔指定付箋");
+        console.debug("文字間隔指定付箋");
         tsFontSpacingSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x05)) {
-        console.log("文字回転指定付箋");
+        console.debug("文字回転指定付箋");
     } else if (UB_SubID === Number(0x06)) {
-        console.log("文字カラー指定付箋");
+        console.debug("文字カラー指定付箋");
         tsFontColorSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x07)) {
-        console.log("文字基準位置移動付箋");
+        console.debug("文字基準位置移動付箋");
     }
 }
 
@@ -1434,6 +1721,8 @@ function tadFontSetFusen(segLen, tadSeg) {
  * @param {0x0000[]} tadSeg 
  */
 function tsFig(tadSeg) {
+    isInTextSegment = false;  // 図形セグメント開始（文章セグメント処理終了）
+    
     if (startTadSegment == false) {
         startTadSegment = true;
         startByImageSegment = true;
@@ -1637,7 +1926,7 @@ function tsFigPolygonDraw(segLen, tadSeg) {
         }
         polygonPoint += IntToHex((tadSeg[offsetLen]),4).replace('0x','');
     }
-    console.log(polygonPoint);
+    console.debug(polygonPoint);
     ctx.closePath();
     ctx.stroke();
     ctx.fillStyle = drawFillColor;
@@ -1678,7 +1967,7 @@ function tsFigLineDraw(segLen, tadSeg) {
         }
         linePoint += IntToHex((tadSeg[offsetLen]),4).replace('0x','');
     }
-    console.log(linePoint);
+    console.debug(linePoint);
 
     ctx.stroke();
     return;
@@ -1843,33 +2132,33 @@ function tsFigDraw(segLen, tadSeg) {
     const UB_SubID = getTopUBinUH(tadSeg[0]);
     
     if (UB_SubID === Number(0x00)) {
-        console.log("長方形セグメント");
+        console.debug("長方形セグメント");
         tsFigRectAngleDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x01)) {
-        console.log("角丸長方形セグメント");
+        console.debug("角丸長方形セグメント");
         tsFigRoundRectAngleDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x02)) {
-        console.log("楕円セグメント");
+        console.debug("楕円セグメント");
         tsFigEllipseDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x03)) {
-        console.log("扇形セグメント");
+        console.debug("扇形セグメント");
     } else if (UB_SubID === Number(0x04)) {
-        console.log("弓形セグメント");
+        console.debug("弓形セグメント");
     } else if (UB_SubID === Number(0x05)) {
-        console.log("多角形セグメント");
+        console.debug("多角形セグメント");
         tsFigPolygonDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x06)) {
-        console.log("直線セグメント");
+        console.debug("直線セグメント");
         tsFigLineDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x07)) {
-        console.log("楕円弧セグメント");
+        console.debug("楕円弧セグメント");
         tsFigEllipticalArcDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x08)) {
-        console.log("折れ線セグメント");
+        console.debug("折れ線セグメント");
         tsFigPolylineDraw(segLen, tadSeg);
     // TODO :未対応
     } else if (UB_SubID === Number(0x09)) {
-        console.log("曲線セグメント");
+        console.debug("曲線セグメント");
         tsFigCurveDraw(segLen, tadSeg);
     }
 }
@@ -1931,16 +2220,16 @@ function tsDataSet(segLen, tadSeg) {
     const UB_SubID = getTopUBinUH(tadSeg[0]);
     
     if (UB_SubID === Number(0x00)) {
-        console.log("カラーマップ定義セグメント");
+        console.debug("カラーマップ定義セグメント");
     } else if (UB_SubID === Number(0x01)) {
-        console.log("マスクデータ定義セグメント");
+        console.debug("マスクデータ定義セグメント");
     } else if (UB_SubID === Number(0x02)) {
         tsFigColorPattern(segLen, tadSeg);
-        console.log("パターン定義セグメント");
+        console.debug("パターン定義セグメント");
     } else if (UB_SubID === Number(0x03)) {
-        console.log("線種定義セグメント");
+        console.debug("線種定義セグメント");
     } else if (UB_SubID === Number(0x04)) {
-        console.log("マーカー定義セグメント");
+        console.debug("マーカー定義セグメント");
     }
 }
 
@@ -1969,16 +2258,81 @@ function tsVirtualObjSegment(segLen, tadSeg) {
     let linkRecordData = new Array();
     for(let offsetLen=15;offsetLen<tadSeg.length;offsetLen++) {
         linkRecordData.push(tadSeg[offsetLen]);
+//        let char = charTronCode(Number(tadSeg[offsetLen]));
+//        console.debug("linkRecordData[" + offsetLen + "] = [" + char + "] " + IntToHex((tadSeg[offsetLen]),4).replace('0x',''));
     }
+
+    let newLink = new LINK();
+    if (isProcessingBpk) {
+        newLink = linkRecordList[currentFileIndex][linkNo];
+        newLink.left = vobj.left;
+        newLink.top = vobj.top;
+        newLink.right = vobj.right;
+        newLink.bottom = vobj.bottom;
+        newLink.dlen = vobj.dlen;
+    }
+
+    
+    // virtual領域の拡大チェック
+    expandVirtualArea(vobj.left, vobj.top, vobj.right, vobj.bottom);
+
+
+    // LHEADからlink_nameを取得
+    if (LHEAD && LHEAD[newLink.link_id - 1]) {
+        const lhead = LHEAD[newLink.link_id - 1];
+        newLink.link_name = lhead.name;
+    }
+
+    // 文章セグメント処理中かどうかで描画位置を変更
+    let drawLeft, drawTop, drawRight, lineTop, lineBottom;
+    if (isInTextSegment) {
+        
+        // テキスト位置を仮身の幅分調整
+        if (textWidth + (newLink.right - newLink.left) > canvasW) {
+            textHeight += textFontSize * lineSpacingPitch;
+            textRow++;
+            textWidth = 0;
+        }
+
+        // 文章セグメント処理中：drawText座標系での描画位置に仮身の枠を配置
+        drawLeft = textWidth;
+        drawTop = textHeight;
+        lineTop = textHeight ;
+        drawRight = drawLeft + (newLink.right - newLink.left);
+        lineBottom = lineTop + textFontSize;
+
+        // 文章セグメントの位置にリンク位置を修正
+        newLink.left = drawLeft;
+        newLink.top = lineTop;
+        newLink.right = drawRight;
+        newLink.bottom = lineBottom;
+
+    } else {
+        // 図形セグメント処理中：従来通りの絶対座標
+        drawLeft = newLink.left;
+        drawTop = newLink.top;
+        drawRight = newLink.right;
+    }
+
+    textWidth += newLink.right - newLink.left;
+
+    //drawText(ctx, newLink.link_name, 9.6, drawLeft, drawTop, drawRight - drawLeft, textSpacingPitch, lineSpacingPitch, 0);
+    ctx.fillText(newLink.link_name,  drawLeft, drawTop);
+
     ctx.beginPath();
-    ctx.rect(vobj.left, vobj.top, vobj.right - vobj.left, vobj.bottom - vobj.top);
+    ctx.rect(drawLeft, lineTop, drawRight - drawLeft, lineBottom - lineTop);
     ctx.fillStyle = drawFillColor;
-    ctx.fill();
+    //ctx.fill();
     ctx.lineWidth = drawLineWidth;
     ctx.strokeStyle = drawLineColor;
     ctx.stroke();
 
-    console.debug(`left : ${vobj.left}, top : ${vobj.top}, right : ${vobj.right}, bottom : ${vobj.bottom}, dlen : ${vobj.dlen}`);
+
+
+    linkRecordList[currentFileIndex][linkNo] = newLink;
+    linkNo++;
+
+    console.debug(`仮身セグメント left : ${vobj.left}, top : ${vobj.top}, right : ${vobj.right}, bottom : ${vobj.bottom}, dlen : ${vobj.dlen}`);
 }
 
 /**
@@ -2016,7 +2370,7 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
     console.debug("書庫形式");
 
     for (offsetLen=15;offsetLen<31;offsetLen++) {
-        console.log(charTronCode(tadSeg[offsetLen]));
+        console.debug(charTronCode(tadSeg[offsetLen]));
     }
 
     const dlen = uh2uw([tadSeg[32], tadSeg[31]]);
@@ -2047,7 +2401,7 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
 
     compMethod = Number(GHEAD.compMethod);
     if ((compMethod != LH5) && (compMethod != LH0)) {
-        console.log("Error file");
+        console.debug("Error file");
         return;
     }
     let time = uh2uw([compSeg[6], compSeg[5]]);
@@ -2060,22 +2414,30 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
     /* crc テーブルを作成する */
     make_crctable();
 
-    /* CRCを初期化する */  
-
     const startPos = nowPos + 66 + 30 + 8; // nowPos38 + Number(0x42) + 30;
-    tadCompSize = GHEAD.compSize + startPos + 66 + 30; // 66は仮身セグメントの長さ、30はローカルヘッダの長さ
     tadPos = startPos;
-    origsize = GHEAD.origSize;
-    compsize = GHEAD.compSize;
+
     crc = INIT_CRC;
     
     // Initialize LH5 decoder if needed
     if (compMethod == LH5) {
+        decode_buf = new Uint8Array(DICSIZ);
+        
         lh5Decoder = new LH5Decoder();
-        lh5Decoder.init(new Uint8Array(tadRawBuffer, tadPos), 0);
+
+        // Set up global decode state accessors
+        setGlobalDecodeAccessors(
+            () => globalDecodeJ,              // getGlobalDecodeJ
+            (value) => { globalDecodeJ = value; }, // setGlobalDecodeJ
+            () => globalDecodeI,              // getGlobalDecodeI
+            (value) => { globalDecodeI = value; }, // setGlobalDecodeI
+            () => globalStaticN               // getGlobalStaticN
+        );
+        
+        tadDecodeStart(currentFileIndex);
     }
 
-    console.log("startPos : " + startPos);
+    console.debug("startPos : " + startPos);
 
     // Read extended data (ルート仮身)
     const extBuf = new Uint16Array(250);
@@ -2088,39 +2450,41 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
         extBuf[i] = extView.getUint16(i * 2, true);
     }
     
-    // if (extBuf[0] !== VOBJ) {
-    //     throw new Error('Invalid extended data');
-    // }
-    console.debug("tadPos :" + tadPos);
+    if (extBuf[0] !== VOBJ) {
+        //throw new Error('Invalid extended data');
+    }
+    if (compMethod == LH5) {
+        console.debug("globalStaticBufTop :" + globalStaticBufTop);
+    } else {
+        console.debug("tadPos :" + tadPos);
+    }
 
-    // ローカルヘッダの読込 ここから解凍しながら読込
+    // ローカルヘッダの一括読込
     LHEAD = new Array(GHEAD.nfiles);
-    console.log("localHead Num :" + GHEAD.nfiles);
-    for (let localheadLoop=0;localheadLoop<GHEAD.nfiles;localheadLoop++) {
-        console.log("localHead No:" + localheadLoop);
-        console.log("localHead tadPos" + tadPos);
+    console.debug("localHead Num :" + GHEAD.nfiles);
 
+    // 各LOCALHEADを1つずつ読み込み（デバッグのため）
+    for (let localheadLoop = 0; localheadLoop < GHEAD.nfiles; localheadLoop++) {
+        console.debug("localHead No:" + localheadLoop);
+        
+        // 1つのLOCALHEADを読み込み
         const lheadData = new Uint8Array(LOCALHEADSIZE);
         xRead(compMethod, lheadData, LOCALHEADSIZE);
-
+        
         const lhead = new LocalHead();
         const view = new DataView(lheadData.buffer);
         let offset = 0;
-        let compLocalHeadSeg = new Array();
-        for(let i = 0; i < 48; i++) {
-            compLocalHeadSeg.push(view.getUint16(i));
-        }
 
         lhead.f_type = view.getUint16(offset, true); offset += 2;
         lhead.f_atype = view.getUint16(offset, true); offset += 2;
         
         // Read name (20 TC chars = 40 bytes)
         for (let j = 0; j < 20; j++) {
-            lhead.name[j] = view.getUint16(offset, true);
+            lhead.name += charTronCode(Number(view.getUint16(offset, true)));
             offset += 2;
         }
 
-        lhead.origId = IntToHex(view.getUint16(offset, true), 4).replace('0x', ''); offset += 2;
+        lhead.origId = Number(view.getUint16(offset, true)); offset += 2;
         lhead.compMethod = Number(view.getUint16(offset, true)); offset += 2;
         lhead.origSize = Number(uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]); offset += 4;
         lhead.compSize = Number(uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]); offset += 4;
@@ -2130,13 +2494,13 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
 
         lhead.f_nlink = IntToHex(view.getUint16(offset, true), 4).replace('0x', ''); offset += 2;
         lhead.crc = IntToHex(view.getUint16(offset, true), 4).replace('0x', ''); offset += 2;
-        lhead.f_size = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
-        lhead.offset = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
+        lhead.f_size = Number(uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]); offset += 4;
+        lhead.offset = Number(uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]); offset += 4;
         lhead.f_nrec = Number(uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]); offset += 4;
-        lhead.f_ltime = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
-        lhead.f_atime = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
-        lhead.f_mtime = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
-        lhead.f_ctime = uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]; offset += 4;
+        lhead.f_ltime = Number(uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]); offset += 4;
+        lhead.f_atime = Number(uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]); offset += 4;
+        lhead.f_mtime = Number(uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]); offset += 4;
+        lhead.f_ctime = Number(uh2uw([view.getUint16(offset + 2, true), view.getUint16(offset, true)])[0]); offset += 4;
 
         console.debug("LocalHead_name :" + lhead.name);
         console.debug("LocalHead_origId :" + lhead.origId);
@@ -2151,14 +2515,13 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
         console.debug("LocalHead_f_ltime :" + lhead.f_ltime);
         
         LHEAD[localheadLoop] = lhead;
-        tadPos += LOCALHEADSIZE; // ローカルヘッダの長さ分進める
     }
-
+    
     pass1();
-    console.log('PASS1 ok!!');
+    console.debug('PASS1 ok!!');
 
     pass2(LHEAD);
-    console.log('PASS2 ok!!');
+    console.debug('PASS2 ok!!');
 }
 
 /**
@@ -2169,71 +2532,71 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
  * @param {int} nowPos
  */
 function tadPerse(segID, segLen, tadSeg, nowPos) {
-    console.log("tadSeg " + IntToHex((segID),4).replace('0x',''));
+    console.debug("tadSeg " + IntToHex((segID),4).replace('0x',''));
 
     if (segID === Number(TS_INFO)) {
-        console.log('管理情報セグメント');
+        console.debug('管理情報セグメント');
         tadVer(tadSeg);
     } else if (segID === Number(TS_TEXT)) {
-        console.log('文章開始セグメント');
+        console.debug('文章開始セグメント');
         tsTextStart(tadSeg);
     } else if (segID === Number(TS_TEXTEND)) {
-        console.log('文章終了セグメント');
+        console.debug('文章終了セグメント');
         tsTextEnd(tadSeg);
     } else if (segID === Number(TS_FIG)) {
-        console.log('図形開始セグメント');
+        console.debug('図形開始セグメント');
         tsFig(tadSeg);
     } else if (segID === Number(TS_FIGEND)) {
-        console.log('図形終了セグメント');
+        console.debug('図形終了セグメント');
     } else if (segID === Number(TS_IMAGE)) {
-        console.log('画像セグメント');
+        console.debug('画像セグメント');
     } else if (segID === Number(TS_VOBJ)) {
-        console.log('仮身セグメント');
+        console.debug('仮身セグメント');
         tsVirtualObjSegment(segLen, tadSeg);
     } else if (segID === Number(TS_DFUSEN)) {
-        console.log('指定付箋セグメント');
+        console.debug('指定付箋セグメント');
         tsSpecitySegment(segLen, tadSeg, nowPos);
     } else if (segID === Number(TS_FFUSEN)) {
-        console.log('機能付箋セグメント');
+        console.debug('機能付箋セグメント');
     } else if (segID === Number(TS_TPAGE)) {
-        console.log('文章ページ割付け指定付箋');
+        console.debug('文章ページ割付け指定付箋');
         tadPageSetFusen(segLen, tadSeg);
     } else if (segID === Number(TS_TRULER)) {
-        console.log('行書式指定付箋');
+        console.debug('行書式指定付箋');
         tadRulerSetFusen(segLen, tadSeg);
     } else if (segID === Number(TS_TFONT)) {
-        console.log('文字指定付箋');
+        console.debug('文字指定付箋');
         tadFontSetFusen(segLen, tadSeg);
     } else if (segID === Number(TS_TCHAR)) {
-        console.log('特殊文字指定付箋');
+        console.debug('特殊文字指定付箋');
     } else if (segID === Number(TS_TATTR)) {
-        console.log('文字割り付け指定付箋');
+        console.debug('文字割り付け指定付箋');
     } else if (segID === Number(TS_TSTYLE)) {
-        console.log('文字修飾指定付箋');
+        console.debug('文字修飾指定付箋');
     } else if (segID === Number(TS_TVAR)) {
-        console.log('変数参照指定付箋');
+        console.debug('変数参照指定付箋');
     } else if (segID === Number(TS_TMEMO)) {
-        console.log('文章メモ指定付箋');
+        console.debug('文章メモ指定付箋');
     } else if (segID === Number(TS_TAPPL)) {
-        console.log('文章アプリケーション指定付箋');
+        console.debug('文章アプリケーション指定付箋');
     } else if (segID === Number(TS_FPRIM)) {
-        console.log('図形要素セグメント');
+        console.debug('図形要素セグメント');
         tsFigDraw(segLen, tadSeg);
     } else if (segID === Number(TS_FDEF)) {
-        console.log('データ定義セグメント');
+        console.debug('データ定義セグメント');
         tsDataSet(segLen, tadSeg);
     } else if (segID === Number(TS_FGRP)) {
-        console.log('グループ定義セグメント');
+        console.debug('グループ定義セグメント');
     } else if (segID === Number(TS_FMAC)) {
-        console.log('マクロ定義/参照セグメント');
+        console.debug('マクロ定義/参照セグメント');
     } else if (segID === Number(TS_FATTR)) {
-        console.log('図形修飾セグメント');
+        console.debug('図形修飾セグメント');
     } else if (segID === Number(TS_FPAGE)) {
-        console.log('図形ページ割り付け指定付箋');
+        console.debug('図形ページ割り付け指定付箋');
     } else if (segID === Number(TS_FMEMO)) {
-        console.log('図形メモ指定付箋');
+        console.debug('図形メモ指定付箋');
     } else if (segID === Number(TS_FAPPL)) {
-        console.log('図形アプリケーション指定付箋');
+        console.debug('図形アプリケーション指定付箋');
     }
 }
 
@@ -2244,12 +2607,11 @@ function tadPerse(segID, segLen, tadSeg, nowPos) {
  * @returns 
  */
 function charTronCode(char) {
-    let charBuffer = new ArrayBuffer(2);
-    let dv = new DataView(charBuffer);
+    const charBuffer = new ArrayBuffer(2);
+    const dv = new DataView(charBuffer);
     dv.setUint16(0, char);
 
-    let char8 = new Array(Number(dv.getUint8(0,false)),Number(dv.getUint8(1,false)));
-    //var char8 = new Array();
+    const char8 = new Array(Number(dv.getUint8(0,false)),Number(dv.getUint8(1,false)));
     let int1 = Number(dv.getUint8(0,false));
     let int2 = Number(dv.getUint8(1,false));
 
@@ -2259,9 +2621,8 @@ function charTronCode(char) {
     if ((char >= Number(0xfe21) && char <= Number(0xfe7e) )
     || (char >= Number(0xfe80) && char <= Number(0xfefe))) {
         tronCodeMask[textNest] = char - Number(0xfe21) + 1;
-        console.log("TRON Code面 :" + tronCodeMask[textNest])
+        console.debug("TRON Code面 :" + tronCodeMask[textNest])
     }
-
 
     // TRONコード 第1面 Aゾーン(JIS X 0208)をjsのUNICODEに変換
     // TODO: JIS2UNICODEが上手く動作しないため、JISをSJISに変換後、SJI2UNICODEを実施
@@ -2280,8 +2641,6 @@ function charTronCode(char) {
         if (int2 >= Number(0x7f)) {
             int2 = int2 + Number(1);
         }
-        
-        //console.log('JIS Zone');
 
         const unicodeArray = Encoding.convert([int1,int2],{
             to: 'UNICODE',
@@ -2300,53 +2659,113 @@ function charTronCode(char) {
     }
     return text;
 }
-let moveflg = 0,
-    Xpoint,
-    Ypoint;
+// let moveflg = 0,
+//     Xpoint,
+//     Ypoint;
 
 //初期値（サイズ、色、アルファ値）の決定
-let defSize = 7,
-    defColor = "#555";
+// let defSize = 7,
+//     defColor = "#555";
 
-function startPoint(e) {
-    e.preventDefault();
-    ctx.beginPath();
-    Xpoint = e.pageX - canvas.offsetLeft;
-    Ypoint = e.pageY - canvas.offsetTop;
-    ctx.moveTo(Xpoint, Ypoint);
+// function startPoint(e) {
+//     e.preventDefault();
+//     ctx.beginPath();
+//     Xpoint = e.pageX - canvas.offsetLeft;
+//     Ypoint = e.pageY - canvas.offsetTop;
+//     ctx.moveTo(Xpoint, Ypoint);
+// }
+
+function mouseDownListner(e) {
+    var rect = e.target.getBoundingClientRect();
+	//座標取得
+	const mouseX1 = e.clientX - rect.left;
+	const mouseY1 = e.clientY - rect.top;
+    
+    console.debug(`Mouse clicked at (${mouseX1}, ${mouseY1})`);
+
+    // 現在のタブインデックスを取得 
+    // currentTabIndexはindex_old2.htmlで定義されるが、BPK処理中はcurrentFileIndexと対応する
+    let tabIndex = 0;
+    if (typeof currentTabIndex !== 'undefined') {
+        tabIndex = currentTabIndex;
+    } else if (isProcessingBpk && currentFileIndex > 0) {
+        tabIndex = currentFileIndex - 1; // currentFileIndexは次のファイル用に既にインクリメントされている
+    }
+    
+    console.debug(`Current tab index: ${tabIndex}`);
+    
+    // リンク座標リストを参照してリストにあればリンク先を参照する
+    if (linkRecordList && linkRecordList[tabIndex] && linkRecordList[tabIndex].length > 0) {
+        //console.debug(`Checking ${linkRecordList[tabIndex].length} links for tab ${tabIndex}`);
+        
+        for (const link of linkRecordList[tabIndex]) {
+            //console.debug(`Link:`, link);
+            
+            // リンクに座標情報がある場合のみチェック
+            if (link.left !== undefined && link.right !== undefined && 
+                link.top !== undefined && link.bottom !== undefined) {
+                
+                if (mouseX1 >= link.left && mouseX1 <= link.right &&
+                    mouseY1 >= link.top && mouseY1 <= link.bottom) {
+
+                    console.debug(`Link clicked: ${link.link_name} (ID: ${link.link_id})`);
+
+                    // link_idがある場合は対応するcanvasタブに移動
+                    if (link.link_id && link.link_id > 0) {
+                        // link_idを0ベースのタブインデックスに変換
+                        const targetTabIndex = link.link_id - 1;
+                        
+                        console.debug(`Navigating to tab ${targetTabIndex} for link_id ${link.link_id}`);
+                        
+                        // index_old2.htmlのswitchTab関数を呼び出し
+                        if (typeof switchTab === 'function') {
+                            switchTab(targetTabIndex);
+                            console.debug(`Switched to tab ${targetTabIndex}`);
+                        } else {
+                            console.warn('switchTab function not available');
+                            alert(`Link to tab ${targetTabIndex} (${link.link_name})`);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    } else {
+        console.debug(`No links found for tab ${tabIndex}`);
+    }
 }
 
 /**
  * マウスやタッチでの描画処理
  */
-function movePoint(e) {
-    if (e.buttons === 1 || e.which === 1 || e.type == 'touchmove') {
-        Xpoint = e.pageX - canvas.offsetLeft;
-        Ypoint = e.pageY - canvas.offsetTop;
-        moveflg = 1;
+// function movePoint(e) {
+//     if (e.buttons === 1 || e.which === 1 || e.type == 'touchmove') {
+//         Xpoint = e.pageX - canvas.offsetLeft;
+//         Ypoint = e.pageY - canvas.offsetTop;
+//         moveflg = 1;
 
-        ctx.lineTo(Xpoint, Ypoint);
-        ctx.lineCap = "round";
-        ctx.lineWidth = defSize * 2;
-        ctx.strokeStyle = defColor;
-        ctx.stroke(); 
-    }
-}
+//         ctx.lineTo(Xpoint, Ypoint);
+//         ctx.lineCap = "round";
+//         ctx.lineWidth = defSize * 2;
+//         ctx.strokeStyle = defColor;
+//         ctx.stroke(); 
+//     }
+// }
 
 /**
  * 描画処理終了
  * @param {*} e 
  */
-function endPoint(e) {
-    if (moveflg === 0) {
-        ctx.lineTo(Xpoint-1, Ypoint-1);
-        ctx.lineCap = "round";
-        ctx.lineWidth = defSize * 2;
-        ctx.strokeStyle = defColor;
-        ctx.stroke();
-    }
-    moveflg = 0;
-}
+// function endPoint(e) {
+//     if (moveflg === 0) {
+//         ctx.lineTo(Xpoint-1, Ypoint-1);
+//         ctx.lineCap = "round";
+//         ctx.lineWidth = defSize * 2;
+//         ctx.strokeStyle = defColor;
+//         ctx.stroke();
+//     }
+//     moveflg = 0;
+// }
 
 /**
  * キャンバスをクリア
@@ -2386,28 +2805,99 @@ function canvasInit(canvasId) {
         
         canvas.width = canvasW;
         canvas.height = canvasH;
+        
+        // スクロールオフセットを適用
+        applyScrollOffset();
 
         ctx.fillStyle = 'white'; // 背景色を白に設定
         ctx.fillRect(0, 0, ctx.canvas.clientWidth, ctx.canvas.clientHeight);
     }
+
+    // リンク対応
+    canvas.addEventListener("mousedown", mouseDownListner, false);
     
     // PC対応
-    canvas.addEventListener('mousedown', startPoint, false);
-    canvas.addEventListener('mousemove', movePoint, false);
-    canvas.addEventListener('mouseup', endPoint, false);
+    //canvas.addEventListener('mousedown', startPoint, false);
+    //canvas.addEventListener('mousemove', movePoint, false);
+    //canvas.addEventListener('mouseup', endPoint, false);
     // スマホ対応
-    canvas.addEventListener('touchstart', startPoint, false);
-    canvas.addEventListener('touchmove', movePoint, false);
-    canvas.addEventListener('touchend', endPoint, false);
+    //canvas.addEventListener('touchstart', startPoint, false);
+    //canvas.addEventListener('touchmove', movePoint, false);
+    //canvas.addEventListener('touchend', endPoint, false);
 }
 
-function tadDataArray(raw) {
+function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
     if (raw && raw.p instanceof Uint8Array) {
         raw = raw.p;
     }
 
-    // Create new tab if processing BPK with multiple files
-    if (isProcessingBpk && currentFileIndex > 0) {
+    // === 新設計：各TADファイル(nfiles)ごとのcanvas描画システム ===
+    
+    // パラメータの決定
+    if (nfiles === null) {
+        nfiles = (typeof GHEAD !== 'undefined' && GHEAD.nfiles) ? GHEAD.nfiles : 1;
+    }
+    if (fileIndex === null) {
+        fileIndex = (typeof currentFileIndex !== 'undefined') ? currentFileIndex : 0;
+    }
+    
+    console.debug(`*** New tadDataArray: nfiles=${nfiles}, fileIndex=${fileIndex}, isRedrawn=${isRedrawn} ***`);
+    
+    // TADファイルごとのrawデータを保管
+    if (!isRedrawn && raw && raw.length > 0) {
+        if (!tadRawDataArray[fileIndex]) {
+            tadRawDataArray[fileIndex] = new Uint8Array(raw);
+            console.debug(`TAD raw data saved for file ${fileIndex}, size: ${raw.length}`);
+        }
+    }
+    
+    // 再描画時は保存されたrawデータを使用
+    if (isRedrawn && tadRawDataArray[fileIndex]) {
+        raw = tadRawDataArray[fileIndex];
+        console.debug(`Using saved raw data for file ${fileIndex}, size: ${raw.length}`);
+    }
+    
+    // TADファイルごとのcanvasを生成
+    const tadCanvas = createTadFileCanvas(fileIndex, 2000, 2000);
+    const tadCtx = tadFileContexts[fileIndex];
+    
+    // 描画コンテキストを一時的にTADファイル用canvasに切り替え
+    const originalCanvas = canvas;
+    const originalCtx = ctx;
+    canvas = tadCanvas;
+    ctx = tadCtx;
+    
+    // tabIndexを定義（fileIndexをtabIndexとして使用）
+    const tabIndex = fileIndex;
+    
+    // タブのスクロール状態を初期化（必要な場合のみ）
+    if (!isRedrawn) {
+        initTabScrollState(tabIndex);
+        syncTabStateToGlobals(tabIndex);
+    }
+    
+    // 再描画時はスクロール状態をリセットしない
+    if (!isRedrawn) {
+        // virtual領域を初期値にリセット（新しいファイル処理開始時）
+        if (!isProcessingBpk || currentFileIndex === 0) {
+            // 完全に初期化
+            resetTabScrollState(tabIndex);
+            syncTabStateToGlobals(tabIndex);
+        } else {
+            // 既存タブの状態を初期化してからグローバル変数に反映
+            initTabScrollState(tabIndex);
+            const state = getTabScrollState(tabIndex);
+            scrollX = state.scrollX;
+            scrollY = state.scrollY;
+            virtualW = state.virtualW;
+            virtualH = state.virtualH;
+            showHScrollBar = state.showHScrollBar;
+            showVScrollBar = state.showVScrollBar;
+        }
+    }
+
+    // Create new tab if processing BPK with multiple files (only for initial processing, not redraws)
+    if (!isRedrawn && isProcessingBpk && currentFileIndex > 0) {
         if (typeof createNewTab === 'function') {
             createNewTab(currentFileIndex);
         }
@@ -2507,6 +2997,58 @@ function tadDataArray(raw) {
         tadTextDump += '\r\n';
         tadTextDump += IntToHex((i),8).replace('0x','') + ' ';
     }
+    
+    // スクロールオフセットを復元
+    restoreScrollOffset();
+    
+    // TAD処理完了後にスクロールバーを更新
+    const finalState = getTabScrollState(tabIndex);
+    console.debug('TAD processing completed');
+    console.debug(`Final state for tab ${tabIndex}:`, finalState);
+    
+    updateScrollBars();
+    
+    // スクロールバーが必要な場合のみハンドル更新
+    if ((finalState.showHScrollBar || finalState.showVScrollBar) && typeof updateScrollBarHandles === 'function') {
+        setTimeout(() => {
+            updateScrollBarHandles();
+        }, 100);
+    }
+    
+    // 描画内容を描画バッファ領域に保存
+    saveTadFileDrawBuffer(fileIndex);
+    
+    // 描画コンテキストを元に戻す
+    canvas = originalCanvas;
+    ctx = originalCtx;
+    
+    // nfiles=1の場合：直接tab 0に表示
+    // nfiles>=2の場合：現在のfileIndexに対応するタブに表示
+    const displayTabIndex = (nfiles === 1) ? 0 : fileIndex;
+    
+    // タブが存在する場合のみ表示処理を実行
+    if (typeof document !== 'undefined') {
+        const targetCanvas = document.getElementById(`canvas-${displayTabIndex}`);
+        if (targetCanvas) {
+            // 初期表示時はtab 0のみ即座に描画、他のタブは遅延描画
+            if (displayTabIndex === 0 && !isRedrawn) {
+                // 描画バッファから表示用canvasに描画
+                const state = getTabScrollState(displayTabIndex);
+                renderFromTadFileDrawBuffer(fileIndex, displayTabIndex, state.scrollX, state.scrollY);
+                console.debug(`*** INITIAL DISPLAY: rendering file ${fileIndex} to tab ${displayTabIndex} ***`);
+            } else if (!isRedrawn) {
+                // 他のタブは遅延描画（必要時にのみ描画）
+                console.debug(`*** DEFERRED RENDERING: file ${fileIndex} ready for tab ${displayTabIndex} ***`);
+            } else {
+                // 再描画時は即座に実行
+                const state = getTabScrollState(displayTabIndex);
+                renderFromTadFileDrawBuffer(fileIndex, displayTabIndex, state.scrollX, state.scrollY);
+            }
+        }
+    }
+    
+    console.debug(`*** TAD file ${fileIndex} processing completed ***`);
+    
     document.getElementById('BainryInfo').innerHTML = 
         'This File Size : ' + setComma(raw.length) +' Byte<br>Maximum displaye Size : 1000KB(1,000,000 Byte)';
     document.getElementById('tadDumpView').innerHTML = htmlspecialchars(tadTextDump);  
@@ -2526,6 +3068,16 @@ function onAddFile(event) {
     // Reset flags for new file
     isProcessingBpk = false;
     currentFileIndex = 0;
+    linkRecordList = [];  // Reset linkRecordList as two-dimensional array
+    linkRecordList[0] = [];  // Initialize first index for single files
+    
+    // 新設計：TADファイル描画バッファシステムをリセット
+    tadFileCanvases = {};
+    tadFileContexts = {};
+    tadFileDrawBuffers = {};
+    tadRawDataArray = {};
+    
+    console.debug('TAD file drawing system reset');
     
     canvasInit();
     
@@ -2539,18 +3091,19 @@ function onAddFile(event) {
     for(let numLoop=0;numLoop<fileNum;numLoop++) {
         if (files[numLoop].name.includes('.000')) {
             linkRecord = files[numLoop]
-            console.log("link Record" + linkRecord)
+            console.debug("link Record" + linkRecord)
         }
         if (numLoop === (fileNum - 1)) {
             tadRecord = files[numLoop]
-            console.log("TAD Record" + tadRecord)
+            console.debug("TAD Record" + tadRecord)
         }
     }
 
     reader.onload = function (event) {
         const raw = new Uint8Array(reader.result);
         // console.debug(raw);
-        tadDataArray(raw);
+        // 新設計：単一ファイル処理（nfiles=1, fileIndex=0）
+        tadDataArray(raw, false, 1, 0);
     };
 
     if (fileNum > 0) {
@@ -2559,6 +3112,86 @@ function onAddFile(event) {
     }
 
 }
+
+/**
+ * 描画領域拡大のメソッド
+ * @param {number} left 
+ * @param {number} top 
+ * @param {number} right 
+ * @param {number} bottom 
+ */
+function expandVirtualArea(left, top, right, bottom) {
+    const tabIndex = getCurrentTabIndex();
+    const state = getTabScrollState(tabIndex);
+    let updated = false;
+    
+    let newVirtualW = state.virtualW;
+    let newVirtualH = state.virtualH;
+    
+    if (right > state.virtualW) {
+        newVirtualW = right + 50; // 余裕を持たせる
+        updated = true;
+    }
+    
+    if (bottom > state.virtualH) {
+        newVirtualH = bottom + 50; // 余裕を持たせる
+        updated = true;
+    }
+    
+    // タブ別状態を更新
+    if (updated) {
+        updateTabScrollState(tabIndex, {
+            virtualW: newVirtualW,
+            virtualH: newVirtualH
+        });
+        
+        // グローバル変数も同期
+        virtualW = newVirtualW;
+        virtualH = newVirtualH;
+    }
+    
+    // virtualW/H が canvas サイズを超えている場合は常にスクロールバーを更新
+    const needsScrollBars = newVirtualW > canvasW || newVirtualH > canvasH;
+    
+    if (updated || needsScrollBars) {
+        updateScrollBars();
+    }
+}
+
+/**
+ * スクロールバーの表示状態を更新
+ */
+function updateScrollBars() {
+    const tabIndex = getCurrentTabIndex();
+    const state = getTabScrollState(tabIndex);
+    
+    // より厳密な判定: 1px以上の差がある場合のみ表示
+    const newShowHScrollBar = state.virtualW > canvasW + 1;
+    const newShowVScrollBar = state.virtualH > canvasH + 1;
+    
+    
+    // 状態が変化した場合のみ更新
+    if (state.showHScrollBar !== newShowHScrollBar || state.showVScrollBar !== newShowVScrollBar) {
+        
+        // タブ別状態を更新
+        updateTabScrollState(tabIndex, {
+            showHScrollBar: newShowHScrollBar,
+            showVScrollBar: newShowVScrollBar
+        });
+        
+        // グローバル変数も同期
+        showHScrollBar = newShowHScrollBar;
+        showVScrollBar = newShowVScrollBar;
+        
+        // HTMLのスクロールバー更新関数を呼び出し
+        if (typeof updateScrollBarVisibility === 'function') {
+            updateScrollBarVisibility();
+        } else {
+        }
+    } else {
+    }
+}
+
 
 /**
  * TAD保存処理
@@ -2579,4 +3212,13 @@ if (typeof window !== 'undefined') {
     window.onDrop = onDrop;
     window.onDragOver = onDragOver;
     window.save = save;
+    window.tadSave = save; // Alias for save function
+    
+    console.debug('TAD.js functions exported to global scope:', {
+        onAddFile: typeof window.onAddFile,
+        onDrop: typeof window.onDrop, 
+        onDragOver: typeof window.onDragOver,
+        save: typeof window.save,
+        tadSave: typeof window.tadSave
+    });
 }
