@@ -3,7 +3,6 @@
  * Based on the LHA compression algorithm
  */
 
-(function() {
 // Constants from ar.h
 const DICBIT = 13;
 const DICSIZ = (1 << DICBIT);
@@ -15,34 +14,43 @@ const CHAR_BIT = 8;
 const UCHAR_MAX = 255;
 const NC = UCHAR_MAX + MAXMATCH + 2 - THRESHOLD;
 const CBIT = 9;
-const BITBUFSIZ = 16;
+const BITBUFSIZ = 31;
 
 // Huffman coding parameters
-const NT = CODE_BIT + 3;
-const TBIT = 5;
-const NP = DICBIT + 1;
+const H_NP = DICBIT + 1;  // 14
+const H_NT = CODE_BIT + 3; // 19
 const PBIT = 4;
+const TBIT = 5;
+const NPT = H_NT > H_NP ? H_NT : H_NP;
 
-// If NT > NP, then NT is maximum
-const NPT = NT > NP ? NT : NP;
-
+/**
+ * LH5 unified class - combines LH5Decoder and GlobalDecompressedStream
+ */
 class LH5Decoder {
     constructor() {
+        // From original LH5Decoder
+        this.bitbuf = 0;      // buffer
+        this.bitremain = 0;   // Remaining bits in buffer
+        this.compsize = 0;
+        this.origsize = 0;
+        this.crc = 0;
+        
+        // Huffman tables
         this.left = new Uint16Array(2 * NC - 1);
         this.right = new Uint16Array(2 * NC - 1);
         this.c_len = new Uint8Array(NC);
         this.pt_len = new Uint8Array(NPT);
-        this.c_table = new Uint16Array(4096);
-        this.pt_table = new Uint16Array(256);
+        this.c_table = new Uint16Array(65536);
+        this.pt_table = new Uint16Array(65536);
         
-        this.bitbuf = 0;
-        this.subbitbuf = 0;
-        this.bitcount = 0;
+        // From GlobalDecompressedStream
+        this.buffer = new Uint8Array(8192);
+        this.rpos = 0;
+        this.wpos = 0;
+        this.pos = 0;
         this.blocksize = 0;
         
-        this.decode_i = 0;
-        this.decode_j = 0;
-        
+        // File data
         this.fileData = null;
         this.filePos = 0;
     }
@@ -50,140 +58,124 @@ class LH5Decoder {
     /**
      * Initialize decoder with file data
      */
-    init(fileData, startPos) {
+    init(fileData, startPos, compsize, origsize) {
         this.fileData = fileData;
         this.filePos = startPos;
-        this.bitbuf = 0;
-        this.subbitbuf = 0;
-        this.bitcount = 0;
-        this.decode_i = 0;
-        this.decode_j = 0;
+        this.compsize = compsize;
+        this.origsize = origsize;
+        
+        // Reset stream state
+        this.rpos = 0;
+        this.wpos = 0;
+        this.pos = 0;
         this.blocksize = 0;
         
-        // Initialize bit buffer
-        this.fillbuf(BITBUFSIZ);
-
+        // Initialize bitstream
+        this.init_getbits();
     }
 
     /**
-     * Fill bit buffer
+     * Port of init_getbits() from io.c
      */
-    fillbuf(n) {
-        this.bitbuf = ((this.bitbuf << n) & 0xFFFF);
-        
-        while (n > this.bitcount) {
-            this.bitbuf |= (this.subbitbuf << (n - this.bitcount)) & 0xFFFF;
-            n -= this.bitcount;
-            
-            if (this.filePos < this.fileData.length) {
-                this.subbitbuf = this.fileData[this.filePos++];
-            } else {
-                this.subbitbuf = 0;
-            }
-            this.bitcount = CHAR_BIT;
-        }
-        
-        this.bitbuf |= (this.subbitbuf >>> (this.bitcount - n));
-        this.bitbuf &= 0xFFFF;
-        this.bitcount -= n;
+    init_getbits() {
+        this.bitbuf = 0;
+        this.bitremain = 0;
+        this.fillbuf();
     }
 
     /**
-     * Get n bits from input
+     * fillbuf() implementation
+     */
+    fillbuf() {
+        while (this.bitremain <= (BITBUFSIZ - CHAR_BIT)) {
+            if (this.filePos >= this.fileData.length || this.compsize <= 0) {
+                console.debug("End of file in fillbuf - no more data available");
+                return false;
+            }
+            
+            const subbitbuf = this.fileData[this.filePos++] & 0xFF;
+            this.compsize--;
+            
+            this.bitbuf |= (subbitbuf << (BITBUFSIZ - CHAR_BIT - this.bitremain)) & 0x7fffffff;
+            this.bitremain += CHAR_BIT;
+        }
+        return true;
+    }
+
+    /**
+     * Get bits from bitstream
      */
     getbits(n) {
+        if (n > BITBUFSIZ) {
+            console.error("getbits: len > 31 not supported");
+            return 0;
+        }
+        
+        if (!this.fillbuf()) {
+            return 0; // EOF
+        }
+        
         const x = this.bitbuf >>> (BITBUFSIZ - n);
-        this.fillbuf(n);
-        return x & 0xFFFF;
+        
+        this.bitbuf = (this.bitbuf << n) & 0x7fffffff;
+        this.bitremain -= n;
+        
+        if (this.bitremain < 0) {
+            console.warn(`bitremain went negative: ${this.bitremain}, len=${n}. Resetting to 0.`);
+            this.bitremain = 0;
+        }
+        
+        return x;
     }
 
     /**
      * Make table for decoding
      */
-    make_table(nchar, bitlen, tablebits, table) {
-        const count = new Uint16Array(17);
-        const weight = new Uint16Array(17);
-        const start = new Uint32Array(18);  // Use 32-bit for overflow check
+    make_table(nchar, bitlen, table) {
+        const count = {};
+        const start = {};
+
+        for (let i = 0; i < nchar; i++) {
+            const bitleni = bitlen[i];
+            if (bitleni > 0) {
+                count[bitleni] = (count[bitleni] || 0) + 1;
+            }
+        }
         
-        // Initialize count
-        for (let i = 1; i <= 16; i++) count[i] = 0;
-        for (let i = 0; i < nchar; i++) count[bitlen[i]]++;
-        
-        // Calculate first code
         start[1] = 0;
         for (let i = 1; i <= 16; i++) {
-            start[i + 1] = start[i] + (count[i] << (16 - i));
+            const countI = count[i] || 0;
+            start[i + 1] = start[i] + (countI << (16 - i));
         }
-        
-        if (start[17] !== (1 << 16)) {
-            console.log('make_table error:', {
-                nchar,
-                tablebits,
-                count: Array.from(count),
-                start: Array.from(start),
-                expected: 1 << 16
-            });
-            throw new Error('Bad table');
-        }
-        
-        // Shift data for make table
-        const jutbits = 16 - tablebits;
-        for (let i = 1; i <= tablebits; i++) {
-            start[i] >>>= jutbits;
-            weight[i] = 1 << (tablebits - i);
-        }
-        
-        let i = tablebits + 1;
-        while (i <= 16) {
-            weight[i] = 1 << (16 - i);
-            i++;
+
+        if (start[17] !== 0x10000) {
+            console.error(`FATAL: start[17]=${start[17]}, expected=65536`);
+            
+            // Fill table with zeros as fallback
+            for (let i = 0; i < table.length; i++) {
+                table[i] = 0;
+            }
+            return;
         }
         
         // Initialize table
-        i = start[tablebits + 1] >>> jutbits;
-        if (i !== (1 << 16)) {
-            const k = 1 << tablebits;
-            while (i < k) table[i++] = 0;
+        for (let i = 0; i < table.length; i++) {
+            table[i] = 0;
         }
-        
-        // Create table
-        let avail = nchar;
-        const mask = 1 << (15 - tablebits);
         
         for (let ch = 0; ch < nchar; ch++) {
             const len = bitlen[ch];
             if (len === 0) continue;
             
-            const nextcode = (start[len] + weight[len]) & 0xFFFF;
+            let i = start[len];
+            const nextcode = i + (1 << (16 - len));
             
-            if (len <= tablebits) {
-                // Short code
-                for (let i = start[len]; i < nextcode; i++) {
+            while (i < nextcode) {
+                if (i >= 0 && i < table.length) {
                     table[i] = ch;
                 }
-            } else {
-                // Long code
-                let k = start[len];
-                let p = k >>> jutbits;
-                
-                // Create tree
-                let i = len - tablebits;
-                while (i !== 0) {
-                    if (table[p] === 0) {
-                        this.right[avail] = this.left[avail] = 0;
-                        table[p] = avail++;
-                    }
-                    
-                    if (k & mask) {
-                        p = this.right[table[p]];
-                    } else {
-                        p = this.left[table[p]];
-                    }
-                    k <<= 1;
-                    i--;
-                }
-                table[p] = ch;
-            }
+                i++;
+            }   
             start[len] = nextcode;
         }
     }
@@ -196,198 +188,244 @@ class LH5Decoder {
         
         if (n === 0) {
             const c = this.getbits(nbit);
+            
             for (let i = 0; i < nn; i++) {
                 this.pt_len[i] = 0;
             }
-            for (let i = 0; i < 256; i++) {
+            
+            for (let i = 0; i < 65536; i++) {
                 this.pt_table[i] = c;
             }
-        } else {
-            let i = 0;
-            while (i < n) {
-                let c = this.bitbuf >>> (BITBUFSIZ - 3);
-                
-                if (c === 7) {
-                    let mask = 1 << (BITBUFSIZ - 1 - 3);
-                    while ((this.bitbuf & mask) !== 0) {
-                        mask >>>= 1;
-                        c++;
-                    }
-                }
-                
-                this.fillbuf((c < 7) ? 3 : c - 3);
-                
-                this.pt_len[i++] = c;
-                
-                if (i === i_special) {
-                    let c = this.getbits(2);
-                    while (--c >= 0) {
-                        this.pt_len[i++] = 0;
-                    }
-                }
-            }
-            
-            while (i < nn) {
-                this.pt_len[i++] = 0;
-            }
-            
-            this.make_table(nn, this.pt_len, 8, this.pt_table);
+            return;
         }
+        
+        let i = 0;
+        while (i < n) {
+            let c = this.getbits(3);
+            if (c === 7) {
+                while (this.getbits(1)) {
+                    c++;
+                }
+            }
+            
+            this.pt_len[i++] = c;
+            
+            if (i === i_special) {
+                let c = this.getbits(2);
+                while (--c >= 0) {
+                    this.pt_len[i++] = 0;
+                }
+            }
+        }
+        
+        while (i < nn) {
+            this.pt_len[i++] = 0;
+        }
+        
+        this.make_table(nn, this.pt_len, this.pt_table);
     }
 
     /**
      * Read character length
      */
-    read_c_len() {
+    read_c_len() {       
         const n = this.getbits(CBIT);
         
         if (n === 0) {
             const c = this.getbits(CBIT);
+            
             for (let i = 0; i < NC; i++) {
                 this.c_len[i] = 0;
             }
-            for (let i = 0; i < 4096; i++) {
+
+            for (let i = 0; i < 65536; i++) {
                 this.c_table[i] = c;
             }
-        } else {
-            let i = 0;
-            while (i < n) {
-                let c = this.pt_table[this.bitbuf >>> (BITBUFSIZ - 8)];
-                
-                if (c >= NT) {
-                    let mask = 1 << (BITBUFSIZ - 1 - 8);
-                    do {
-                        if ((this.bitbuf & mask) !== 0) {
-                            c = this.right[c];
-                        } else {
-                            c = this.left[c];
-                        }
-                        mask >>>= 1;
-                    } while (c >= NT);
-                }
-                
-                this.fillbuf(this.pt_len[c]);
-                
-                if (c <= 2) {
-                    if (c === 0) {
-                        c = 1;
-                    } else if (c === 1) {
-                        c = this.getbits(4) + 3;
-                    } else {
-                        c = this.getbits(CBIT) + 20;
-                    }
-                    
-                    while (--c >= 0) {
-                        this.c_len[i++] = 0;
-                    }
-                } else {
-                    this.c_len[i++] = c - 2;
-                }
-            }
-            
-            while (i < NC) {
-                this.c_len[i++] = 0;
-            }
-            
-            this.make_table(NC, this.c_len, 12, this.c_table);
+            return;
         }
+        
+        const c_len = [];
+        let i = 0;
+        let count;
+        
+        while (i < n) {
+            const c = this.get_from_pt_table();
+            
+            if (c <= 2) {
+                if (c === 0) {
+                    count = 1;
+                } else if (c === 1) {
+                    count = this.getbits(4) + 3;
+                } else if (c === 2) {
+                    count = this.getbits(CBIT) + 20;
+                }
+                while (count-- > 0) {
+                    c_len[i++] = 0;
+                }
+            } else {
+                c_len[i++] = c - 2;
+            }
+        }
+        
+        while (i < NC) {
+            c_len[i++] = 0;
+        }
+        
+        for (let i = 0; i < NC; i++) {
+            this.c_len[i] = c_len[i] || 0;
+        }
+        
+        this.make_table(NC, this.c_len, this.c_table);
+    }
+    
+    /**
+     * Decode character from PT table
+     */
+    get_from_pt_table() {
+        if (!this.fillbuf()) {
+            return 0;
+        }
+        
+        const tableIndex = this.bitbuf >>> (BITBUFSIZ - 16); // Get top 16 bits
+        const val = this.pt_table[tableIndex] || 0;
+        
+        const bitLen = this.pt_len[val] || 0;
+        if (bitLen > 0) {
+            this.getbits(bitLen);
+        }
+        
+        return val;
     }
 
     /**
-     * Decode character
+     * decode_c() with better error handling
      */
     decode_c() {
-        if (this.blocksize === 0) {
+        if (this.blocksize <= 0) {
             this.blocksize = this.getbits(16);
-            this.read_pt_len(NT, TBIT, 3);
+            
+            if (this.blocksize === 0) {
+                return false; // EOF
+            }
+
+            this.read_pt_len(H_NT, TBIT, 3);
             this.read_c_len();
-            this.read_pt_len(NP, PBIT, -1);
+            this.read_pt_len(H_NP, PBIT, -1);
         }
         
         this.blocksize--;
-        let j = this.c_table[this.bitbuf >>> (BITBUFSIZ - 12)];
-        
-        if (j >= NC) {
-            let mask = 1 << (BITBUFSIZ - 1 - 12);
-            do {
-                if ((this.bitbuf & mask) !== 0) {
-                    j = this.right[j];
-                } else {
-                    j = this.left[j];
-                }
-                mask >>>= 1;
-            } while (j >= NC);
-        }
-        
-        this.fillbuf(this.c_len[j]);
-        return j & 0xFFFF;
-    }
 
-    /**
-     * Decode position
-     */
-    decode_p() {
-        let j = this.pt_table[this.bitbuf >>> (BITBUFSIZ - 8)];
-        
-        if (j >= NP) {
-            let mask = 1 << (BITBUFSIZ - 1 - 8);
-            do {
-                if ((this.bitbuf & mask) !== 0) {
-                    j = this.right[j];
-                } else {
-                    j = this.left[j];
-                }
-                mask >>>= 1;
-            } while (j >= NP);
+        if (!this.fillbuf()) {
+            return UCHAR_MAX + 1; // EOF
         }
         
-        this.fillbuf(this.pt_len[j]);
+        const j = this.c_table[this.bitbuf >>> (BITBUFSIZ - 16)] || 0;
         
-        if (j !== 0) {
-            j = ((1 << (j - 1)) + this.getbits(j - 1)) & 0xFFFF;
+        const bitLen = this.c_len[j] || 0;
+        if (bitLen > 0) {
+            this.getbits(bitLen);
+        } else {
+            this.getbits(1); // Safety fallback
         }
         
         return j;
     }
 
     /**
-     * Decode specified number of bytes
+     * Decode position
      */
-    decode(count, buffer) {
-        let r = 0;
-        let c = 0;
+    decode_p() {
+        if (!this.fillbuf()) {
+            return 0;
+        }
         
-        while (count > 0) {
-            if (this.decode_j === 0) {
-                // Decode next character or match
-                c = this.decode_c();
-                
-                if (c < 256) {
-                    // Single character
-                    buffer[r++] = c;
-                    count--;
-                } else {
-                    // Match
-                    this.decode_j = c - 256 + THRESHOLD;
-                    this.decode_i = ((r - this.decode_p() - 1) & (DICSIZ - 1));
-                }
+        const j = this.pt_table[this.bitbuf >>> (BITBUFSIZ - 16)] || 0;
+        
+        const bitLen = this.pt_len[j] || 0;
+        if (bitLen > 0) {
+            this.getbits(bitLen);
+        }
+        
+        if (j <= 1) {
+            return j;
+        }
+        
+        const extraBits = j - 1;
+        if (extraBits > 0 && extraBits <= 16) {
+            const result = ((1 << extraBits) + this.getbits(extraBits)) & 0xFFFF;
+            return result;
+        }
+        
+        return j;
+    }
+
+    /**
+     * Read multiple bytes into buffer (unified with ub())
+     */
+    decode(length, buffer) {
+        for (let i = 0; i < length; i++) {
+            this.pos++;
+            
+            // Check if we have data in buffer
+            if (this.wpos != this.rpos) {
+                buffer[i] = this.buffer[this.rpos];
+                this.rpos = (this.rpos + 1) & 0x1fff;
+                continue;
+            }
+            
+            // Get character/code from Huffman table
+            const c = this.decode_c();
+            
+            if (c === false) {
+                return i; // EOF - return actual bytes read
+            }
+            
+            if (c <= UCHAR_MAX) {
+                // Literal character
+                this.buffer[this.wpos] = c;
+                this.rpos = this.wpos = (this.wpos + 1) & 0x1fff;
+                buffer[i] = c;
             } else {
-                // Copy from dictionary
-                while (this.decode_j > 0 && count > 0) {
-                    buffer[r] = buffer[this.decode_i];
-                    this.decode_i = (this.decode_i + 1) & (DICSIZ - 1);
-                    r++;
-                    count--;
-                    this.decode_j--;
+                // LZ77 match: length and distance
+                const decode_j = c - (UCHAR_MAX + 1 - THRESHOLD);
+                
+                // Copy matched data to buffer
+                let decode_i = (this.wpos + 0x2000 - this.decode_p() - 1) & 0x1fff;
+                for (let j = 0; j < decode_j; j++) {
+                    this.buffer[this.wpos] = this.buffer[decode_i];
+                    this.wpos = (this.wpos + 1) & 0x1fff;
+                    decode_i = (decode_i + 1) & 0x1fff;
                 }
+                
+                // Return first byte of the match
+                buffer[i] = this.buffer[this.rpos];
+                this.rpos = (this.rpos + 1) & 0x1fff;
             }
         }
+        return length;
     }
 }
 
-// For non-module environments (when loaded via script tag)
+
+// Export classes and constants to global scope for browser compatibility
 if (typeof window !== 'undefined') {
     window.LH5Decoder = LH5Decoder;
+    
+    // Export constants for use in tad.js
+    window.DICBIT = DICBIT;
+    window.DICSIZ = DICSIZ;
+    window.MATCHBIT = MATCHBIT;
+    window.MAXMATCH = MAXMATCH;
+    window.THRESHOLD = THRESHOLD;
+    window.CODE_BIT = CODE_BIT;
+    window.CHAR_BIT = CHAR_BIT;
+    window.UCHAR_MAX = UCHAR_MAX;
+    window.NC = NC;
+    window.CBIT = CBIT;
+    window.BITBUFSIZ = BITBUFSIZ;
+    window.H_NP = H_NP;
+    window.H_NT = H_NT;
+    window.PBIT = PBIT;
+    window.TBIT = TBIT;
+    window.NPT = NPT;
 }
-
-})();
