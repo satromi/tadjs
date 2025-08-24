@@ -2,8 +2,9 @@
 <html lang="ja">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-    <title>TADjs</title>
-    <!-- Include Lzh library -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TADjs - Document Viewer</title>
+    <!-- Include LH5 decoder classes -->
     <script src="lh5.js"></script>
     <!-- Include TAD Core (non-module version) -->
     <script src="tad.js"></script>
@@ -11,17 +12,48 @@
     <script src="encoding.min.js"></script>
     <script>
             window.addEventListener("DOMContentLoaded", () => {
-            document.getElementById("save").addEventListener("click", save);
+                // save関数がグローバルに登録されているかチェック
+                console.log('Checking save function:', typeof window.save, window.save);
+                console.log('Checking tadSave function:', typeof window.tadSave);
+                
+                const saveElement = document.getElementById("save");
+                
+                // DOM elementとの競合を避けるため、tadSaveを優先使用
+                if (typeof window.tadSave === 'function') {
+                    saveElement.addEventListener("click", window.tadSave);
+                    console.log('Save event listener attached using tadSave function');
+                } else if (typeof window.save === 'function') {
+                    saveElement.addEventListener("click", window.save);
+                    console.log('Save event listener attached using save function');
+                } else {
+                    console.error('TAD save function not found');
+                }
+                
+                // 関数の存在確認
+                console.log('TAD.js functions check:');
+                console.log('onAddFile:', typeof window.onAddFile);
+                console.log('onDrop:', typeof window.onDrop);
+                console.log('onDragOver:', typeof window.onDragOver);
+                console.log('save:', typeof window.save);
             });
             
             let currentTabIndex = 0;
             let tabCount = 0;
             
             function createNewTab(tabIndex) {
+                // Check if tab already exists
+                const existingButton = document.querySelector(`button[onclick*="switchTab(${tabIndex})"]`);
+                const existingContainer = document.getElementById(`canvas-container-${tabIndex}`);
+                
+                if (existingButton && existingContainer) {
+                        return;
+                }
+                
+                
                 // Create tab button
                 const tabButton = document.createElement('button');
                 tabButton.className = 'tab-button';
-                tabButton.textContent = `Tab ${tabIndex + 1}`;
+                tabButton.innerHTML = `<span class="tab-number">${tabIndex + 1}</span><span class="tab-label">Tab ${tabIndex + 1}</span>`;
                 tabButton.onclick = () => switchTab(tabIndex);
                 if (tabIndex === 0) {
                     tabButton.classList.add('active');
@@ -34,18 +66,75 @@
                 canvasContainer.id = `canvas-container-${tabIndex}`;
                 canvasContainer.style.display = tabIndex === 0 ? 'block' : 'none';
                 
-                // Create canvas
+                // Create canvas wrapper
+                const canvasWrapper = document.createElement('div');
+                canvasWrapper.className = 'canvas-wrapper';
+                canvasWrapper.id = `canvas-wrapper-${tabIndex}`;
+                
+                // Create canvas - using fixed values since canvasW/H may not be available yet
+                const canvasWidth = 1200;
+                const canvasHeight = 1000;
                 const canvas = document.createElement('canvas');
                 canvas.id = `canvas-${tabIndex}`;
-                canvas.width = 800;
-                canvas.height = 450;
-                canvasContainer.appendChild(canvas);
+                canvas.width = canvasWidth;
+                canvas.height = canvasHeight;
+                canvasWrapper.appendChild(canvas);
+                
+                // Create horizontal scrollbar
+                const hScrollbar = document.createElement('div');
+                hScrollbar.className = 'scrollbar-h';
+                hScrollbar.id = `hscrollbar-${tabIndex}`;
+                hScrollbar.style.width = canvasWidth + 'px';
+                hScrollbar.style.display = 'none'; // Initially hidden
+                
+                const hHandle = document.createElement('div');
+                hHandle.className = 'scrollbar-handle';
+                hHandle.id = `hhandle-${tabIndex}`;
+                hScrollbar.appendChild(hHandle);
+                
+                // Create vertical scrollbar
+                const vScrollbar = document.createElement('div');
+                vScrollbar.className = 'scrollbar-v';
+                vScrollbar.id = `vscrollbar-${tabIndex}`;
+                vScrollbar.style.height = canvasHeight + 'px';
+                vScrollbar.style.display = 'none'; // Initially hidden
+                
+                const vHandle = document.createElement('div');
+                vHandle.className = 'scrollbar-handle';
+                vHandle.id = `vhandle-${tabIndex}`;
+                vScrollbar.appendChild(vHandle);
+                
+                // Create corner element
+                const corner = document.createElement('div');
+                corner.className = 'scrollbar-corner';
+                corner.id = `corner-${tabIndex}`;
+                corner.style.display = 'none'; // Initially hidden
+                
+                canvasWrapper.appendChild(hScrollbar);
+                canvasWrapper.appendChild(vScrollbar);
+                canvasWrapper.appendChild(corner);
+                canvasContainer.appendChild(canvasWrapper);
                 
                 document.getElementById('canvas-area').appendChild(canvasContainer);
+                
+                // Initialize tab scroll state
+                if (typeof initTabScrollState === 'function') {
+                    initTabScrollState(tabIndex);
+                }
+                
                 tabCount++;
             }
             
             function switchTab(tabIndex) {
+                
+                // Save current tab's scroll state
+                if (typeof updateTabScrollState === 'function' && currentTabIndex !== undefined && currentTabIndex !== tabIndex) {
+                    updateTabScrollState(currentTabIndex, {
+                        scrollX: scrollX,
+                        scrollY: scrollY
+                    });
+                }
+                
                 // Hide all canvases
                 const containers = document.querySelectorAll('.canvas-container');
                 containers.forEach(container => {
@@ -59,82 +148,1061 @@
                 });
                 
                 // Show selected canvas and mark button as active
-                document.getElementById(`canvas-container-${tabIndex}`).style.display = 'block';
-                buttons[tabIndex].classList.add('active');
+                const targetContainer = document.getElementById(`canvas-container-${tabIndex}`);
+                if (targetContainer) {
+                    targetContainer.style.display = 'block';
+                }
+                if (buttons[tabIndex]) {
+                    buttons[tabIndex].classList.add('active');
+                }
                 currentTabIndex = tabIndex;
+                
+                // Update canvas and ctx for the new tab
+                const newCanvas = document.getElementById(`canvas-${tabIndex}`);
+                if (newCanvas && typeof window !== 'undefined') {
+                    window.canvas = newCanvas;
+                    window.ctx = newCanvas.getContext('2d');
+                }
+                
+                // Restore new tab's scroll state
+                if (typeof getTabScrollState === 'function') {
+                    const state = getTabScrollState(tabIndex);
+                    scrollX = state.scrollX;
+                    scrollY = state.scrollY;
+                    virtualW = state.virtualW;
+                    virtualH = state.virtualH;
+                    showHScrollBar = state.showHScrollBar;
+                    showVScrollBar = state.showVScrollBar;
+                    
+                    
+                    // Force recalculation of scrollbar state for the new tab
+                    if (typeof updateScrollBars === 'function') {
+                        updateScrollBars();
+                    }
+                    
+                    // Update scrollbar visibility for new tab
+                    updateScrollBarVisibility();
+                } else {
+                    // tad.js functions not available yet, set default values
+                    scrollX = 0;
+                    scrollY = 0;
+                    virtualW = 1200;
+                    virtualH = 1000;
+                    showHScrollBar = false;
+                    showVScrollBar = false;
+                }
             }
             
             // Initialize with first tab
             window.addEventListener("DOMContentLoaded", () => {
                 createNewTab(0);
+                setupCanvasScrolling();
+                setupTabScrolling();
+                
+                // Setup collapsible sections
+                const collapsibles = document.querySelectorAll('.collapsible-header');
+                collapsibles.forEach(header => {
+                    header.addEventListener('click', () => {
+                        header.classList.toggle('collapsed');
+                        const content = header.nextElementSibling;
+                        if (content) {
+                            content.style.display = header.classList.contains('collapsed') ? 'none' : 'block';
+                        }
+                    });
+                });
+                
+                // Custom file input
+                const fileInput = document.getElementById('inputfile');
+                const fileButton = document.getElementById('file-button');
+                fileButton.addEventListener('click', () => fileInput.click());
+                
+                fileInput.addEventListener('change', (e) => {
+                    const fileName = e.target.files[0]?.name || 'No file selected';
+                    document.getElementById('file-name').textContent = fileName;
+                });
             });
+            
+            // Tab scrolling functionality
+            function setupTabScrolling() {
+                const tabContainer = document.getElementById('tab-container');
+                const tabButtons = document.getElementById('tab-buttons');
+                const scrollLeftBtn = document.getElementById('tab-scroll-left');
+                const scrollRightBtn = document.getElementById('tab-scroll-right');
+                
+                let isDragging = false;
+                let startX;
+                let scrollLeft;
+                
+                // Check if tabs overflow and show/hide scroll buttons
+                function checkTabOverflow() {
+                    if (tabButtons.scrollWidth > tabButtons.clientWidth) {
+                        scrollLeftBtn.style.display = 'flex';
+                        scrollRightBtn.style.display = 'flex';
+                        updateScrollButtons();
+                    } else {
+                        scrollLeftBtn.style.display = 'none';
+                        scrollRightBtn.style.display = 'none';
+                    }
+                }
+                
+                // Update scroll button states
+                function updateScrollButtons() {
+                    scrollLeftBtn.style.opacity = tabButtons.scrollLeft <= 0 ? '0.3' : '1';
+                    scrollRightBtn.style.opacity = 
+                        tabButtons.scrollLeft >= tabButtons.scrollWidth - tabButtons.clientWidth ? '0.3' : '1';
+                }
+                
+                // Scroll button click handlers
+                scrollLeftBtn.addEventListener('click', () => {
+                    tabButtons.scrollBy({ left: -200, behavior: 'smooth' });
+                    setTimeout(updateScrollButtons, 300);
+                });
+                
+                scrollRightBtn.addEventListener('click', () => {
+                    tabButtons.scrollBy({ left: 200, behavior: 'smooth' });
+                    setTimeout(updateScrollButtons, 300);
+                });
+                
+                // Drag to scroll functionality
+                tabButtons.addEventListener('mousedown', (e) => {
+                    // Start drag immediately on any mousedown in the tab area
+                    isDragging = true;
+                    tabButtons.classList.add('dragging');
+                    startX = e.pageX - tabButtons.offsetLeft;
+                    scrollLeft = tabButtons.scrollLeft;
+                    tabButtons.style.cursor = 'grabbing';
+                    e.preventDefault();
+                });
+                
+                tabButtons.addEventListener('mouseleave', () => {
+                    if (isDragging) {
+                        isDragging = false;
+                        tabButtons.classList.remove('dragging');
+                        tabButtons.style.cursor = '';
+                    }
+                });
+                
+                tabButtons.addEventListener('mouseup', () => {
+                    if (isDragging) {
+                        isDragging = false;
+                        tabButtons.classList.remove('dragging');
+                        tabButtons.style.cursor = '';
+                    }
+                });
+                
+                tabButtons.addEventListener('mousemove', (e) => {
+                    if (!isDragging) return;
+                    e.preventDefault();
+                    const x = e.pageX - tabButtons.offsetLeft;
+                    const walk = startX - x; // 1:1 movement, no acceleration
+                    tabButtons.scrollLeft = scrollLeft + walk;
+                    updateScrollButtons();
+                });
+                
+                // Update on scroll
+                tabButtons.addEventListener('scroll', updateScrollButtons);
+                
+                // Check overflow on window resize
+                window.addEventListener('resize', checkTabOverflow);
+                
+                // Initial check
+                setTimeout(checkTabOverflow, 100);
+                
+                // Check when new tabs are added
+                const observer = new MutationObserver(checkTabOverflow);
+                observer.observe(tabButtons, { childList: true });
+            }
+            
+            function setupCanvasScrolling() {
+                // Add mouse wheel event listener for scrolling - target canvas area
+                const canvasArea = document.getElementById('canvas-area');
+                if (canvasArea) {
+                    canvasArea.addEventListener('wheel', handleCanvasScroll, { passive: false });
+                } else {
+                    document.addEventListener('wheel', handleCanvasScroll, { passive: false });
+                }
+                // Add mouse event listeners for scroll bar interaction
+                document.addEventListener('mousedown', handleScrollBarMouseDown);
+                document.addEventListener('mousemove', handleScrollBarMouseMove);
+                document.addEventListener('mouseup', handleScrollBarMouseUp);
+            }
+            
+            function updateScrollBarVisibility() {
+                // Get current tab state
+                let state;
+                if (typeof getTabScrollState === 'function') {
+                    state = getTabScrollState(currentTabIndex);
+                } else {
+                    state = { 
+                        showHScrollBar: showHScrollBar,
+                        showVScrollBar: showVScrollBar,
+                        virtualW: virtualW, 
+                        virtualH: virtualH
+                    };
+                }
+                
+                
+                const hScrollbar = document.getElementById(`hscrollbar-${currentTabIndex}`);
+                const vScrollbar = document.getElementById(`vscrollbar-${currentTabIndex}`);
+                const corner = document.getElementById(`corner-${currentTabIndex}`);
+                
+                
+                if (hScrollbar) {
+                    const oldDisplay = hScrollbar.style.display;
+                    hScrollbar.style.display = state.showHScrollBar ? 'block' : 'none';
+                }
+                if (vScrollbar) {
+                    const oldDisplay = vScrollbar.style.display;
+                    vScrollbar.style.display = state.showVScrollBar ? 'block' : 'none';
+                    
+                    // 縦スクロールバーが表示されない場合の詳細デバッグ
+                    if (state.showVScrollBar && vScrollbar.style.display !== 'block') {
+                        console.error('vScrollbar should be visible but display is not block!');
+                    }
+                }
+                if (corner) {
+                    corner.style.display = (state.showHScrollBar && state.showVScrollBar) ? 'block' : 'none';
+                }
+                
+                // Update global variables for consistency
+                showHScrollBar = state.showHScrollBar;
+                showVScrollBar = state.showVScrollBar;
+                
+                updateScrollBarHandles();
+            }
+            
+            function updateScrollBarHandles() {
+                const canvasWidth = 1200;
+                const canvasHeight = 1000;
+                
+                // Get current tab state
+                let state;
+                if (typeof getTabScrollState === 'function') {
+                    state = getTabScrollState(currentTabIndex);
+                } else {
+                    state = { 
+                        scrollX: scrollX, 
+                        scrollY: scrollY, 
+                        virtualW: virtualW, 
+                        virtualH: virtualH,
+                        showHScrollBar: showHScrollBar,
+                        showVScrollBar: showVScrollBar
+                    };
+                }
+                
+                
+                if (state.showHScrollBar) {
+                    const hHandle = document.getElementById(`hhandle-${currentTabIndex}`);
+                    if (hHandle) {
+                        const scrollBarLength = canvasWidth - (state.showVScrollBar ? 16 : 0);
+                        const handleWidth = Math.max(20, (canvasWidth / state.virtualW) * scrollBarLength);
+                        const maxScrollX = Math.max(0, state.virtualW - canvasWidth);
+                        const handleX = maxScrollX > 0 ? (state.scrollX / maxScrollX) * (scrollBarLength - handleWidth) : 0;
+                        
+                        
+                        hHandle.style.width = handleWidth + 'px';
+                        hHandle.style.left = handleX + 'px';
+                        
+                        // Force style application and verify
+                        hHandle.offsetWidth; // Trigger reflow
+                    }
+                }
+                
+                if (state.showVScrollBar) {
+                    const vHandle = document.getElementById(`vhandle-${currentTabIndex}`);
+                    if (vHandle) {
+                        const scrollBarLength = canvasHeight - (state.showHScrollBar ? 16 : 0);
+                        const handleHeight = Math.max(20, (canvasHeight / state.virtualH) * scrollBarLength);
+                        const maxScrollY = Math.max(0, state.virtualH - canvasHeight);
+                        const handleY = maxScrollY > 0 ? (state.scrollY / maxScrollY) * (scrollBarLength - handleHeight) : 0;
+                        
+                        
+                        vHandle.style.height = handleHeight + 'px';
+                        vHandle.style.top = handleY + 'px';
+                        
+                        // Force style application
+                        vHandle.offsetHeight; // Trigger reflow
+                        
+                    } else {
+                    }
+                } else {
+                }
+            }
+            
+            let isScrollBarDragging = false;
+            let dragStartX = 0;
+            let dragStartY = 0;
+            let initialScrollX = 0;
+            let initialScrollY = 0;
+            
+            function handleCanvasScroll(event) {
+                const canvas = document.getElementById(`canvas-${currentTabIndex}`);
+                if (!canvas) {
+                    return;
+                }
+                
+                event.preventDefault();
+                
+                // Get current tab state
+                let state;
+                if (typeof getTabScrollState === 'function') {
+                    state = getTabScrollState(currentTabIndex);
+                } else {
+                    state = { scrollX: scrollX, scrollY: scrollY, virtualW: virtualW, virtualH: virtualH };
+                }
+                
+                
+                const scrollSpeed = 30;
+                const canvasWidth = 1200;
+                const canvasHeight = 1000;
+                const maxScrollX = Math.max(0, state.virtualW - canvasWidth);
+                const maxScrollY = Math.max(0, state.virtualH - canvasHeight);
+                
+                // スクロールバーが表示されていない場合はスクロール不要
+                if (maxScrollX === 0 && maxScrollY === 0) {
+                    console.debug(`No scrolling needed - content fits in canvas`);
+                    return;
+                }
+                
+                const oldScrollX = state.scrollX || 0;
+                const oldScrollY = state.scrollY || 0;
+                
+                let newScrollX = oldScrollX;
+                let newScrollY = oldScrollY;
+                
+                if (event.deltaX !== 0 && maxScrollX > 0) {
+                    const deltaScrollX = event.deltaX * scrollSpeed / 100;
+                    newScrollX = Math.max(0, Math.min(maxScrollX, oldScrollX + deltaScrollX));
+                }
+                
+                if (event.deltaY !== 0 && maxScrollY > 0) {
+                    const deltaScrollY = event.deltaY * scrollSpeed / 100;
+                    newScrollY = Math.max(0, Math.min(maxScrollY, oldScrollY + deltaScrollY));
+                }
+                
+                
+                // Update global variables
+                scrollX = newScrollX;
+                scrollY = newScrollY;
+                
+                // Update tab-specific scroll state
+                if (typeof updateTabScrollState === 'function') {
+                    updateTabScrollState(currentTabIndex, {
+                        scrollX: newScrollX,
+                        scrollY: newScrollY
+                    });
+                } else {
+                }
+                
+                // Update scrollbar handles immediately
+                updateScrollBarHandles();
+                
+                // Redraw canvas with new scroll position
+                if (newScrollX !== oldScrollX || newScrollY !== oldScrollY) {
+                    // スクロール位置が実際に変更された場合のみ再描画
+                    redrawCanvas();
+                } else {
+                    console.debug(`No scroll change needed (${oldScrollX}, ${oldScrollY})`);
+                }
+            }
+            
+            function handleScrollBarMouseDown(event) {
+                const target = event.target;
+                const canvasWidth = 1200;
+                const canvasHeight = 1000;
+                
+                // Check if click is on horizontal scroll bar
+                const hScrollbar = document.getElementById(`hscrollbar-${currentTabIndex}`);
+                const hHandle = document.getElementById(`hhandle-${currentTabIndex}`);
+                if (hScrollbar && target === hScrollbar) {
+                    // Get current tab state
+                    let state;
+                    if (typeof getTabScrollState === 'function') {
+                        state = getTabScrollState(currentTabIndex);
+                    } else {
+                        state = { scrollX: scrollX, scrollY: scrollY, virtualW: virtualW, virtualH: virtualH };
+                    }
+                    
+                    const rect = hScrollbar.getBoundingClientRect();
+                    const clickX = event.clientX - rect.left;
+                    const handleRect = hHandle.getBoundingClientRect();
+                    const handleX = handleRect.left - rect.left;
+                    const handleWidth = parseFloat(hHandle.style.width);
+                    
+                    let newScrollX = state.scrollX;
+                    
+                    if (clickX < handleX) {
+                        // Click before handle - page left
+                        const maxScrollX = Math.max(0, state.virtualW - canvasWidth);
+                        newScrollX = Math.max(0, state.scrollX - canvasWidth * 0.8);
+                    } else if (clickX > handleX + handleWidth) {
+                        // Click after handle - page right
+                        const maxScrollX = Math.max(0, state.virtualW - canvasWidth);
+                        newScrollX = Math.min(maxScrollX, state.scrollX + canvasWidth * 0.8);
+                    }
+                    
+                    
+                    // Update global variables
+                    scrollX = newScrollX;
+                    
+                    // Update tab-specific scroll state
+                    if (typeof updateTabScrollState === 'function') {
+                        updateTabScrollState(currentTabIndex, { scrollX: scrollX });
+                    }
+                    
+                    updateScrollBarHandles();
+                    redrawCanvas();
+                    event.preventDefault();
+                    return;
+                }
+                
+                // Check if click is on horizontal scroll bar handle
+                if (hHandle && target === hHandle) {
+                    isScrollBarDragging = true;
+                    const rect = hScrollbar.getBoundingClientRect();
+                    dragStartX = event.clientX - rect.left;
+                    initialScrollX = scrollX;
+                    console.debug(`Start H drag: dragStartX=${dragStartX}, initialScrollX=${initialScrollX}`);
+                    event.preventDefault();
+                    return;
+                }
+                
+                // Check if click is on vertical scroll bar
+                const vScrollbar = document.getElementById(`vscrollbar-${currentTabIndex}`);
+                const vHandle = document.getElementById(`vhandle-${currentTabIndex}`);
+                if (vScrollbar && target === vScrollbar) {
+                    // Get current tab state
+                    let state;
+                    if (typeof getTabScrollState === 'function') {
+                        state = getTabScrollState(currentTabIndex);
+                    } else {
+                        state = { scrollX: scrollX, scrollY: scrollY, virtualW: virtualW, virtualH: virtualH };
+                    }
+                    
+                    const rect = vScrollbar.getBoundingClientRect();
+                    const clickY = event.clientY - rect.top;
+                    const handleRect = vHandle.getBoundingClientRect();
+                    const handleY = handleRect.top - rect.top;
+                    const handleHeight = parseFloat(vHandle.style.height);
+                    
+                    let newScrollY = state.scrollY;
+                    
+                    if (clickY < handleY) {
+                        // Click before handle - page up
+                        const maxScrollY = Math.max(0, state.virtualH - canvasHeight);
+                        newScrollY = Math.max(0, state.scrollY - canvasHeight * 0.8);
+                    } else if (clickY > handleY + handleHeight) {
+                        // Click after handle - page down
+                        const maxScrollY = Math.max(0, state.virtualH - canvasHeight);
+                        newScrollY = Math.min(maxScrollY, state.scrollY + canvasHeight * 0.8);
+                    }
+                    
+                    
+                    // Update global variables
+                    scrollY = newScrollY;
+                    
+                    // Update tab-specific scroll state
+                    if (typeof updateTabScrollState === 'function') {
+                        updateTabScrollState(currentTabIndex, { scrollY: scrollY });
+                    }
+                    
+                    updateScrollBarHandles();
+                    redrawCanvas();
+                    event.preventDefault();
+                    return;
+                }
+                
+                // Check if click is on vertical scroll bar handle
+                if (vHandle && target === vHandle) {
+                    isScrollBarDragging = true;
+                    const rect = vScrollbar.getBoundingClientRect();
+                    dragStartY = event.clientY - rect.top;
+                    initialScrollY = scrollY;
+                    console.debug(`Start V drag: dragStartY=${dragStartY}, initialScrollY=${initialScrollY}`);
+                    event.preventDefault();
+                    return;
+                }
+            }
+            
+            function handleScrollBarMouseMove(event) {
+                if (!isScrollBarDragging) return;
+                
+                // Handle horizontal scroll bar dragging
+                if (dragStartX !== 0) {
+                    const hScrollbar = document.getElementById(`hscrollbar-${currentTabIndex}`);
+                    if (hScrollbar) {
+                        const canvasWidth = 1200;
+                        const rect = hScrollbar.getBoundingClientRect();
+                        const x = event.clientX - rect.left;
+                        const deltaX = x - dragStartX;
+                        const scrollBarLength = canvasWidth - (showVScrollBar ? 16 : 0);
+                        const maxScrollX = Math.max(0, virtualW - canvasWidth);
+                        const scrollRatio = deltaX / scrollBarLength;
+                        const newScrollX = Math.max(0, Math.min(maxScrollX, initialScrollX + scrollRatio * maxScrollX));
+                        
+                        scrollX = newScrollX;
+                    }
+                }
+                
+                // Handle vertical scroll bar dragging
+                if (dragStartY !== 0) {
+                    const vScrollbar = document.getElementById(`vscrollbar-${currentTabIndex}`);
+                    if (vScrollbar) {
+                        const canvasHeight = 1000;
+                        const rect = vScrollbar.getBoundingClientRect();
+                        const y = event.clientY - rect.top;
+                        const deltaY = y - dragStartY;
+                        const scrollBarLength = canvasHeight - (showHScrollBar ? 16 : 0);
+                        const maxScrollY = Math.max(0, virtualH - canvasHeight);
+                        const scrollRatio = deltaY / scrollBarLength;
+                        const newScrollY = Math.max(0, Math.min(maxScrollY, initialScrollY + scrollRatio * maxScrollY));
+                        
+                        scrollY = newScrollY;
+                    }
+                }
+                
+                // Update tab-specific scroll state
+                if (typeof updateTabScrollState === 'function') {
+                    updateTabScrollState(currentTabIndex, {
+                        scrollX: scrollX,
+                        scrollY: scrollY
+                    });
+                }
+                
+                updateScrollBarHandles();
+                redrawCanvas();
+                event.preventDefault();
+            }
+            
+            function handleScrollBarMouseUp(event) {
+                isScrollBarDragging = false;
+                dragStartX = 0;
+                dragStartY = 0;
+                initialScrollX = 0;
+                initialScrollY = 0;
+            }
+            
+            function redrawCanvas() {
+                const canvas = document.getElementById(`canvas-${currentTabIndex}`);
+                if (!canvas) return;
+                
+                
+                // 新設計：描画バッファ領域から表示用canvasに描画
+                if (typeof renderFromTadFileDrawBuffer === 'function') {
+                    const state = typeof getTabScrollState === 'function' ? 
+                                  getTabScrollState(currentTabIndex) : 
+                                  { scrollX: scrollX, scrollY: scrollY };
+                    renderFromTadFileDrawBuffer(currentTabIndex, currentTabIndex, state.scrollX, state.scrollY);
+                    //console.debug(`Tab switch: rendered from TAD file draw buffer: file ${currentTabIndex} -> tab ${currentTabIndex}`);
+                } else if (typeof redrawCurrentTAD === 'function') {
+                    // フォールバック：従来の再描画処理
+                    redrawCurrentTAD();
+                }
+                
+                // Update scroll bar visibility and handles
+                updateScrollBarVisibility();
+                
+                // Ensure scrollbar handles are updated
+                updateScrollBarHandles();
+            }
     </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #003c7f 0%, #00a0e9 100%);
+            min-height: 100vh;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .main-container {
+            width: 100%;
+            max-width: 100%;
+            margin: 0;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 0;
+            box-shadow: none;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #003c7f 0%, #00a0e9 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 300;
+            letter-spacing: 2px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1rem;
+        }
+        
+        .controls-section {
+            padding: 30px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .controls-wrapper {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .file-input-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        #inputfile {
+            display: none;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #003c7f 0%, #00a0e9 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 160, 233, 0.4);
+        }
+        
+        .btn-secondary {
+            background: white;
+            color: #003c7f;
+            border: 2px solid #003c7f;
+        }
+        
+        .btn-secondary:hover {
+            background: #003c7f;
+            color: white;
+            transform: translateY(-2px);
+        }
+        
+        .file-name {
+            color: #666;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+        
+        .viewer-section {
+            padding: 30px;
+        }
+        
+        .tab-container {
+            position: relative;
+            margin-bottom: 20px;
+        }
+        
+        #tab-buttons {
+            display: flex;
+            gap: 0;
+            border-bottom: 2px solid #e0e0e0;
+            overflow-x: auto;
+            scroll-behavior: smooth;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        
+        #tab-buttons::-webkit-scrollbar {
+            display: none;
+        }
+        
+        #tab-buttons {
+            cursor: grab;
+        }
+        
+        #tab-buttons.dragging {
+            cursor: grabbing !important;
+            user-select: none;
+        }
+        
+        .tab-scroll-button {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 40px;
+            background: linear-gradient(to right, rgba(255,255,255,0.95), rgba(255,255,255,0));
+            border: none;
+            cursor: pointer;
+            z-index: 10;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            color: #003c7f;
+            transition: all 0.3s ease;
+        }
+        
+        .tab-scroll-button:hover {
+            background: linear-gradient(to right, rgba(0,160,233,0.2), rgba(0,160,233,0));
+        }
+        
+        .tab-scroll-button.left {
+            left: 0;
+            background: linear-gradient(to right, rgba(255,255,255,0.95), rgba(255,255,255,0));
+        }
+        
+        .tab-scroll-button.left:hover {
+            background: linear-gradient(to right, rgba(0,160,233,0.2), rgba(0,160,233,0));
+        }
+        
+        .tab-scroll-button.right {
+            right: 0;
+            background: linear-gradient(to left, rgba(255,255,255,0.95), rgba(255,255,255,0));
+        }
+        
+        .tab-scroll-button.right:hover {
+            background: linear-gradient(to left, rgba(0,160,233,0.2), rgba(0,160,233,0));
+        }
+        
+        .tab-button {
+            padding: 10px 18px;
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            color: #666;
+            transition: all 0.3s ease;
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+        
+        .tab-button:hover {
+            background: rgba(0, 160, 233, 0.1);
+            color: #003c7f;
+        }
+        
+        .tab-button.active {
+            color: #003c7f;
+            border-bottom-color: #00a0e9;
+            background: rgba(0, 160, 233, 0.05);
+        }
+        
+        .tab-number {
+            background: rgba(0, 160, 233, 0.2);
+            color: #003c7f;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        
+        .tab-button.active .tab-number {
+            background: #00a0e9;
+            color: white;
+        }
+        
+        #canvas-area {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        .canvas-container {
+            display: none;
+        }
+        
+        .canvas-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+        
+        canvas {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 20px rgba(0, 0, 0, 0.1);
+            cursor: crosshair;
+            position: relative;
+        }
+        
+        canvas:hover {
+            cursor: pointer;
+        }
+        
+        /* Modern Scrollbars */
+        .scrollbar-h {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 12px;
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 6px;
+            cursor: pointer;
+            display: none;
+            transition: all 0.3s ease;
+        }
+        
+        .scrollbar-h:hover {
+            background: rgba(0, 0, 0, 0.1);
+        }
+        
+        .scrollbar-v {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 12px;
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 6px;
+            cursor: pointer;
+            display: none;
+            transition: all 0.3s ease;
+        }
+        
+        .scrollbar-v:hover {
+            background: rgba(0, 0, 0, 0.1);
+        }
+        
+        .scrollbar-handle {
+            background: rgba(0, 160, 233, 0.5);
+            position: absolute;
+            border-radius: 6px;
+            transition: background 0.3s ease;
+        }
+        
+        .scrollbar-handle:hover {
+            background: rgba(0, 160, 233, 0.8);
+        }
+        
+        .scrollbar-h .scrollbar-handle {
+            height: 10px;
+            top: 1px;
+        }
+        
+        .scrollbar-v .scrollbar-handle {
+            width: 10px;
+            left: 1px;
+        }
+        
+        .scrollbar-corner {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 12px;
+            height: 12px;
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 0 0 8px 0;
+            display: none;
+        }
+        
+        /* Debug Section */
+        .debug-section {
+            margin: 30px;
+        }
+        
+        .collapsible-header {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            padding: 15px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: all 0.3s ease;
+            margin-bottom: 10px;
+        }
+        
+        .collapsible-header:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .collapsible-header h2 {
+            font-size: 1.2rem;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .collapsible-header::after {
+            content: '▼';
+            font-size: 12px;
+            transition: transform 0.3s ease;
+        }
+        
+        .collapsible-header.collapsed::after {
+            transform: rotate(-90deg);
+        }
+        
+        .collapsible-content {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+        
+        #BainryInfo {
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 15px;
+        }
+        
+        #tadDumpView {
+            width: 100%;
+            max-width: 100%;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 13px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 15px;
+            background: #f8f9fa;
+            resize: vertical;
+        }
+        
+        #tadTextView {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #333;
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            min-height: 100px;
+        }
+        
+        /* Drag and Drop Area */
+        .drop-zone {
+            border: 2px dashed rgba(0, 160, 233, 0.3);
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s ease;
+            background: rgba(0, 160, 233, 0.02);
+            margin: 20px 0;
+        }
+        
+        .drop-zone.drag-over {
+            border-color: #00a0e9;
+            background: rgba(0, 160, 233, 0.1);
+            transform: scale(1.02);
+        }
+        
+        .drop-zone p {
+            color: #999;
+            font-size: 16px;
+            margin: 0;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8rem;
+            }
+            
+            .controls-wrapper {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            body {
+                padding: 10px;
+            }
+            
+            .viewer-section,
+            .controls-section,
+            .debug-section {
+                padding: 15px;
+            }
+        }
+    </style>
 </head>
-<style>
-    body{
-        background: #eee;
-    }
-
-    canvas {
-        background: #fff;
-    }
-    
-    #tab-buttons {
-        display: flex;
-        gap: 2px;
-        margin-bottom: 10px;
-    }
-    
-    .tab-button {
-        padding: 8px 16px;
-        background: #ddd;
-        border: 1px solid #ccc;
-        border-bottom: none;
-        cursor: pointer;
-        border-radius: 4px 4px 0 0;
-    }
-    
-    .tab-button:hover {
-        background: #e5e5e5;
-    }
-    
-    .tab-button.active {
-        background: #fff;
-        border-bottom: 1px solid #fff;
-        position: relative;
-        z-index: 1;
-    }
-    
-    #canvas-area {
-        border: 1px solid #ccc;
-        padding: 10px;
-        background: #fff;
-        margin-top: -1px;
-    }
-    
-    .canvas-container {
-        display: none;
-    }
-</style>
-<body >
-    <div ondrop="onDrop(event);" ondragover="onDragOver(event);" multiple >
-        <input type="file" id="inputfile" onchange="onAddFile(event);" multiple>
-        <a id="save" href="#" download="canvas.jpg">ダウンロード</a>
-        <br>
-        <div id="tab-buttons"></div>
-        <div id="canvas-area"></div>
-        <hr>
-        <p id="BainryInfo"></p>
-        <h2>Tad Dump View</h2>
-        <textarea rows="30" cols="80" id="tadDumpView" style="width:600px;font-family: Consolas, 'Courier New', Courier, Monaco, monospace;font-size:14px;" readonly>
-        </textarea>
-        <h2>Tad Text View</h2>
-        <p id="tadTextView"></p>
-        <br>
-
-        <br>
-        <hr>
-
-      </div>
+<body>
+    <div class="main-container">
+        <div class="header">
+            <h1>TAD.js Document Viewer</h1>
+            <p>View and interact with TAD format documents</p>
+        </div>
+        
+        <div class="controls-section" ondrop="onDrop(event);" ondragover="onDragOver(event);">
+            <div class="controls-wrapper">
+                <div class="file-input-wrapper">
+                    <input type="file" id="inputfile" onchange="onAddFile(event);" multiple>
+                    <button id="file-button" class="btn btn-primary">
+                        <span style="filter: grayscale(100%);">🗄️</span> Choose Files
+                    </button>
+                    <span id="file-name" class="file-name">No file selected</span>
+                </div>
+                <a id="save" href="#" download="canvas.jpg" class="btn btn-secondary">
+                    💾 Download Canvas
+                </a>
+            </div>
+            
+            <div class="drop-zone" ondrop="onDrop(event);" ondragover="onDragOver(event);">
+                <p>📥 Drag and drop TAD or BPK files here</p>
+            </div>
+        </div>
+        
+        <div class="viewer-section">
+            <div class="tab-container" id="tab-container">
+                <button class="tab-scroll-button left" id="tab-scroll-left">‹</button>
+                <div id="tab-buttons"></div>
+                <button class="tab-scroll-button right" id="tab-scroll-right">›</button>
+            </div>
+            <div id="canvas-area"></div>
+        </div>
+        
+        <div class="debug-section">
+            <div class="collapsible-header collapsed">
+                <h2>🔍 Debug Information</h2>
+            </div>
+            <div class="collapsible-content" style="display: none;">
+                <p id="BainryInfo"></p>
+                
+                <h3 style="margin: 20px 0 10px; color: #003c7f;">TAD Dump View</h3>
+                <textarea rows="20" id="tadDumpView" readonly></textarea>
+                
+                <h3 style="margin: 20px 0 10px; color: #003c7f;">TAD Text View</h3>
+                <div id="tadTextView"></div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
