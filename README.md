@@ -1,6 +1,6 @@
 # TADjs
 
-Ver 0.05
+Ver 0.06
 satromi@gmai.com
 
 ## 紹介
@@ -45,5 +45,9 @@ satromi@gmai.com
 - Ver0.05
 
 HTMLページのデザインを変更して、10ページ以上ある場合にもスクロールできるようにしました。
+
+- Ver0.06
+
+データの読込が遅かったのを改善しました。
 
 TADjs by satromi is licensed under the Apache License, Version2.0

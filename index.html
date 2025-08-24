@@ -80,6 +80,10 @@
                 canvas.height = canvasHeight;
                 canvasWrapper.appendChild(canvas);
                 
+                // Create scrollbar container
+                const scrollContainer = document.createElement('div');
+                scrollContainer.className = 'scroll-container';
+                
                 // Create horizontal scrollbar
                 const hScrollbar = document.createElement('div');
                 hScrollbar.className = 'scrollbar-h';
@@ -110,10 +114,12 @@
                 corner.id = `corner-${tabIndex}`;
                 corner.style.display = 'none'; // Initially hidden
                 
-                canvasWrapper.appendChild(hScrollbar);
-                canvasWrapper.appendChild(vScrollbar);
-                canvasWrapper.appendChild(corner);
-                canvasContainer.appendChild(canvasWrapper);
+                // Add canvas to scroll container first
+                scrollContainer.appendChild(canvasWrapper);
+                scrollContainer.appendChild(hScrollbar);
+                scrollContainer.appendChild(vScrollbar);
+                scrollContainer.appendChild(corner);
+                canvasContainer.appendChild(scrollContainer);
                 
                 document.getElementById('canvas-area').appendChild(canvasContainer);
                 
@@ -816,6 +822,56 @@
             margin-left: 10px;
         }
         
+        .dump-controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #666;
+            user-select: none;
+        }
+        
+        .checkbox-label input[type="checkbox"] {
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border: 2px solid #003c7f;
+            border-radius: 3px;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .checkbox-label input[type="checkbox"]:checked {
+            background: #003c7f;
+            border-color: #003c7f;
+        }
+        
+        .checkbox-label input[type="checkbox"]:checked::after {
+            content: '✓';
+            position: absolute;
+            top: -2px;
+            left: 2px;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .checkbox-label:hover input[type="checkbox"] {
+            border-color: #00a0e9;
+        }
+        
+        .checkbox-label:hover .checkbox-text {
+            color: #003c7f;
+        }
+        
         .viewer-section {
             padding: 30px;
         }
@@ -945,6 +1001,11 @@
             display: none;
         }
         
+        .scroll-container {
+            position: relative;
+            display: inline-block;
+        }
+        
         .canvas-wrapper {
             position: relative;
             display: inline-block;
@@ -964,9 +1025,8 @@
         
         /* Modern Scrollbars */
         .scrollbar-h {
-            position: absolute;
-            bottom: 0;
-            left: 0;
+            position: relative;
+            margin-top: 4px;
             height: 12px;
             background: rgba(0, 0, 0, 0.05);
             border-radius: 6px;
@@ -982,7 +1042,7 @@
         .scrollbar-v {
             position: absolute;
             top: 0;
-            right: 0;
+            right: -16px;
             width: 12px;
             background: rgba(0, 0, 0, 0.05);
             border-radius: 6px;
@@ -1018,8 +1078,8 @@
         
         .scrollbar-corner {
             position: absolute;
-            bottom: 0;
-            right: 0;
+            bottom: -16px;
+            right: -16px;
             width: 12px;
             height: 12px;
             background: rgba(0, 0, 0, 0.05);
@@ -1173,6 +1233,16 @@
                 <a id="save" href="#" download="canvas.jpg" class="btn btn-secondary">
                     💾 Download Canvas
                 </a>
+                <div class="dump-controls">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="tad-dump-enabled">
+                        <span class="checkbox-text">TAD Dump</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="text-dump-enabled">
+                        <span class="checkbox-text">Text Dump</span>
+                    </label>
+                </div>
             </div>
             
             <div class="drop-zone" ondrop="onDrop(event);" ondragover="onDragOver(event);">

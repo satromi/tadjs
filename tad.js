@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.05
+ * TADjs Ver0.06
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -26,6 +26,23 @@
 // global
 let ctx;
 let canvas;
+
+// Helper functions to check dump settings
+function isTadDumpEnabled() {
+    if (typeof document !== 'undefined') {
+        const checkbox = document.getElementById('tad-dump-enabled');
+        return checkbox ? checkbox.checked : false;
+    }
+    return false;
+}
+
+function isTextDumpEnabled() {
+    if (typeof document !== 'undefined') {
+        const checkbox = document.getElementById('text-dump-enabled');
+        return checkbox ? checkbox.checked : false;
+    }
+    return false;
+}
 let currentFileIndex = 0;  // Track current file index for multiple tabs
 let isProcessingBpk = false;  // Flag to indicate BPK processing
 let textNest = 0;
@@ -62,6 +79,8 @@ let backgroundColor = '#FFFFFF';
 let tadRaw;
 let tadRawBuffer;
 let tadDataView;
+let tadTextDumpBuffer = ['00000000 '];
+let planeTextDumpBuffer = [];
 let tadTextDump = '00000000 ';
 let planeTextDump = '';
 let tadPos = 0;
@@ -2843,6 +2862,21 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
     
     console.debug(`*** New tadDataArray: nfiles=${nfiles}, fileIndex=${fileIndex}, isRedrawn=${isRedrawn} ***`);
     
+    // Reset text dump buffers for new processing (only if dump is enabled)
+    if (!isRedrawn) {
+        if (isTadDumpEnabled()) {
+            tadTextDumpBuffer = ['00000000 '];
+        } else {
+            tadTextDumpBuffer = [];
+        }
+        
+        if (isTextDumpEnabled()) {
+            planeTextDumpBuffer = [];
+        } else {
+            planeTextDumpBuffer = [];
+        }
+    }
+    
     // TADファイルごとのrawデータを保管
     if (!isRedrawn && raw && raw.length > 0) {
         if (!tadRawDataArray[fileIndex]) {
@@ -2922,8 +2956,12 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
 
         if (raw16 === Number(TNULL)) {
             // 終端
-            tadTextDump += 'buffer over.\r\n';
-            planeTextDump += 'EOF\r\n';
+            if (isTadDumpEnabled()) {
+                tadTextDumpBuffer.push('buffer over.\r\n');
+            }
+            if (isTextDumpEnabled()) {
+                planeTextDumpBuffer.push('EOF\r\n');
+            }
             break;
         }
 
@@ -2959,7 +2997,9 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
                 segID = data_view.getUint8(i,true) + TC_SPEC;  
                 i += 2;
             }
-            tadTextDump  += ' segID = ( ' + IntToHex((segID),4).replace('0x','') + ' ) ';
+            if (isTadDumpEnabled()) {
+                tadTextDumpBuffer.push(' segID = ( ' + IntToHex((segID),4).replace('0x','') + ' ) ');
+            }
 
             segLen = Number(data_view.getUint16(i,true));
             if (segLen === Number(0xffff)) {
@@ -2970,11 +3010,15 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
             }else{
                 i += 2;
             }
-            tadTextDump  += ' segLen = ( ' + IntToHex((segLen),4).replace('0x','') + ' ) ';
+            if (isTadDumpEnabled()) {
+                tadTextDumpBuffer.push(' segLen = ( ' + IntToHex((segLen),4).replace('0x','') + ' ) ');
+            }
 
             for(let offsetLen=0;offsetLen<segLen;offsetLen=offsetLen+2) {
                 const offsetRaw = data_view.getUint16(i + offsetLen,true);
-                tadTextDump  += ' ' + IntToHex(Number(offsetRaw),4).replace('0x','');
+                if (isTadDumpEnabled()) {
+                    tadTextDumpBuffer.push(' ' + IntToHex(Number(offsetRaw),4).replace('0x',''));
+                }
                 tadSeg.push(offsetRaw);
             }
             i += segLen;
@@ -2983,8 +3027,12 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
         }else{
             const raw8Plus1 = Number(data_view.getUint16(i,true));
             const char = charTronCode(raw8Plus1);
-            tadTextDump  += 'char = ( ' + IntToHex((raw8Plus1),4).replace('0x','') + ' )' + char;
-            planeTextDump += char;
+            if (isTadDumpEnabled()) {
+                tadTextDumpBuffer.push('char = ( ' + IntToHex((raw8Plus1),4).replace('0x','') + ' )' + char);
+            }
+            if (isTextDumpEnabled()) {
+                planeTextDumpBuffer.push(char);
+            }
             P4 += char;
             i += 2;
             if (textNest > 0){
@@ -2994,8 +3042,10 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
 
         textCharList[textNest-1] += P4;
 
-        tadTextDump += '\r\n';
-        tadTextDump += IntToHex((i),8).replace('0x','') + ' ';
+        if (isTadDumpEnabled()) {
+            tadTextDumpBuffer.push('\r\n');
+            tadTextDumpBuffer.push(IntToHex((i),8).replace('0x','') + ' ');
+        }
     }
     
     // スクロールオフセットを復元
@@ -3049,10 +3099,85 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
     
     console.debug(`*** TAD file ${fileIndex} processing completed ***`);
     
-    document.getElementById('BainryInfo').innerHTML = 
-        'This File Size : ' + setComma(raw.length) +' Byte<br>Maximum displaye Size : 1000KB(1,000,000 Byte)';
-    document.getElementById('tadDumpView').innerHTML = htmlspecialchars(tadTextDump);  
-    document.getElementById('tadTextView').innerHTML = htmlspecialchars(planeTextDump);
+    // Join buffer arrays to create final strings (only if enabled)
+    if (isTadDumpEnabled()) {
+        tadTextDump = tadTextDumpBuffer.join('');
+    } else {
+        tadTextDump = 'TAD Dump is disabled';
+    }
+    
+    if (isTextDumpEnabled()) {
+        planeTextDump = planeTextDumpBuffer.join('');
+    } else {
+        planeTextDump = 'Text Dump is disabled';
+    }
+    
+    // Asynchronous DOM update to prevent UI blocking
+    const updateDOMElements = () => {
+        const binaryInfo = document.getElementById('BainryInfo');
+        const tadDumpView = document.getElementById('tadDumpView');
+        const tadTextView = document.getElementById('tadTextView');
+        
+        if (binaryInfo) {
+            binaryInfo.innerHTML = 'This File Size : ' + setComma(raw.length) +' Byte<br>Maximum displaye Size : 1000KB(1,000,000 Byte)';
+        }
+        
+        // Only update dump views if they contain actual data (not just disabled message)
+        if (tadDumpView) {
+            if (isTadDumpEnabled() && tadTextDump && tadTextDump.length > 0) {
+                // For large dumps, update in chunks to prevent blocking
+                if (tadTextDump.length > 50000) {
+                    const chunks = tadTextDump.match(/.{1,10000}/g) || [];
+                    tadDumpView.innerHTML = '';
+                    let chunkIndex = 0;
+                    
+                    const updateChunk = () => {
+                        if (chunkIndex < chunks.length) {
+                            tadDumpView.innerHTML += htmlspecialchars(chunks[chunkIndex]);
+                            chunkIndex++;
+                            setTimeout(updateChunk, 0);
+                        }
+                    };
+                    updateChunk();
+                } else {
+                    tadDumpView.innerHTML = htmlspecialchars(tadTextDump);
+                }
+            } else {
+                tadDumpView.innerHTML = htmlspecialchars(tadTextDump);
+            }
+        }
+        
+        if (tadTextView) {
+            if (isTextDumpEnabled() && planeTextDump && planeTextDump.length > 0) {
+                // For large text dumps, update in chunks
+                if (planeTextDump.length > 50000) {
+                    const chunks = planeTextDump.match(/.{1,10000}/g) || [];
+                    tadTextView.innerHTML = '';
+                    let chunkIndex = 0;
+                    
+                    const updateChunk = () => {
+                        if (chunkIndex < chunks.length) {
+                            tadTextView.innerHTML += htmlspecialchars(chunks[chunkIndex]);
+                            chunkIndex++;
+                            setTimeout(updateChunk, 0);
+                        }
+                    };
+                    updateChunk();
+                } else {
+                    tadTextView.innerHTML = htmlspecialchars(planeTextDump);
+                }
+            } else {
+                tadTextView.innerHTML = htmlspecialchars(planeTextDump);
+            }
+        }
+    };
+    
+    // Use requestIdleCallback for better performance, fallback to setTimeout
+    if (typeof requestIdleCallback !== 'undefined') {
+        requestIdleCallback(updateDOMElements, { timeout: 1000 });
+    } else {
+        setTimeout(updateDOMElements, 0);
+    }
 }
 
 /**
