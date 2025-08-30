@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.06
+ * TADjs Ver0.04
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -46,6 +46,7 @@ function isTextDumpEnabled() {
 let currentFileIndex = 0;  // Track current file index for multiple tabs
 let isProcessingBpk = false;  // Flag to indicate BPK processing
 let textNest = 0;
+let tadNest = 0;
 let textCharList = new Array();
 let textCharPoint = new Array();
 let textCharData = new Array();
@@ -1159,6 +1160,7 @@ function tsTextStart(tadSeg) {
         tadDpiV = textChar.v_unit; // v_unit
     }
 
+    tadNest++;
     textNest++;
     textCharList.push('');
     tronCodeMask.push(1);
@@ -1331,6 +1333,7 @@ function tsTextEnd(tadSeg) {
     textCharPoint.pop();
     textCharData.pop();
     tronCodeMask.pop();
+    tadNest--;
     textNest--;
     textWidth = 0;
     textHeight = 0;
@@ -1736,6 +1739,162 @@ function tadFontSetFusen(segLen, tadSeg) {
 }
 
 /**
+ * 特殊文字指定付箋を処理
+ * @param {*} segLen 
+ * @param {*} tadSeg 
+ */
+function tadSpecialCharFusen(segLen, tadSeg) {
+    const UB_SubID = getTopUBinUH(tadSeg[0]);
+
+        if (UB_SubID === Number(0x00)) {
+        console.debug("固定幅空白指定付箋");
+        // TODO
+    } else if (UB_SubID === Number(0x01)) {
+        console.debug("充填文字指定付箋");
+        // TODO
+    } else if (UB_SubID === Number(0x02)) {
+        console.debug("文字罫線指定付箋");
+        // サポートしない
+    }
+}
+
+/**
+ * 特殊文字指定付箋を処理
+ * @param {*} segLen 
+ * @param {*} tadSeg 
+ */
+function tadTextAlignFusen(segLen, tadSeg) {
+    const UB_SubID = getTopUBinUH(tadSeg[0]);
+
+    if (UB_SubID === Number(0x00)) {
+        console.debug("結合開始指定付箋");
+        textLigatureFusen(segLen, tadSeg);
+    } else if (UB_SubID === Number(0x01)) {
+        console.debug("結合終了指定付箋");
+        textLigatureFusenEnd(segLen, tadSeg);
+        // TODO
+    } else if (UB_SubID === Number(0x02)) {
+        console.debug("文字割付け開始指定付箋");
+        // TODO
+    } else if (UB_SubID === Number(0x03)) {
+        console.debug("文字割付け終了指定付箋");
+        // TODO
+    } else if (UB_SubID === Number(0x04)) {
+        console.debug("添え字開始指定付箋");
+        // TODO
+    } else if (UB_SubID === Number(0x05)) {
+        console.debug("添え字終了指定付箋");
+        // TODO
+    } else if (UB_SubID === Number(0x06)) {
+        console.debug("ルビ開始指定付箋");
+        // TODO
+    } else if (UB_SubID === Number(0x07)) {
+        console.debug("ルビ終了指定付箋");
+        // TODO
+    } else if (UB_SubID === Number(0x08)) {
+        console.debug("行頭禁則指定付箋");
+        // TODO
+    } else if (UB_SubID === Number(0x09)) {
+        console.debug("行末禁則指定付箋");
+        // TODO
+    }
+}
+
+function tadTextStyleFusen(segLen, tadSeg) {
+    const UB_SubID = getTopUBinUH(tadSeg[0]);
+
+    if (UB_SubID === Number(0x00)) {
+        console.debug("下線開始");
+        tadTextStyleLineStart(segLen, tadSeg, UB_SubID);
+        // TODO
+    } else if (UB_SubID === Number(0x01)) {
+        console.debug("下線終了");
+        tadTextStyleLineEnd(segLen, tadSeg, UB_SubID);
+        // TODO
+    } else if (UB_SubID === Number(0x02)) {
+        console.debug("上線開始");
+        // TODO
+    } else if (UB_SubID === Number(0x03)) {
+        console.debug("上線終了");
+        // TODO
+    } else if (UB_SubID === Number(0x04)) {
+        console.debug("打ち消し線開始");
+        // TODO
+    } else if (UB_SubID === Number(0x05)) {
+        console.debug("打ち消し線終了");
+        // TODO
+    } else if (UB_SubID === Number(0x06)) {
+        console.debug("枠囲み線開始");
+        // TODO
+    } else if (UB_SubID === Number(0x07)) {
+        console.debug("枠囲み線終了");
+        // TODO
+    } else if (UB_SubID === Number(0x08)) {
+        console.debug("上（右）傍点開始");
+        // TODO
+    } else if (UB_SubID === Number(0x09)) {
+        console.debug("上（右）傍点終了");
+        // TODO
+    } else if (UB_SubID === Number(0x0A)) {
+        console.debug("下（左）傍点開始");
+        // TODO
+    } else if (UB_SubID === Number(0x0B)) {
+        console.debug("下（左）傍点終了");
+        // TODO
+    } else if (UB_SubID === Number(0x0C)) {
+        console.debug("反転開始");
+        // TODO
+    } else if (UB_SubID === Number(0x0D)) {
+        console.debug("反転終了");
+        // TODO
+    } else if (UB_SubID === Number(0x0E)) {
+        console.debug("網掛開始");
+        // TODO
+    } else if (UB_SubID === Number(0x0F)) {
+        console.debug("網掛終了");
+        // TODO
+    } else if (UB_SubID === Number(0x10)) {
+        console.debug("背景開始");
+        // TODO
+    } else if (UB_SubID === Number(0x11)) {
+        console.debug("背景終了");
+        // TODO
+    } else if (UB_SubID === Number(0x12)) {
+        console.debug("無印字開始");
+        // TODO
+    } else if (UB_SubID === Number(0x13)) {
+        console.debug("無印字終了");
+        // TODO
+    }
+}
+
+function tadTextStyleLineStart(segLen, tadSeg, UB_SubID) {
+    // TODO
+}
+
+function tadTextStyleLineEnd(segLen, tadSeg, UB_SubID) {
+    // TODO
+}
+
+/**
+ * 結合開始指定付箋を処理
+ * @param {*} segLen 
+ * @param {*} tadSeg 
+ */
+function textLigatureFusen(segLen, tadSeg) {
+
+}
+
+/**
+ * 結合終了指定付箋を処理
+ * @param {*} segLen 
+ * @param {*} tadSeg 
+ */
+function textLigatureFusenEnd(segLen, tadSeg) {
+
+}
+
+/**
  * 図形開始セグメントを処理
  * @param {0x0000[]} tadSeg 
  */
@@ -1756,6 +1915,8 @@ function tsFig(tadSeg) {
         tadDpiH = h_unit; // h_unit
         tadDpiV = v_unit; // v_unit
     }
+
+    tadNest++;
     imageNest++;
 
     let figSeg = new STARTFIGSEG();
@@ -1789,7 +1950,7 @@ function tsFig(tadSeg) {
         drawW = figSeg.draw.right - drawX;
         drawH = figSeg.draw.bottom - drawY;
         
-    } else if (imageNest > 1 && startByImageSegment == true) {
+    } else if (tadNest > 1 && startByImageSegment == true) {
         viewX = figSeg.view.left;
         viewY = figSeg.view.top;
         viewW = figSeg.view.right - viewX;
@@ -1802,7 +1963,7 @@ function tsFig(tadSeg) {
 
     // TODO: なぜか、図形TADなのに図形開始セグメントにview定義されていることがあるためcanvasサイズを変更
     // canvasサイズを図形開始セグメントのサイズにあわせる
-    if ( startByImageSegment == true && imageNest == 1) {
+    if ( startByImageSegment == true && tadNest == 1) {
         //canvas.width = viewW;
         //canvas.height = viewH;
     }
@@ -1821,6 +1982,14 @@ function tsFig(tadSeg) {
     console.debug("v_unit " + figSeg.v_unit);
 
     imagePoint.push([viewX,viewY,viewW,viewH,drawX,drawY,drawW,drawH]);
+}
+
+/**
+ * 図形終了 セグメントを処理
+ * @param {*} tadSeg 
+ */
+function tsFigEnd(tadSeg) {
+    tadNest--;
 }
 
 /**
@@ -2437,6 +2606,8 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
     tadPos = startPos;
 
     crc = INIT_CRC;
+    const DICBIT = 13;
+    const DICSIZ = (1 << DICBIT);
     
     // Initialize LH5 decoder if needed
     if (compMethod == LH5) {
@@ -2567,6 +2738,7 @@ function tadPerse(segID, segLen, tadSeg, nowPos) {
         tsFig(tadSeg);
     } else if (segID === Number(TS_FIGEND)) {
         console.debug('図形終了セグメント');
+        tsFigEnd(tadSeg);
     } else if (segID === Number(TS_IMAGE)) {
         console.debug('画像セグメント');
     } else if (segID === Number(TS_VOBJ)) {
@@ -2588,10 +2760,13 @@ function tadPerse(segID, segLen, tadSeg, nowPos) {
         tadFontSetFusen(segLen, tadSeg);
     } else if (segID === Number(TS_TCHAR)) {
         console.debug('特殊文字指定付箋');
+        tadSpecialCharFusen(segLen, tadSeg);
     } else if (segID === Number(TS_TATTR)) {
         console.debug('文字割り付け指定付箋');
+        tadTextAlignFusen(segLen, tadSeg);
     } else if (segID === Number(TS_TSTYLE)) {
         console.debug('文字修飾指定付箋');
+        tadTextStyleFusen(segLen, tadSeg);
     } else if (segID === Number(TS_TVAR)) {
         console.debug('変数参照指定付箋');
     } else if (segID === Number(TS_TMEMO)) {
