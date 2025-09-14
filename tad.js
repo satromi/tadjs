@@ -1,4 +1,5 @@
 /**
+ * ✅ MODIFIED VERSION - CACHE BUSTER 2025-01-XX-17:00 ✅
  * 
  *   Copyright [2025] [satromi]
  *
@@ -14,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.07
+ * TADjs Ver0.08
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -26,6 +27,8 @@
 // global
 let ctx;
 let canvas;
+
+// グローバル変数は関数内でローカル変数として使用
 
 // Helper functions to check dump settings
 function isTadDumpEnabled() {
@@ -96,7 +99,7 @@ let tabRulerLinePos = 0;
 let tabRulerLineMoveCount = 0;
 let tabRulerLineMovePoint = new Array();
 let tabRulerLineMoveFlag = false;
-let colorPattern = new Array(65536);
+let colorPattern = []; // 配列として初期化
 let groupList = new Array();
 
 // フォント設定
@@ -117,7 +120,107 @@ let drawLineColor = '#000000';
 let drawLineWidth = 1;
 let drawFillColor = '#FFFFFF';
 let backgroundColor = '#FFFFFF';
+let colorMap = new Array();
 
+// 線種定義（デフォルト値）
+let linePatternDefinitions = {
+    0: [],                    // 実線
+    1: [6, 3],               // 破線
+    2: [2, 2],               // 点線
+    3: [8, 3, 2, 3],         // 一点鎖線
+    4: [8, 3, 2, 3, 2, 3],   // 二点鎖線
+    5: [12, 4]               // 長破線
+};
+
+// マスクデータ定義
+let maskDefinitions = new Map();
+
+/**
+ * マスクデータクラス
+ */
+class MaskData {
+    constructor(id, hsize, vsize, maskBits) {
+        this.id = id;        // マスクID
+        this.hsize = hsize;  // 横サイズ
+        this.vsize = vsize;  // 縦サイズ
+        this.maskBits = maskBits; // ビットマスクデータ
+    }
+    
+    /**
+     * 指定座標のマスク値を取得（1:描画, 0:描画しない）
+     * @param {number} x - X座標
+     * @param {number} y - Y座標
+     * @returns {number} マスク値
+     */
+    getMaskValue(x, y) {
+        if (x < 0 || x >= this.hsize || y < 0 || y >= this.vsize) {
+            return 0; // 範囲外は描画しない
+        }
+        
+        // パターンの繰り返し
+        const patternX = x % this.hsize;
+        const patternY = y % this.vsize;
+        
+        // バイト位置とビット位置を計算
+        const bytesPerRow = Math.ceil(this.hsize / 8);
+        const byteIndex = patternY * bytesPerRow + Math.floor(patternX / 8);
+        const bitIndex = 7 - (patternX % 8); // MSBから開始
+        
+        if (byteIndex >= this.maskBits.length) {
+            return 0;
+        }
+        
+        const bit = (this.maskBits[byteIndex] >> bitIndex) & 1;
+        
+        return bit;
+    }
+    
+    // マスクが全て1かどうかをチェック
+    isAllOnes() {
+        const totalBits = this.hsize * this.vsize;
+        let onesCount = 0;
+        
+        for (let y = 0; y < this.vsize; y++) {
+            for (let x = 0; x < this.hsize; x++) {
+                if (this.getMaskValue(x, y) === 1) {
+                    onesCount++;
+                }
+            }
+        }
+        
+        return onesCount === totalBits;
+    }
+}
+
+// デフォルトマスク1-13を定義（4x4パターン）
+function initializeDefaultMasks() {
+    // マスク1: 0000000000000000 (全て描画しない)
+    maskDefinitions.set(1, new MaskData(1, 4, 4, [0x00, 0x00, 0x00, 0x00]));    
+    // マスク2: 1000000000100000
+    maskDefinitions.set(2, new MaskData(2, 4, 4, [0x80, 0x00, 0x20, 0x00]));    
+    // マスク3: 1010000010100000
+    maskDefinitions.set(3, new MaskData(3, 4, 4, [0xA0, 0x00, 0xA0, 0x00]));
+    // マスク4: 1010010110100101
+    maskDefinitions.set(4, new MaskData(4, 4, 4, [0xA0, 0x50, 0xA0, 0x50]));
+    // マスク5: 1010111110101111
+    maskDefinitions.set(5, new MaskData(5, 4, 4, [0xA0, 0xF0, 0xA0, 0xF0]));
+    // マスク6: 1011111111101111
+    maskDefinitions.set(6, new MaskData(6, 4, 4, [0xB0, 0xF0, 0xE0, 0xF0]));
+    // マスク7: 1111111111111111 (全て描画)
+    maskDefinitions.set(7, new MaskData(7, 4, 4, [0xF0, 0xF0, 0xF0, 0xF0]));
+    // マスク8: 0100010001000100 (垂直線)
+    maskDefinitions.set(8, new MaskData(8, 4, 4, [0x40, 0x40, 0x40, 0x40]));
+    // マスク9: 0000111100000000 (水平線)
+    maskDefinitions.set(9, new MaskData(9, 4, 4, [0x00, 0xF0, 0x00, 0x00]));
+    // マスク10: 0001001001001000
+    maskDefinitions.set(10, new MaskData(10, 4, 4, [0x10, 0x20, 0x40, 0x80]));
+    // マスク11: 0001100001000010
+    maskDefinitions.set(11, new MaskData(11, 4, 4, [0x10, 0x80, 0x40, 0x20]));
+    // マスク12: 0100111101000100
+    maskDefinitions.set(12, new MaskData(12, 4, 4, [0x40, 0xF0, 0x40, 0x40]));
+    // マスク13: 0001101001001010
+    maskDefinitions.set(13, new MaskData(13, 4, 4, [0x10, 0xA0, 0x40, 0xA0]));
+}
 
 let tadRaw;
 let tadRawBuffer;
@@ -149,6 +252,7 @@ let currentLineOffset = 0;  // 現在行の揃えオフセット
 
 // リンクレコード対応
 let linkRecordList = new Array(); // リンクレコードリスト
+let execFuncRecordList = new Array(); // 実行機能付箋レコードリスト
 let linkNo = 0;
 
 
@@ -178,6 +282,18 @@ let decorationRanges = {
     mesh: [],
     background: [],
     noprint: []
+};
+
+// 添え字状態管理
+let subscriptState = {
+    active: false,          // 添え字モードが有効か
+    type: 0,                // 0:下付き, 1:上付き
+    position: 0,            // 位置指定 (F値) 0:前置, 1:後置
+    unit: 1,                // 0:文字列単位, 1:文字単位
+    targetPosition: 0,      // U値: 0:右(右下/右上), 1:左(左下/左上)
+    baseline: 0,            // pos値: ベースライン位置 (0:下, 1:上, 2:中央, 3:左, 4:右)
+    fontSize: 0.7,          // 添え字のフォントサイズ比率
+    offset: { x: 0, y: 0 }  // 添え字のオフセット位置
 };
 
 let LOCALHEADSIZE = 96;
@@ -346,6 +462,7 @@ function saveTadFileDrawBuffer(fileIndex) {
     if (canvas && ctx) {
         tadFileDrawBuffers[fileIndex] = ctx.getImageData(0, 0, canvas.width, canvas.height);
         console.debug(`Draw buffer saved for TAD file ${fileIndex}`);
+
     }
 }
 
@@ -394,28 +511,26 @@ function renderFromTadFileDrawBuffer(fileIndex, tabIndex, scrollX = 0, scrollY =
         validScrollX, validScrollY, displayCanvas.width, displayCanvas.height, // 元画像の切り取り範囲
         0, 0, displayCanvas.width, displayCanvas.height                        // 転送先の範囲
     );
-    
-    //console.debug(`Rendered from draw buffer: file ${fileIndex} -> tab ${tabIndex} (scroll: ${scrollX}, ${scrollY})`);
 }
 
 /**
  * Canvas描画前のスクロールオフセット適用
  */
-function applyScrollOffset() {
-    if (ctx) {
+function applyScrollOffset(targetCtx) {
+    if (targetCtx) {
         const tabIndex = getCurrentTabIndex();
         const state = getTabScrollState(tabIndex);
-        ctx.save();
-        ctx.translate(-state.scrollX, -state.scrollY);
+        targetCtx.save();
+        targetCtx.translate(-state.scrollX, -state.scrollY);
     }
 }
 
 /**
  * Canvas描画後のスクロールオフセット復元
  */
-function restoreScrollOffset() {
-    if (ctx) {
-        ctx.restore();
+function restoreScrollOffset(targetCtx) {
+    if (targetCtx) {
+        targetCtx.restore();
     }
 }
 
@@ -518,9 +633,10 @@ class COLORPATTERN {
         this.hsize = 0; // UH
         this.vsize = 0; // UH
         this.ncol = 0; // UH
-        this.fgcol = new Array(); // COLOR()配列
+        this.fgcolArray = new Array(); // COLOR()配列
         this.bgcol = new COLOR(); // COLORのみ
         this.mask = new Array(); // UH[]
+        this.patternData = null; // 2次元配列のパターンデータ
     }
 }
 
@@ -636,6 +752,25 @@ class LINKRECORD {
 
 }
 
+// EXECFUNCRECORD (実行機能付箋レコード) 構造体クラス
+// EXECFUNCRECORD (実行機能付箋レコード) クラス
+class EXECFUNCRECORD {
+    constructor() {
+        this.view = new RECT(); // view
+        this.chsz = 0;  // CHSIZE (UH)
+        this.frcol = new COLOR();  // UH[2]
+        this.chcol = new COLOR();  // UH[2]
+        this.tbcol = new COLOR();  // UH[2]
+        this.pict = 0;  // pict (UH)
+        this.appl = [0, 0, 0];  // UH[3]
+        this.name = new Array(32).fill(0);  // TC[32]
+        this.type = new Array(32).fill(0);  // TC[32]
+        this.dlen = 0;  // UH
+        this.data = new Array();  // UB[]
+        this.window_view = new RECT(); // view
+    }
+}
+
 // TADセグメント:用紙サイズ付箋
 class PaperSize {
     constructor() {
@@ -719,7 +854,6 @@ class GROUP {
 
 let GHEAD = new GlobalHead();
 let LHEAD = [];
-let fusen = new DFUSENSEG();
 
 // 用紙サイズ
 let paperSize = null;                   // 用紙サイズ（PaperSizeクラスのインスタンス）
@@ -891,7 +1025,7 @@ function changeEndian(n) {
  */
 function getTopUBinUH(UH) {
     const SubID = ( UH >> 8);
-    console.debug("UB_SubID" + SubID);
+    //console.debug("UB_SubID" + SubID);
     return SubID;
 }
 
@@ -902,8 +1036,19 @@ function getTopUBinUH(UH) {
  */
 function getLastUBinUH(UH) {
     const ATTR = ( UH & 0b00000011);
-    console.debug("ATTR" + ATTR);
+    //console.debug("ATTR" + ATTR);
     return ATTR;
+}
+
+/**
+ * 下位UBをUHから取得する
+ * @param {UH} UH 
+ * @returns 
+ */
+function getBottomUBinUH(UH) {
+    const bottomUB = (UH & 0xFF);
+    //console.debug("Bottom UB: " + bottomUB);
+    return bottomUB;
 }
 
 /**
@@ -929,6 +1074,7 @@ function parseColor(raw, offset = 0) {
         const r = (color28 >>> 16) & 0xFF;
         const g = (color28 >>> 8) & 0xFF;
         const b = color28 & 0xFF;
+        console.debug(`parseColor: transparent=${transparentMode}, modeBits=${modeBits}, rgb28=${color28}`);
         return {
             transparent: transparentMode,
             mode: modeBits, // 28bitカラー
@@ -1069,6 +1215,28 @@ function xRead(compMethod, p, l) {
             console.error("LH5Decoder is not initialized!");
             return -1;
         }
+        
+        // Check if LH5Decoder is properly initialized with fileData
+        if (!lh5Decoder.fileData || !lh5Decoder.initialized) {
+            // Try to initialize LH5Decoder dynamically if raw data is available
+            if (tadRawDataArray[currentFileIndex]) {
+                console.debug(`Attempting dynamic LH5 decoder initialization for currentFileIndex=${currentFileIndex}`);
+                try {
+                    lh5Decoder.init(tadRawDataArray[currentFileIndex], tadPos, GHEAD.compSize, GHEAD.origSize);
+                    lh5Decoder.initialized = true;
+                    console.debug("LH5Decoder dynamically initialized successfully");
+                } catch (error) {
+                    console.error("Failed to dynamically initialize LH5Decoder:", error);
+                    return -1;
+                }
+            } else {
+                console.error("LH5Decoder is not properly initialized - fileData missing or not initialized");
+                console.debug("Current fileData:", lh5Decoder.fileData ? 'exists' : 'null');
+                console.debug("Initialized flag:", lh5Decoder.initialized);
+                console.debug(`tadRawDataArray[${currentFileIndex}]:`, tadRawDataArray[currentFileIndex]?.length || 'undefined');
+                return -1;
+            }
+        }
 
         const bytesRead = lh5Decoder.decode(l, p);
         
@@ -1112,6 +1280,79 @@ function pass1() {
 }
 
 /**
+ * EXECFUNCRECORD（実行機能付箋レコード）を解析してexecFuncRecordListに追加
+ * @param {Uint8Array} recordData レコードデータ
+ * @param {number} fileIndex ファイルインデックス
+ */
+function parseExecFuncRecord(recordData, fileIndex) {
+    // EXECFUNCRECORD構造を解析
+    const execFuncRecord = new EXECFUNCRECORD();
+    const execView = new DataView(recordData.buffer);
+    
+    // EXECFUNCRECORDの各フィールドを読み込み
+    // view (RECT) - offset 0x00
+    let recordOffset = 0;
+    execFuncRecord.view.left = execView.getUint16(recordOffset, true); recordOffset += 2;
+    execFuncRecord.view.top = execView.getUint16(recordOffset, true); recordOffset += 2;
+    execFuncRecord.view.right = execView.getUint16(recordOffset, true); recordOffset += 2;
+    execFuncRecord.view.bottom = execView.getUint16(recordOffset, true); recordOffset += 2;
+
+    // chsz (UH) - offset 0x08
+    execFuncRecord.chsz = execView.getUint16(recordOffset, true); recordOffset += 2;
+
+    // frcol, chcol, tbcol (COLOR - UH[2] each)
+    execFuncRecord.frcol = uh2uw([execView.getUint16(recordOffset + 2, true), execView.getUint16(recordOffset, true)])[0]; recordOffset += 4;
+    execFuncRecord.chcol = uh2uw([execView.getUint16(recordOffset + 2, true), execView.getUint16(recordOffset, true)])[0]; recordOffset += 4;
+    execFuncRecord.tbcol = uh2uw([execView.getUint16(recordOffset + 2, true), execView.getUint16(recordOffset, true)])[0]; recordOffset += 4;
+    
+    // pict (UH) - offset 0x16
+    execFuncRecord.pict = execView.getUint16(recordOffset, true); recordOffset += 2;
+    
+    // appl (UH[3]) - offset 0x18
+    execFuncRecord.appl[0] = execView.getUint16(recordOffset, true); recordOffset += 2;
+    execFuncRecord.appl[1] = execView.getUint16(recordOffset, true); recordOffset += 2;
+    execFuncRecord.appl[2] = execView.getUint16(recordOffset, true); recordOffset += 2;
+    
+    // name (TC[32]) - offset 0x1E
+    for (let k = 0; k < 16; k++) {
+        execFuncRecord.name[k] = execView.getUint16(recordOffset, true);
+        recordOffset += 2;
+    }
+    
+    // type (TC[32]) - offset 0x5E
+    for (let k = 0; k < 16; k++) {
+        execFuncRecord.type[k] = execView.getUint16(recordOffset, true);
+        recordOffset += 2;
+    }
+    
+    // dlen (UH) - offset 0x9E
+    execFuncRecord.dlen = execView.getUint16(recordOffset, true); recordOffset += 2;
+
+    // data (UB[]) - offset 0xA0, length = dlen
+    if (execFuncRecord.dlen > 0 && recordData.length >= recordOffset + 0x10) {
+        
+        // dlen > 0x10以上だったら、dataの0x04からviewを読み取ってwindow_viewにセット
+        if (execFuncRecord.dlen >= 0x10) {
+            // 無精してrecordOffsetの0x64から読み取る
+            recordOffset+= 4; // dataの0x04相当
+            
+            execFuncRecord.window_view.left = execView.getUint16(recordOffset, true); recordOffset += 2;
+            execFuncRecord.window_view.top = execView.getUint16(recordOffset, true); recordOffset += 2;
+            execFuncRecord.window_view.right = execView.getUint16(recordOffset, true); recordOffset += 2;
+            execFuncRecord.window_view.bottom = execView.getUint16(recordOffset, true);
+        }
+    }
+    
+    console.debug(`EXECFUNCRECORD: dlen=${execFuncRecord.dlen}, window_view=${JSON.stringify(execFuncRecord.window_view)}`);
+    
+    // ファイルごとにexecFuncRecordListを管理
+    if (!execFuncRecordList[fileIndex]) {
+        execFuncRecordList[fileIndex] = [];
+    }
+    execFuncRecordList[fileIndex].push(execFuncRecord);
+}
+
+/**
  * pass2
  * tadファイルの内容を解凍し、各ファイルの内容をディレクトリに保存する。
  * 各ファイルの情報はfile.infに保存され、各レコードの情報はrec.infに保存される。
@@ -1119,7 +1360,7 @@ function pass1() {
 function pass2(LHEAD) {
     // Create file info
     const finfoPath = 'file.inf';
-    let finfoContent = 'No: f_type, name\n';
+    let finfoContent = 'No: f_type, name\\n';
     
     // Set BPK processing flag if multiple files
     if (GHEAD.nfiles > 1) {
@@ -1141,11 +1382,11 @@ function pass2(LHEAD) {
         console.debug(`Processing file ${i}, GHEAD.nfiles=${GHEAD.nfiles}`);
         const lhead = LHEAD[i];
         const fileName = lhead.name;
-        finfoContent += `${i}: 0${lhead.f_type.toString(8)}, ${fileName}\n`;
+        finfoContent += `${i}: 0${lhead.f_type.toString(8)}, ${fileName}\\n`;
         
         // Create record info
         const recInfoPath = `${i}/rec.inf`;
-        let recInfoContent = 'No: type, subtype\n';
+        let recInfoContent = 'No: type, subtype\\n';
         
         // Process all records
         for (let j = 0; j < lhead.f_nrec; j++) {
@@ -1160,7 +1401,7 @@ function pass2(LHEAD) {
             rhead.size = Number(uh2uw([view.getUint16(6, true), view.getUint16(4, true)])[0])
             console.debug(`Record Head: type=${rhead.type}, subtype=${rhead.subtype}, size=${rhead.size}`);
             
-            recInfoContent += `${j}: ${rhead.type}, ${rhead.subtype}\n`;
+            recInfoContent += `${j}: ${rhead.type}, ${rhead.subtype}\\n`;
             
             // Create output file
             const recFileName = `${i}/${j}`;
@@ -1195,6 +1436,7 @@ function pass2(LHEAD) {
                 linkRecordList[i].push(link); // リンクレコードを保存 (ファイルインデックス別)
 
                 recordData = linkData;
+                
             } else if (rhead.type === 1) {
                 // Regular record
                 let tempsize = 0;
@@ -1210,13 +1452,7 @@ function pass2(LHEAD) {
                     recordData.set(remaining, tempsize);
                 }
                 // 新設計：nfilesとfileIndexを明示的に渡す
-                //const nfiles = (typeof GHEAD !== 'undefined' && GHEAD.nfiles) ? GHEAD.nfiles : 1;
-                //tadDataArray(recordData, false, nfiles, currentFileIndex);
-                // LHEADインデックスからTADファイルインデックスへのマッピング
-                // rhead.type === 1の時だけマッピングを作成
-                if (isProcessingBpk) {
-                    lheadToCanvasMap[i] = tadFileIndex;
-                }
+                lheadToCanvasMap[i] = tadFileIndex;
 
                 // TADデータを配列に保存（ファイルインデックスと共に）                
                 try {
@@ -1232,8 +1468,26 @@ function pass2(LHEAD) {
                 // tadFileIndexをインクリメント（実際にデータを保存した後）
                 tadFileIndex++;
 
+            } else if (rhead.type === 8) {
+                // 実行機能付箋レコード (EXECFUNCRECORD)
+                let tempsize = 0;
+                while (rhead.size - tempsize > BUFFERSIZE) {
+                    xRead(compMethod, buffer, BUFFERSIZE);
+                    recordData.set(buffer.slice(), tempsize);
+                    tempsize += BUFFERSIZE;
+                }
+                
+                if (rhead.size - tempsize > 0) {
+                    const remaining = new Uint8Array(rhead.size - tempsize);
+                    xRead(compMethod, remaining, rhead.size - tempsize);
+                    recordData.set(remaining, tempsize);
+                }
+                
+                // 専用メソッドを使用してEXECFUNCRECORDを解析
+                parseExecFuncRecord(recordData, i);
+                
             } else {
-                // Other record types (type !== 0 && type !== 1)
+                // Other record types (type !== 0 && type !== 1 && type !== 8)
                 // 他のタイプのレコード（画像など）は読み飛ばす
                 let tempsize = 0;
                 while (rhead.size - tempsize > BUFFERSIZE) {
@@ -1362,11 +1616,21 @@ function tsTextStart(tadSeg) {
  * @param {int} linePitch 
  * @param {int} align 
  */
-function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, linePitch, align) {
-    if (canvasW < width ) {
-        width = canvasW;
+function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, width, textPitch, linePitch, align) {
+    // パラメータとして受け取ったcanvasとctxを使用
+    if (!targetCtx || !targetCanvas) {
+        console.error('ctx and canvas must be provided as parameters in drawText');
+        return;
+    }
+    
+    // ローカル変数として設定
+    const ctx = targetCtx;
+    const canvasElement = targetCanvas;
+    
+    if (canvasElement.width < width ) {
+        width = canvasElement.width;
     } else if (width < 10) {
-        width = canvasW;
+        width = canvasElement.width;
     }
 
     const lineHeight = textfontSize * linePitch;
@@ -1379,17 +1643,22 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
         lineMaxHeight[textRow] = lineHeight;
     }
 
-    // フォント設定を適用
+    // ctxの最終確認とフォント設定を適用
+    if (!ctx) {
+        console.error('ctx is still undefined in drawText after parameter assignment. targetCtx was:', targetCtx);
+        return;
+    }
+    
     ctx.fillStyle = textFontColor;
     ctx.font = textFontSet;
-    ctx.textBaseline = "top";
+    ctx.textBaseline = "alphabetic";  // ベースライン基準に変更
     ctx.textAlign = "left"; // 常に左揃えで描画し、位置は手動計算
 
     // 折り返し処理
     if (ctx.measureText(char).width + textWidth > width) {
         textHeight += lineMaxHeight[textRow];
         textRow++;
-        lineMaxHeight.push(linePitch)
+        lineMaxHeight.push(linePitch);
         textWidth = 0;
         textColumn = 0;
         currentLineOffset = 0; // 行オフセットをリセット
@@ -1405,7 +1674,7 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
     if (char == String.fromCharCode(Number(TC_NL))) {
         textHeight += lineMaxHeight[textRow];
         textRow++;
-        lineMaxHeight.push(linePitch)
+        lineMaxHeight.push(linePitch);
         textWidth = 0;
         textColumn = 0;
         if (tabRulerLineMoveFlag == true) {
@@ -1415,7 +1684,7 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
     } else if (char == String.fromCharCode(Number(TC_CR))) {
         textHeight += lineMaxHeight[textRow];
         textRow++;
-        lineMaxHeight.push(linePitch)
+        lineMaxHeight.push(linePitch);
         textWidth = 0;
         textColumn = 0;
         if (tabRulerLineMoveFlag == true) {
@@ -1431,7 +1700,7 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
 
         textHeight += lineMaxHeight[textRow];
         textRow++;
-        lineMaxHeight.push(linePitch)
+        lineMaxHeight.push(linePitch);
         textWidth = 0;
         textColumn = 0;
         if (tabRulerLineMoveFlag == true) {
@@ -1446,7 +1715,8 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
         }
     } else {
         let padding = 0;
-        const charY = startY + textHeight;
+        // シンプルな位置計算
+        const charY = startY + textHeight + textfontSize;  // シンプルな文字位置
         const charWidth = ctx.measureText(char).width;
         let charX = 0 + padding + startX + textWidth;
         
@@ -1481,7 +1751,8 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
             const currentTextColor = textFontColor || '#000000';
             const padding = 2;
             const charHeight = textfontSize * 1.2;
-            const top = charY - textfontSize * 0.2;
+            // ベースライン基準で背景位置を調整
+            const top = charY - textfontSize * 0.8;
             
             // 文字の背景を文字色で塗りつぶす
             ctx.fillStyle = currentTextColor;
@@ -1501,7 +1772,10 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
             
             // 変形効果を適用
             if (textScaleX !== 1.0 || textSkewAngle !== 0) {
+                // skew変換を適用する際、原点を文字の位置に移動してから変換
+                ctx.translate(charX, charY);
                 ctx.transform(textScaleX, 0, Math.tan(textSkewAngle * Math.PI / 180), 1, 0, 0);
+                ctx.translate(-charX, -charY);
             }
             
             // 影の設定
@@ -1526,18 +1800,51 @@ function drawText(ctx, char, textfontSize, startX, startY, width, textPitch, lin
                 actualTextColor = backgroundColor || '#ffffff';
             }
             
+            // 添え字処理
+            let actualCharX = charX;
+            let actualCharY = charY;
+            let savedFontSet = textFontSet;
+            
+            if (subscriptState.active) {
+                // フォントサイズを調整
+                const subscriptFontSize = textFontSize * subscriptState.fontSize;
+                ctx.font = subscriptFontSize + 'px serif';
+                
+                // 位置調整
+                if (subscriptState.type === 0) {
+                    // 下付き
+                    actualCharY += textFontSize * 0.3;
+                } else if (subscriptState.type === 1) {
+                    // 上付き
+                    actualCharY -= textFontSize * 0.3;
+                }
+                
+                // 左右位置調整（文字単位の場合）
+                if (subscriptState.unit === 1) {
+                    if (subscriptState.targetPosition === 1) {
+                        // 左寄せ
+                        actualCharX -= charWidth * 0.2;
+                    }
+                }
+            }
+            
             // 袋文字の処理
             if (textStrokeStyle === 'outline') {
                 ctx.strokeStyle = actualTextColor;
                 ctx.lineWidth = 1;
-                ctx.strokeText(char, charX, charY);
+                ctx.strokeText(char, actualCharX, actualCharY);
                 ctx.fillStyle = actualTextColor === textFontColor ? 'white' : actualTextColor;
-                ctx.fillText(char, charX, charY);
+                ctx.fillText(char, actualCharX, actualCharY);
                 ctx.fillStyle = textFontColor;  // 元の色に戻す
             } else {
                 ctx.fillStyle = actualTextColor;
-                ctx.fillText(char, charX, charY);
+                ctx.fillText(char, actualCharX, actualCharY);
                 ctx.fillStyle = textFontColor;  // 元の色に戻す
+            }
+            
+            // 添え字の場合フォントを戻す
+            if (subscriptState.active) {
+                ctx.font = savedFontSet;
             }
             
             ctx.restore();  // 変形効果と影の設定を復元
@@ -2190,10 +2497,10 @@ function tadTextAlignFusen(segLen, tadSeg) {
         // TODO
     } else if (UB_SubID === Number(0x04)) {
         console.debug("添え字開始指定付箋");
-        // TODO
+        tadSubscriptStart(segLen, tadSeg);
     } else if (UB_SubID === Number(0x05)) {
         console.debug("添え字終了指定付箋");
-        // TODO
+        tadSubscriptEnd(segLen, tadSeg);
     } else if (UB_SubID === Number(0x06)) {
         console.debug("ルビ開始指定付箋");
         // TODO
@@ -2468,7 +2775,9 @@ function drawTextDecoration(type, range) {
     const style = range.style;
     const startX = range.start.startX;
     const endX = range.end.x;
-    let y = range.start.y;
+    // シンプルな位置計算
+    const fontSize = range.start.fontSize || textFontSize;
+    let y = range.start.y;  // シンプルな位置
     
     // Canvas設定を保存
     ctx.save();
@@ -2485,8 +2794,9 @@ function drawTextDecoration(type, range) {
     if (type === 'box') {
         // テキストの上下左右に余白を持たせた枠を描画
         const padding = 2;
-        const top = range.start.y - range.start.fontSize * 0.2 - padding;
-        const bottom = range.start.y + range.start.fontSize * 1.2 + padding;
+        // シンプルな枠の位置計算
+        const top = y - padding;
+        const bottom = y + range.start.fontSize + padding;
         const left = startX - padding;
         const right = endX + padding;
         
@@ -2517,13 +2827,13 @@ function drawTextDecoration(type, range) {
         // 無印字の場合（実際の描画処理は文字描画時に行う）
         // ここでは何もしない
     } else {
-        // 通常の線装飾の位置を計算
+        // 通常の線装飾の位置を計算（シンプル）
         switch(type) {
             case 'underline':
-                y += range.start.fontSize * 1.1;  // 文字の下
+                y += range.start.fontSize;  // 文字の下
                 break;
             case 'overline':
-                y -= range.start.fontSize * 0.1;  // 文字の上
+                // そのまま文字の上
                 break;
             case 'strikethrough':
                 y += range.start.fontSize * 0.5;  // 文字の中央
@@ -2719,6 +3029,71 @@ function setLinePattern(pattern) {
     }
 }
 
+/**
+ * 線属性(l_atr)を適用
+ * @param {number} l_atr - 線属性値 (上位8ビット: 線種, 下位8ビット: 線幅)
+ * @returns {Object} 元の線設定を返す（復元用）
+ */
+function applyLineAttribute(l_atr) {
+    // 元の設定を保存
+    const oldSettings = {
+        lineWidth: ctx.lineWidth,
+        lineDash: ctx.getLineDash(),
+        drawLineWidth: drawLineWidth
+    };
+    
+    // 線幅（下位8ビット）
+    const lineWidth = l_atr & 0xFF;
+    
+    // 線幅が0の場合は何も描画しない
+    if (lineWidth === 0) {
+        ctx.lineWidth = 0;
+        drawLineWidth = 0;
+        return oldSettings;
+    }
+    
+    // 線幅を設定（線幅>1の場合は右下方向に太くなる効果を追加）
+    ctx.lineWidth = lineWidth;
+    drawLineWidth = lineWidth;
+    
+    // 線種（上位8ビット）
+    const lineType = (l_atr >> 8) & 0xFF;
+    
+    // 線種パターンを適用
+    if (linePatternDefinitions[lineType]) {
+        ctx.setLineDash(linePatternDefinitions[lineType]);
+    } else {
+        // 未定義の線種は実線として扱う
+        ctx.setLineDash([]);
+    }
+    
+    // 線幅が1より大きい場合、右下方向のオフセット効果のためにシャドウを使用
+    if (lineWidth > 1) {
+        ctx.shadowColor = 'transparent';
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+        // 必要に応じて線の描画位置を微調整
+    }
+    
+    return oldSettings;
+}
+
+/**
+ * 線属性設定を復元
+ * @param {Object} oldSettings - applyLineAttributeで返された設定
+ */
+function restoreLineAttribute(oldSettings) {
+    if (oldSettings) {
+        ctx.lineWidth = oldSettings.lineWidth;
+        ctx.setLineDash(oldSettings.lineDash);
+        drawLineWidth = oldSettings.drawLineWidth;
+        // シャドウ設定をリセット
+        ctx.shadowColor = 'transparent';
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+    }
+}
+
 // 画像セグメントリスト
 let imageSegments = [];
 
@@ -2868,8 +3243,10 @@ function tsImageSegment(segLen, tadSeg) {
             // 画像がcanvas幅に収まる場合は改行しない
         }
         
-        // 画像を描画
-        drawImageSegment(imageSeg, ctx, textWidth, textHeight);
+        // 画像を描画（シンプルな位置計算）
+        const imageDrawY = textHeight;
+        
+        drawImageSegment(imageSeg, ctx, textWidth, imageDrawY);
 
         // 大きな画像の場合、lineMaxHeightを更新
         if (imageWidth > textFontSize * 2 || imageHeight > textFontSize * 2) {
@@ -2886,8 +3263,8 @@ function tsImageSegment(segLen, tadSeg) {
             textWidth += imageWidth;
         }
 
-        // 画像描画後の仮想領域を拡張（textHeight更新前の位置で計算）
-        expandVirtualArea(textWidth, textHeight, textWidth + imageWidth, textHeight + imageHeight);
+        // 画像描画後の仮想領域を拡張（調整された位置で計算）
+        expandVirtualArea(textWidth, imageDrawY, textWidth + imageWidth, imageDrawY + imageHeight);
 
     } else if (isInFigureSegment()) {
         // 図形セグメント内での画像
@@ -3212,7 +3589,7 @@ function tsFig(tadSeg) {
  * @param {*} tadSeg 
  */
 function tsFigEnd(tadSeg) {
-    // 文章セグメント内の図形の場合、lineMaxHeightを更新
+    // 文章セグメント内の図形の場合、lineMaxHeightを更新し位置調整
     if (isInTextSegment() || isDirectTextSegment()) {
         // 図形のサイズを取得（imagePointスタックから）
         if (imagePoint.length > 0) {
@@ -3225,6 +3602,12 @@ function tsFigEnd(tadSeg) {
             } else if (lineMaxHeight[textRow] < figHeight) {
                 lineMaxHeight[textRow] = figHeight;
             }
+            
+            // 図形描画位置をシンプルに設定
+            const figDrawY = textHeight;
+            
+            // 図形描画用のオフセット情報を更新（各図形要素で使用）
+            figInfo[6] = figDrawY;  // drawY位置を更新
         }
     }
     
@@ -3247,24 +3630,187 @@ function tsFigEnd(tadSeg) {
  * @param {{0x0000[]} tadSeg 
  * @returns 
  */
+/**
+ * カラーパターンから線色と塗り色を設定する共通メソッド
+ * @param {number} l_pat - 線パターンID
+ * @param {number} f_pat - 塗りパターンID
+ * @returns {object} 元の色設定（復元用）
+ */
+function setColorPattern(l_pat, f_pat) {
+    const oldColors = {
+        lineColor: drawLineColor,
+        fillColor: drawFillColor,
+        fillStyle: ctx.fillStyle
+    };
+    
+    if (colorPattern.length > 0) {
+        if (colorPattern[l_pat]) {
+            const pattern = colorPattern[l_pat];
+            // fgcolArrayが存在し、要素があることを確認
+            if (pattern.fgcolArray && pattern.fgcolArray.length > 0) {
+                drawLineColor = pattern.fgcolArray[0].color;
+            }
+        }
+        if (colorPattern[f_pat]) {
+            const pattern = colorPattern[f_pat];
+            
+            // パターンデータが存在し、有効なサイズを持つ場合
+            if (pattern.patternData && pattern.hsize > 0 && pattern.vsize > 0) {
+                // パターンが単色かチェック
+                let isSolidColor = true;
+                const firstColor = pattern.patternData[0][0];
+                const differentColors = [];
+                
+                outer: for (let y = 0; y < pattern.vsize; y++) {
+                    for (let x = 0; x < pattern.hsize; x++) {
+                        const currentColor = pattern.patternData[y][x];
+                        if (currentColor !== firstColor) {
+                            isSolidColor = false;
+                            if (differentColors.indexOf(currentColor) === -1) {
+                                differentColors.push(currentColor);
+                            }
+                            if (differentColors.length >= 3) break outer; // 3色以上なら早期終了
+                        }
+                    }
+                }
+                
+                if (isSolidColor) {
+                    // 単色の場合は直接色を設定
+                    if (firstColor !== null && firstColor !== undefined && firstColor !== -1) {
+                        drawFillColor = firstColor;
+                        ctx.fillStyle = drawFillColor;
+                    } else {
+                        // 透明または無効な色の場合はデフォルト色を使用
+                        if (pattern.fgcolArray && pattern.fgcolArray.length > 0) {
+                            drawFillColor = pattern.fgcolArray[0].color;
+                        } else {
+                            drawFillColor = '#000000';
+                        }
+                        ctx.fillStyle = drawFillColor;
+                    }
+                } else {
+                    // パターンの場合はCanvasパターンを作成
+                    console.debug(`Creating canvas pattern for pattern ${f_pat}: ${pattern.hsize}x${pattern.vsize}`);
+                    const patternCanvas = document.createElement('canvas');
+                    patternCanvas.width = pattern.hsize;
+                    patternCanvas.height = pattern.vsize;
+                    const patternCtx = patternCanvas.getContext('2d');
+                    
+                    // パターンキャンバスをクリア（透明にする）
+                    patternCtx.clearRect(0, 0, pattern.hsize, pattern.vsize);
+                    
+                    // パターンデータをCanvasに描画
+                    for (let y = 0; y < pattern.vsize; y++) {
+                        for (let x = 0; x < pattern.hsize; x++) {
+                            const color = pattern.patternData[y][x];
+                            if (color !== null && color !== undefined && color !== -1) {
+                                patternCtx.fillStyle = color;
+                                patternCtx.fillRect(x, y, 1, 1);
+                            }
+                        }
+                    }
+                    
+                    // パターンを作成して設定
+                    const canvasPattern = ctx.createPattern(patternCanvas, 'repeat');
+                    if (canvasPattern) {
+                        ctx.fillStyle = canvasPattern;
+                    } else {
+                        // パターン作成に失敗した場合は最初の色を使用
+                        if (pattern.fgcolArray && pattern.fgcolArray.length > 0) {
+                            drawFillColor = pattern.fgcolArray[0].color;
+                            ctx.fillStyle = drawFillColor;
+                        }
+                    }
+                }
+            } else {
+                // パターンデータがない場合は最初の前景色を使用（単色塗りつぶし）
+                if (pattern.fgcolArray && pattern.fgcolArray.length > 0) {
+                    drawFillColor = pattern.fgcolArray[0].color;
+                    ctx.fillStyle = drawFillColor;
+                } else {
+                    // 前景色もない場合はデフォルト色
+                    drawFillColor = '#000000';
+                    ctx.fillStyle = drawFillColor;
+                }
+            }
+        }
+    }
+    
+    return oldColors;
+}
+
+/**
+ * 線色のみカラーパターンから設定する共通メソッド
+ * @param {number} l_pat - 線パターンID
+ * @returns {string} 元の線色（復元用）
+ */
+function setLineColorPattern(l_pat) {
+    const oldLineColor = drawLineColor;
+    
+    if (colorPattern.length > 0 && colorPattern[l_pat]) {
+        const pattern = colorPattern[l_pat];
+        // fgcolArrayが存在し、要素があることを確認
+        if (pattern.fgcolArray && pattern.fgcolArray.length > 0) {
+            drawLineColor = pattern.fgcolArray[0].color;
+        }
+    }
+    
+    return oldLineColor;
+}
+
 function tsFigRectAngleDraw(segLen, tadSeg) {
     if (segLen < Number(0x0012)) {
         return;
     }
+    const l_atr = Number(tadSeg[1]);
+    const l_pat = Number(tadSeg[2]);
+    const f_pat = Number(tadSeg[3]);
+    const angle = Number(tadSeg[4]);
     const figX = Number(tadSeg[5]);
     const figY = Number(tadSeg[6]);
     const figW = Number(tadSeg[7]) - figX;
     const figH = Number(tadSeg[8]) - figY;
 
+    ctx.save(); // 現在の状態を保存
+
     console.debug(`Rectangle attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}, angle=${IntToHex((tadSeg[4]),4).replace('0x','')}`);
     console.debug(`Rectangle bounds: left=${IntToHex((tadSeg[5]),4).replace('0x','')}, top=${IntToHex((tadSeg[6]),4).replace('0x','')}, right=${IntToHex((tadSeg[7]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[8]),4).replace('0x','')}`);
+    
+    // 線属性を適用
+    const oldLineSettings = applyLineAttribute(l_atr);
+    const oldColors = setColorPattern(l_pat, f_pat);
+    
     ctx.beginPath();
     ctx.rect(figX , figY, figW, figH);
-    ctx.fillStyle = drawFillColor;
+    
+    if (angle !== 0) {
+        // 回転角度が指定されている場合は図形を回転させる
+        ctx.translate(figX + figW / 2, figY + figH / 2);
+        ctx.rotate((angle * Math.PI) / 180);
+        ctx.translate(-(figX + figW / 2), -(figY + figH / 2));
+    }
+    // setColorPatternでfillStyleが設定されていない場合のみdrawFillColorを設定
+    if (ctx.fillStyle === oldColors.fillStyle || !oldColors.fillStyle) {
+        ctx.fillStyle = drawFillColor;
+    }
     ctx.fill();
-    ctx.lineWidth = drawLineWidth;
-    ctx.strokeStyle = drawLineColor;
-    ctx.stroke();
+    
+    // 線幅が0より大きい場合のみ枠線を描画
+    if (drawLineWidth > 0) {
+        ctx.strokeStyle = drawLineColor;
+        ctx.stroke();
+    }
+
+    ctx.restore(); // 保存した状態に戻す
+    
+    drawFillColor = oldColors.fillColor;
+    drawLineColor = oldColors.lineColor;
+    if (oldColors.fillStyle) {
+        ctx.fillStyle = oldColors.fillStyle;
+    }
+    
+    // 線属性を復元
+    restoreLineAttribute(oldLineSettings);
 
     return;
 }
@@ -3279,6 +3825,10 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
     if (segLen < Number(0x0016)) {
         return;
     }
+    const l_atr = Number(tadSeg[1]);
+    const l_pat = Number(tadSeg[2]);
+    const f_pat = Number(tadSeg[3]);
+    const angle = Number(tadSeg[4]);
     const figRH = Number(tadSeg[5]);
     const figRV = Number(tadSeg[6]);
     const figX = Number(tadSeg[7]);
@@ -3286,8 +3836,20 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
     const figW = Number(tadSeg[9]) - figX;
     const figH = Number(tadSeg[10]) - figY;
 
-    console.debug(`RoundRect attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}, angle=${IntToHex((tadSeg[4]),4).replace('0x','')}, rh=${IntToHex((tadSeg[5]),4).replace('0x','')}, rv=${IntToHex((tadSeg[6]),4).replace('0x','')}`);
-    console.debug(`RoundRect bounds: left=${IntToHex((tadSeg[7]),4).replace('0x','')}, top=${IntToHex((tadSeg[8]),4).replace('0x','')}, right=${IntToHex((tadSeg[9]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[10]),4).replace('0x','')}`);
+    ctx.save(); // 現在の状態を保存
+
+    // console.debug(`RoundRect attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}, angle=${IntToHex((tadSeg[4]),4).replace('0x','')}, rh=${IntToHex((tadSeg[5]),4).replace('0x','')}, rv=${IntToHex((tadSeg[6]),4).replace('0x','')}`);
+    // console.debug(`RoundRect bounds: left=${IntToHex((tadSeg[7]),4).replace('0x','')}, top=${IntToHex((tadSeg[8]),4).replace('0x','')}, right=${IntToHex((tadSeg[9]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[10]),4).replace('0x','')}`);
+
+    // 線属性を適用
+    const oldLineSettings = applyLineAttribute(l_atr);
+    const oldColors = setColorPattern(l_pat, f_pat);
+    if (angle !== 0) {
+        // 回転角度が指定されている場合は図形を回転させる
+        ctx.translate(figX + figW / 2, figY + figH / 2);
+        ctx.rotate((angle * Math.PI) / 180);
+        ctx.translate(-(figX + figW / 2), -(figY + figH / 2));
+    }
 
     ctx.beginPath();
     ctx.moveTo(figX + (figRH / 2), figY);
@@ -3301,11 +3863,28 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
     ctx.arcTo(figX, figY, figX + (figRH / 2), figY, (figRV / 2));
     ctx.closePath();
 
-    ctx.fillStyle = drawFillColor;
+    // setColorPatternでfillStyleが設定されていない場合のみdrawFillColorを設定
+    if (ctx.fillStyle === oldColors.fillStyle || !oldColors.fillStyle) {
+        ctx.fillStyle = drawFillColor;
+    }
     ctx.fill();
-    ctx.lineWidth = drawLineWidth;
-    ctx.strokeStyle = drawLineColor;
-    ctx.stroke();
+    
+    // 線幅が0より大きい場合のみ枠線を描画
+    if (drawLineWidth > 0) {
+        ctx.strokeStyle = drawLineColor;
+        ctx.stroke();
+    }
+
+    ctx.restore(); // 保存した状態に戻す
+    
+    drawFillColor = oldColors.fillColor;
+    drawLineColor = oldColors.lineColor;
+    if (oldColors.fillStyle) {
+        ctx.fillStyle = oldColors.fillStyle;
+    }
+    
+    // 線属性を復元
+    restoreLineAttribute(oldLineSettings);
 
     return;
 }
@@ -3321,11 +3900,20 @@ function tsFigPolygonDraw(segLen, tadSeg) {
         return;
     }
 
+    const l_atr = Number(tadSeg[1]);
+    const l_pat = Number(tadSeg[2]);
+    const f_pat = Number(tadSeg[3]);
+
     console.debug(`Polygon attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}`);
     console.debug("round  " + IntToHex((tadSeg[4]),4).replace('0x',''));
     console.debug("np     " + IntToHex((tadSeg[5]),4).replace('0x',''));
     console.debug("x      " + IntToHex((tadSeg[6]),4).replace('0x',''));
     console.debug("y      " + IntToHex((tadSeg[7]),4).replace('0x',''));
+
+    // 線属性を適用
+    const oldLineSettings = applyLineAttribute(l_atr);
+    // カラーパターンを設定
+    const oldColors = setColorPattern(l_pat, f_pat);
 
     let x = Number(tadSeg[6]);
     let y = Number(tadSeg[7]);
@@ -3348,9 +3936,29 @@ function tsFigPolygonDraw(segLen, tadSeg) {
     }
     console.debug(polygonPoint);
     ctx.closePath();
-    ctx.stroke();
-    ctx.fillStyle = drawFillColor;
+    
+    // 塗りつぶしを先に実行
+    // setColorPatternでfillStyleが設定されていない場合のみdrawFillColorを設定
+    if (ctx.fillStyle === oldColors.fillStyle || !oldColors.fillStyle) {
+        ctx.fillStyle = drawFillColor;
+    }
     ctx.fill();
+    
+    // 線幅が0より大きい場合のみ枠線を描画
+    if (drawLineWidth > 0) {
+        ctx.strokeStyle = drawLineColor;
+        ctx.stroke();
+    }
+
+    // 色設定を復元
+    drawLineColor = oldColors.lineColor;
+    drawFillColor = oldColors.fillColor;
+    if (oldColors.fillStyle) {
+        ctx.fillStyle = oldColors.fillStyle;
+    }
+    
+    // 線属性を復元
+    restoreLineAttribute(oldLineSettings);
 
     return;
 }
@@ -3365,7 +3973,17 @@ function tsFigLineDraw(segLen, tadSeg) {
     if (segLen < Number(0x000E)) {
         return;
     }
-    console.debug(`Polyline attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}`);
+    
+    const l_atr = Number(tadSeg[1]);
+    const l_pat = Number(tadSeg[2]);
+    
+    console.debug(`Line attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}`);
+    
+    // 線属性を適用
+    const oldLineSettings = applyLineAttribute(l_atr);
+    // 線色のみカラーパターンを設定
+    const oldLineColor = setLineColorPattern(l_pat);
+    
     let x = Number(tadSeg[3]);
     let y = Number(tadSeg[4]);
 
@@ -3387,7 +4005,17 @@ function tsFigLineDraw(segLen, tadSeg) {
     }
     console.debug(linePoint);
 
-    ctx.stroke();
+    // 線幅が0より大きい場合のみ描画
+    if (drawLineWidth > 0) {
+        ctx.stroke();
+    }
+    
+    // 色設定を復元
+    drawLineColor = oldLineColor;
+    
+    // 線属性を復元
+    restoreLineAttribute(oldLineSettings);
+    
     return;
 }
 
@@ -3404,6 +4032,9 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     console.debug(`Ellipse attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}, angle=${IntToHex((tadSeg[4]),4).replace('0x','')}`);
     console.debug(`Ellipse bounds: left=${IntToHex((tadSeg[5]),4).replace('0x','')}, top=${IntToHex((tadSeg[6]),4).replace('0x','')}, right=${IntToHex((tadSeg[7]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[8]),4).replace('0x','')}`);
 
+    const l_atr = Number(tadSeg[1]);
+    const l_pat = Number(tadSeg[2]);
+    const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
     const frameLeft = Number(uh2h(tadSeg[5]));
     const frameTop = Number(uh2h(tadSeg[6]));
@@ -3422,9 +4053,38 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     console.debug(radiusX);
     console.debug(radiusY);
 
+    ctx.save(); // 現在の状態を保存
+
+    // 線属性を適用
+    const oldLineSettings = applyLineAttribute(l_atr);
+    const oldColors = setColorPattern(l_pat, f_pat);
+
     ctx.beginPath();
     ctx.ellipse(frameCenterX, frameCenterY, radiusX, radiusY, radianAngle, 0, Math.PI * 2,false);
-    ctx.stroke();
+    
+    // 塗りつぶしを先に実行
+    // setColorPatternでfillStyleが設定されていない場合のみdrawFillColorを設定
+    if (ctx.fillStyle === oldColors.fillStyle || !oldColors.fillStyle) {
+        ctx.fillStyle = drawFillColor;
+    }
+    ctx.fill();
+    
+    // 線幅が0より大きい場合のみ枠線を描画
+    if (drawLineWidth > 0) {
+        ctx.strokeStyle = drawLineColor;
+        ctx.stroke();
+    }
+
+    ctx.restore(); // 保存した状態に戻す
+
+    drawFillColor = oldColors.fillColor;
+    drawLineColor = oldColors.lineColor;
+    if (oldColors.fillStyle) {
+        ctx.fillStyle = oldColors.fillStyle;
+    }
+    
+    // 線属性を復元
+    restoreLineAttribute(oldLineSettings);
 
     return;
 }
@@ -3439,9 +4099,18 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     if (segLen < Number(0x0018)) {
         return;
     }
-    console.debug(`Line attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, angle=${IntToHex((tadSeg[3]),4).replace('0x','')}`);
-    console.debug(`Line bounds: left=${IntToHex((tadSeg[4]),4).replace('0x','')}, top=${IntToHex((tadSeg[5]),4).replace('0x','')}, right=${IntToHex((tadSeg[6]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[7]),4).replace('0x','')}`);
-    console.debug(`Line points: startx=${IntToHex((tadSeg[8]),4).replace('0x','')}, starty=${IntToHex((tadSeg[9]),4).replace('0x','')}, endx=${IntToHex((tadSeg[10]),4).replace('0x','')}, endy=${IntToHex((tadSeg[11]),4).replace('0x','')}`);
+    
+    const l_atr = Number(tadSeg[1]);
+    const l_pat = Number(tadSeg[2]);
+    
+    console.debug(`EllipticalArc attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, angle=${IntToHex((tadSeg[3]),4).replace('0x','')}`);
+    console.debug(`EllipticalArc bounds: left=${IntToHex((tadSeg[4]),4).replace('0x','')}, top=${IntToHex((tadSeg[5]),4).replace('0x','')}, right=${IntToHex((tadSeg[6]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[7]),4).replace('0x','')}`);
+    console.debug(`EllipticalArc points: startx=${IntToHex((tadSeg[8]),4).replace('0x','')}, starty=${IntToHex((tadSeg[9]),4).replace('0x','')}, endx=${IntToHex((tadSeg[10]),4).replace('0x','')}, endy=${IntToHex((tadSeg[11]),4).replace('0x','')}`);
+
+    // 線属性を適用
+    const oldLineSettings = applyLineAttribute(l_atr);
+    // 線色のみカラーパターンを設定（楕円弧は線のみで塗りはない）
+    const oldLineColor = setLineColorPattern(l_pat);
 
     const angle = Number(uh2h(tadSeg[3]));
     const frameLeft = Number(uh2h(tadSeg[4]));
@@ -3472,7 +4141,18 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
 
     ctx.beginPath();
     ctx.ellipse(frameCenterX, frameCenterY, radiusX, radiusY, radianAngle, radianStart, radianEnd,false);
-    ctx.stroke();
+    
+    // 線幅が0より大きい場合のみ描画
+    if (drawLineWidth > 0) {
+        ctx.strokeStyle = drawLineColor;
+        ctx.stroke();
+    }
+
+    // 色設定を復元
+    drawLineColor = oldLineColor;
+    
+    // 線属性を復元
+    restoreLineAttribute(oldLineSettings);
 
     return;
 }
@@ -3491,6 +4171,14 @@ function tsFigPolylineDraw(segLen, tadSeg) {
     let l_pat = Number(uh2h(tadSeg[2]));
     let round = Number(uh2h(tadSeg[3]));
     let np = Number(uh2h(tadSeg[4]));
+    
+    console.debug(`Polyline attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}`);
+    
+    // 線属性を適用
+    const oldLineSettings = applyLineAttribute(l_atr);
+    
+    // 線色のみカラーパターンを設定
+    const oldLineColor = setLineColorPattern(l_pat);
 
     let polyLines = new Array();
     for (let i = 0; i < np; i++) {
@@ -3500,18 +4188,27 @@ function tsFigPolylineDraw(segLen, tadSeg) {
         polyLines.push(polyline);
     }
 
-    ctx.strokeStyle = drawLineColor;
-    ctx.beginPath();
-    for (let i = 0; i < polyLines.length; i++) {
-        let point = polyLines[i];
-        if (i === 0) {
-            ctx.moveTo(point.x, point.y);
-        } else {
-            ctx.lineTo(point.x, point.y);
+    // 線幅が0の場合は描画しない
+    if (drawLineWidth > 0) {
+        ctx.strokeStyle = drawLineColor;
+        ctx.beginPath();
+        for (let i = 0; i < polyLines.length; i++) {
+            let point = polyLines[i];
+            if (i === 0) {
+                ctx.moveTo(point.x, point.y);
+            } else {
+                ctx.lineTo(point.x, point.y);
+            }
         }
+        //ctx.closePath();
+        ctx.stroke();
     }
-    //ctx.closePath();
-    ctx.stroke();
+    
+    // 色設定を復元
+    drawLineColor = oldLineColor;
+    
+    // 線属性を復元
+    restoreLineAttribute(oldLineSettings);
 }
 
 /**
@@ -3521,10 +4218,222 @@ function tsFigPolylineDraw(segLen, tadSeg) {
  * @returns
  */
 function tsFigCurveDraw(segLen, tadSeg) {
-    if (segLen < Number(0x0007)) {
+    if (segLen < Number(0x000C)) { // 最小サイズ: mode(2) + l_atr(2) + l_pat(2) + f_pat(2) + type(2) + np(2) = 12バイト
         return;
     }
-    // 曲線セグメントの描画処理
+    
+    // パラメータ解析
+    const mode = getLastUBinUH(tadSeg[0]);
+    const l_atr = Number(tadSeg[1]);
+    const l_pat = Number(tadSeg[2]);
+    const f_pat = Number(tadSeg[3]);
+    const type = Number(tadSeg[4]);
+    const np = Number(tadSeg[5]);
+    
+    console.debug(`Curve attributes: mode=${mode}, l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}, type=${type}, np=${np}`);
+    
+    // mode 0 のみ処理
+    if (mode !== 0) {
+        console.debug(`Unsupported curve mode: ${mode}`);
+        return;
+    }
+    
+    // 頂点数のチェック
+    if (np < 2) {
+        console.debug("Curve needs at least 2 points");
+        return;
+    }
+    
+    // 必要なデータサイズをチェック（各頂点は x,y で 4バイト）
+    const expectedSize = 12 + np * 4;
+    if (segLen < expectedSize) {
+        console.debug(`Curve segment too short: expected ${expectedSize}, got ${segLen}`);
+        return;
+    }
+    
+    // 頂点データを読み取り
+    const points = [];
+    for (let i = 0; i < np; i++) {
+        const x = Number(uh2h(tadSeg[6 + i * 2]));
+        const y = Number(uh2h(tadSeg[7 + i * 2]));
+        points.push({ x: x, y: y });
+    }
+    
+    // 閉じた曲線かどうかを判定
+    const isClosed = (points[0].x === points[np - 1].x && points[0].y === points[np - 1].y);
+    
+    console.debug(`Curve type: ${type === 0 ? 'polyline' : 'B-spline'}, ${isClosed ? 'closed' : 'open'}, points: ${np}`);
+    
+    // 線属性を適用
+    const oldLineSettings = applyLineAttribute(l_atr);
+    const oldColors = setColorPattern(l_pat, f_pat);
+    
+    ctx.save(); // 状態を保存
+    
+    // 曲線を描画
+    if (type === 0) {
+        // 折れ線
+        drawPolylineCurve(points, isClosed);
+    } else if (type === 1) {
+        // 3次B-スプライン曲線
+        drawBSplineCurve(points, isClosed);
+    } else {
+        console.debug(`Unsupported curve type: ${type}`);
+        ctx.restore();
+        restoreLineAttribute(oldLineSettings);
+        drawFillColor = oldColors.fillColor;
+        drawLineColor = oldColors.lineColor;
+        return;
+    }
+    
+    ctx.restore(); // 状態を復元
+    
+    // 色設定を復元
+    drawFillColor = oldColors.fillColor;
+    drawLineColor = oldColors.lineColor;
+    
+    // 線属性を復元
+    restoreLineAttribute(oldLineSettings);
+}
+
+/**
+ * 折れ線曲線を描画
+ * @param {Array} points - 頂点配列 [{x, y}, ...]
+ * @param {boolean} isClosed - 閉じた曲線かどうか
+ */
+function drawPolylineCurve(points, isClosed) {
+    if (points.length < 2) return;
+    
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    
+    for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+    }
+    
+    if (isClosed) {
+        ctx.closePath();
+        // 閉じた曲線の場合は塗りつぶしを先に実行
+        ctx.fillStyle = drawFillColor;
+        ctx.fill();
+    }
+    
+    // 線幅が0より大きい場合のみ線を描画
+    if (drawLineWidth > 0) {
+        ctx.strokeStyle = drawLineColor;
+        ctx.stroke();
+    }
+}
+
+/**
+ * 3次B-スプライン曲線を描画
+ * @param {Array} points - 制御点配列 [{x, y}, ...]
+ * @param {boolean} isClosed - 閉じた曲線かどうか
+ */
+function drawBSplineCurve(points, isClosed) {
+    if (points.length < 4) {
+        // B-スプライン曲線には最低4つの制御点が必要
+        // 足りない場合は折れ線として描画
+        drawPolylineCurve(points, isClosed);
+        return;
+    }
+    
+    ctx.beginPath();
+    
+    // 3次B-スプライン曲線をベジエ曲線で近似
+    const curvePoints = calculateBSplineCurve(points, isClosed);
+    
+    if (curvePoints.length === 0) return;
+    
+    ctx.moveTo(curvePoints[0].x, curvePoints[0].y);
+    
+    // ベジエ曲線として描画
+    for (let i = 1; i < curvePoints.length - 2; i += 3) {
+        ctx.bezierCurveTo(
+            curvePoints[i].x, curvePoints[i].y,
+            curvePoints[i + 1].x, curvePoints[i + 1].y,
+            curvePoints[i + 2].x, curvePoints[i + 2].y
+        );
+    }
+    
+    if (isClosed) {
+        ctx.closePath();
+        // 閉じた曲線の場合は塗りつぶしを先に実行
+        ctx.fillStyle = drawFillColor;
+        ctx.fill();
+    }
+    
+    // 線幅が0より大きい場合のみ線を描画
+    if (drawLineWidth > 0) {
+        ctx.strokeStyle = drawLineColor;
+        ctx.stroke();
+    }
+}
+
+/**
+ * 3次B-スプライン曲線をベジエ制御点に変換
+ * @param {Array} controlPoints - B-スプライン制御点
+ * @param {boolean} isClosed - 閉じた曲線かどうか
+ * @returns {Array} ベジエ曲線の制御点配列
+ */
+function calculateBSplineCurve(controlPoints, isClosed) {
+    const n = controlPoints.length;
+    if (n < 4) return [];
+    
+    const bezierPoints = [];
+    
+    // 開いた曲線の場合：最初と最後の制御点を重複させる
+    let points = [...controlPoints];
+    if (!isClosed) {
+        // 端点を複製して端点で曲線が始まり終わるようにする
+        points = [controlPoints[0], ...controlPoints, controlPoints[n - 1]];
+    }
+    
+    const numSegments = isClosed ? n : n - 3;
+    
+    for (let i = 0; i < numSegments; i++) {
+        const p0 = points[i % points.length];
+        const p1 = points[(i + 1) % points.length];
+        const p2 = points[(i + 2) % points.length];
+        const p3 = points[(i + 3) % points.length];
+        
+        // B-スプラインからベジエへの変換
+        const bezier = convertBSplineToBezier(p0, p1, p2, p3);
+        
+        if (i === 0) {
+            bezierPoints.push(bezier.p0);
+        }
+        bezierPoints.push(bezier.cp1, bezier.cp2, bezier.p3);
+    }
+    
+    return bezierPoints;
+}
+
+/**
+ * 4つのB-スプライン制御点から1つのベジエ曲線セグメントを計算
+ * @param {Object} p0, p1, p2, p3 - B-スプライン制御点
+ * @returns {Object} ベジエ曲線の制御点 {p0, cp1, cp2, p3}
+ */
+function convertBSplineToBezier(p0, p1, p2, p3) {
+    // B-スプライン基底関数からベジエ制御点への変換
+    return {
+        p0: {
+            x: (p1.x + p2.x) / 2,
+            y: (p1.y + p2.y) / 2
+        },
+        cp1: {
+            x: (p1.x * 2 + p2.x) / 3,
+            y: (p1.y * 2 + p2.y) / 3
+        },
+        cp2: {
+            x: (p1.x + p2.x * 2) / 3,
+            y: (p1.y + p2.y * 2) / 3
+        },
+        p3: {
+            x: (p2.x + p3.x) / 2,
+            y: (p2.y + p3.y) / 2
+        }
+    };
 }
 
 /**
@@ -3576,44 +4485,265 @@ function tsFigDraw(segLen, tadSeg) {
  * @returns 
  */
 function tsFigColorPattern(segLen, tadSeg) {
-    if (segLen < Number(0x16)) {
+    if (segLen < Number(0x000E)) {
         return;
     }
     let i = 1;
     let pattern = new COLORPATTERN();
-    pattern.id = Number(uh2h(tadSeg[i]));
+    pattern.id = Number(uh2h(tadSeg[i++]));
     pattern.hsize = Number(uh2h(tadSeg[i++]));
     pattern.vsize = Number(uh2h(tadSeg[i++]));
     pattern.ncol = Number(uh2h(tadSeg[i++]));
 
-    let fgColArray = new Array();
+    // 全ての色を配列に格納（前景色 + 背景色）
+    const allColors = [];
+    
     for (let j = 0; j < pattern.ncol; j++) {
-        let segNum = i;
         let fgCol = new COLOR();
-        fgCol.color = parseColor(uh2uw([tadSeg[segNum+1], tadSeg[segNum]])[0]);
-        i += 2;
-        fgColArray.push(fgCol);
+        fgCol = parseColor(uh2uw([tadSeg[i+1], tadSeg[i]])[0]);
+        i+= 2;
+        pattern.fgcolArray.push(fgCol);
+        allColors.push(fgCol.color);
+        console.debug(`fgCol[${j}]: ${fgCol.color}`);
     }
+    
     pattern.bgcol = parseColor(uh2uw([tadSeg[i+1], tadSeg[i]])[0]);
     i += 2;
+    allColors.push(pattern.bgcol.color); // 背景色も配列の最後に追加
 
-    let maskArray = new Array();
+    // マスクID配列を読み込み
+    const maskIds = [];
     for (let j = 0; j < pattern.ncol; j++) {
-        let mask = Number(uh2h(tadSeg[i++]));
-        maskArray.push(mask);
+        const mask = Number(uh2h(tadSeg[i++]));
+        pattern.mask.push(mask);
+        maskIds.push(mask);
     }
-    pattern.mask = maskArray;
+
+    // パターンデータを生成
+    // 初期値は最後の色（背景色）で埋める
+    pattern.patternData = Array(pattern.vsize).fill(null).map(() => 
+        Array(pattern.hsize).fill(pattern.bgcol.color)
+    );
+    
+    for (let i = 0; i < pattern.ncol; i++) {
+        const maskId = maskIds[i];
+        const color = allColors[i];
+        const maskData = maskDefinitions.get(maskId);
+        
+        console.debug(`Processing pattern ${pattern.id}, layer ${i}: maskId=${maskId}, color=${color}`);
+        
+        if (!maskData) {
+            console.debug(`  Mask ${maskId} not found`);
+            continue;
+        }
+        
+        let pixelsSet = 0;
+        for (let y = 0; y < pattern.vsize; y++) {
+            for (let x = 0; x < pattern.hsize; x++) {
+                const maskX = x % maskData.hsize;
+                const maskY = y % maskData.vsize;
+                const maskValue = maskData.getMaskValue(maskX, maskY);
+                
+                if (color === null || color === undefined || color === -1) {
+                    // 透明色の場合：マスクが0の場所に描
+                    if (maskValue !== 0) {
+                        continue;
+                    }
+                } else {
+                    // 通常色の場合：マスクが1の場所に描画
+                    if (maskValue === 0) {
+                        continue;
+                    }
+                }
+                
+                pattern.patternData[y][x] = color;
+                pixelsSet++;
+            }
+        }
+        console.debug(`  Set ${pixelsSet} pixels with color ${color}`);
+    }
+    
+    // デバッグ: パターン全体のピクセル数をチェック
+    if (pattern.id >= 6 && pattern.id <= 10) {
+        let totalPixelsSet = 0;
+        let backgroundPixels = 0;
+        let foregroundPixels = 0;
+        for (let dy = 0; dy < pattern.vsize; dy++) {
+            for (let dx = 0; dx < pattern.hsize; dx++) {
+                if (pattern.patternData[dy][dx] === pattern.bgcol.color) {
+                    backgroundPixels++;
+                } else {
+                    foregroundPixels++;
+                    totalPixelsSet++;
+                }
+            }
+        }
+        console.debug(`  Pattern ${pattern.id}: totalPixelsSet=${totalPixelsSet}/${pattern.hsize * pattern.vsize}, bg=${backgroundPixels}, fg=${foregroundPixels}`);
+    }
 
     colorPattern[pattern.id] = pattern;
-
-    console.debug("id     " + IntToHex((pattern.id),4).replace('0x',''));
-    console.debug("hsize  " + IntToHex((pattern.hsize),4).replace('0x',''));
-    console.debug("vsize  " + IntToHex((pattern.vsize),4).replace('0x',''));
-    console.debug("ncol   " + IntToHex((pattern.ncol),4).replace('0x','')); 
-    console.debug("bgcol  " + pattern.bgcol.color);
-    console.debug("fgcol  " + fgColArray.map(col => col.color).join(', '));
-    console.debug("mask   " + maskArray.join(', '));
 }
+
+/**
+ * カラーマップ定義セグメントを処理
+ * @param {*} segLen 
+ * @param {*} tadSeg 
+ * @returns 
+ */
+function tsColorMapDefine(segLen, tadSeg) {
+    if (segLen < Number(0x0008)) {
+        return;
+    }
+    const nent = Number(uh2h(tadSeg[1]));
+    let nentNo = 2;
+    for (let i = 0; i < nent; i++) {
+        let color = new COLOR();
+        color = parseColor(uh2uw([tadSeg[nentNo + 1], tadSeg[nentNo]])[0]);
+        nentNo += 2;
+        colorMap[i] = color;
+    }
+}
+
+/**
+ * 線種定義セグメントを処理 (0xffb1, SubID: 0x03)
+ * @param {number} segLen - セグメント長
+ * @param {Array} tadSeg - セグメントデータ
+ */
+function tsFigLinePatternDefinition(segLen, tadSeg) {
+    // 最小サイズチェック (SubID(2) + 線種番号(2) + パターン数(2) = 6バイト)
+    if (segLen < 6) {
+        console.debug("線種定義セグメントが短すぎます");
+        return;
+    }
+    
+    // 線種番号を取得 (tadSeg[1])
+    const lineTypeNumber = Number(tadSeg[1]);
+    
+    // パターン数を取得 (tadSeg[2])
+    const patternCount = Number(tadSeg[2]);
+    
+    console.debug(`線種定義: 線種番号=${lineTypeNumber}, パターン数=${patternCount}`);
+    
+    // パターンデータが十分にあるかチェック
+    if (segLen < 6 + patternCount * 2) {
+        console.debug("線種定義セグメントのパターンデータが不足しています");
+        return;
+    }
+    
+    // パターンデータを読み取る
+    const pattern = [];
+    for (let i = 0; i < patternCount; i++) {
+        // 各パターン値は2バイト (tadSeg[3 + i])
+        const patternValue = Number(tadSeg[3 + i]);
+        pattern.push(patternValue);
+    }
+    
+    // 線種定義を更新
+    linePatternDefinitions[lineTypeNumber] = pattern;
+    
+    console.debug(`線種${lineTypeNumber}のパターンを定義: [${pattern.join(', ')}]`);
+}
+
+/**
+ * マスクデータ定義セグメントを処理 (0xffb1, SubID: 0x01)
+ * @param {number} segLen - セグメント長
+ * @param {Array} tadSeg - セグメントデータ
+ */
+function tsMaskDataDefinition(segLen, tadSeg) {
+    // 最小サイズチェック (type(2) + id(2) + hsize(2) + vsize(2) = 8バイト)
+    if (segLen < 8) {
+        console.debug("マスクデータ定義セグメントが短すぎます");
+        return;
+    }
+    
+    let i = 0;
+    // パラメータを取得
+    const type = getLastUBinUH(tadSeg[i++]);
+    const id = Number(tadSeg[i++]);
+    const hsize = Number(tadSeg[i++]);
+    const vsize = Number(tadSeg[i++]);
+
+    console.debug(`Mask definition: type=${type}, id=${id}, hsize=${hsize}, vsize=${vsize}`);
+    
+    // type 0 (ビットマップ形式) のみ処理
+    if (type !== 0) {
+        console.debug(`Unsupported mask type: ${type}`);
+        return;
+    }
+    
+    // サイズの検証
+    if (hsize <= 0 || vsize <= 0) {
+        console.debug(`Invalid mask size: ${hsize}x${vsize}`);
+        return;
+    }
+    
+    if (id < 0) {
+        console.debug(`Invalid mask ID: ${id}`);
+        return;
+    }
+    
+    const wordsPerRow = Math.floor((hsize + 15) / 16); // 1行当たりの16bitワード数
+    const expectedWords = wordsPerRow * vsize;
+    const availableWords = Math.floor((segLen - 4) / 2);
+    
+    console.debug(`Mask ${id}: ${hsize}x${vsize}, wordsPerRow=${wordsPerRow}, expectedWords=${expectedWords}, availableWords=${availableWords}`);
+    
+    // バイト配列として初期化
+    const bytesPerRow = Math.ceil(hsize / 8);
+    const maskBits = new Array(bytesPerRow * vsize).fill(0);
+    
+    let wordIndex = 0;
+    for (let y = 0; y < vsize; y++) {
+        for (let wordInRow = 0; wordInRow < wordsPerRow; wordInRow++) {
+            const tadIndex = 4 + wordIndex;
+            if (tadIndex >= segLen) {
+                console.debug(`Warning: Not enough mask data at tadIndex ${tadIndex} for row ${y}`);
+                return; // データ不足の場合は処理を中断
+            }
+            
+            // tadSegから直接16bit値を取得（既にUH形式）
+            const word16 = Number(tadSeg[tadIndex]) & 0xFFFF;
+
+            // 16bitワードから各ビットを抽出してバイト配列に格納
+            for (let bit = 0; bit < 16; bit++) {
+                const x = wordInRow * 16 + bit;
+                if (x >= hsize) break; // 行の終端を超えない
+                
+                const byteIndex = y * bytesPerRow + Math.floor(x / 8);
+                const bitIndex = 7 - (x % 8); // MSBから
+                const bitValue = (word16 >> (15 - bit)) & 1;
+                
+                if (bitValue) {
+                    maskBits[byteIndex] |= (1 << bitIndex);
+                }
+            }
+            wordIndex++;
+        }
+    }
+    
+    // マスクデータを作成・登録
+    const maskData = new MaskData(id, hsize, vsize, maskBits);
+    maskDefinitions.set(id, maskData);
+
+    
+    // マスクデータをビット表現で出力（行単位で正しく処理）
+    let bitString = 'Mask data (bits):\n';
+    for (let y = 0; y < vsize; y++) {
+        let rowBits = '';
+        for (let x = 0; x < hsize; x++) {
+            // 行単位でのバイト位置とビット位置を計算
+            const byteIndex = y * bytesPerRow + Math.floor(x / 8);
+            const bitIndex = 7 - (x % 8); // MSBから開始
+            const bit = (maskBits[byteIndex] >> bitIndex) & 1;
+            rowBits += bit.toString();
+        }
+        bitString += `  Row ${y.toString().padStart(2, '0')}: ${rowBits}\n`;
+    }
+    console.debug(bitString);
+}
+
+
+
 
 /**
  * データ定義セグメントを判定
@@ -3625,13 +4755,16 @@ function tsDataSet(segLen, tadSeg) {
     
     if (UB_SubID === Number(0x00)) {
         console.debug("カラーマップ定義セグメント");
+        tsColorMapDefine(segLen, tadSeg);
     } else if (UB_SubID === Number(0x01)) {
         console.debug("マスクデータ定義セグメント");
+        tsMaskDataDefinition(segLen, tadSeg);
     } else if (UB_SubID === Number(0x02)) {
-        tsFigColorPattern(segLen, tadSeg);
         console.debug("パターン定義セグメント");
+        tsFigColorPattern(segLen, tadSeg);
     } else if (UB_SubID === Number(0x03)) {
         console.debug("線種定義セグメント");
+        tsFigLinePatternDefinition(segLen, tadSeg);
     } else if (UB_SubID === Number(0x04)) {
         console.debug("マーカー定義セグメント");
     }
@@ -3703,7 +4836,10 @@ function initTAD(x = 0, y = 0) {
     currentLineOffset = 0;
     tabRulerLineMoveFlag = false;
     tabRulerLinePoint = 0;
-    colorPattern = {};
+    colorPattern = [];
+
+    // デフォルトマスクを初期化
+    initializeDefaultMasks();
 
     // Canvas描画設定を初期化
     if (ctx) {
@@ -3722,6 +4858,13 @@ function initTAD(x = 0, y = 0) {
  * @param {VOBJSEG} vobj - 仮身セグメントオブジェクト
  */
 function renderLinkedDocumentInVirtualObj(link, x, y, width, height, vobj) {
+    // グローバル変数を使用（シンプルなアプローチ）
+    if (!ctx || !canvas) {
+        console.error('ctx or canvas not available in renderLinkedDocumentInVirtualObj');
+        console.error('ctx:', ctx, 'canvas:', canvas);
+        return;
+    }
+    
     // リンク先のデータが存在しない場合は何もしない
     if (!link || !link.raw) {
         console.debug('No linked document data available');
@@ -3975,8 +5118,37 @@ function tsVirtualObjSegment(segLen, tadSeg) {
     }
 
     let newLink = new LINK();
+    console.debug('=== LINK CREATION DEBUG ===');
+    console.debug(`isProcessingBpk: ${isProcessingBpk}, currentFileIndex: ${currentFileIndex}, linkNo: ${linkNo}, window.originalLinkId: ${window.originalLinkId}`);
+
     if (isProcessingBpk) {
-        newLink = linkRecordList[currentFileIndex][linkNo];
+        // セカンダリウィンドウの場合、originalLinkIdを使ってグローバルlinkRecordListから取得
+        if (window.originalLinkId !== undefined && window.originalLinkId !== null) {
+            const globalLinkRecordList = window.linkRecordList || linkRecordList;
+            //console.log('Secondary window: using originalLinkId', window.originalLinkId);
+            //console.log('Available linkRecordList indices:', globalLinkRecordList ? Object.keys(globalLinkRecordList) : 'null');
+            
+            // 元のファイルのlinkRecordListから取得
+            const targetFileIndex = window.originalLinkId - 1; // link_idは1-indexed
+            if (globalLinkRecordList && globalLinkRecordList[targetFileIndex] && globalLinkRecordList[targetFileIndex][linkNo]) {
+                newLink = globalLinkRecordList[targetFileIndex][linkNo];
+                //console.log(`Using existing link from globalLinkRecordList[${targetFileIndex}][${linkNo}]`);
+                //console.log('Retrieved link:', newLink);
+            } else {
+                //console.log(`No existing link found in globalLinkRecordList[${targetFileIndex}][${linkNo}], creating new one`);
+                newLink = new LINK();
+            }
+        } else {
+            // メインウィンドウの場合
+            if (linkRecordList[currentFileIndex] && linkRecordList[currentFileIndex][linkNo]) {
+                newLink = linkRecordList[currentFileIndex][linkNo];
+                //console.log('Main window: using existing link from linkRecordList');
+            } else {
+                //console.log('Main window: no existing link found, creating new one');
+                newLink = new LINK();
+            }
+        }
+        
         newLink.left = vobj.left;
         newLink.top = vobj.top;
         newLink.right = vobj.right;
@@ -4010,7 +5182,7 @@ function tsVirtualObjSegment(segLen, tadSeg) {
             textColumn = 0;
         }
 
-        // 文章セグメント処理中：drawText座標系での描画位置に仮身の枠を配置
+        // 文章セグメント処理中：シンプルな位置計算
         drawLeft = textWidth;
         drawTop = textHeight;
         drawRight = drawLeft + vobjWidth;
@@ -4043,8 +5215,6 @@ function tsVirtualObjSegment(segLen, tadSeg) {
         drawRight = vobj.right;
         drawBottom = vobj.bottom;
     }
-
-    textWidth += newLink.right - newLink.left;
 
     if (openVirtualObj) {
         // 開いた仮身の場合、二重枠を描画
@@ -4109,9 +5279,37 @@ function tsVirtualObjSegment(segLen, tadSeg) {
     // virtual領域の拡大チェック
     expandVirtualArea(drawLeft, drawTop, drawRight, drawBottom);
 
+    console.log(`=== SAVING VIRTUAL OBJECT LINK ===`);
+    console.log(`currentFileIndex: ${currentFileIndex}, linkNo: ${linkNo}`);
+    
+    // 座標情報をリンクデータに追加
+    newLink.left = drawLeft;
+    newLink.top = drawTop;
+    newLink.right = drawRight;
+    newLink.bottom = drawBottom;
+    
+    //console.debug('Link data to save:', newLink);
+    //console.debug(`Coordinates: left=${drawLeft}, top=${drawTop}, right=${drawRight}, bottom=${drawBottom}`);
+    //console.debug('linkRecordList before save:', linkRecordList);
+    //console.debug('linkRecordList structure check:');
+    //console.debug('  - typeof linkRecordList:', typeof linkRecordList);
+    //console.debug('  - Array.isArray(linkRecordList):', Array.isArray(linkRecordList));
+    //console.debug('  - linkRecordList.length:', linkRecordList.length);
+    //console.debug(`  - linkRecordList[${currentFileIndex}]:`, linkRecordList[currentFileIndex]);
+    //console.debug(`  - Array.isArray(linkRecordList[${currentFileIndex}]):`, Array.isArray(linkRecordList[currentFileIndex]));
+
+    // linkRecordList[currentFileIndex]が存在しない場合は初期化
+    if (!linkRecordList[currentFileIndex]) {
+        console.debug(`Initializing linkRecordList[${currentFileIndex}] as empty array`);
+        linkRecordList[currentFileIndex] = [];
+    }
+    
     linkRecordList[currentFileIndex][linkNo] = newLink;
     linkNo++;
 
+    //console.debug('linkRecordList after save:', linkRecordList);
+    //console.debug(`linkRecordList[${currentFileIndex}] length:`, linkRecordList[currentFileIndex] ? linkRecordList[currentFileIndex].length : 'undefined');
+    //console.debug(`linkRecordList[${currentFileIndex}][${linkNo-1}]:`, linkRecordList[currentFileIndex] ? linkRecordList[currentFileIndex][linkNo-1] : 'undefined');
     console.debug(`仮身セグメント left : ${vobj.left}, top : ${vobj.top}, right : ${vobj.right}, bottom : ${vobj.bottom}, dlen : ${vobj.dlen} textHeight : ${textHeight}`);
 }
 
@@ -4130,8 +5328,7 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
 
     console.debug(`tsSpecity: left=${Number(uh2h(tadSeg[0]))}, top=${Number(uh2h(tadSeg[1]))}, right=${Number(uh2h(tadSeg[2]))}, bottom=${Number(uh2h(tadSeg[3]))}, chsz=${IntToHex((tadSeg[4]),4).replace('0x','')}, pict=${Number(uh2h(tadSeg[11]))}`);
 
-    console.debug("segLen " + Number(segLen));
-    console.debug("nowPos " + Number(nowPos)); // 0x26(0d38)は仮身セグメントの開始位置
+    console.debug(`segLen ${Number(segLen)}, nowPos ${Number(nowPos)}`); // 0x26(0d38)は仮身セグメントの開始位置
 
     const appl = IntToHex((tadSeg[12]),4).replace('0x','')
         + IntToHex((tadSeg[13]),4).replace('0x','')
@@ -4144,9 +5341,12 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
     }
     console.debug("書庫形式");
 
+    let fileTadName = [];
+
     for (offsetLen=15;offsetLen<31;offsetLen++) {
-        console.debug(charTronCode(tadSeg[offsetLen]));
+        fileTadName.push(charTronCode(tadSeg[offsetLen]));
     }
+    console.debug("fileTadName " + fileTadName);
 
     const dlen = uh2uw([tadSeg[32], tadSeg[31]]);
     console.debug("dlen   " + dlen[0]);
@@ -4202,7 +5402,32 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
             () => globalStaticN               // getGlobalStaticN
         );
         
-        tadDecodeStart(currentFileIndex);
+        // LH5Decoderを直接初期化（tadRawDataArrayに依存しない）
+        console.debug('Initializing LH5Decoder directly in tsSpecitySegment');
+        console.debug('tadPos:', tadPos, 'GHEAD.compSize:', GHEAD.compSize, 'GHEAD.origSize:', GHEAD.origSize);
+        
+        try {
+            // tadRawArrayで渡されたrawデータを使用してLH5Decoderを初期化
+            if (typeof window !== 'undefined' && window.currentRawData) {
+                console.debug('currentRawData length:', window.currentRawData.length);
+                // tadPosは0ベースで、startPos(142)から開始
+                lh5Decoder.init(window.currentRawData, tadPos, GHEAD.compSize, GHEAD.origSize);
+                lh5Decoder.initialized = true; // 重要：初期化フラグを設定
+                
+                // 初期化後の状態確認
+                console.debug('LH5Decoder initialized successfully with currentRawData');
+                console.debug('LH5Decoder state: fileData=', !!lh5Decoder.fileData, 'filePos=', lh5Decoder.filePos,
+                             'compsize=', lh5Decoder.compsize, 'origsize=', lh5Decoder.origsize, 'initialized=', lh5Decoder.initialized);
+            } else {
+                console.error('currentRawData not available, cannot initialize LH5Decoder');
+                return; // 初期化失敗の場合は処理を停止
+            }
+        } catch (error) {
+            console.error('Failed to initialize LH5Decoder:', error);
+            console.error('Parameters: fileData length=', window.currentRawData ? window.currentRawData.length : 'null', 
+                         'startPos=', tadPos, 'compSize=', GHEAD.compSize, 'origSize=', GHEAD.origSize);
+            return;
+        }
     }
 
     console.debug("startPos : " + startPos);
@@ -4312,6 +5537,7 @@ function tadPerse(segID, segLen, tadSeg, nowPos) {
         tsImageSegment(segLen, tadSeg);
     } else if (segID === Number(TS_VOBJ)) {
         console.debug('仮身セグメント');
+        console.log('Virtual object segment detected! segLen:', segLen, 'currentFileIndex:', currentFileIndex);
         tsVirtualObjSegment(segLen, tadSeg);
     } else if (segID === Number(TS_DFUSEN)) {
         console.debug('指定付箋セグメント');
@@ -4439,17 +5665,51 @@ function charTronCode(char) {
 //     ctx.moveTo(Xpoint, Ypoint);
 // }
 
+// ダブルクリック用の変数
+let lastClickTime = 0;
+let lastClickX = 0;
+let lastClickY = 0;
+const DOUBLE_CLICK_THRESHOLD = 300; // ミリ秒
+const CLICK_DISTANCE_THRESHOLD = 5; // ピクセル
+
 function mouseDownListner(e) {
     var rect = e.target.getBoundingClientRect();
 	//座標取得
 	const mouseX1 = e.clientX - rect.left;
 	const mouseY1 = e.clientY - rect.top;
     
-    console.debug(`Mouse clicked at (${mouseX1}, ${mouseY1})`);
+    // ダブルクリック判定
+    const now = Date.now();
+    const timeDiff = now - lastClickTime;
+    const distance = Math.sqrt(Math.pow(mouseX1 - lastClickX, 2) + Math.pow(mouseY1 - lastClickY, 2));
+    
+    // 前回のクリック情報を更新
+    lastClickTime = now;
+    lastClickX = mouseX1;
+    lastClickY = mouseY1;
+    
+    // ダブルクリックでない場合は処理しない
+    if (timeDiff > DOUBLE_CLICK_THRESHOLD || distance > CLICK_DISTANCE_THRESHOLD) {
+        return; // シングルクリックなので何もしない
+    }
+    
+    console.debug(`Double-click detected at (${mouseX1}, ${mouseY1})`);
 
-    // 現在のタブインデックスを取得 
-    // currentTabIndexはindex_old2.htmlで定義されるが、BPK処理中はcurrentFileIndexと対応する
+    // BTRONデスクトップ環境では、canvasにvirtualObjectLinksが保存されており、
+    // setupVirtualObjectEventsで独自の処理が行われるため、ここでは処理しない
+    if (typeof window.btronDesktop !== 'undefined') {
+        console.debug('BTRONDesktop environment detected, skipping tad.js link processing');
+        return; // BTRONデスクトップの処理に任せる
+    }
+
+    // 現在のタブインデックスを取得
     let tabIndex = 0;
+    
+    // BTRONデスクトップ環境では独自の処理を行うため、tad.jsのタブ処理はスキップ
+    if (typeof window.btronDesktop !== 'undefined') {
+        return;
+    }
+    
     if (typeof currentTabIndex !== 'undefined') {
         tabIndex = currentTabIndex;
     } else if (isProcessingBpk && currentFileIndex > 0) {
@@ -4558,9 +5818,19 @@ function canvasInit(canvasId) {
     if (!canvasId) {
         canvasId = 'canvas-0';
     }
+    
+    // Try to get canvas element, with fallback for index.html tab system
     canvas = document.getElementById(canvasId);
+    console.debug(`canvasInit: document.getElementById('${canvasId}'):`, !!canvas);
+    
+    
     if (canvas && canvas.getContext) {
         ctx = canvas.getContext('2d');
+        
+        // Set global window references for compatibility
+        window.canvas = canvas;
+        window.ctx = ctx;
+        
     }
 
     // キャンバスをクリア
@@ -4571,26 +5841,25 @@ function canvasInit(canvasId) {
         canvas.height = canvasH;
         
         // スクロールオフセットを適用
-        applyScrollOffset();
+        applyScrollOffset(ctx);
 
         ctx.fillStyle = 'white'; // 背景色を白に設定
         ctx.fillRect(0, 0, ctx.canvas.clientWidth, ctx.canvas.clientHeight);
     }
 
-    // リンク対応
+    // リンク対応（ダブルクリック）
     canvas.addEventListener("mousedown", mouseDownListner, false);
-    
-    // PC対応
-    //canvas.addEventListener('mousedown', startPoint, false);
-    //canvas.addEventListener('mousemove', movePoint, false);
-    //canvas.addEventListener('mouseup', endPoint, false);
-    // スマホ対応
-    //canvas.addEventListener('touchstart', startPoint, false);
-    //canvas.addEventListener('touchmove', movePoint, false);
-    //canvas.addEventListener('touchend', endPoint, false);
+
 }
 
 function tadRawArray(raw){
+    
+    // LH5Decoder初期化用にrawデータをグローバルに保存
+    if (typeof window !== 'undefined') {
+        window.currentRawData = raw;
+    }
+
+
     let rawBuffer = raw.buffer;
     let data_view = new DataView( rawBuffer );
 
@@ -4692,7 +5961,14 @@ function tadRawArray(raw){
             P4 += char;
             i += 2;
             if (textNest > 0){
-                drawText(ctx, char, textFontSize,  textCharPoint[textNest-1][0],textCharPoint[textNest-1][1] ,textCharPoint[textNest-1][2], textSpacingPitch, lineSpacingPitch, 0);
+                // drawText呼び出し前の最終チェック
+                if (!ctx || !canvas) {
+                    // 緊急修復を試行
+                    ctx = window.ctx;
+                    canvas = window.canvas;
+                    console.debug('Emergency repair attempted - ctx:', !!ctx, 'canvas:', !!canvas);
+                }
+                drawText(ctx, canvas, char, textFontSize,  textCharPoint[textNest-1][0],textCharPoint[textNest-1][1] ,textCharPoint[textNest-1][2], textSpacingPitch, lineSpacingPitch, 0);
             }
         }
 
@@ -4795,7 +6071,11 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
         if (typeof createNewTab === 'function') {
             createNewTab(currentFileIndex);
         }
-        canvasInit(`canvas-${currentFileIndex}`);
+        // btron-desktop環境ではcanvas-X要素が存在しないためスキップ
+        const targetCanvas = document.getElementById(`canvas-${currentFileIndex}`);
+        if (targetCanvas) {
+            canvasInit(`canvas-${currentFileIndex}`);
+        }
     }
 
     // TADセグメント処理
@@ -4931,7 +6211,42 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
     } else {
         setTimeout(updateDOMElements, 0);
     }
+    
+    // TAD処理完了のコールバックを呼び出し（最後のファイル処理時のみ）
+    const canvasId = window.canvas ? window.canvas.id : 'canvas-0';
+    const callbackName = `tadProcessingComplete_${canvasId}`;
+    console.debug(`TAD processing completed for canvas: ${canvasId}, callback: ${callbackName}`);
+    console.debug(`Callback function exists: ${typeof window[callbackName] === 'function'}`);
+    console.debug(`isProcessingBpk: ${isProcessingBpk}, tadRecordDataArray length: ${tadRecordDataArray ? tadRecordDataArray.length : 'null'}, currentFileIndex: ${currentFileIndex}`);
+    
+    if (typeof window !== 'undefined' && typeof window[callbackName] === 'function') {
+        // BPK処理の場合は最後のファイル処理時のみコールバックを呼ぶ
+        // 単体TADファイルの場合は常にコールバックを呼ぶ
+        const shouldCallCallback = !isProcessingBpk || 
+                                   !tadRecordDataArray || 
+                                   tadRecordDataArray.length <= 1 || 
+                                   currentFileIndex >= tadRecordDataArray.length - 1;
+        
+        console.debug(`shouldCallCallback: ${shouldCallCallback}`);
+        
+        if (shouldCallCallback) {
+            setTimeout(() => {
+                console.debug(`Calling ${callbackName} callback (final)`);
+                window[callbackName]({
+                    linkRecordList: linkRecordList,
+                    tadRecordDataArray: tadRecordDataArray,
+                    isProcessingBpk: isProcessingBpk,
+                    currentFileIndex: currentFileIndex
+                });
+            }, 10); // DOM更新後に実行
+        } else {
+            console.debug(`Skipping callback - not final file (currentFileIndex: ${currentFileIndex}, total files: ${tadRecordDataArray ? tadRecordDataArray.length : 'null'})`);
+        }
+    } else {
+        console.debug(`Callback ${callbackName} not found or not a function`);
+    }
 }
+
 
 /**
  * TADファイル読込処理
@@ -4978,8 +6293,8 @@ function onAddFile(event) {
     reader.onload = function (event) {
         const raw = new Uint8Array(reader.result);
         // console.debug(raw);
-        // 新設計：単一ファイル処理（nfiles=1, fileIndex=0）
-        tadDataArray(raw, false, 1, 0);
+        // すべてのファイルでtadRawArrayを使用（シンプル）
+        tadRawArray(raw);
     };
 
     if (fileNum > 0) {
@@ -5068,6 +6383,81 @@ function updateScrollBars() {
     }
 }
 
+
+/**
+ * 添え字開始指定付箋を処理
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tadSubscriptStart(segLen, tadSeg) {
+    // デフォルトで2バイトデータ取得
+    let dataOffset = 0;
+    
+    // SubIDを取得 (最初のバイトの下位4ビットは既に処理済み)
+    
+    // typeフィールドを取得 (1バイト目の上位4ビット)
+    const typeByte = getBottomUBinUH(tadSeg[dataOffset]);
+    const F = (typeByte >> 3) & 0x01;  // ビット3: 前置(0)/後置(1)
+    const unit = (typeByte >> 2) & 0x01;  // ビット2: 文字列単位(0)/文字単位(1)
+    const type = typeByte & 0x03;  // ビット0-1: 0:下付き, 1:上付き, 2-3:予約
+    
+    dataOffset++;
+    
+    // 追加パラメータがある場合
+    if (segLen > 2) {
+        // U値またはpos値を取得
+        const paramByte = tadSeg[dataOffset];
+        
+        if (unit === 1) {
+            // 文字単位の場合: U値 (位置指定)
+            subscriptState.targetPosition = paramByte & 0x01;  // 0:右, 1:左
+        } else {
+            // 文字列単位の場合: pos値 (ベースライン位置)
+            subscriptState.baseline = paramByte & 0x07;  // 0-4の値
+        }
+    }
+    
+    // 添え字状態を更新
+    subscriptState.active = true;
+    subscriptState.type = type;
+    subscriptState.position = F;
+    subscriptState.unit = unit;
+    
+    // フォントサイズの調整（添え字は通常のサイズの60-70%）
+    const savedFontSize = textFontSize;
+    subscriptState.savedFontSize = savedFontSize;
+    
+    // デバッグ情報
+    console.debug("添え字開始: ", {
+        type: type === 0 ? "下付き" : "上付き",
+        position: F === 0 ? "前置" : "後置",
+        unit: unit === 0 ? "文字列単位" : "文字単位",
+        targetPosition: subscriptState.targetPosition,
+        baseline: subscriptState.baseline
+    });
+}
+
+/**
+ * 添え字終了指定付箋を処理
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tadSubscriptEnd(segLen, tadSeg) {
+    // 添え字状態をリセット
+    subscriptState.active = false;
+    
+    // フォントサイズを元に戻す
+    if (subscriptState.savedFontSize) {
+        textFontSize = subscriptState.savedFontSize;
+        textFontSet = textFontSize + 'px serif';
+        delete subscriptState.savedFontSize;
+    }
+    
+    // オフセットをリセット
+    subscriptState.offset = { x: 0, y: 0 };
+    
+    console.debug("添え字終了");
+}
 
 /**
  * TAD保存処理
