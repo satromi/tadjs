@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.08
+ * TADjs Ver0.09
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -58,6 +58,7 @@ let imagePoint = new Array();
 let tronCodeMask = new Array();
 let startTadSegment = false;
 let startByImageSegment = false;
+let DoNotNextLineFlag = false; // 改行禁止フラグ
 
 // セグメントタイプ管理用
 const SEGMENT_TYPE = {
@@ -105,6 +106,40 @@ let groupList = new Array();
 // フォント設定
 let textFontSize = 9.6;
 let textFontSet = textFontSize + 'px serif';
+let currentFontFamily = 'serif'; // 現在指定されているフォントファミリー
+
+// ルビ関連の状態変数
+let rubyState = {
+    active: false,           // ルビモード中かどうか
+    baseText: '',           // 被ルビ文字列
+    rubyText: '',           // ルビ文字列
+    position: 0,            // 0: 行戻し側（上/右）、1: 行送り側（下/左）
+    fontSize: 0.5,          // ルビのフォントサイズ比率（1/2 or 1/3）
+    startX: 0,              // ルビ開始位置X
+    startY: 0,              // ルビ開始位置Y
+    endX: 0,                // ルビ終了位置X
+    endY: 0                 // ルビ終了位置Y
+};
+
+// 行頭禁則関連の状態変数
+let lineStartProhibitionState = {
+    active: false,           // 行頭禁則処理が有効かどうか
+    level: 0,               // 禁則レベル（0: 一重禁則、1: 多重禁則）
+    method: 0,              // 禁則方法（0: 無し、1: 追い出し、2: 追い込み）
+    chars: [],              // 禁則対象文字のリスト
+    currentLineChars: [],   // 現在の行の文字列（禁則処理用）
+    pendingChars: []        // 次の行に送る文字列
+};
+
+// 行末禁則関連の状態変数
+let lineEndProhibitionState = {
+    active: false,           // 行末禁則処理が有効かどうか
+    level: 0,               // 禁則レベル（0: 一重禁則、1: 多重禁則）
+    method: 0,              // 禁則方法（0: 無し、1: 追い出し、2: 追い込み）
+    chars: [],              // 禁則対象文字のリスト
+    currentLineChars: [],   // 現在の行の文字列（禁則処理用）
+    nextLineChars: []       // 次の行の文字列（追い込み処理用）
+};
 let textFontStyle = 'normal';
 let textFontWeight = 400;
 let textFontStretch = 'normal';
@@ -114,6 +149,25 @@ let fontDirection = 0;  // 0:横書き, 1:縦書き（フォント属性用）
 let textStrokeStyle = 'none';  // 線種（none, outline）
 let textShadowStyle = 'none';  // 影（none, black, white）
 let textFontColor = '#000000';
+
+// 変数参照管理
+let variableReferences = new Map(); // ユーザー定義変数
+let currentPageNumber = 1;          // 現在のページ番号
+let totalPageNumber = 1;            // 全体のページ番号
+let documentFileName = '';          // 実身名
+
+// 文章メモ管理
+let documentMemos = [];             // 文章メモの配列
+
+// 図形メモ管理
+let figureMemos = [];               // 図形メモの配列
+
+// 図形要素修飾管理
+let figureModifierState = {
+    hasArrow: false,                // 矢印修飾があるかどうか
+    startArrow: false,              // 開始点に矢印を描画
+    endArrow: false                 // 終了点に矢印を描画
+};
 
 // 図形設定
 let drawLineColor = '#000000';
@@ -239,7 +293,10 @@ let textHeight = 0;
 let lineMaxHeight = new Array();
 let lineSpacingDirection = 0; // 行間
 let lineSpacingType = 1; // 行間の種類
+let pageCount = 1; // 現在のページ数（ページ番号ではない）
 let lineSpacingPitch = 1.75; // 行間のピッチ
+let isDetailMode = false; // 詳細モード表示フラグ
+let detailModeRulerDrawn = false; // 詳細モードルーラ描画済みフラグ
 let textAlign = 0; // 0:左揃え,1:中央揃え,2:右揃え,3:両端揃え,4:均等揃え,5～:予約
 let textDirection = 0; // 0:左から右,1:右から左,2:上から下,3-255:予約
 let textSpacingDirection = 0; // 文字間隔の方向 0:文字送り方向, 1:文字送り方向の逆
@@ -398,28 +455,10 @@ function syncTabStateToGlobals(tabIndex) {
 }
 
 /**
- * フォント設定を更新
+ * フォント設定を更新（updateFontSet()に統合されました）
  */
 function updateFontSettings() {
-    // フォント文字列を構築
-    let fontParts = [];
-    
-    if (textFontStyle !== 'normal') {
-        fontParts.push(textFontStyle);
-    }
-    if (textFontWeight !== 400) {
-        fontParts.push(textFontWeight);
-    }
-    if (textFontStretch !== 'normal') {
-        fontParts.push(textFontStretch);
-    }
-    
-    fontParts.push(textFontSize + 'px');
-    fontParts.push('serif');
-    
-    textFontSet = fontParts.join(' ');
-    
-    console.debug(`Font updated: ${textFontSet}`);
+    updateFontSet();
 }
 
 /**
@@ -511,6 +550,399 @@ function renderFromTadFileDrawBuffer(fileIndex, tabIndex, scrollX = 0, scrollY =
         validScrollX, validScrollY, displayCanvas.width, displayCanvas.height, // 元画像の切り取り範囲
         0, 0, displayCanvas.width, displayCanvas.height                        // 転送先の範囲
     );
+    
+    // 用紙モードが有効な場合、用紙枠を描画
+    // index.html用のチェックボックス
+    const paperModeCheckbox = document.getElementById('paper-mode-enabled') || 
+                              document.getElementById(`canvas-${tabIndex}-paper-mode`);
+    
+    // btron-desktop.js用のウィンドウ属性チェック
+    const canvas = document.getElementById(`canvas-${tabIndex}`);
+    let paperModeEnabled = false;
+    
+    if (paperModeCheckbox && paperModeCheckbox.checked) {
+        // チェックボックスがある場合（index.html）
+        paperModeEnabled = true;
+    } else if (canvas) {
+        // canvas要素から親ウィンドウを探して、data-paper-mode属性をチェック（btron-desktop.js）
+        const windowElement = canvas.closest('.window');
+        if (windowElement && windowElement.dataset.paperMode === 'true') {
+            paperModeEnabled = true;
+        }
+    }
+    
+    if (paperModeEnabled) {
+        console.debug(`Drawing paper frame for tab ${tabIndex}`);
+        drawPaperFrame(displayCtx, tabIndex, validScrollX, validScrollY);
+    }
+    
+    // 詳細モード（mode=2）の場合、タブ状態表示とルーラを描画
+    const canvasElement = document.getElementById(`canvas-${tabIndex}`);
+    let displayMode = '0';
+    if (canvasElement) {
+        const windowElement = canvasElement.closest('.window');
+        if (windowElement) {
+            displayMode = windowElement.dataset.displayMode || '3';
+        } else {
+            // index.html の場合
+            const displayModeSelect = document.getElementById('display-mode-select');
+            if (displayModeSelect) {
+                displayMode = displayModeSelect.value;
+            }
+        }
+    }
+    
+    // 詳細モード表示は描画バッファからの表示時は不要（セグメント処理中に描画されるため）
+}
+
+/**
+ * 用紙枠を描画する関数
+ * @param {CanvasRenderingContext2D} ctx 描画コンテキスト
+ * @param {number} tabIndex タブインデックス
+ * @param {number} scrollX スクロール位置X
+ * @param {number} scrollY スクロール位置Y
+ */
+function drawPaperFrame(ctx, tabIndex, scrollX = 0, scrollY = 0) {
+    // 用紙情報が存在しない場合は何も描画しない
+    if (!paperSize || !paperSize.width || !paperSize.length) {
+        return;
+    }
+    
+    // 現在のページ番号（タブインデックスから推定、実際にはpageNumber変数を使うべき）
+    const currentPageNumber = typeof pageNumber !== 'undefined' ? pageNumber : (tabIndex + 1);
+    const isEvenPage = (currentPageNumber % 2) === 0;
+    
+    // 物理的な左右マージンを計算
+    let physicalLeft, physicalRight;
+    let shouldSwap = false;
+    
+    // 右綴じの場合は左右を逆にする
+    if (paperSize.binding === 1) {
+        shouldSwap = true;
+    }
+    
+    // 左綴じの見開きで偶数ページの場合も左右を逆にする
+    if (paperSize.binding === 0 && paperSize.imposition === 1 && isEvenPage) {
+        shouldSwap = true;
+    }
+    
+    // 右綴じの見開きで奇数ページの場合は逆にしない
+    if (paperSize.binding === 1 && paperSize.imposition === 1 && !isEvenPage) {
+        shouldSwap = false;
+    }
+    
+    if (shouldSwap) {
+        physicalLeft = paperSize.right;   // 小口側の値を物理的な左に
+        physicalRight = paperSize.left;   // ノド側の値を物理的な右に
+    } else {
+        physicalLeft = paperSize.left;    // ノド側の値を物理的な左に
+        physicalRight = paperSize.right;  // 小口側の値を物理的な右に
+    }
+    
+    // 描画スタイルを保存
+    ctx.save();
+    
+    // スクロール位置を考慮して描画位置を調整
+    ctx.translate(-scrollX, -scrollY);
+    
+    // 用紙の外枠を描画（薄い点線）
+    ctx.strokeStyle = 'rgba(128, 128, 128, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 5]);
+    ctx.strokeRect(0, 0, paperSize.width, paperSize.length);
+    
+    // オーバーレイ領域の枠を描画（やや濃い点線）
+    if (paperSize.top !== undefined && paperSize.bottom !== undefined) {
+        ctx.strokeStyle = 'rgba(100, 100, 100, 0.4)';
+        ctx.setLineDash([3, 3]);
+        ctx.strokeRect(
+            physicalLeft,
+            paperSize.top,
+            paperSize.width - physicalLeft - physicalRight,
+            paperSize.length - paperSize.top - paperSize.bottom
+        );
+    }
+    
+    // 本文レイアウト領域の枠を描画（最も濃い点線）
+    if (paperMargin) {
+        // マージンの物理的な左右を計算
+        let marginPhysicalLeft, marginPhysicalRight;
+        
+        if (shouldSwap) {
+            marginPhysicalLeft = paperMargin.right;
+            marginPhysicalRight = paperMargin.left;
+        } else {
+            marginPhysicalLeft = paperMargin.left;
+            marginPhysicalRight = paperMargin.right;
+        }
+        
+        ctx.strokeStyle = 'rgba(64, 64, 64, 0.5)';
+        ctx.setLineDash([2, 2]);
+        ctx.strokeRect(
+            marginPhysicalLeft,
+            paperMargin.top,
+            paperSize.width - marginPhysicalLeft - marginPhysicalRight,
+            paperSize.length - paperMargin.top - paperMargin.bottom
+        );
+    }
+    
+    // 綴じ方向のインジケータを描画
+    ctx.fillStyle = 'rgba(128, 128, 128, 0.3)';
+    ctx.font = '10px sans-serif';
+    const bindingText = paperSize.binding === 0 ? '左綴じ' : '右綴じ';
+    const pageText = `ページ${currentPageNumber}`;
+    
+    if (paperSize.binding === 0) {
+        // 左綴じの場合、左上に表示
+        ctx.fillText(bindingText + ' ' + pageText, 5 - scrollX, 15 - scrollY);
+    } else {
+        // 右綴じの場合、右上に表示
+        const textWidth = ctx.measureText(bindingText + ' ' + pageText).width;
+        ctx.fillText(bindingText + ' ' + pageText, paperSize.width - textWidth - 5 - scrollX, 15 - scrollY);
+    }
+    
+    // 描画スタイルを復元
+    ctx.restore();
+}
+
+/**
+ * 詳細モード表示を描画する関数
+ * @param {CanvasRenderingContext2D} ctx 描画コンテキスト
+ * @param {number} tabIndex タブインデックス
+ * @param {number} scrollX スクロール位置X
+ * @param {number} scrollY スクロール位置Y
+ */
+function drawDetailModeDisplay(ctx, tabIndex, scrollX = 0, scrollY = 0) {
+    ctx.save();
+    
+    // スクロール位置を考慮して描画位置を調整
+    ctx.translate(-scrollX, -scrollY);
+    
+    // ルーラの幅を計算
+    let rulerWidth = 1200; // デフォルト幅
+    if (paperSize && paperSize.width) {
+        rulerWidth = paperSize.width;
+    } else if (canvas) {
+        rulerWidth = canvas.width;
+    }
+    
+    // 本文レイアウト領域の左端を計算
+    let textAreaLeft = 0;
+    let textAreaWidth = rulerWidth;
+    
+    if (paperSize && paperMargin) {
+        // 用紙指定とマージン指定がある場合
+        const currentPageNumber = typeof pageNumber !== 'undefined' ? pageNumber : 1;
+        const isEvenPage = (currentPageNumber % 2) === 0;
+        
+        // 物理的な左右マージンを計算（用紙枠描画と同じロジック）
+        let shouldSwap = false;
+        if (paperSize.binding === 1) {
+            shouldSwap = true;
+        }
+        if (paperSize.binding === 0 && paperSize.imposition === 1 && isEvenPage) {
+            shouldSwap = true;
+        }
+        if (paperSize.binding === 1 && paperSize.imposition === 1 && !isEvenPage) {
+            shouldSwap = false;
+        }
+        
+        let marginPhysicalLeft, marginPhysicalRight;
+        if (shouldSwap) {
+            marginPhysicalLeft = paperMargin.right;
+            marginPhysicalRight = paperMargin.left;
+        } else {
+            marginPhysicalLeft = paperMargin.left;
+            marginPhysicalRight = paperMargin.right;
+        }
+        
+        textAreaLeft = marginPhysicalLeft;
+        textAreaWidth = paperSize.width - marginPhysicalLeft - marginPhysicalRight;
+    }
+    
+    // 標準文字サイズ（9.6）での文字幅を計算
+    const standardCharSize = 9.6;
+    const charWidth = standardCharSize * 0.8; // 文字幅の概算
+    
+    // ルーラ背景（薄いグレー）
+    ctx.fillStyle = 'rgba(240, 240, 240, 0.8)';
+    ctx.fillRect(textAreaLeft, 0, textAreaWidth, 20);
+    
+    // ルーラ枠線
+    ctx.strokeStyle = 'rgba(128, 128, 128, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.strokeRect(textAreaLeft, 0, textAreaWidth, 20);
+    
+    // 文字数カウントを5文字おきに表示
+    ctx.fillStyle = 'rgba(64, 64, 64, 0.8)';
+    ctx.font = '8px sans-serif';
+    ctx.textAlign = 'center';
+    
+    for (let charCount = 5; charCount * charWidth < textAreaWidth; charCount += 5) {
+        const x = textAreaLeft + charCount * charWidth;
+        if (x > textAreaLeft && x < textAreaLeft + textAreaWidth) {
+            // 目盛り線
+            ctx.beginPath();
+            ctx.moveTo(x, 15);
+            ctx.lineTo(x, 20);
+            ctx.stroke();
+            
+            // 文字数表示
+            ctx.fillText(charCount.toString(), x, 12);
+        }
+    }
+    
+    // 1文字おきの小さな目盛り
+    ctx.strokeStyle = 'rgba(128, 128, 128, 0.3)';
+    for (let charCount = 1; charCount * charWidth < textAreaWidth; charCount++) {
+        if (charCount % 5 !== 0) { // 5の倍数以外
+            const x = textAreaLeft + charCount * charWidth;
+            if (x > textAreaLeft && x < textAreaLeft + textAreaWidth) {
+                ctx.beginPath();
+                ctx.moveTo(x, 17);
+                ctx.lineTo(x, 20);
+                ctx.stroke();
+            }
+        }
+    }
+    
+    ctx.restore();
+}
+
+/**
+ * 詳細モード状態を設定する関数
+ * @param {number} tabIndex タブインデックス
+ */
+function setDetailModeState(tabIndex) {
+    // 詳細モード状態をチェック
+    const canvasElement = document.getElementById(`canvas-${tabIndex}`);
+    let displayMode = '0';
+    if (canvasElement) {
+        const windowElement = canvasElement.closest('.window');
+        if (windowElement) {
+            displayMode = windowElement.dataset.displayMode || '3';
+        } else {
+            // index.html の場合
+            const displayModeSelect = document.getElementById('display-mode-select');
+            if (displayModeSelect) {
+                displayMode = displayModeSelect.value;
+            }
+        }
+    }
+    
+    isDetailMode = (displayMode === '2');
+    detailModeRulerDrawn = false; // リセット
+    console.debug(`Detail mode state set: ${isDetailMode} for tab ${tabIndex}`);
+}
+
+/**
+ * 詳細モード時のルーラを描画する関数
+ */
+function drawDetailModeRulerAsSegment() {
+    if (!isDetailMode || detailModeRulerDrawn || !ctx) {
+        return;
+    }
+    
+    console.debug('Drawing detail mode ruler as segment');
+    
+    // ルーラの幅を計算
+    let rulerWidth = 1200; // デフォルト幅
+    if (paperSize && paperSize.width) {
+        rulerWidth = paperSize.width;
+    } else if (canvas) {
+        rulerWidth = canvas.width;
+    }
+    
+    // 本文レイアウト領域の左端を計算
+    let textAreaLeft = 0;
+    let textAreaWidth = rulerWidth;
+    
+    if (paperSize && paperMargin) {
+        // 用紙指定とマージン指定がある場合
+        const currentPageNumber = typeof pageNumber !== 'undefined' ? pageNumber : 1;
+        const isEvenPage = (currentPageNumber % 2) === 0;
+        
+        // 物理的な左右マージンを計算
+        let shouldSwap = false;
+        if (paperSize.binding === 1) {
+            shouldSwap = true;
+        }
+        if (paperSize.binding === 0 && paperSize.imposition === 1 && isEvenPage) {
+            shouldSwap = true;
+        }
+        if (paperSize.binding === 1 && paperSize.imposition === 1 && !isEvenPage) {
+            shouldSwap = false;
+        }
+        
+        let marginPhysicalLeft, marginPhysicalRight;
+        if (shouldSwap) {
+            marginPhysicalLeft = paperMargin.right;
+            marginPhysicalRight = paperMargin.left;
+        } else {
+            marginPhysicalLeft = paperMargin.left;
+            marginPhysicalRight = paperMargin.right;
+        }
+        
+        textAreaLeft = marginPhysicalLeft;
+        textAreaWidth = paperSize.width - marginPhysicalLeft - marginPhysicalRight;
+    }
+    
+    ctx.save();
+    
+    // 標準文字サイズ（9.6）での文字幅を計算
+    const standardCharSize = 9.6;
+    const charWidth = standardCharSize * 0.8; // 文字幅の概算
+    const rulerHeight = 20;
+    
+    // ルーラ背景（薄いグレー）
+    ctx.fillStyle = 'rgba(240, 240, 240, 0.8)';
+    ctx.fillRect(textAreaLeft, textHeight, textAreaWidth, rulerHeight);
+    
+    // ルーラ枠線
+    ctx.strokeStyle = 'rgba(128, 128, 128, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.strokeRect(textAreaLeft, textHeight, textAreaWidth, rulerHeight);
+    
+    // 文字数カウントを5文字おきに表示
+    ctx.fillStyle = 'rgba(64, 64, 64, 0.8)';
+    ctx.font = '8px sans-serif';
+    ctx.textAlign = 'center';
+    
+    for (let charCount = 5; charCount * charWidth < textAreaWidth; charCount += 5) {
+        const x = textAreaLeft + charCount * charWidth;
+        if (x > textAreaLeft && x < textAreaLeft + textAreaWidth) {
+            // 目盛り線
+            ctx.beginPath();
+            ctx.moveTo(x, textHeight + rulerHeight - 5);
+            ctx.lineTo(x, textHeight + rulerHeight);
+            ctx.stroke();
+            
+            // 文字数表示
+            ctx.fillText(charCount.toString(), x, textHeight + rulerHeight - 8);
+        }
+    }
+    
+    // 1文字おきの小さな目盛り
+    ctx.strokeStyle = 'rgba(128, 128, 128, 0.3)';
+    for (let charCount = 1; charCount * charWidth < textAreaWidth; charCount++) {
+        if (charCount % 5 !== 0) { // 5の倍数以外
+            const x = textAreaLeft + charCount * charWidth;
+            if (x > textAreaLeft && x < textAreaLeft + textAreaWidth) {
+                ctx.beginPath();
+                ctx.moveTo(x, textHeight + rulerHeight - 3);
+                ctx.lineTo(x, textHeight + rulerHeight);
+                ctx.stroke();
+            }
+        }
+    }
+    
+    ctx.restore();
+    
+    // textHeightをルーラ分進める
+    textHeight += rulerHeight;
+    detailModeRulerDrawn = true;
 }
 
 /**
@@ -1035,7 +1467,7 @@ function getTopUBinUH(UH) {
  * @returns 
  */
 function getLastUBinUH(UH) {
-    const ATTR = ( UH & 0b00000011);
+    const ATTR = ( UH & 0b11111111);  // 全8ビットを取得するように修正
     //console.debug("ATTR" + ATTR);
     return ATTR;
 }
@@ -1603,6 +2035,9 @@ function tsTextStart(tadSeg) {
 
     textCharPoint.push([textChar.view.left,textChar.view.top,viewW,viewH,textChar.draw.left,textChar.draw.top,drawW,drawH]);
     textCharData.push(textChar);
+    
+    // 詳細モード時のルーラを描画（文章開始時）
+    drawDetailModeRulerAsSegment();
 }
 
 /**
@@ -1616,7 +2051,7 @@ function tsTextStart(tadSeg) {
  * @param {int} linePitch 
  * @param {int} align 
  */
-function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, width, textPitch, linePitch, align) {
+function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, width, textPitch, linePitch, align, nextChar = null) {
     // パラメータとして受け取ったcanvasとctxを使用
     if (!targetCtx || !targetCanvas) {
         console.error('ctx and canvas must be provided as parameters in drawText');
@@ -1655,20 +2090,52 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
     ctx.textAlign = "left"; // 常に左揃えで描画し、位置は手動計算
 
     // 折り返し処理
-    if (ctx.measureText(char).width + textWidth > width) {
-        textHeight += lineMaxHeight[textRow];
-        textRow++;
-        lineMaxHeight.push(linePitch);
-        textWidth = 0;
-        textColumn = 0;
-        currentLineOffset = 0; // 行オフセットをリセット
-        if (tabRulerLineMoveFlag == true) {
-            console.debug("行頭移動処理");
-            for (let tabLoop = 0;tabLoop < tabRulerLinePoint; tabLoop++) {
-                textWidth += ctx.measureText(" ").width;
-                textColumn++;
+    if ((ctx.measureText(char).width + textWidth > width)) {
+        // 行頭禁則処理 - 行頭に来てはいけない文字をチェック
+        let shouldBreak = true;
+        if (lineStartProhibitionState.active && lineStartProhibitionState.chars.length > 0) {
+            const prohibitResult = checkLineStartProhibition(char);
+            if (prohibitResult.prohibited) {
+                console.debug(`行頭禁則検出: "${char}" は行頭に配置不可`);
+                if (lineStartProhibitionState.method === 2) {
+                    // 禁則方法2: 禁則文字を全行の行末に追い込む
+                    console.debug("行頭禁則:2 禁則文字を前行の行末に追い込む");
+                    shouldBreak = false;
+                }
             }
         }
+
+        // 行頭禁則処理 - 次の文字が行頭に来てはいけない文字かチェック（方法1のみ）
+        if (shouldBreak && nextChar && lineStartProhibitionState.active && lineStartProhibitionState.chars.length > 0) {
+            const prohibitResult = checkLineStartProhibition(nextChar);
+            if (prohibitResult.prohibited) {
+                console.debug(`行頭禁則検出: "${nextChar}" は行頭に配置不可`);
+                if (lineStartProhibitionState.method === 1) {
+                    // 禁則方法1: 前の行末文字を行頭に取り込む
+                    console.debug("行頭禁則:1 前の行末文字を行頭に取り込む");
+                    shouldBreak = true;
+                }
+                // 方法1は文字描画時に処理するため、ここでは何もしない
+            }
+        }
+
+        // 通常の改行処理
+        if (shouldBreak && DoNotNextLineFlag == false) {
+            textHeight += lineMaxHeight[textRow];
+            textRow++;
+            lineMaxHeight.push(linePitch);
+            textWidth = 0;
+            textColumn = 0;
+            currentLineOffset = 0; // 行オフセットをリセット
+            if (tabRulerLineMoveFlag == true) {
+                console.debug("行頭移動処理");
+                for (let tabLoop = 0;tabLoop < tabRulerLinePoint; tabLoop++) {
+                    textWidth += ctx.measureText(" ").width;
+                    textColumn++;
+                }
+            }
+        }
+        DoNotNextLineFlag = false;
     }
     // 改段落処理
     if (char == String.fromCharCode(Number(TC_NL))) {
@@ -1680,6 +2147,7 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
         if (tabRulerLineMoveFlag == true) {
             tabRulerLineMoveFlag = false;
         }
+        DoNotNextLineFlag = false;
     // 改行処理
     } else if (char == String.fromCharCode(Number(TC_CR))) {
         textHeight += lineMaxHeight[textRow];
@@ -1694,6 +2162,7 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
                 textColumn++;
             }
         }
+        DoNotNextLineFlag = false;
     // 改ページ処理
     } else if (char == String.fromCharCode(Number(TC_NC)
         || char == String.fromCharCode(Number(TC_FF)))) {
@@ -1706,14 +2175,65 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
         if (tabRulerLineMoveFlag == true) {
             tabRulerLineMoveFlag = false;
         }
+        DoNotNextLineFlag = false;
     // Tab処理
     } else if (char == String.fromCharCode(Number(TC_TAB))) {
         console.debug("Tab処理");
         for (let tabLoop = 0;tabLoop < tabCharNum; tabLoop++) {
             textWidth += ctx.measureText(" ").width;
             textColumn++;
+            DoNotNextLineFlag = false;
         }
     } else {
+        // 行末禁則方法1の処理: 文字が禁則文字の場合改行
+        let shouldMoveToNextLine = false;
+        if (lineEndProhibitionState.active && lineEndProhibitionState.method === 1) {
+            const prohibitResult = checkLineEndProhibition(char);
+            if (prohibitResult.prohibited) {
+                // 現在の文字 + 次の文字の幅が行幅を超える場合のみ改行
+                const currentCharWidth = ctx.measureText(char).width;
+                const nextCharWidth = ctx.measureText(nextChar).width;
+                if (textWidth + currentCharWidth + nextCharWidth > width) {
+                    console.debug(`行末禁則方法1: 次の文字 "${nextChar}" が禁則文字で行幅を超えるため、現在の文字 "${char}" を改行して描画`);
+                    shouldMoveToNextLine = true;
+                }
+            }
+        } else if (lineStartProhibitionState.active && lineStartProhibitionState.method === 2) {
+            // 行頭禁則方法2の処理: 文字が禁則文字で次が行頭に来て良い文字の場合
+            const prohibitResult = checkLineStartProhibition(char);
+            if (prohibitResult.prohibited) {
+                // 現在の文字 + 次の文字の幅が行幅を超える場合でも改行しない
+                const currentCharWidth = ctx.measureText(char).width;
+                const nextCharWidth = ctx.measureText(nextChar).width;
+                if (textWidth + currentCharWidth + nextCharWidth > width) {
+                    console.debug(`行頭禁則方法2: 次の文字 "${char}" が禁則文字で行幅を超えるため、改行せずに描画`);
+                    shouldMoveToNextLine = false;
+                    DoNotNextLineFlag = true; // 次の文字で改行しないフラグをセット
+                }
+            }
+        }
+
+
+        // 改行処理
+        if (shouldMoveToNextLine) {
+            textHeight += lineMaxHeight[textRow];
+            textRow++;
+            lineMaxHeight.push(linePitch);
+            textWidth = 0;
+            textColumn = 0;
+            currentLineOffset = 0;
+            if (tabRulerLineMoveFlag == true) {
+                console.debug("行頭移動処理");
+                for (let tabLoop = 0; tabLoop < tabRulerLinePoint; tabLoop++) {
+                    textWidth += ctx.measureText(" ").width;
+                    textColumn++;
+                }
+            }
+            DoNotNextLineFlag = false;
+        }
+
+
+
         let padding = 0;
         // シンプルな位置計算
         const charY = startY + textHeight + textfontSize;  // シンプルな文字位置
@@ -1829,6 +2349,26 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
             }
             
             // 袋文字の処理
+            // ルビモード中の場合、被ルビ文字列を収集
+            if (rubyState.active) {
+                // 最初の文字の位置を記録
+                if (rubyState.baseText === '') {
+                    rubyState.startX = actualCharX;
+                    rubyState.startY = actualCharY;
+                }
+                rubyState.baseText += char;
+                // 最後の文字の位置を更新（文字幅を考慮）
+                if (textDirection === 1 || textDirection === 3) {
+                    // 縦書きの場合
+                    rubyState.endX = actualCharX;
+                    rubyState.endY = actualCharY + textfontSize;
+                } else {
+                    // 横書きの場合
+                    rubyState.endX = actualCharX + textfontSize;
+                    rubyState.endY = actualCharY;
+                }
+            }
+
             if (textStrokeStyle === 'outline') {
                 ctx.strokeStyle = actualTextColor;
                 ctx.lineWidth = 1;
@@ -1927,32 +2467,30 @@ function tsSizeOfPaperSetFusen(segLen, tadSeg) {
 
     const ATTR = getLastUBinUH(tadSeg[0]);
 
-    // 綴じ方向と面付け指定を設定
-    if (ATTR === Number(0x00)) {
-        paperSize.binding = 0; // 用紙綴じ方向 0:左綴じ
-        paperSize.imposition = 0; // 用紙面付け指定 0:1面付け
-    } else if (ATTR === Number(0x01)) {
-        paperSize.binding = 0; // 用紙綴じ方向 0:左綴じ
-        paperSize.imposition = 1; // 用紙面付け指定 1:2面付け
-    } else if (ATTR === Number(0x02)) {
-        paperSize.binding = 1; // 用紙綴じ方向 1:右綴じ
-        paperSize.imposition = 0; // 用紙面付け指定 0:1面付け
-    } else if (ATTR === Number(0x03)) {
-        paperSize.binding = 1; // 用紙綴じ方向 1:右綴じ
-        paperSize.imposition = 1; // 用紙面付け指定 1:2面付け
-    }
+    // 綴じ方向と面付け指定をビットマスクで解析
+    // bit0: P (面付け指定) 0:1面付け, 1:2面付け
+    // bit1: D (綴じ方向) 0:左綴じ, 1:右綴じ
+    paperSize.imposition = (ATTR & 0x01) ? 1 : 0;  // bit0: P
+    paperSize.binding = (ATTR & 0x02) ? 1 : 0;     // bit1: D
 
+    console.debug(`Paper attr: 0x${ATTR.toString(16).padStart(2, '0')} (binding=${paperSize.binding}, imposition=${paperSize.imposition})`);
     console.debug("length " + IntToHex((tadSeg[1]),4).replace('0x',''));
     console.debug("width  " + IntToHex((tadSeg[2]),4).replace('0x',''));
-    console.debug(`Paper bounds: left=${IntToHex((tadSeg[5]),4).replace('0x','')}, top=${IntToHex((tadSeg[3]),4).replace('0x','')}, right=${IntToHex((tadSeg[6]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[4]),4).replace('0x','')}`);
+    console.debug(`Paper overlay margins (logical): top=${IntToHex((tadSeg[3]),4).replace('0x','')}, bottom=${IntToHex((uh2h(tadSeg[4])),4).replace('0x','')}, left(gutter)=${IntToHex((uh2h(tadSeg[5])),4).replace('0x','')}, right(fore-edge)=${IntToHex((uh2h(tadSeg[6])),4).replace('0x','')}`);
 
-    // 用紙サイズと余白をPaperSizeクラスに設定
+    // 用紙サイズを設定
     paperSize.length = Number(tadSeg[1]);
     paperSize.width = Number(tadSeg[2]);
+    
+    // オーバーレイ領域までのマージンを設定（論理値として保存）
     paperSize.top = Number(tadSeg[3]);
-    paperSize.bottom = Number(tadSeg[4]);
-    paperSize.left = Number(tadSeg[5]);
-    paperSize.right = Number(tadSeg[6]);
+    paperSize.bottom = Number(uh2h(tadSeg[4]));
+    
+    // 論理的なleft（ノド）とright（小口）の値をそのまま保存
+    paperSize.left = Number(uh2h(tadSeg[5]));   // ノド（綴じ側）
+    paperSize.right = Number(uh2h(tadSeg[6]));  // 小口（開き側）
+    
+    console.debug(`Logical overlay margins stored: left(gutter)=${paperSize.left}, right(fore-edge)=${paperSize.right}`);
 }
 
 /**
@@ -1970,18 +2508,40 @@ function tsSizeOfMarginSetFusen(segLen, tadSeg) {
         return;
     }
 
+    // 前のマージン値を保存（継承用）
+    const previousMargin = paperMargin ? {
+        top: paperMargin.top,
+        bottom: paperMargin.bottom,
+        left: paperMargin.left,
+        right: paperMargin.right
+    } : null;
+
     // PaperMarginクラスのインスタンスを作成（まだ存在しない場合）
     if (paperMargin === null) {
         paperMargin = new PaperMargin();
     }
 
-    console.debug(`Margin bounds: left=${IntToHex((tadSeg[3]),4).replace('0x','')}, top=${IntToHex((tadSeg[1]),4).replace('0x','')}, right=${IntToHex((tadSeg[4]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[2]),4).replace('0x','')}`);
+    console.debug(`Margin raw values: top=${IntToHex((tadSeg[1]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[2]),4).replace('0x','')}, left(gutter)=${IntToHex((tadSeg[3]),4).replace('0x','')}, right(fore-edge)=${IntToHex((tadSeg[4]),4).replace('0x','')}`);
 
-    // マージンをPaperMarginクラスに設定
-    paperMargin.top = Number(tadSeg[1]);
-    paperMargin.bottom = Number(tadSeg[2]);
-    paperMargin.left = Number(tadSeg[3]);
-    paperMargin.right = Number(tadSeg[4]);
+    // マージン値を取得（0xffffの場合は前の値を継承）
+    const topValue = Number(tadSeg[1]);
+    const bottomValue = Number(tadSeg[2]);
+    const leftValue = Number(tadSeg[3]);
+    const rightValue = Number(tadSeg[4]);
+    
+    // 0xffffの場合は前の値を継承、そうでなければ新しい値を設定（論理値として保存）
+    paperMargin.top = (topValue === 0xffff && previousMargin) ? previousMargin.top : topValue;
+    paperMargin.bottom = (bottomValue === 0xffff && previousMargin) ? previousMargin.bottom : bottomValue;
+    paperMargin.left = (leftValue === 0xffff && previousMargin) ? previousMargin.left : leftValue;     // ノド（綴じ側）
+    paperMargin.right = (rightValue === 0xffff && previousMargin) ? previousMargin.right : rightValue;  // 小口（開き側）
+    
+    console.debug(`Logical text layout margins stored: top=${paperMargin.top}, bottom=${paperMargin.bottom}, left(gutter)=${paperMargin.left}, right(fore-edge)=${paperMargin.right}`);
+    
+    // 継承されたマージンがある場合はログ出力
+    if (topValue === 0xffff && previousMargin) console.debug(`  top margin inherited: ${paperMargin.top}`);
+    if (bottomValue === 0xffff && previousMargin) console.debug(`  bottom margin inherited: ${paperMargin.bottom}`);
+    if (leftValue === 0xffff && previousMargin) console.debug(`  left margin inherited: ${paperMargin.left}`);
+    if (rightValue === 0xffff && previousMargin) console.debug(`  right margin inherited: ${paperMargin.right}`);
 
     // PaperSizeクラスのmarginプロパティにも設定（関連付け）
     if (paperSize !== null) {
@@ -2004,6 +2564,159 @@ function tsSizeOfColumnSetFusen(segLen, tadSeg) {
         return;
     }
     // TODO: 未実装
+}
+
+/**
+ * 条件改ページ指定付箋を処理
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
+function tsPageBreakConditionFusen(segLen, tadSeg) {
+    if (segLen < Number(0x0004)) {
+        return;
+    }
+    // 図形TADの場合は無視される
+    if (startByImageSegment == true) {
+        return;
+    }
+    
+    const cond = getLastUBinUH(tadSeg[0]);
+    const remain = Number(tadSeg[1]);
+    
+    console.debug(`Conditional page break: cond=${cond}, remain=${IntToHex(remain, 4)}`);
+    
+    // 現在のページ数を取得（ページ番号ではなくページ数）
+    const currentPageCount = typeof pageCount !== 'undefined' ? pageCount : 1;
+    
+    let shouldBreak = false;
+    
+    switch (cond) {
+        case 0x00:
+            // 偶数ページの場合は改ページ
+            if (currentPageCount % 2 === 0) {
+                shouldBreak = true;
+                console.debug(`Page break on even page (page count: ${currentPageCount})`);
+            }
+            break;
+            
+        case 0x01:
+            // 奇数ページの場合は改ページ
+            if (currentPageCount % 2 === 1) {
+                shouldBreak = true;
+                console.debug(`Page break on odd page (page count: ${currentPageCount})`);
+            }
+            break;
+            
+        case 0x02:
+            // ページの残り描画域の長さがremain以下の場合は改ページ
+            const remainValue = parseScaleValue(remain);
+            const pageHeight = getPageHeight();
+            const currentYPosition = textHeight;
+            const remainingSpace = pageHeight - currentYPosition;
+            
+            console.debug(`Remaining space check: remaining=${remainingSpace}, threshold=${remainValue}`);
+            
+            if (remainingSpace <= remainValue) {
+                shouldBreak = true;
+                console.debug(`Page break due to insufficient space (remaining: ${remainingSpace} <= ${remainValue})`);
+            }
+            break;
+            
+        default:
+            console.warn(`Unknown page break condition: ${cond}`);
+            break;
+    }
+    
+    // 改ページを実行
+    if (shouldBreak) {
+        performPageBreak();
+    }
+}
+
+/**
+ * SCALE型の値を解析
+ * @param {number} scaleValue SCALE型の値
+ * @returns {number} 座標系単位での値
+ */
+function parseScaleValue(scaleValue) {
+    const msb = (scaleValue >> 15) & 0x01;
+    
+    if (msb === 0) {
+        // 比率指定（0AAAAAAABBBBBBBB）
+        const a = (scaleValue >> 8) & 0x7F;
+        const b = scaleValue & 0xFF;
+        
+        if (b === 0) {
+            // B=0の場合は比率1
+            return a;
+        } else {
+            // A/B比率
+            return Math.floor(a / b * getPageHeight());
+        }
+    } else {
+        // 絶対指定（1NNNNNNNNNNNNNNN）
+        const absoluteValue = scaleValue & 0x7FFF;
+        return absoluteValue;
+    }
+}
+
+/**
+ * ページの高さを取得
+ * @returns {number} ページの高さ
+ */
+function getPageHeight() {
+    // 用紙モードが有効な場合は用紙の高さを返す
+    if (paperSize && paperSize.length) {
+        return paperSize.length;
+    }
+    
+    // それ以外はキャンバスの高さを返す
+    if (canvas) {
+        return canvas.height;
+    }
+    
+    // デフォルト値
+    return 1000;
+}
+
+/**
+ * 改ページを実行
+ */
+function performPageBreak() {
+    // 現在の描画位置を保存
+    const prevTextHeight = textHeight;
+    
+    // ページ区切り線を描画（薄い灰色の点線）
+    if (ctx) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(128, 128, 128, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 5]);
+        
+        // 用紙モードの場合は用紙幅、そうでない場合はキャンバス幅
+        const lineWidth = (paperSize && paperSize.width) ? paperSize.width : 
+                         (canvas ? canvas.width : 1200);
+        
+        ctx.beginPath();
+        ctx.moveTo(0, prevTextHeight);
+        ctx.lineTo(lineWidth, prevTextHeight);
+        ctx.stroke();
+        
+        ctx.restore();
+    }
+    
+    // 次のページの先頭に移動
+    const pageHeight = getPageHeight();
+    const currentPage = Math.floor(textHeight / pageHeight);
+    textHeight = (currentPage + 1) * pageHeight;
+    
+    // ページ数をインクリメント
+    if (typeof pageCount !== 'undefined') {
+        pageCount++;
+    }
+    
+    console.debug(`Page break performed: from Y=${prevTextHeight} to Y=${textHeight}`);
 }
 
 /**
@@ -2071,7 +2784,7 @@ function tadPageSetFusen(segLen, tadSeg) {
         // TODO: 未実装
     } else if (UB_SubID === Number(0x07)) {
         console.debug("条件改ページ指定付箋");
-        // TODO: 未実装
+        tsPageBreakConditionFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x08)) {
         console.debug("充填行指定付箋");
         // TODO: 未実装
@@ -2184,13 +2897,259 @@ function tadRulerSetFusen(segLen, tadSeg) {
  * @param {0x0000[]} tadSeg 
  * @returns 
  */
-function tsFontNameSetFusen(segLen,tadSeg) {
+/**
+ * フォント名指定付箋を処理
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg TADセグメントデータ
+ */
+function tsFontNameSetFusen(segLen, tadSeg) {
     if (segLen < Number(0x0004)) {
         return;
     }
-    for(let offsetLen=2;offsetLen<tadSeg.length;offsetLen++) {
-        console.debug(charTronCode(tadSeg[offsetLen]));
+    
+    // class取得（UH形式）
+    const fontClass = Number(tadSeg[1]);
+    console.debug(`Font class: 0x${fontClass.toString(16).padStart(4, '0')}`);
+    
+    // フォント名を取得（TRONコードからの変換）
+    let fontName = '';
+    for (let offsetLen = 2; offsetLen < tadSeg.length; offsetLen++) {
+        const tronChar = charTronCode(tadSeg[offsetLen]);
+        if (tronChar) {
+            fontName += tronChar;
+        }
     }
+    
+    console.debug(`Original font name: "${fontName}"`);
+    
+    // BTRONフォント名からWebフォント名にマッピング
+    const mappedFontFamily = mapBTRONFontToWeb(fontName, fontClass);
+    
+    // フォントファミリーを更新
+    currentFontFamily = mappedFontFamily;
+    updateFontSet();
+    
+    console.debug(`Mapped to font family: "${currentFontFamily}"`);
+}
+
+/**
+ * フォントがブラウザで利用可能かチェックする
+ * @param {string} fontName フォント名
+ * @returns {boolean} フォントが利用可能かどうか
+ */
+function isFontAvailable(fontName) {
+    // ブラウザ環境でない場合は常にfalseを返す
+    if (typeof document === 'undefined' || typeof window === 'undefined') {
+        return false;
+    }
+    
+    try {
+        // Canvas要素を作成してフォント測定
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // テスト文字列
+        const testString = 'abcdefghijklmnopqrstuvwxyz0123456789あいうえおかきくけこ';
+        
+        // デフォルトフォントでのサイズを測定
+        ctx.font = '12px serif';
+        const defaultWidth = ctx.measureText(testString).width;
+        
+        // 指定フォントでのサイズを測定
+        ctx.font = `12px "${fontName}", serif`;
+        const testWidth = ctx.measureText(testString).width;
+        
+        // サイズが異なればそのフォントが利用可能
+        return Math.abs(defaultWidth - testWidth) > 0.1;
+    } catch (e) {
+        console.debug(`Font availability check failed for "${fontName}":`, e);
+        return false;
+    }
+}
+
+/**
+ * BTRONフォント名をWebフォント名にマッピングする
+ * @param {string} btronFontName BTRONフォント名
+ * @param {number} fontClass フォントクラス
+ * @returns {string} Webフォント名
+ */
+function mapBTRONFontToWeb(btronFontName, fontClass) {
+    // 既定のフォントマッピング
+    const fontMapping = {
+        '明朝体': '"メイリオ", "Meiryo", "Yu Mincho", "游明朝", serif',
+        'GT書体': 'GT書体, serif',
+        'SS細明朝体': '"メイリオ", "Meiryo", "Yu Mincho Light", "游明朝 Light", serif',
+        'SS明朝体': '"Yu Mincho", "游明朝","メイリオ", "Meiryo", serif',
+        'ゴシック体': '"MS UI Gothic", "ＭＳ Ｐゴシック", "MS Gothic", sans-serif',
+        'SS教科書体': '"UD デジタル 教科書体 NP-R", "HGP教科書体", "HGPゴシック", "MS Gothic", sans-serif',
+        'SS丸ゴシック体': '"HG丸ゴシックM-PRO", "MS Gothic", sans-serif',
+        'SSゴシック体': '"Yu Gothic", "游ゴシック", "ＭＳ Ｐゴシック", "MS Gothic", sans-serif',
+        'SSCourier': '"Courier New", monospace',
+        'SSTimes': '"Times New Roman", serif'
+    };
+    
+    // 完全マッチを探す
+    if (fontMapping[btronFontName]) {
+        return fontMapping[btronFontName];
+    }
+    
+    // 部分マッチを探す
+    for (const [btronName, webFont] of Object.entries(fontMapping)) {
+        if (btronFontName.includes(btronName) || btronName.includes(btronFontName)) {
+            return webFont;
+        }
+    }
+    
+    // 対応表にないフォント名の場合、直接フォント名を試す
+    if (btronFontName && btronFontName.trim() !== '') {
+        // フォント名をクォートで囲み、フォールバックを追加
+        const directFontSpec = `"${btronFontName}", serif`;
+        console.debug(`Trying direct font specification: ${directFontSpec}`);
+        
+        // ブラウザでフォントが利用可能かチェック
+        if (isFontAvailable(btronFontName)) {
+            console.debug(`Font "${btronFontName}" is available on this system`);
+            return directFontSpec;
+        } else {
+            console.debug(`Font "${btronFontName}" is not available, falling back to font class estimation`);
+        }
+    }
+    
+    // フォントクラスに基づく推定
+    if (fontClass !== undefined) {
+        const classAnalysis = analyzeFontClass(fontClass);
+        console.debug(`Font class analysis:`, classAnalysis);
+        
+        // フォント選択ロジック
+        if (classAnalysis.hasSerifB || classAnalysis.hasSerifC || classAnalysis.isJapanese) {
+            // セリフまたは和風の場合は明朝系
+            if (classAnalysis.isJapanese) {
+                return '"Yu Mincho", "游明朝", Meiryo, serif';
+            } else {
+                return '"Times New Roman", serif';
+            }
+        } else if (classAnalysis.isSimple || classAnalysis.isModern) {
+            // シンプルまたはモダンの場合はゴシック系
+            if (classAnalysis.isJapanese) {
+                return '"Yu Gothic", "游ゴシック", "MS Gothic", sans-serif';
+            } else {
+                return 'Arial, sans-serif';
+            }
+        } else if (classAnalysis.isMonospace) {
+            // 等幅フォントの推定（フリーハンド風でない、シンプル、線が途切れていない）
+            if (!classAnalysis.isFreehand && classAnalysis.isSimple && !classAnalysis.isBroken) {
+                return '"Courier New", monospace';
+            }
+        }
+        
+        // デフォルトの判定
+        if (classAnalysis.isJapanese) {
+            return 'serif'; // 和風は明朝系
+        } else {
+            return 'sans-serif'; // その他はゴシック系
+        }
+    }
+    
+    // デフォルト
+    console.warn(`Unknown BTRON font: "${btronFontName}", using default serif`);
+    return 'serif';
+}
+
+/**
+ * フォントクラスのビット列を解析する
+ * @param {number} fontClass 16ビットのフォントクラス値
+ * @returns {Object} 解析結果オブジェクト
+ */
+function analyzeFontClass(fontClass) {
+    // ビット位置の定義（MSBから）
+    // ABCDEFGHIJKLMMNN (16ビット)
+    
+    const analysis = {
+        // A: 見出し専用文字
+        isHeadingOnly: (fontClass & 0x8000) !== 0,
+        
+        // B: 線の末端に飾りあり
+        hasSerifB: (fontClass & 0x4000) !== 0,
+        
+        // C: 線の末端に飾りあり  
+        hasSerifC: (fontClass & 0x2000) !== 0,
+        
+        // D: 線幅に抑揚あり
+        hasVariableWidth: (fontClass & 0x1000) !== 0,
+        
+        // E: 線の末端が丸い
+        hasRoundedEnds: (fontClass & 0x0800) !== 0,
+        
+        // F: 角が丸い
+        hasRoundedCorners: (fontClass & 0x0400) !== 0,
+        
+        // G: 線が途切れている
+        isBroken: (fontClass & 0x0200) !== 0,
+        
+        // H: フリーハンド風
+        isFreehand: (fontClass & 0x0100) !== 0,
+        
+        // I: 上品である
+        isElegant: (fontClass & 0x0080) !== 0,
+        
+        // J: シンプルである
+        isSimple: (fontClass & 0x0040) !== 0,
+        
+        // K: モダンである
+        isModern: (fontClass & 0x0020) !== 0,
+        
+        // L: 和風である
+        isJapanese: (fontClass & 0x0010) !== 0,
+        
+        // MM: 文字の大きさによる読みやすさ (2ビット)
+        sizeReadability: (fontClass & 0x000C) >> 2,
+        
+        // NN: 線の太さによる読みやすさ (2ビット)
+        weightReadability: (fontClass & 0x0003)
+    };
+    
+    // 追加の推定プロパティ
+    analysis.hasSerif = analysis.hasSerifB || analysis.hasSerifC;
+    analysis.isMonospace = analysis.isSimple && !analysis.hasVariableWidth && !analysis.isFreehand;
+    analysis.isDecorative = analysis.hasRoundedCorners || analysis.isBroken || analysis.isFreehand;
+    
+    // 読みやすさの解釈
+    analysis.sizeReadabilityText = ['常に読みやすい', '小さいと読みにくい', '大きいと読みにくい', '常に読みにくい'][analysis.sizeReadability];
+    analysis.weightReadabilityText = ['常に読みやすい', '細いと読みにくい', '太いと読みにくい', '常に読みにくい'][analysis.weightReadability];
+    
+    return analysis;
+}
+
+/**
+ * フォントセットを更新する
+ */
+function updateFontSet() {
+    const fontParts = [];
+    
+    // フォントスタイル
+    if (textFontStyle !== 'normal') {
+        fontParts.push(textFontStyle);
+    }
+    
+    // フォント変形
+    if (textFontStretch !== 'normal') {
+        fontParts.push(textFontStretch);
+    }
+    
+    // フォント重み
+    if (textFontWeight !== 400) {
+        fontParts.push(textFontWeight.toString());
+    }
+    
+    // フォントサイズ
+    fontParts.push(textFontSize + 'px');
+    
+    // フォントファミリー
+    fontParts.push(currentFontFamily);
+    
+    textFontSet = fontParts.join(' ');
+    
+    console.debug(`Font set updated: ${textFontSet}`);
 }
 
 /**
@@ -2503,16 +3462,19 @@ function tadTextAlignFusen(segLen, tadSeg) {
         tadSubscriptEnd(segLen, tadSeg);
     } else if (UB_SubID === Number(0x06)) {
         console.debug("ルビ開始指定付箋");
-        // TODO
+        tsRubyStartFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x07)) {
         console.debug("ルビ終了指定付箋");
-        // TODO
+        tsRubyEndFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x08)) {
         console.debug("行頭禁則指定付箋");
-        // TODO
+        tsLineStartProhibitionFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x09)) {
         console.debug("行末禁則指定付箋");
-        // TODO
+        tsLineEndProhibitionFusen(segLen, tadSeg);
+    } else if (UB_SubID === Number(0x0A)) {
+        console.debug("固定幅空白指定付箋");
+        tsFixedWidthSpaceFusen(segLen, tadSeg);
     }
 }
 
@@ -4009,7 +4971,35 @@ function tsFigLineDraw(segLen, tadSeg) {
     if (drawLineWidth > 0) {
         ctx.stroke();
     }
-    
+
+    // 矢印修飾がある場合のみ矢印を描画
+    if (figureModifierState.hasArrow && tadSeg.length >= 6) {
+        const startX = Number(tadSeg[3]);
+        const startY = Number(tadSeg[4]);
+        const endX = Number(tadSeg[tadSeg.length - 2]);
+        const endY = Number(tadSeg[tadSeg.length - 1]);
+
+        // 開始点の矢印（最初の線分の方向）
+        if (figureModifierState.startArrow) {
+            const secondX = tadSeg.length > 6 ? Number(tadSeg[5]) : endX;
+            const secondY = tadSeg.length > 6 ? Number(tadSeg[6]) : endY;
+            const startAngle = Math.atan2(secondY - startY, secondX - startX);
+            drawArrow(ctx, startX, startY, startAngle + Math.PI); // 反対方向
+        }
+
+        // 終了点の矢印（最後の線分の方向）
+        if (figureModifierState.endArrow) {
+            const prevIndex = tadSeg.length >= 8 ? tadSeg.length - 4 : 3;
+            const prevX = Number(tadSeg[prevIndex]);
+            const prevY = Number(tadSeg[prevIndex + 1]);
+            const endAngle = Math.atan2(endY - prevY, endX - prevX);
+            drawArrow(ctx, endX, endY, endAngle);
+        }
+
+        // 修飾状態をリセット（次の図形に影響しないように）
+        resetFigureModifier();
+    }
+
     // 色設定を復元
     drawLineColor = oldLineColor;
     
@@ -4064,6 +5054,224 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     
     // 塗りつぶしを先に実行
     // setColorPatternでfillStyleが設定されていない場合のみdrawFillColorを設定
+    if (ctx.fillStyle === oldColors.fillStyle || !oldColors.fillStyle) {
+        ctx.fillStyle = drawFillColor;
+    }
+    ctx.fill();
+    
+    // 線幅が0より大きい場合のみ枠線を描画
+    if (drawLineWidth > 0) {
+        ctx.strokeStyle = drawLineColor;
+        ctx.stroke();
+    }
+
+    ctx.restore(); // 保存した状態に戻す
+
+    drawFillColor = oldColors.fillColor;
+    drawLineColor = oldColors.lineColor;
+    if (oldColors.fillStyle) {
+        ctx.fillStyle = oldColors.fillStyle;
+    }
+    
+    // 線属性を復元
+    restoreLineAttribute(oldLineSettings);
+
+    return;
+}
+
+/**
+ * 図形セグメント 扇形セグメントを描画
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
+function tsFigArcDraw(segLen, tadSeg) {
+    if (segLen < Number(0x0018)) {
+        return;
+    }
+    
+    console.debug(`Arc attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}, angle=${IntToHex((tadSeg[4]),4).replace('0x','')}`);
+    console.debug(`Arc frame: left=${IntToHex((tadSeg[5]),4).replace('0x','')}, top=${IntToHex((tadSeg[6]),4).replace('0x','')}, right=${IntToHex((tadSeg[7]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[8]),4).replace('0x','')}`);
+    console.debug(`Arc points: startX=${IntToHex((tadSeg[9]),4).replace('0x','')}, startY=${IntToHex((tadSeg[10]),4).replace('0x','')}, endX=${IntToHex((tadSeg[11]),4).replace('0x','')}, endY=${IntToHex((tadSeg[12]),4).replace('0x','')}`);
+
+    const l_atr = Number(tadSeg[1]);
+    const l_pat = Number(tadSeg[2]);
+    const f_pat = Number(tadSeg[3]);
+    const angle = Number(uh2h(tadSeg[4]));
+    
+    // フレーム座標（half-openなので right と bottom に +1）
+    const frameLeft = Number(uh2h(tadSeg[5]));
+    const frameTop = Number(uh2h(tadSeg[6]));
+    const frameRight = Number(uh2h(tadSeg[7])) + 1;
+    const frameBottom = Number(uh2h(tadSeg[8])) + 1;
+    
+    // 開始・終了点
+    const startX = Number(uh2h(tadSeg[9]));
+    const startY = Number(uh2h(tadSeg[10]));
+    const endX = Number(uh2h(tadSeg[11]));
+    const endY = Number(uh2h(tadSeg[12]));
+    
+    const radiusX = (frameRight - frameLeft) / 2;
+    const radiusY = (frameBottom - frameTop) / 2;
+    const centerX = frameLeft + radiusX;
+    const centerY = frameTop + radiusY;
+    
+    // 開始・終了角度を計算（楕円上の点から角度を求める）
+    const startAngle = Math.atan2((startY - centerY) / radiusY, (startX - centerX) / radiusX);
+    const endAngle = Math.atan2((endY - centerY) / radiusY, (endX - centerX) / radiusX);
+    
+    const radianAngle = angle * Math.PI / 180;
+    
+    console.debug(`Arc center: (${centerX}, ${centerY}), radius: (${radiusX}, ${radiusY})`);
+    console.debug(`Start angle: ${startAngle}, End angle: ${endAngle}`);
+
+    ctx.save(); // 現在の状態を保存
+
+    // フレーム矩形でクリッピング
+    ctx.beginPath();
+    ctx.rect(frameLeft, frameTop, frameRight - frameLeft, frameBottom - frameTop);
+    ctx.clip();
+
+    // 線属性を適用
+    const oldLineSettings = applyLineAttribute(l_atr);
+    const oldColors = setColorPattern(l_pat, f_pat);
+
+    ctx.beginPath();
+    
+    // 中心から開始点へ
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(startX, startY);
+    
+    // 開始点から終了点へ楕円弧（時計回り）
+    ctx.ellipse(centerX, centerY, radiusX, radiusY, radianAngle, startAngle, endAngle, false);
+    
+    // 終了点から中心へ
+    ctx.lineTo(centerX, centerY);
+    ctx.closePath();
+    
+    // 塗りつぶしを先に実行
+    if (ctx.fillStyle === oldColors.fillStyle || !oldColors.fillStyle) {
+        ctx.fillStyle = drawFillColor;
+    }
+    ctx.fill();
+    
+    // 線幅が0より大きい場合のみ枠線を描画
+    if (drawLineWidth > 0) {
+        ctx.strokeStyle = drawLineColor;
+        ctx.stroke();
+    }
+
+    ctx.restore(); // 保存した状態に戻す
+
+    drawFillColor = oldColors.fillColor;
+    drawLineColor = oldColors.lineColor;
+    if (oldColors.fillStyle) {
+        ctx.fillStyle = oldColors.fillStyle;
+    }
+
+    // 線属性を復元
+    restoreLineAttribute(oldLineSettings);
+
+    // 矢印の描画
+    if (figureModifierState.hasArrow && segLen >= 0x0018) {
+        if (figureModifierState.startArrow) {
+            // 開始点から中心方向の角度を計算
+            const angleToCenter = Math.atan2(centerY - startY, centerX - startX);
+            drawArrow(startX, startY, angleToCenter);
+        }
+
+        if (figureModifierState.endArrow) {
+            // 終了点から中心方向の角度を計算
+            const angleToCenter = Math.atan2(centerY - endY, centerX - endX);
+            drawArrow(endX, endY, angleToCenter);
+        }
+
+        resetFigureModifier();
+    }
+
+    return;
+}
+
+/**
+ * 図形セグメント 弓形セグメントを描画
+ * @param {int} segLen 
+ * @param {0x0000[]} tadSeg 
+ * @returns 
+ */
+function tsFigChordDraw(segLen, tadSeg) {
+    if (segLen < Number(0x0018)) {
+        return;
+    }
+    
+    console.debug(`Chord attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}, angle=${IntToHex((tadSeg[4]),4).replace('0x','')}`);
+    console.debug(`Chord frame: left=${IntToHex((tadSeg[5]),4).replace('0x','')}, top=${IntToHex((tadSeg[6]),4).replace('0x','')}, right=${IntToHex((tadSeg[7]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[8]),4).replace('0x','')}`);
+    console.debug(`Chord points: startX=${IntToHex((tadSeg[9]),4).replace('0x','')}, startY=${IntToHex((tadSeg[10]),4).replace('0x','')}, endX=${IntToHex((tadSeg[11]),4).replace('0x','')}, endY=${IntToHex((tadSeg[12]),4).replace('0x','')}`);
+
+    const l_atr = Number(tadSeg[1]);
+    const l_pat = Number(tadSeg[2]);
+    const f_pat = Number(tadSeg[3]);
+    const angle = Number(uh2h(tadSeg[4]));
+    
+    // フレーム座標（half-openなので right と bottom に +1）
+    const frameLeft = Number(uh2h(tadSeg[5]));
+    const frameTop = Number(uh2h(tadSeg[6]));
+    const frameRight = Number(uh2h(tadSeg[7])) + 1;
+    const frameBottom = Number(uh2h(tadSeg[8])) + 1;
+    
+    // 開始・終了点の指定位置
+    const startx = Number(uh2h(tadSeg[9]));
+    const starty = Number(uh2h(tadSeg[10]));
+    const endx = Number(uh2h(tadSeg[11]));
+    const endy = Number(uh2h(tadSeg[12]));
+    
+    const radiusX = (frameRight - frameLeft) / 2;
+    const radiusY = (frameBottom - frameTop) / 2;
+    const frameCenterX = frameLeft + radiusX;
+    const frameCenterY = frameTop + radiusY;
+    
+    // 楕円の中心とstart/endを結ぶ直線が楕円と交わる点を計算
+    // 開始点の角度を計算
+    const startAngleRaw = Math.atan2(starty - frameCenterY, startx - frameCenterX);
+    // 楕円上の実際の開始点を計算
+    const startXOnEllipse = frameCenterX + radiusX * Math.cos(startAngleRaw);
+    const startYOnEllipse = frameCenterY + radiusY * Math.sin(startAngleRaw);
+    
+    // 終了点の角度を計算
+    const endAngleRaw = Math.atan2(endy - frameCenterY, endx - frameCenterX);
+    // 楕円上の実際の終了点を計算
+    const endXOnEllipse = frameCenterX + radiusX * Math.cos(endAngleRaw);
+    const endYOnEllipse = frameCenterY + radiusY * Math.sin(endAngleRaw);
+    
+    // 楕円座標系での角度を計算
+    const startAngle = Math.atan2((startYOnEllipse - frameCenterY) / radiusY, (startXOnEllipse - frameCenterX) / radiusX);
+    const endAngle = Math.atan2((endYOnEllipse - frameCenterY) / radiusY, (endXOnEllipse - frameCenterX) / radiusX);
+    
+    const radianAngle = angle * Math.PI / 180;
+    
+    console.debug(`Chord center: (${frameCenterX}, ${frameCenterY}), radius: (${radiusX}, ${radiusY})`);
+    console.debug(`Start angle: ${startAngle}, End angle: ${endAngle}`);
+    console.debug(`Start point on ellipse: (${startXOnEllipse}, ${startYOnEllipse}), End point: (${endXOnEllipse}, ${endYOnEllipse})`);
+
+    ctx.save(); // 現在の状態を保存
+
+    // フレーム矩形でクリッピング
+    ctx.beginPath();
+    ctx.rect(frameLeft, frameTop, frameRight - frameLeft, frameBottom - frameTop);
+    ctx.clip();
+
+    // 線属性を適用
+    const oldLineSettings = applyLineAttribute(l_atr);
+    const oldColors = setColorPattern(l_pat, f_pat);
+
+    ctx.beginPath();
+    
+    // 開始点から終了点へ楕円弧（時計回り）
+    ctx.ellipse(frameCenterX, frameCenterY, radiusX, radiusY, radianAngle, startAngle, endAngle, false);
+    
+    // 終了点から開始点へ直線で結ぶ（弓形を完成させる）
+    ctx.closePath();
+    
+    // 塗りつぶしを先に実行
     if (ctx.fillStyle === oldColors.fillStyle || !oldColors.fillStyle) {
         ctx.fillStyle = drawFillColor;
     }
@@ -4206,9 +5414,31 @@ function tsFigPolylineDraw(segLen, tadSeg) {
     
     // 色設定を復元
     drawLineColor = oldLineColor;
-    
+
     // 線属性を復元
     restoreLineAttribute(oldLineSettings);
+
+    // 矢印の描画
+    if (figureModifierState.hasArrow && np >= 2) {
+        const firstPoint = polyLines[0];
+        const lastPoint = polyLines[polyLines.length - 1];
+
+        if (figureModifierState.startArrow && polyLines.length >= 2) {
+            // 開始点から次の点への角度を計算
+            const secondPoint = polyLines[1];
+            const angle = Math.atan2(secondPoint.y - firstPoint.y, secondPoint.x - firstPoint.x);
+            drawArrow(firstPoint.x, firstPoint.y, angle);
+        }
+
+        if (figureModifierState.endArrow && polyLines.length >= 2) {
+            // 終了点から前の点への角度を計算
+            const prevPoint = polyLines[polyLines.length - 2];
+            const angle = Math.atan2(lastPoint.y - prevPoint.y, lastPoint.x - prevPoint.x);
+            drawArrow(lastPoint.x, lastPoint.y, angle);
+        }
+
+        resetFigureModifier();
+    }
 }
 
 /**
@@ -4455,6 +5685,7 @@ function tsFigDraw(segLen, tadSeg) {
         tsFigEllipseDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x03)) {
         console.debug("扇形セグメント");
+        tsFigArcDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x04)) {
         console.debug("弓形セグメント");
     } else if (UB_SubID === Number(0x05)) {
@@ -4469,7 +5700,6 @@ function tsFigDraw(segLen, tadSeg) {
     } else if (UB_SubID === Number(0x08)) {
         console.debug("折れ線セグメント");
         tsFigPolylineDraw(segLen, tadSeg);
-    // TODO :未対応
     } else if (UB_SubID === Number(0x09)) {
         console.debug("曲線セグメント");
         tsFigCurveDraw(segLen, tadSeg);
@@ -4811,6 +6041,7 @@ function initTAD(x = 0, y = 0) {
     // フォント関係を初期化（デフォルト値に設定）
     textFontSize = 9.6;
     textFontSet = textFontSize + 'px serif';
+    currentFontFamily = 'serif';  // フォントファミリーを初期化
     textFontStyle = 'normal';
     textFontWeight = 400;
     textFontStretch = 'normal';
@@ -5564,8 +6795,10 @@ function tadPerse(segID, segLen, tadSeg, nowPos) {
         tadTextStyleFusen(segLen, tadSeg);
     } else if (segID === Number(TS_TVAR)) {
         console.debug('変数参照指定付箋');
+        tsVariableReference(segLen, tadSeg);
     } else if (segID === Number(TS_TMEMO)) {
         console.debug('文章メモ指定付箋');
+        tsDocumentMemo(segLen, tadSeg);
     } else if (segID === Number(TS_TAPPL)) {
         console.debug('文章アプリケーション指定付箋');
     } else if (segID === Number(TS_FPRIM)) {
@@ -5581,10 +6814,12 @@ function tadPerse(segID, segLen, tadSeg, nowPos) {
         console.debug('マクロ定義/参照セグメント');
     } else if (segID === Number(TS_FATTR)) {
         console.debug('図形修飾セグメント');
+        tsFigureModifier(segLen, tadSeg);
     } else if (segID === Number(TS_FPAGE)) {
         console.debug('図形ページ割り付け指定付箋');
     } else if (segID === Number(TS_FMEMO)) {
         console.debug('図形メモ指定付箋');
+        tsFigureMemo(segLen, tadSeg);
     } else if (segID === Number(TS_FAPPL)) {
         console.debug('図形アプリケーション指定付箋');
     }
@@ -5968,7 +7203,20 @@ function tadRawArray(raw){
                     canvas = window.canvas;
                     console.debug('Emergency repair attempted - ctx:', !!ctx, 'canvas:', !!canvas);
                 }
-                drawText(ctx, canvas, char, textFontSize,  textCharPoint[textNest-1][0],textCharPoint[textNest-1][1] ,textCharPoint[textNest-1][2], textSpacingPitch, lineSpacingPitch, 0);
+
+                // 次の文字を先読み（行頭禁則処理のため）
+                let nextChar = null;
+                const nextIndex = i + 2;
+                if (nextIndex < data_view.byteLength) {
+                    try {
+                        const nextRaw8Plus1 = data_view.getUint16(nextIndex, true);
+                        nextChar = charTronCode(nextRaw8Plus1);
+                    } catch (e) {
+                        // 先読みに失敗した場合はnullのまま
+                    }
+                }
+
+                drawText(ctx, canvas, char, textFontSize,  textCharPoint[textNest-1][0],textCharPoint[textNest-1][1] ,textCharPoint[textNest-1][2], textSpacingPitch, lineSpacingPitch, 0, nextChar);
             }
         }
 
@@ -6389,6 +7637,382 @@ function updateScrollBars() {
  * @param {number} segLen セグメント長
  * @param {Array} tadSeg セグメントデータ
  */
+function tsRubyStartFusen(segLen, tadSeg) {
+    // ルビ開始指定付箋の処理
+    // attr = getLastUBinUH(tadSeg[0]) で属性を取得
+    const attr = getLastUBinUH(tadSeg[0]);
+
+    // attrのビット構成: UUUUxxxP
+    // P: ルビ配置側 (0: 行戻し側, 1: 行送り側)
+    const rubyPosition = attr & 0x01;
+
+    // ルビ文字列を取得（tadSeg[1]以降はTRONコード列）
+    let rubyText = '';
+    for (let i = 1; i < segLen && i < tadSeg.length; i++) {
+        const tronChar = charTronCode(tadSeg[i]);
+        if (tronChar) {
+            rubyText += tronChar;
+        }
+    }
+
+    // ルビ状態を更新
+    rubyState.active = true;
+    rubyState.rubyText = rubyText;
+    rubyState.position = rubyPosition;
+    rubyState.baseText = '';  // 被ルビ文字列をリセット
+
+    // 現在の描画位置を記録
+    // charX, charY はグローバルスコープで管理されていないため、
+    // ルビ開始時点では位置を記録できない
+    // ルビ終了時に描画位置から計算する必要がある
+    rubyState.startX = 0;  // 後で更新
+    rubyState.startY = 0;  // 後で更新
+
+    // ルビのフォントサイズを決定（暫定的に1/2に設定）
+    // TODO: 行送り間隔と文字数比率に基づいて1/2か1/3を選択
+    rubyState.fontSize = 0.5;
+
+    console.debug(`ルビ開始: text="${rubyText}", position=${rubyPosition}`);
+}
+
+function tsRubyEndFusen(segLen, tadSeg) {
+    // ルビ終了指定付箋の処理
+    if (!rubyState.active) {
+        console.warn("ルビ終了付箋が呼ばれましたが、ルビ開始されていません");
+        return;
+    }
+
+    // ルビを実際に描画
+    drawRuby();
+
+    // ルビ状態をリセット
+    rubyState.active = false;
+    rubyState.baseText = '';
+    rubyState.rubyText = '';
+
+    console.debug("ルビ終了");
+}
+
+function drawRuby() {
+    if (!rubyState.rubyText || !rubyState.baseText) {
+        return;
+    }
+
+    // 現在のフォント設定を保存
+    const savedFont = ctx.font;
+    const savedFillStyle = ctx.fillStyle;
+
+    // ルビ用のフォントサイズを設定
+    const rubyFontSize = textFontSize * rubyState.fontSize;
+    ctx.font = `${rubyFontSize}px ${currentFontFamily}`;
+
+    // 被ルビ文字列の長さを計算
+    let baseTextLength = 0;
+    if (textDirection === 1 || textDirection === 3) {
+        // 縦書き
+        baseTextLength = rubyState.endY - rubyState.startY;
+    } else {
+        // 横書き
+        baseTextLength = rubyState.endX - rubyState.startX;
+    }
+
+    // ルビ文字の配置間隔を計算（均等配置）
+    const rubyCharCount = rubyState.rubyText.length;
+    const rubySpacing = baseTextLength / rubyCharCount;
+
+    // ルビの描画位置を計算
+    let rubyX = rubyState.startX;
+    let rubyY = rubyState.startY;
+
+    // 縦書きの場合の位置調整
+    if (textDirection === 1 || textDirection === 3) {
+        // 縦書き
+        if (rubyState.position === 0) {
+            // 行戻し側（右側）- ルビサイズ分だけ離す
+            rubyX += textFontSize + rubyFontSize * 0.2;
+        } else {
+            // 行送り側（左側）
+            rubyX -= rubyFontSize + rubyFontSize * 0.2;
+        }
+
+        // ルビ文字を縦に均等配置
+        for (let i = 0; i < rubyCharCount; i++) {
+            const charY = rubyY + (i * rubySpacing) + (rubySpacing / 2);
+            ctx.fillText(rubyState.rubyText[i], rubyX, charY);
+        }
+    } else {
+        // 横書き
+        if (rubyState.position === 0) {
+            // 行戻し側（上側）- 被ルビ文字列の文字サイズ分だけ上にずらす
+            rubyY -= textFontSize;
+        } else {
+            // 行送り側（下側）
+            rubyY += textFontSize + rubyFontSize * 0.2;
+        }
+
+        // ルビ文字を横に均等配置
+        for (let i = 0; i < rubyCharCount; i++) {
+            const charX = rubyX + (i * rubySpacing) + (rubySpacing / 2) - (rubyFontSize / 2);
+            ctx.fillText(rubyState.rubyText[i], charX, rubyY);
+        }
+    }
+
+    // フォント設定を復元
+    ctx.font = savedFont;
+    ctx.fillStyle = savedFillStyle;
+}
+
+function tsLineStartProhibitionFusen(segLen, tadSeg) {
+    // 行頭禁則指定付箋の処理
+    // attr = getLastUBinUH(tadSeg[0]) で属性を取得
+    const attr = getLastUBinUH(tadSeg[0]);
+
+    // attrのビット構成: xxxLKKKK
+    // L: 禁則レベル (ビット4)
+    // K: 禁則方法 (ビット0-3)
+    const prohibitionLevel = (attr >> 4) & 0x01;  // L: 0=一重禁則、1=多重禁則
+    const prohibitionMethod = attr & 0x0F;        // K: 禁則方法
+
+    // 禁則対象文字列を取得（tadSeg[1]以降はTRONコード列）
+    let prohibitionChars = [];
+    for (let i = 1; i < segLen && i < tadSeg.length; i++) {
+        const tronChar = charTronCode(tadSeg[i]);
+        if (tronChar) {
+            prohibitionChars.push(tronChar);
+        }
+    }
+
+    // 行頭禁則状態を更新
+    if (prohibitionMethod === 0 || prohibitionChars.length === 0) {
+        // 禁則無し、または禁則文字が空の場合
+        lineStartProhibitionState.active = false;
+        lineStartProhibitionState.method = 0;
+        lineStartProhibitionState.chars = [];
+    } else {
+        lineStartProhibitionState.active = true;
+        lineStartProhibitionState.level = prohibitionLevel;
+        lineStartProhibitionState.method = prohibitionMethod;
+        lineStartProhibitionState.chars = prohibitionChars;
+    }
+
+    console.debug(`行頭禁則設定: level=${prohibitionLevel}, method=${prohibitionMethod}, chars="${prohibitionChars.join('')}"`);
+}
+
+function checkLineStartProhibition(char) {
+    // 行頭禁則文字かどうかをチェック
+    if (!lineStartProhibitionState.active || lineStartProhibitionState.chars.length === 0) {
+        return false;
+    }
+    return lineStartProhibitionState.chars.includes(char);
+}
+
+function processLineStartProhibition(char, lineStartFlag) {
+    // 行頭禁則処理を実行
+    if (!lineStartProhibitionState.active || !lineStartFlag) {
+        return { shouldProcess: false, action: 'none' };
+    }
+
+    // 禁則文字かどうかをチェック
+    const isProhibited = checkLineStartProhibition(char);
+
+    if (!isProhibited) {
+        return { shouldProcess: false, action: 'none' };
+    }
+
+    // 禁則処理方法に応じた処理
+    switch (lineStartProhibitionState.method) {
+        case 1: // 追い出し禁則
+            // 前の行末文字を行頭に取り込む
+            return { shouldProcess: true, action: 'push_out' };
+        case 2: // 追い込み禁則
+            // 禁則文字を前行の行末に追い込む
+            return { shouldProcess: true, action: 'pull_in' };
+        default:
+            return { shouldProcess: false, action: 'none' };
+    }
+}
+
+function tsLineEndProhibitionFusen(segLen, tadSeg) {
+    // 行末禁則指定付箋の処理
+    // attr = getLastUBinUH(tadSeg[0]) で属性を取得
+    const attr = getLastUBinUH(tadSeg[0]);
+
+    // attrのビット構成: xxxLKKKK
+    // L: 禁則レベル (ビット4)
+    // K: 禁則方法 (ビット0-3)
+    const prohibitionLevel = (attr >> 4) & 0x01;  // L: 0=一重禁則、1=多重禁則
+    const prohibitionMethod = attr & 0x0F;        // K: 禁則方法
+
+    // 禁則対象文字列を取得（tadSeg[1]以降はTRONコード列）
+    let prohibitionChars = [];
+    for (let i = 1; i < segLen && i < tadSeg.length; i++) {
+        const tronChar = charTronCode(tadSeg[i]);
+        if (tronChar) {
+            prohibitionChars.push(tronChar);
+        }
+    }
+
+    // 行末禁則状態を更新
+    if (prohibitionMethod === 0 || prohibitionChars.length === 0) {
+        // 禁則無し、または禁則文字が空の場合
+        lineEndProhibitionState.active = false;
+        lineEndProhibitionState.method = 0;
+        lineEndProhibitionState.chars = [];
+    } else {
+        lineEndProhibitionState.active = true;
+        lineEndProhibitionState.level = prohibitionLevel;
+        lineEndProhibitionState.method = prohibitionMethod;
+        lineEndProhibitionState.chars = prohibitionChars;
+    }
+
+    console.debug(`行末禁則設定: level=${prohibitionLevel}, method=${prohibitionMethod}, chars="${prohibitionChars.join('')}"`);
+}
+
+function checkLineEndProhibition(char) {
+    // 行末禁則文字かどうかをチェック
+    if (!lineEndProhibitionState.active || lineEndProhibitionState.chars.length === 0) {
+        return { prohibited: false };
+    }
+    const prohibited = lineEndProhibitionState.chars.includes(char);
+    return {
+        prohibited: prohibited,
+        method: lineEndProhibitionState.method,
+        level: lineEndProhibitionState.level
+    };
+}
+
+function checkLineStartProhibition(char) {
+    // 行頭禁則文字かどうかをチェック
+    if (!lineStartProhibitionState.active || lineStartProhibitionState.chars.length === 0) {
+        return { prohibited: false };
+    }
+    const prohibited = lineStartProhibitionState.chars.includes(char);
+    return {
+        prohibited: prohibited,
+        method: lineStartProhibitionState.method,
+        level: lineStartProhibitionState.level
+    };
+}
+
+function processLineEndProhibition(char, nextChar, lineEndFlag) {
+    // 行末禁則処理を実行
+    if (!lineEndProhibitionState.active || !lineEndFlag) {
+        return { shouldProcess: false, action: 'none' };
+    }
+
+    // 禁則文字かどうかをチェック
+    const isProhibited = checkLineEndProhibition(char);
+
+    if (!isProhibited) {
+        return { shouldProcess: false, action: 'none' };
+    }
+
+    // 多重禁則のチェック（レベル1の場合、連続する禁則文字をすべて処理）
+    let prohibitedCount = 1;
+    if (lineEndProhibitionState.level === 1 && nextChar) {
+        // 多重禁則: 次の文字も禁則文字かチェック
+        if (checkLineEndProhibition(nextChar)) {
+            prohibitedCount++;
+        }
+    }
+
+    // 禁則処理方法に応じた処理
+    switch (lineEndProhibitionState.method) {
+        case 1: // 追い出し禁則
+            // 禁則文字を次の行の行頭に追い出す
+            return { shouldProcess: true, action: 'push_out', count: prohibitedCount };
+        case 2: // 追い込み禁則
+            // 次行の行頭文字を前行の行末に追い込む
+            return { shouldProcess: true, action: 'pull_in', count: prohibitedCount };
+        default:
+            return { shouldProcess: false, action: 'none' };
+    }
+}
+
+/**
+ * SCALE型データをパースして実際の幅（ピクセル）を取得
+ * @param {number} scaleData SCALE型データ（UH形式）
+ * @param {number} baseFontSize 基準となるフォントサイズ
+ * @param {number} h_unit 水平方向の座標系単位
+ * @param {number} v_unit 垂直方向の座標系単位
+ * @param {boolean} isVertical 縦書きかどうか
+ * @returns {number} 実際の幅（ピクセル）
+ */
+function parseScaleWidth(scaleData, baseFontSize, h_unit, v_unit, isVertical = false) {
+    const msb = (scaleData >> 15) & 0x01;  // MSBを取得
+
+    if (msb === 1) {
+        // MSBが1の場合: 絶対指定 (1NNNNNNNNNNNNNNN)
+        const absoluteValue = scaleData & 0x7FFF;  // 下位15ビット
+        const unit = isVertical ? v_unit : h_unit;
+        return absoluteValue * unit;
+    } else {
+        // MSBが0の場合: 比率指定 (0AAAAAAAABBBBBBBB)
+        const A = (scaleData >> 8) & 0x7F;   // 上位7ビット (比率の分子)
+        const B = scaleData & 0xFF;          // 下位8ビット (比率の分母)
+
+        const denominator = B === 0 ? 1 : B;  // B=0の場合は比率1
+        const ratio = A / denominator;
+
+        // 基準値は文字サイズの縦方向のpx数
+        return baseFontSize * ratio;
+    }
+}
+
+/**
+ * 固定幅空白指定付箋を処理
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tsFixedWidthSpaceFusen(segLen, tadSeg) {
+    if (segLen < 1) {
+        console.debug("固定幅空白指定付箋: セグメント長が不正");
+        return;
+    }
+
+    const widthData = tadSeg[1];  // SCALE型の幅データ
+
+    // 現在の文章開始セグメントの座標系単位を取得（グローバル変数として仮定）
+    const h_unit = window.h_unit || 1;
+    const v_unit = window.v_unit || 1;
+    const isVertical = window.isVertical || false;
+
+    // SCALE型データをピクセル幅に変換
+    const spaceWidth = parseScaleWidth(widthData, textfontSize, h_unit, v_unit, isVertical);
+
+    console.debug(`固定幅空白指定付箋: width=${IntToHex(widthData, 4)}, calculated=${spaceWidth}px`);
+
+    // 行末までに収まらない場合は次行に追い出し
+    if (textWidth + spaceWidth > width) {
+        console.debug("固定幅空白: 行末に収まらないため次行に追い出し");
+
+        // 改行処理
+        textHeight += lineMaxHeight[textRow];
+        textRow++;
+        lineMaxHeight.push(linePitch);
+        textWidth = 0;
+        textColumn = 0;
+        currentLineOffset = 0;
+
+        if (tabRulerLineMoveFlag == true) {
+            console.debug("行頭移動処理");
+            for (let tabLoop = 0; tabLoop < tabRulerLinePoint; tabLoop++) {
+                textWidth += ctx.measureText(" ").width;
+                textColumn++;
+            }
+        }
+    }
+
+    // グローバルのwidthよりも長い場合は、行頭から行末まで一行のみ取る
+    const finalWidth = Math.min(spaceWidth, width);
+
+    // 空白を描画（視覚的には何も描画しないが、位置を進める）
+    textWidth += finalWidth;
+    textColumn += Math.ceil(finalWidth / ctx.measureText(" ").width);  // 概算の文字数
+
+    console.debug(`固定幅空白描画完了: width=${finalWidth}px, newTextWidth=${textWidth}`);
+}
+
 function tadSubscriptStart(segLen, tadSeg) {
     // デフォルトで2バイトデータ取得
     let dataOffset = 0;
@@ -6460,6 +8084,322 @@ function tadSubscriptEnd(segLen, tadSeg) {
 }
 
 /**
+ * 変数参照指定付箋を処理
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tsVariableReference(segLen, tadSeg) {
+    if (segLen < 1) {
+        console.debug("変数参照指定付箋: セグメント長が不正");
+        return;
+    }
+
+    const varId = tadSeg[1]; // 変数ID
+    console.debug(`変数参照指定付箋: varId=${varId}`);
+
+    const variableValue = getVariableValue(varId);
+    if (variableValue !== null) {
+        // 変数値を文字列として描画
+        for (let i = 0; i < variableValue.length; i++) {
+            const char = variableValue.charAt(i);
+            if (textNest > 0) {
+                // drawText呼び出し前の最終チェック
+                if (!ctx || !canvas) {
+                    ctx = window.ctx;
+                    canvas = window.canvas;
+                }
+
+                // 次の文字を先読み
+                let nextChar = null;
+                if (i + 1 < variableValue.length) {
+                    nextChar = variableValue.charAt(i + 1);
+                }
+
+                drawText(ctx, canvas, char, textFontSize, textCharPoint[textNest-1][0], textCharPoint[textNest-1][1], textCharPoint[textNest-1][2], textSpacingPitch, lineSpacingPitch, 0, nextChar);
+            }
+        }
+    }
+}
+
+/**
+ * 変数IDに対応する値を取得
+ * @param {number} varId 変数ID
+ * @returns {string|null} 変数値
+ */
+function getVariableValue(varId) {
+    const now = new Date();
+
+    switch (varId) {
+        case 0: // 自身の実身名
+            return documentFileName || 'unnamed';
+
+        case 100: // 年（西暦下二桁）
+            return String(now.getFullYear()).slice(-2);
+
+        case 101: // 元号（簡易実装）
+            const year = now.getFullYear();
+            if (year >= 2019) return '令和';
+            else if (year >= 1989) return '平成';
+            else if (year >= 1926) return '昭和';
+            else return '大正';
+
+        case 110: // 月（1桁）
+            return String(now.getMonth() + 1);
+
+        case 111: // 月（2桁）
+            return String(now.getMonth() + 1).padStart(2, '0');
+
+        case 112: // 月（英小文字3文字）
+            const monthsLower = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                               'jul', 'aug', 'sep', 'oct', 'nov', 'dek'];
+            return monthsLower[now.getMonth()];
+
+        case 113: // 月（英大文字3文字）
+            const monthsUpper = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+                               'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEK'];
+            return monthsUpper[now.getMonth()];
+
+        case 120: // 日（1桁）
+            return String(now.getDate());
+
+        case 121: // 日（2桁）
+            return String(now.getDate()).padStart(2, '0');
+
+        case 200: // 現在ページ番号（数字）
+            return String(currentPageNumber);
+
+        case 201: // 現在ページ番号（小文字ローマ数字）
+            return toRomanNumeral(currentPageNumber, false);
+
+        case 202: // 現在ページ番号（大文字ローマ数字）
+            return toRomanNumeral(currentPageNumber, true);
+
+        case 250: // 全体ページ番号（数字）
+            return String(totalPageNumber);
+
+        case 251: // 全体ページ番号（小文字ローマ数字）
+            return toRomanNumeral(totalPageNumber, false);
+
+        case 252: // 全体ページ番号（大文字ローマ数字）
+            return toRomanNumeral(totalPageNumber, true);
+
+        default:
+            // ユーザー定義変数
+            return variableReferences.get(varId) || null;
+    }
+}
+
+/**
+ * 数字をローマ数字に変換
+ * @param {number} num 数字
+ * @param {boolean} uppercase 大文字かどうか
+ * @returns {string} ローマ数字
+ */
+function toRomanNumeral(num, uppercase = true) {
+    const values = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1];
+    const numerals = uppercase
+        ? ['M', 'CM', 'D', 'CD', 'C', 'XC', 'L', 'XL', 'X', 'IX', 'V', 'IV', 'I']
+        : ['m', 'cm', 'd', 'cd', 'c', 'xc', 'l', 'xl', 'x', 'ix', 'v', 'iv', 'i'];
+
+    let result = '';
+    for (let i = 0; i < values.length; i++) {
+        while (num >= values[i]) {
+            result += numerals[i];
+            num -= values[i];
+        }
+    }
+    return result;
+}
+
+/**
+ * 文章メモ指定付箋を処理
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tsDocumentMemo(segLen, tadSeg) {
+    if (segLen < 1) {
+        console.debug("文章メモ指定付箋: セグメント長が不正");
+        return;
+    }
+
+    // tadSeg[1]以降はTRONコード列
+    // segLenから読む範囲を決定（セグメント長 - ヘッダー部分）
+    const memoDataLength = segLen - 1;
+    let memoText = '';
+
+    // TRONコード列をテキストに変換
+    for (let i = 1; i <= memoDataLength && i < tadSeg.length; i++) {
+        const tronChar = charTronCode(tadSeg[i]);
+        if (tronChar) {
+            memoText += tronChar;
+        }
+    }
+
+    // メモを配列に追加
+    documentMemos.push(memoText);
+
+    console.debug(`文章メモ追加: "${memoText}" (合計 ${documentMemos.length} 個)`);
+}
+
+/**
+ * 文章メモを取得
+ * @returns {Array} 文章メモの配列
+ */
+function getDocumentMemos() {
+    return [...documentMemos]; // コピーを返す
+}
+
+/**
+ * 文章メモをクリア
+ */
+function clearDocumentMemos() {
+    documentMemos = [];
+    console.debug("文章メモをクリアしました");
+}
+
+/**
+ * 指定したインデックスの文章メモを取得
+ * @param {number} index インデックス（0から開始）
+ * @returns {string|null} メモテキストまたはnull
+ */
+function getDocumentMemo(index) {
+    if (index >= 0 && index < documentMemos.length) {
+        return documentMemos[index];
+    }
+    return null;
+}
+
+/**
+ * 図形メモ指定付箋を処理
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tsFigureMemo(segLen, tadSeg) {
+    if (segLen < 1) {
+        console.debug("図形メモ指定付箋: セグメント長が不正");
+        return;
+    }
+
+    // tadSeg[1]以降はTRONコード列
+    // segLenから読む範囲を決定（セグメント長 - ヘッダー部分）
+    const memoDataLength = segLen - 1;
+    let memoText = '';
+
+    // TRONコード列をテキストに変換
+    for (let i = 1; i <= memoDataLength && i < tadSeg.length; i++) {
+        const tronChar = charTronCode(tadSeg[i]);
+        if (tronChar) {
+            memoText += tronChar;
+        }
+    }
+
+    // 図形メモを配列に追加
+    figureMemos.push(memoText);
+
+    console.debug(`図形メモ追加: "${memoText}" (合計 ${figureMemos.length} 個)`);
+}
+
+/**
+ * 図形メモを取得
+ * @returns {Array} 図形メモの配列
+ */
+function getFigureMemos() {
+    return [...figureMemos]; // コピーを返す
+}
+
+/**
+ * 図形メモをクリア
+ */
+function clearFigureMemos() {
+    figureMemos = [];
+    console.debug("図形メモをクリアしました");
+}
+
+/**
+ * 指定したインデックスの図形メモを取得
+ * @param {number} index インデックス（0から開始）
+ * @returns {string|null} メモテキストまたはnull
+ */
+function getFigureMemo(index) {
+    if (index >= 0 && index < figureMemos.length) {
+        return figureMemos[index];
+    }
+    return null;
+}
+
+/**
+ * 図形要素修飾セグメントを処理
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tsFigureModifier(segLen, tadSeg) {
+    if (segLen < 1) {
+        console.debug("図形要素修飾セグメント: セグメント長が不正");
+        return;
+    }
+
+    const arrow = tadSeg[1]; // UHのビット列
+
+    // ビット解析: xxxxxxxxxxxxxxES
+    // S: 開始点に矢印（ビット0）
+    // E: 終了点に矢印（ビット1）
+    const startArrow = (arrow & 0x01) !== 0;  // ビット0
+    const endArrow = (arrow & 0x02) !== 0;    // ビット1
+
+    // 図形修飾状態を設定
+    figureModifierState.hasArrow = startArrow || endArrow;
+    figureModifierState.startArrow = startArrow;
+    figureModifierState.endArrow = endArrow;
+
+    console.debug(`図形要素修飾セグメント: arrow=0x${arrow.toString(16)}, startArrow=${startArrow}, endArrow=${endArrow}`);
+}
+
+/**
+ * 矢印を描画
+ * @param {CanvasRenderingContext2D} ctx Canvas描画コンテキスト
+ * @param {number} x 矢印の先端X座標
+ * @param {number} y 矢印の先端Y座標
+ * @param {number} angle 矢印の角度（ラジアン）
+ * @param {number} size 矢印のサイズ
+ */
+function drawArrow(ctx, x, y, angle, size = 10) {
+    const arrowLength = size;
+    const arrowAngle = Math.PI / 6; // 30度
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+
+    // 矢印の形を描画
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-arrowLength * Math.cos(arrowAngle), -arrowLength * Math.sin(arrowAngle));
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-arrowLength * Math.cos(arrowAngle), arrowLength * Math.sin(arrowAngle));
+    ctx.stroke();
+
+    ctx.restore();
+}
+
+/**
+ * 図形修飾状態をリセット
+ */
+function resetFigureModifier() {
+    figureModifierState.hasArrow = false;
+    figureModifierState.startArrow = false;
+    figureModifierState.endArrow = false;
+}
+
+/**
+ * 直線に矢印を描画
+ * @param {CanvasRenderingContext2D} ctx Canvas描画コンテキスト
+ * @param {number} x1 開始点X座標
+ * @param {number} y1 開始点Y座標
+ * @param {number} x2 終了点X座標
+ * @param {number} y2 終了点Y座標
+ */
+
+/**
  * TAD保存処理
  * TODO: 未実装
  * @returns null
@@ -6479,12 +8419,34 @@ if (typeof window !== 'undefined') {
     window.onDragOver = onDragOver;
     window.save = save;
     window.tadSave = save; // Alias for save function
-    
+
+    // 文章メモ関数をエクスポート
+    window.getDocumentMemos = getDocumentMemos;
+    window.clearDocumentMemos = clearDocumentMemos;
+    window.getDocumentMemo = getDocumentMemo;
+
+    // 図形メモ関数をエクスポート
+    window.getFigureMemos = getFigureMemos;
+    window.clearFigureMemos = clearFigureMemos;
+    window.getFigureMemo = getFigureMemo;
+
+    // 図形修飾関数をエクスポート
+    window.resetFigureModifier = resetFigureModifier;
+    window.drawArrow = drawArrow;
+
     console.debug('TAD.js functions exported to global scope:', {
         onAddFile: typeof window.onAddFile,
-        onDrop: typeof window.onDrop, 
+        onDrop: typeof window.onDrop,
         onDragOver: typeof window.onDragOver,
         save: typeof window.save,
-        tadSave: typeof window.tadSave
+        tadSave: typeof window.tadSave,
+        getDocumentMemos: typeof window.getDocumentMemos,
+        clearDocumentMemos: typeof window.clearDocumentMemos,
+        getDocumentMemo: typeof window.getDocumentMemo,
+        getFigureMemos: typeof window.getFigureMemos,
+        clearFigureMemos: typeof window.clearFigureMemos,
+        getFigureMemo: typeof window.getFigureMemo,
+        resetFigureModifier: typeof window.resetFigureModifier,
+        drawArrow: typeof window.drawArrow
     });
 }
