@@ -60,6 +60,13 @@ let startTadSegment = false;
 let startByImageSegment = false;
 let DoNotNextLineFlag = false; // 改行禁止フラグ
 
+// 固定幅空白指定付箋用の状態
+let fixedWidthSpaceState = {
+    active: false,
+    width: 0,
+    scaleData: 0
+};
+
 // セグメントタイプ管理用
 const SEGMENT_TYPE = {
     NONE: 'none',
@@ -126,9 +133,7 @@ let lineStartProhibitionState = {
     active: false,           // 行頭禁則処理が有効かどうか
     level: 0,               // 禁則レベル（0: 一重禁則、1: 多重禁則）
     method: 0,              // 禁則方法（0: 無し、1: 追い出し、2: 追い込み）
-    chars: [],              // 禁則対象文字のリスト
-    currentLineChars: [],   // 現在の行の文字列（禁則処理用）
-    pendingChars: []        // 次の行に送る文字列
+    chars: []              // 禁則対象文字のリスト
 };
 
 // 行末禁則関連の状態変数
@@ -136,9 +141,7 @@ let lineEndProhibitionState = {
     active: false,           // 行末禁則処理が有効かどうか
     level: 0,               // 禁則レベル（0: 一重禁則、1: 多重禁則）
     method: 0,              // 禁則方法（0: 無し、1: 追い出し、2: 追い込み）
-    chars: [],              // 禁則対象文字のリスト
-    currentLineChars: [],   // 現在の行の文字列（禁則処理用）
-    nextLineChars: []       // 次の行の文字列（追い込み処理用）
+    chars: []              // 禁則対象文字のリスト
 };
 let textFontStyle = 'normal';
 let textFontWeight = 400;
@@ -1704,7 +1707,7 @@ function tadDecodeStart(currentFileIndex) {
  */
 function pass1() {
     for (let i = 0; i < GHEAD.nfiles; i++) {
-        const dirName = i.toString();
+        //const dirName = i.toString();
         // if (!fs.existsSync(dirName)) {
         //     fs.mkdirSync(dirName, { recursive: true });
         // }
@@ -1791,8 +1794,8 @@ function parseExecFuncRecord(recordData, fileIndex) {
  */
 function pass2(LHEAD) {
     // Create file info
-    const finfoPath = 'file.inf';
-    let finfoContent = 'No: f_type, name\\n';
+    //const finfoPath = 'file.inf';
+    //let finfoContent = 'No: f_type, name\\n';
     
     // Set BPK processing flag if multiple files
     if (GHEAD.nfiles > 1) {
@@ -1813,12 +1816,12 @@ function pass2(LHEAD) {
     for (let i = 0; i < GHEAD.nfiles; i++) {
         console.debug(`Processing file ${i}, GHEAD.nfiles=${GHEAD.nfiles}`);
         const lhead = LHEAD[i];
-        const fileName = lhead.name;
-        finfoContent += `${i}: 0${lhead.f_type.toString(8)}, ${fileName}\\n`;
+        //const fileName = lhead.name;
+        //finfoContent += `${i}: 0${lhead.f_type.toString(8)}, ${fileName}\\n`;
         
         // Create record info
-        const recInfoPath = `${i}/rec.inf`;
-        let recInfoContent = 'No: type, subtype\\n';
+        //const recInfoPath = `${i}/rec.inf`;
+        //let recInfoContent = 'No: type, subtype\\n';
         
         // Process all records
         for (let j = 0; j < lhead.f_nrec; j++) {
@@ -1833,10 +1836,10 @@ function pass2(LHEAD) {
             rhead.size = Number(uh2uw([view.getUint16(6, true), view.getUint16(4, true)])[0])
             console.debug(`Record Head: type=${rhead.type}, subtype=${rhead.subtype}, size=${rhead.size}`);
             
-            recInfoContent += `${j}: ${rhead.type}, ${rhead.subtype}\\n`;
+            //recInfoContent += `${j}: ${rhead.type}, ${rhead.subtype}\\n`;
             
             // Create output file
-            const recFileName = `${i}/${j}`;
+            //const recFileName = `${i}/${j}`;
             let recordData = new Uint8Array(rhead.size);
             
             if (rhead.type === 0) {
@@ -2070,6 +2073,55 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
 
     const lineHeight = textfontSize * linePitch;
 
+    // 固定幅空白の処理
+    if (fixedWidthSpaceState.active) {
+        // 現在の文章開始セグメントの座標系単位を取得
+        const h_unit = textCharPoint[textNest-1][5] || 1;
+        const v_unit = textCharPoint[textNest-1][6] || 1;
+        const isVertical = (textCharPoint[textNest-1][7] === 1) || false;
+
+        // SCALE型データをピクセル幅に変換
+        const spaceWidth = parseScaleWidth(fixedWidthSpaceState.scaleData, textfontSize, h_unit, v_unit, isVertical);
+        fixedWidthSpaceState.width = spaceWidth;
+
+        console.debug(`固定幅空白処理: width=${IntToHex(fixedWidthSpaceState.scaleData, 4)}, calculated=${spaceWidth}px`);
+
+        // 行末までに収まらない場合は次行に追い出し
+        if (textWidth + spaceWidth > width) {
+            console.debug("固定幅空白: 行末に収まらないため次行に追い出し");
+
+            // 改行処理
+            textHeight += lineMaxHeight[textRow];
+            textRow++;
+            lineMaxHeight.push(linePitch);
+            textWidth = 0;
+            textColumn = 0;
+            currentLineOffset = 0;
+
+            if (tabRulerLineMoveFlag == true) {
+                console.debug("行頭移動処理");
+                for (let tabLoop = 0; tabLoop < tabRulerLinePoint; tabLoop++) {
+                    textWidth += ctx.measureText("　").width;
+                    textColumn++;
+                }
+            }
+        }
+
+        // グローバルのwidthよりも長い場合は、行頭から行末まで一行のみ取る
+        const finalWidth = Math.min(spaceWidth, width);
+
+        // 空白を描画（視覚的には何も描画しないが、位置を進める）
+        textWidth += finalWidth;
+        textColumn += Math.ceil(finalWidth / ctx.measureText(" ").width);
+
+        console.debug(`固定幅空白描画完了: width=${finalWidth}px, newTextWidth=${textWidth}`);
+
+        // 固定幅空白状態をリセット
+        fixedWidthSpaceState.active = false;
+        fixedWidthSpaceState.width = 0;
+        fixedWidthSpaceState.scaleData = 0;
+    }
+
     if (lineMaxHeight.length == 0) {
         lineMaxHeight.push(lineHeight);
     }
@@ -2089,54 +2141,66 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
     ctx.textBaseline = "alphabetic";  // ベースライン基準に変更
     ctx.textAlign = "left"; // 常に左揃えで描画し、位置は手動計算
 
-    // 折り返し処理
-    if ((ctx.measureText(char).width + textWidth > width)) {
-        // 行頭禁則処理 - 行頭に来てはいけない文字をチェック
-        let shouldBreak = true;
-        if (lineStartProhibitionState.active && lineStartProhibitionState.chars.length > 0) {
-            const prohibitResult = checkLineStartProhibition(char);
-            if (prohibitResult.prohibited) {
-                console.debug(`行頭禁則検出: "${char}" は行頭に配置不可`);
-                if (lineStartProhibitionState.method === 2) {
-                    // 禁則方法2: 禁則文字を全行の行末に追い込む
-                    console.debug("行頭禁則:2 禁則文字を前行の行末に追い込む");
-                    shouldBreak = false;
-                }
-            }
-        }
 
-        // 行頭禁則処理 - 次の文字が行頭に来てはいけない文字かチェック（方法1のみ）
-        if (shouldBreak && nextChar && lineStartProhibitionState.active && lineStartProhibitionState.chars.length > 0) {
-            const prohibitResult = checkLineStartProhibition(nextChar);
-            if (prohibitResult.prohibited) {
-                console.debug(`行頭禁則検出: "${nextChar}" は行頭に配置不可`);
-                if (lineStartProhibitionState.method === 1) {
-                    // 禁則方法1: 前の行末文字を行頭に取り込む
-                    console.debug("行頭禁則:1 前の行末文字を行頭に取り込む");
-                    shouldBreak = true;
-                }
-                // 方法1は文字描画時に処理するため、ここでは何もしない
-            }
-        }
+    const currentCharWidth = ctx.measureText(char).width;
+    const WidthOver = (textWidth + currentCharWidth > width);
+    let shouldBreak = false;
 
-        // 通常の改行処理
-        if (shouldBreak && DoNotNextLineFlag == false) {
-            textHeight += lineMaxHeight[textRow];
-            textRow++;
-            lineMaxHeight.push(linePitch);
-            textWidth = 0;
-            textColumn = 0;
-            currentLineOffset = 0; // 行オフセットをリセット
-            if (tabRulerLineMoveFlag == true) {
-                console.debug("行頭移動処理");
-                for (let tabLoop = 0;tabLoop < tabRulerLinePoint; tabLoop++) {
-                    textWidth += ctx.measureText(" ").width;
-                    textColumn++;
-                }
+    // 次の文字で改行要になる場合
+    if (!WidthOver && (textWidth + currentCharWidth + ctx.measureText(nextChar).width > width)) {
+        console.debug(`次の文字 "${nextChar}" で改行`);
+        if (lineStartProhibitionState.active && lineStartProhibitionState.method === 1) {
+            // 行頭禁則方法1の処理: 次の文字が行頭で行頭禁則文字の場合、今の文字を行頭に追い出す
+            const isProhibitedNext = checkLineStartProhibition(nextChar);
+            if (isProhibitedNext && nextChar !== null) {
+                console.debug(`行頭禁則方法1: 次の文字 "${nextChar}" が禁則文字のため先に改行`);
+                shouldBreak = true;
+                DoNotNextLineFlag = false; // 次の文字で改行しないフラグをリセット
             }
         }
-        DoNotNextLineFlag = false;
+        if (lineEndProhibitionState.active && lineEndProhibitionState.method === 1) {
+            // 行末禁則方法1の処理: 今の文字が行末で行末禁則文字の場合、今の文字を行頭に追い出す
+            const isProhibitedCurrent = checkLineEndProhibition(char);
+            if (isProhibitedCurrent) {
+                console.debug(`行末禁則方法1: 現在の文字 "${char}" が禁則文字のため次に改行`);
+                shouldBreak = true;
+                DoNotNextLineFlag = false; // 次の文字で改行しないフラグをリセット
+            }
+        }
     }
+
+    // 折り返し処理
+    if (WidthOver) {
+        shouldBreak = true;
+        // 現在の文字が行頭禁則文字かチェック（方法2のみ）
+        const isProhibited = checkLineStartProhibition(char);
+        if (lineStartProhibitionState.active && lineStartProhibitionState.method === 2 && isProhibited) {
+            // 行末禁則方法2の処理: 今の文字が行末で行末禁則文字の場合、前行の行末に追い込む
+            console.debug(`行頭禁則:2 "${char}" が禁則文字のため前行の行末に追い込む`);
+            shouldBreak = false;
+            DoNotNextLineFlag = true; // 次の文字も改行しない
+        } else {
+            DoNotNextLineFlag = false; // 次の文字で改行しないフラグをリセット
+        }
+    }
+
+    // 通常の改行処理
+    if (shouldBreak && !DoNotNextLineFlag) {
+        textHeight += lineMaxHeight[textRow];
+        textRow++;
+        lineMaxHeight.push(linePitch);
+        textWidth = 0;
+        textColumn = 0;
+        currentLineOffset = 0; // 行オフセットをリセット
+        if (tabRulerLineMoveFlag == true) {
+            console.debug("行頭移動処理");
+            for (let tabLoop = 0;tabLoop < tabRulerLinePoint; tabLoop++) {
+                textWidth += ctx.measureText("　").width;
+                textColumn++;
+            }
+        }
+    }
+
     // 改段落処理
     if (char == String.fromCharCode(Number(TC_NL))) {
         textHeight += lineMaxHeight[textRow];
@@ -2158,7 +2222,7 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
         if (tabRulerLineMoveFlag == true) {
             console.debug("行頭移動処理");
             for (let tabLoop = 0;tabLoop < tabRulerLinePoint; tabLoop++) {
-                textWidth += ctx.measureText(" ").width;
+                textWidth += ctx.measureText("　").width;
                 textColumn++;
             }
         }
@@ -2180,68 +2244,19 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
     } else if (char == String.fromCharCode(Number(TC_TAB))) {
         console.debug("Tab処理");
         for (let tabLoop = 0;tabLoop < tabCharNum; tabLoop++) {
-            textWidth += ctx.measureText(" ").width;
+            textWidth += ctx.measureText("　").width;
             textColumn++;
             DoNotNextLineFlag = false;
         }
     } else {
-        // 行末禁則方法1の処理: 文字が禁則文字の場合改行
-        let shouldMoveToNextLine = false;
-        if (lineEndProhibitionState.active && lineEndProhibitionState.method === 1) {
-            const prohibitResult = checkLineEndProhibition(char);
-            if (prohibitResult.prohibited) {
-                // 現在の文字 + 次の文字の幅が行幅を超える場合のみ改行
-                const currentCharWidth = ctx.measureText(char).width;
-                const nextCharWidth = ctx.measureText(nextChar).width;
-                if (textWidth + currentCharWidth + nextCharWidth > width) {
-                    console.debug(`行末禁則方法1: 次の文字 "${nextChar}" が禁則文字で行幅を超えるため、現在の文字 "${char}" を改行して描画`);
-                    shouldMoveToNextLine = true;
-                }
-            }
-        } else if (lineStartProhibitionState.active && lineStartProhibitionState.method === 2) {
-            // 行頭禁則方法2の処理: 文字が禁則文字で次が行頭に来て良い文字の場合
-            const prohibitResult = checkLineStartProhibition(char);
-            if (prohibitResult.prohibited) {
-                // 現在の文字 + 次の文字の幅が行幅を超える場合でも改行しない
-                const currentCharWidth = ctx.measureText(char).width;
-                const nextCharWidth = ctx.measureText(nextChar).width;
-                if (textWidth + currentCharWidth + nextCharWidth > width) {
-                    console.debug(`行頭禁則方法2: 次の文字 "${char}" が禁則文字で行幅を超えるため、改行せずに描画`);
-                    shouldMoveToNextLine = false;
-                    DoNotNextLineFlag = true; // 次の文字で改行しないフラグをセット
-                }
-            }
-        }
-
-
-        // 改行処理
-        if (shouldMoveToNextLine) {
-            textHeight += lineMaxHeight[textRow];
-            textRow++;
-            lineMaxHeight.push(linePitch);
-            textWidth = 0;
-            textColumn = 0;
-            currentLineOffset = 0;
-            if (tabRulerLineMoveFlag == true) {
-                console.debug("行頭移動処理");
-                for (let tabLoop = 0; tabLoop < tabRulerLinePoint; tabLoop++) {
-                    textWidth += ctx.measureText(" ").width;
-                    textColumn++;
-                }
-            }
-            DoNotNextLineFlag = false;
-        }
-
-
-
-        let padding = 0;
-        // シンプルな位置計算
+        const padding = 0;
+        // 通常文字の描画処理
         const charY = startY + textHeight + textfontSize;  // シンプルな文字位置
         const charWidth = ctx.measureText(char).width;
         let charX = 0 + padding + startX + textWidth;
         
         // 左揃えの基本位置を計算（文字間隔の基準）
-        const baseCharX = startX + textWidth;
+        //const baseCharX = startX + textWidth;
         
         // 行の開始時（textWidth === 0）に行開始位置を決定
         if (textWidth === 0) {
@@ -2608,7 +2623,7 @@ function tsPageBreakConditionFusen(segLen, tadSeg) {
             }
             break;
             
-        case 0x02:
+        case 0x02: {
             // ページの残り描画域の長さがremain以下の場合は改ページ
             const remainValue = parseScaleValue(remain);
             const pageHeight = getPageHeight();
@@ -2622,6 +2637,7 @@ function tsPageBreakConditionFusen(segLen, tadSeg) {
                 console.debug(`Page break due to insufficient space (remaining: ${remainingSpace} <= ${remainValue})`);
             }
             break;
+        }
             
         default:
             console.warn(`Unknown page break condition: ${cond}`);
@@ -5688,6 +5704,7 @@ function tsFigDraw(segLen, tadSeg) {
         tsFigArcDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x04)) {
         console.debug("弓形セグメント");
+        tsFigChordDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x05)) {
         console.debug("多角形セグメント");
         tsFigPolygonDraw(segLen, tadSeg);
@@ -7206,10 +7223,9 @@ function tadRawArray(raw){
 
                 // 次の文字を先読み（行頭禁則処理のため）
                 let nextChar = null;
-                const nextIndex = i + 2;
-                if (nextIndex < data_view.byteLength) {
+                if (i < data_view.byteLength) {
                     try {
-                        const nextRaw8Plus1 = data_view.getUint16(nextIndex, true);
+                        const nextRaw8Plus1 = Number(data_view.getUint16(i, true));
                         nextChar = charTronCode(nextRaw8Plus1);
                     } catch (e) {
                         // 先読みに失敗した場合はnullのまま
@@ -7502,9 +7518,8 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
  */
 function onAddFile(event) {
     let files;
-    let reader = new FileReader();
-    let tadRecord = ''
-    let linkRecord = ''
+    const reader = new FileReader();
+    let tadRecord = '';
 
     // Reset flags for new file
     isProcessingBpk = false;
@@ -7806,31 +7821,7 @@ function checkLineStartProhibition(char) {
     return lineStartProhibitionState.chars.includes(char);
 }
 
-function processLineStartProhibition(char, lineStartFlag) {
-    // 行頭禁則処理を実行
-    if (!lineStartProhibitionState.active || !lineStartFlag) {
-        return { shouldProcess: false, action: 'none' };
-    }
 
-    // 禁則文字かどうかをチェック
-    const isProhibited = checkLineStartProhibition(char);
-
-    if (!isProhibited) {
-        return { shouldProcess: false, action: 'none' };
-    }
-
-    // 禁則処理方法に応じた処理
-    switch (lineStartProhibitionState.method) {
-        case 1: // 追い出し禁則
-            // 前の行末文字を行頭に取り込む
-            return { shouldProcess: true, action: 'push_out' };
-        case 2: // 追い込み禁則
-            // 禁則文字を前行の行末に追い込む
-            return { shouldProcess: true, action: 'pull_in' };
-        default:
-            return { shouldProcess: false, action: 'none' };
-    }
-}
 
 function tsLineEndProhibitionFusen(segLen, tadSeg) {
     // 行末禁則指定付箋の処理
@@ -7871,63 +7862,11 @@ function tsLineEndProhibitionFusen(segLen, tadSeg) {
 function checkLineEndProhibition(char) {
     // 行末禁則文字かどうかをチェック
     if (!lineEndProhibitionState.active || lineEndProhibitionState.chars.length === 0) {
-        return { prohibited: false };
+        return false;
     }
-    const prohibited = lineEndProhibitionState.chars.includes(char);
-    return {
-        prohibited: prohibited,
-        method: lineEndProhibitionState.method,
-        level: lineEndProhibitionState.level
-    };
+    return lineEndProhibitionState.chars.includes(char);
 }
 
-function checkLineStartProhibition(char) {
-    // 行頭禁則文字かどうかをチェック
-    if (!lineStartProhibitionState.active || lineStartProhibitionState.chars.length === 0) {
-        return { prohibited: false };
-    }
-    const prohibited = lineStartProhibitionState.chars.includes(char);
-    return {
-        prohibited: prohibited,
-        method: lineStartProhibitionState.method,
-        level: lineStartProhibitionState.level
-    };
-}
-
-function processLineEndProhibition(char, nextChar, lineEndFlag) {
-    // 行末禁則処理を実行
-    if (!lineEndProhibitionState.active || !lineEndFlag) {
-        return { shouldProcess: false, action: 'none' };
-    }
-
-    // 禁則文字かどうかをチェック
-    const isProhibited = checkLineEndProhibition(char);
-
-    if (!isProhibited) {
-        return { shouldProcess: false, action: 'none' };
-    }
-
-    // 多重禁則のチェック（レベル1の場合、連続する禁則文字をすべて処理）
-    let prohibitedCount = 1;
-    if (lineEndProhibitionState.level === 1 && nextChar) {
-        // 多重禁則: 次の文字も禁則文字かチェック
-        if (checkLineEndProhibition(nextChar)) {
-            prohibitedCount++;
-        }
-    }
-
-    // 禁則処理方法に応じた処理
-    switch (lineEndProhibitionState.method) {
-        case 1: // 追い出し禁則
-            // 禁則文字を次の行の行頭に追い出す
-            return { shouldProcess: true, action: 'push_out', count: prohibitedCount };
-        case 2: // 追い込み禁則
-            // 次行の行頭文字を前行の行末に追い込む
-            return { shouldProcess: true, action: 'pull_in', count: prohibitedCount };
-        default:
-            return { shouldProcess: false, action: 'none' };
-    }
-}
 
 /**
  * SCALE型データをパースして実際の幅（ピクセル）を取得
@@ -7972,45 +7911,12 @@ function tsFixedWidthSpaceFusen(segLen, tadSeg) {
 
     const widthData = tadSeg[1];  // SCALE型の幅データ
 
-    // 現在の文章開始セグメントの座標系単位を取得（グローバル変数として仮定）
-    const h_unit = window.h_unit || 1;
-    const v_unit = window.v_unit || 1;
-    const isVertical = window.isVertical || false;
+    // 固定幅空白状態を設定
+    fixedWidthSpaceState.active = true;
+    fixedWidthSpaceState.scaleData = widthData;
+    fixedWidthSpaceState.width = 0; // drawTextで計算される
 
-    // SCALE型データをピクセル幅に変換
-    const spaceWidth = parseScaleWidth(widthData, textfontSize, h_unit, v_unit, isVertical);
-
-    console.debug(`固定幅空白指定付箋: width=${IntToHex(widthData, 4)}, calculated=${spaceWidth}px`);
-
-    // 行末までに収まらない場合は次行に追い出し
-    if (textWidth + spaceWidth > width) {
-        console.debug("固定幅空白: 行末に収まらないため次行に追い出し");
-
-        // 改行処理
-        textHeight += lineMaxHeight[textRow];
-        textRow++;
-        lineMaxHeight.push(linePitch);
-        textWidth = 0;
-        textColumn = 0;
-        currentLineOffset = 0;
-
-        if (tabRulerLineMoveFlag == true) {
-            console.debug("行頭移動処理");
-            for (let tabLoop = 0; tabLoop < tabRulerLinePoint; tabLoop++) {
-                textWidth += ctx.measureText(" ").width;
-                textColumn++;
-            }
-        }
-    }
-
-    // グローバルのwidthよりも長い場合は、行頭から行末まで一行のみ取る
-    const finalWidth = Math.min(spaceWidth, width);
-
-    // 空白を描画（視覚的には何も描画しないが、位置を進める）
-    textWidth += finalWidth;
-    textColumn += Math.ceil(finalWidth / ctx.measureText(" ").width);  // 概算の文字数
-
-    console.debug(`固定幅空白描画完了: width=${finalWidth}px, newTextWidth=${textWidth}`);
+    console.debug(`固定幅空白指定付箋: 状態設定完了 scaleData=${IntToHex(widthData, 4)}`);
 }
 
 function tadSubscriptStart(segLen, tadSeg) {
@@ -8137,11 +8043,11 @@ function getVariableValue(varId) {
             return String(now.getFullYear()).slice(-2);
 
         case 101: // 元号（簡易実装）
-            const year = now.getFullYear();
+            { const year = now.getFullYear();
             if (year >= 2019) return '令和';
             else if (year >= 1989) return '平成';
             else if (year >= 1926) return '昭和';
-            else return '大正';
+            else return '大正'; }
 
         case 110: // 月（1桁）
             return String(now.getMonth() + 1);
@@ -8150,14 +8056,14 @@ function getVariableValue(varId) {
             return String(now.getMonth() + 1).padStart(2, '0');
 
         case 112: // 月（英小文字3文字）
-            const monthsLower = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+            { const monthsLower = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
                                'jul', 'aug', 'sep', 'oct', 'nov', 'dek'];
-            return monthsLower[now.getMonth()];
+            return monthsLower[now.getMonth()]; }
 
         case 113: // 月（英大文字3文字）
-            const monthsUpper = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+            { const monthsUpper = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
                                'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEK'];
-            return monthsUpper[now.getMonth()];
+            return monthsUpper[now.getMonth()]; }
 
         case 120: // 日（1桁）
             return String(now.getDate());
