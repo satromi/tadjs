@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.11
+ * TADjs Ver0.12
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -66,7 +66,7 @@ let imagePoint = [];
 let tronCodeMask = [];
 let startTadSegment = false;
 let startByImageSegment = false;
-let cantNextLineFlg = false; // 改行禁止フラグ
+let cantNextLineFlg = 0; // 改行禁止フラグ
 let isFontDefined = false; // フォント定義済みフラグ
 let isTadStarted = false; // TAD開始フラグ
 let isXmlTad = false; // XMLTADフラグ
@@ -2157,7 +2157,7 @@ function tsTextStart(tadSeg) {
  * @param {int} linePitch 
  * @param {int} align 
  */
-function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, width, textPitch, linePitch, align, nextChar = null) {
+function drawText(targetCtx, targetCanvas, char, nextChar, textfontSize, startX, startY, width, textPitch, linePitch, align) {
     // パラメータとして受け取ったcanvasとctxを使用
     if (!targetCtx || !targetCanvas) {
         console.error('ctx and canvas must be provided as parameters in drawText');
@@ -2246,17 +2246,22 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
     const currentCharWidth = ctx.measureText(char).width;
     const WidthOver = (textWidth + currentCharWidth > width);
     let shouldBreak = false;
+    let nextCharWidth = 0;
+    if (nextChar !== null) {
+        nextCharWidth = ctx.measureText(nextChar).width;
+    }
+    
 
     // 次の文字で改行要になる場合
-    if (!WidthOver && (textWidth + currentCharWidth + ctx.measureText(nextChar).width > width)) {
+    if (!WidthOver && nextChar !== null && (textWidth + currentCharWidth * (1 + textPitch) + nextCharWidth > width)) {
         console.debug(`次の文字 "${nextChar}" で改行`);
         if (lineStartProhibitionState.active && lineStartProhibitionState.method === 1) {
             // 行頭禁則方法1の処理: 次の文字が行頭で行頭禁則文字の場合、今の文字を行頭に追い出す
             const isProhibitedNext = checkLineStartProhibition(nextChar);
-            if (isProhibitedNext && nextChar !== null) {
+            if (isProhibitedNext) {
                 console.debug(`行頭禁則方法1: 次の文字 "${nextChar}" が禁則文字のため先に改行`);
                 shouldBreak = true;
-                cantNextLineFlg = false; // 次の文字で改行しないフラグをリセット
+                cantNextLineFlg = 0; // 次の文字で改行しないフラグをリセット
             }
         }
         if (lineEndProhibitionState.active && lineEndProhibitionState.method === 1) {
@@ -2265,28 +2270,27 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
             if (isProhibitedCurrent) {
                 console.debug(`行末禁則方法1: 現在の文字 "${char}" が禁則文字のため次に改行`);
                 shouldBreak = true;
-                cantNextLineFlg = false; // 次の文字で改行しないフラグをリセット
+                cantNextLineFlg = 0; // 次の文字で改行しないフラグをリセット
+            }
+        }
+        if (lineStartProhibitionState.active && lineStartProhibitionState.method === 2) {
+            // 行頭禁則方法2の処理: 次の文字が行頭で行頭禁則文字の場合、前行の行末に追い込む
+            const isProhibitedNext = checkLineStartProhibition(nextChar);
+            if (isProhibitedNext) {
+                console.debug(`行頭禁則:2 "${nextChar}" が禁則文字のため前行の行末に追い込む`);
+                shouldBreak = false;
+                cantNextLineFlg = 2; // 次の文字も改行しない
             }
         }
     }
 
     // 折り返し処理
-    if (WidthOver) {
+    if (WidthOver && cantNextLineFlg == 0) {
         shouldBreak = true;
-        // 現在の文字が行頭禁則文字かチェック（方法2のみ）
-        const isProhibited = checkLineStartProhibition(char);
-        if (lineStartProhibitionState.active && lineStartProhibitionState.method === 2 && isProhibited) {
-            // 行末禁則方法2の処理: 今の文字が行末で行末禁則文字の場合、前行の行末に追い込む
-            console.debug(`行頭禁則:2 "${char}" が禁則文字のため前行の行末に追い込む`);
-            shouldBreak = false;
-            cantNextLineFlg = true; // 次の文字も改行しない
-        } else {
-            cantNextLineFlg = false; // 次の文字で改行しないフラグをリセット
-        }
     }
 
     // 通常の改行処理
-    if (shouldBreak && !cantNextLineFlg) {
+    if (shouldBreak) {
         textHeight += lineMaxHeight[textRow];
         textRow++;
         lineMaxHeight.push(linePitch);
@@ -2302,6 +2306,10 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
         }
     }
 
+    if (cantNextLineFlg > 0) {
+        cantNextLineFlg -= 1;
+    }
+
     // 改段落処理
     if (char == String.fromCharCode(Number(TC_NL))) {
         textHeight += lineMaxHeight[textRow];
@@ -2312,7 +2320,7 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
         if (tabRulerLineMoveFlag) {
             tabRulerLineMoveFlag = false;
         }
-        cantNextLineFlg = false;
+        cantNextLineFlg = 0;
 
         // XMLパース出力
         if (isXmlDumpEnabled() && isInDocSegment) {
@@ -2333,7 +2341,7 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
                 textColumn++;
             }
         }
-        cantNextLineFlg = false;
+        cantNextLineFlg = 0;
 
                 // XMLパース出力
         if (isXmlDumpEnabled() && isInDocSegment) {
@@ -2353,14 +2361,14 @@ function drawText(targetCtx, targetCanvas, char, textfontSize, startX, startY, w
         if (tabRulerLineMoveFlag) {
             tabRulerLineMoveFlag = false;
         }
-        cantNextLineFlg = false;
+        cantNextLineFlg = 0;
     // Tab処理
     } else if (char == String.fromCharCode(Number(TC_TAB))) {
         console.debug("Tab処理");
         for (let tabLoop = 0;tabLoop < tabCharNum; tabLoop++) {
             textWidth += ctx.measureText("　").width;
             textColumn++;
-            cantNextLineFlg = false;
+            cantNextLineFlg = 0;
         }
     } else {
         const padding = 0;
@@ -4274,7 +4282,7 @@ function tsVariableReference(segLen, tadSeg) {
                     nextChar = variableValue.charAt(i + 1);
                 }
 
-                drawText(ctx, canvas, char, textFontSize, textCharPoint[textNest-1][0], textCharPoint[textNest-1][1], textCharPoint[textNest-1][2], textSpacingPitch, lineSpacingPitch, 0, nextChar);
+                drawText(ctx, canvas, char, nextChar, textFontSize, textCharPoint[textNest-1][0], textCharPoint[textNest-1][1], textCharPoint[textNest-1][2], textSpacingPitch, lineSpacingPitch, 0);
             }
         }
     }
@@ -8594,7 +8602,7 @@ function tadRawArray(raw){
                     }
                 }
 
-                drawText(ctx, canvas, char, textFontSize,  textCharPoint[textNest-1][0],textCharPoint[textNest-1][1] ,textCharPoint[textNest-1][2], textSpacingPitch, lineSpacingPitch, 0, nextChar);
+                drawText(ctx, canvas, char, nextChar,textFontSize,  textCharPoint[textNest-1][0],textCharPoint[textNest-1][1] ,textCharPoint[textNest-1][2], textSpacingPitch, lineSpacingPitch, 0);
             }
         }
 
