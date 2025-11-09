@@ -1,0 +1,33 @@
+{
+  "name": "システム環境設定",
+  "linktype": false,
+  "makeDate": "2025-11-09T00:00:00Z",
+  "updateDate": "2025-11-09T00:00:00Z",
+  "accessDate": "2025-11-09T00:00:00Z",
+  "periodDate": null,
+  "refCount": 1,
+  "editable": false,
+  "readable": true,
+  "maker": "system",
+  "window": {
+    "pos": {
+      "x": 100,
+      "y": 100
+    },
+    "width": 500,
+    "height": 380,
+    "minWidth": 500,
+    "minHeight": 380,
+    "resizable": false,
+    "scrollable": false,
+    "maximize": false,
+    "maximizable": false,
+    "minimizable": true,
+    "closable": true,
+    "alwaysOnTop": false,
+    "skipTaskbar": false,
+    "frame": true,
+    "transparent": false,
+    "backgroundColor": "#ffffff"
+  }
+}

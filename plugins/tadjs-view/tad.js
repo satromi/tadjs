@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.12
+ * TADjs Ver0.13
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -2090,6 +2090,32 @@ function pass2(lHead) {
         } else {
             console.debug(`Warning: No tadFileIndex mapping found for lHead[${lheadIndex}] during processing`);
         }
+    }
+
+    // tadjs-view専用版：BPKファイル読み込み完了後にコールバックを呼ぶ
+    console.log('[tadjs-view tad.js pass2] BPK processing completed');
+    console.log('[tadjs-view tad.js pass2] linkRecordList:', linkRecordList);
+    console.log('[tadjs-view tad.js pass2] linkRecordList length:', linkRecordList ? linkRecordList.length : 'null');
+
+    const canvasId = window.canvas ? window.canvas.id : 'canvas-0';
+    const callbackName = `tadProcessingComplete_${canvasId}`;
+    console.log(`[tadjs-view tad.js pass2] Checking callback: ${callbackName}`);
+    console.log(`[tadjs-view tad.js pass2] Callback exists:`, typeof window[callbackName] === 'function');
+
+    if (typeof window !== 'undefined' && typeof window[callbackName] === 'function') {
+        console.log(`[tadjs-view tad.js pass2] Calling ${callbackName} callback`);
+
+        setTimeout(() => {
+            console.log(`[tadjs-view tad.js pass2] Executing ${callbackName}`);
+            window[callbackName]({
+                linkRecordList: linkRecordList,
+                tadRecordDataArray: tadRecordDataArray,
+                isProcessingBpk: true,
+                currentFileIndex: tadRecordDataArray.length - 1
+            });
+        }, 50);
+    } else {
+        console.debug(`[tadjs-view tad.js pass2] Callback ${callbackName} not found or not a function`);
     }
 }
 
@@ -5918,6 +5944,12 @@ function setLineColorPattern(l_pat) {
     return oldLineColor;
 }
 
+/**
+ * 図形要素セグメント 長方形セグメントを描画
+ * @param {*} segLen 
+ * @param {*} tadSeg 
+ * @returns 
+ */
 function tsFigRectAngleDraw(segLen, tadSeg) {
     if (segLen < Number(0x0012)) {
         return;
@@ -6766,7 +6798,7 @@ function tsFigCurveDraw(segLen, tadSeg) {
         }
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" type="${type}" closed="${isClosed ? '1' : '0'}" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}">\r\n`);
+        xmlBuffer.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" type="${type}" closed="${isClosed ? '1' : '0'}" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}" />\r\n`);
     }
 
     ctx.save(); // 状態を保存
@@ -7919,51 +7951,80 @@ function tsVirtualObjSegment(segLen, tadSeg) {
     console.debug('=== LINK CREATION DEBUG ===');
     console.debug(`isProcessingBpk: ${isProcessingBpk}, currentFileIndex: ${currentFileIndex}, linkNo: ${linkNo}, window.originalLinkId: ${window.originalLinkId}`);
 
-    if (isProcessingBpk) {
-        // セカンダリウィンドウの場合、originalLinkIdを使ってグローバルlinkRecordListから取得
-        if (window.originalLinkId !== undefined && window.originalLinkId !== null) {
-            const globalLinkRecordList = window.linkRecordList || linkRecordList;
-            //console.log('Secondary window: using originalLinkId', window.originalLinkId);
-            //console.log('Available linkRecordList indices:', globalLinkRecordList ? Object.keys(globalLinkRecordList) : 'null');
-            
-            // 元のファイルのlinkRecordListから取得
-            const targetFileIndex = window.originalLinkId - 1; // link_idは1-indexed
-            if (globalLinkRecordList && globalLinkRecordList[targetFileIndex] && globalLinkRecordList[targetFileIndex][linkNo]) {
-                newLink = globalLinkRecordList[targetFileIndex][linkNo];
-                //console.log(`Using existing link from globalLinkRecordList[${targetFileIndex}][${linkNo}]`);
-                //console.log('Retrieved link:', newLink);
-            } else {
-                //console.log(`No existing link found in globalLinkRecordList[${targetFileIndex}][${linkNo}], creating new one`);
-                newLink = new LINK();
-            }
+    // セカンダリウィンドウ（originalLinkIdが設定されている）の場合
+    if (window.originalLinkId !== undefined && window.originalLinkId !== null) {
+        const globalLinkRecordList = window.linkRecordList || linkRecordList;
+        console.log(`[tsVirtualObjSegment] Secondary window mode - originalLinkId: ${window.originalLinkId}`);
+        console.log(`[tsVirtualObjSegment] Global linkRecordList available:`, !!globalLinkRecordList);
+        console.log(`[tsVirtualObjSegment] Global tadRecordDataArray length:`, tadRecordDataArray ? tadRecordDataArray.length : 'null');
+
+        // 元のファイルのlinkRecordListから取得
+        const targetFileIndex = window.originalLinkId - 1; // link_idは1-indexed
+        if (globalLinkRecordList && globalLinkRecordList[targetFileIndex] && globalLinkRecordList[targetFileIndex][linkNo]) {
+            newLink = globalLinkRecordList[targetFileIndex][linkNo];
+            console.log(`[tsVirtualObjSegment] Retrieved existing link from globalLinkRecordList[${targetFileIndex}][${linkNo}], link_id: ${newLink.link_id}, link_name: ${newLink.link_name}`);
         } else {
-            // メインウィンドウの場合
-            if (linkRecordList[currentFileIndex] && linkRecordList[currentFileIndex][linkNo]) {
-                newLink = linkRecordList[currentFileIndex][linkNo];
-                //console.log('Main window: using existing link from linkRecordList');
-            } else {
-                //console.log('Main window: no existing link found, creating new one');
-                newLink = new LINK();
-            }
+            console.log(`[tsVirtualObjSegment] No existing link found in globalLinkRecordList[${targetFileIndex}][${linkNo}], creating new one`);
+            newLink = new LINK();
         }
-        
-        newLink.left = vobj.left;
-        newLink.top = vobj.top;
-        newLink.right = vobj.right;
-        newLink.bottom = vobj.bottom;
-        newLink.dlen = vobj.dlen;
+    } else if (isProcessingBpk) {
+        // メインウィンドウ（BPKファイル処理中）の場合
+        if (linkRecordList[currentFileIndex] && linkRecordList[currentFileIndex][linkNo]) {
+            newLink = linkRecordList[currentFileIndex][linkNo];
+            console.log(`[tsVirtualObjSegment] Retrieved existing link from linkRecordList[${currentFileIndex}][${linkNo}], link_id: ${newLink.link_id}`);
+        } else {
+            console.log(`[tsVirtualObjSegment] No existing link found in linkRecordList[${currentFileIndex}][${linkNo}], creating new one`);
+            newLink = new LINK();
+        }
+    } else {
+        // 単一TADファイル（非BPK、非セカンダリウィンドウ）の場合
+        console.log(`[tsVirtualObjSegment] Single TAD file mode - creating new LINK`);
+        newLink = new LINK();
     }
 
-    // lHeadからlink_nameを取得とリンク先のrawデータを設定
-    if (lHead && lHead[newLink.link_id - 1]) {
-        const lhead = lHead[newLink.link_id - 1];
-        newLink.link_name = lhead.name;
-        // リンク先のTADファイルのrawデータをtadRecordDataArrayから取得
+    // 座標情報を設定
+    newLink.left = vobj.left;
+    newLink.top = vobj.top;
+    newLink.right = vobj.right;
+    newLink.bottom = vobj.bottom;
+    newLink.dlen = vobj.dlen;
+
+    console.log(`[tsVirtualObjSegment] Before link_name assignment - link_id: ${newLink.link_id}, link_name: ${newLink.link_name}`);
+
+    // link_nameが既に設定されていない場合のみlHeadから取得
+    if (!newLink.link_name || newLink.link_name.trim() === '') {
+        // lHeadからlink_nameを取得
+        if (newLink.link_id && lHead && lHead[newLink.link_id - 1]) {
+            const lhead = lHead[newLink.link_id - 1];
+            newLink.link_name = lhead.name;
+            console.log(`[tsVirtualObjSegment] Set link_name from lHead[${newLink.link_id - 1}]: ${newLink.link_name}`);
+        } else {
+            console.warn(`[tsVirtualObjSegment] Cannot set link_name - link_id: ${newLink.link_id}, lHead exists: ${!!lHead}, lHead length: ${lHead ? lHead.length : 'null'}`);
+            if (newLink.link_id) {
+                console.warn(`[tsVirtualObjSegment] lHead[${newLink.link_id - 1}]:`, lHead ? lHead[newLink.link_id - 1] : 'lHead is null');
+            }
+        }
+    } else {
+        console.log(`[tsVirtualObjSegment] link_name already set: ${newLink.link_name}, skipping lHead lookup`);
+    }
+
+    // リンク先のTADファイルのrawデータを設定（link_nameの有無に関わらず常に実行）
+    if (newLink.link_id && (!newLink.raw || newLink.raw.length === 0)) {
+        console.log(`[tsVirtualObjSegment] Searching for raw data with fileIndex: ${newLink.link_id - 1}`);
+        console.log(`[tsVirtualObjSegment] tadRecordDataArray length: ${tadRecordDataArray.length}`);
         const linkedRecord = tadRecordDataArray.find(record => record.fileIndex === newLink.link_id - 1);
+        console.log(`[tsVirtualObjSegment] Found linkedRecord:`, linkedRecord ? `fileIndex=${linkedRecord.fileIndex}, data.length=${linkedRecord.data.length}` : 'null');
         if (linkedRecord && linkedRecord.data) {
             newLink.raw = linkedRecord.data;
+            console.log(`[tsVirtualObjSegment] Set raw data, length: ${newLink.raw.length}`);
+        } else {
+            console.warn(`[tsVirtualObjSegment] No raw data found for link_id: ${newLink.link_id}`);
         }
+    } else if (newLink.raw && newLink.raw.length > 0) {
+        console.log(`[tsVirtualObjSegment] raw data already set, length: ${newLink.raw.length}`);
     }
+
+    console.log(`[tsVirtualObjSegment] After link_name assignment - link_id: ${newLink.link_id}, link_name: ${newLink.link_name}, has raw: ${!!newLink.raw}`);
 
     // 文章セグメント処理中かどうかで描画位置を変更
     let drawLeft = 0, drawTop = 0, drawRight = 0, drawBottom = 0;
@@ -8032,7 +8093,15 @@ function tsVirtualObjSegment(segLen, tadSeg) {
         
         // リンク先のドキュメントを仮身枠内に描画
         // 内枠の内側に描画（上下左右に5ピクセルのマージン）
-        renderLinkedDocumentInVirtualObj(newLink, drawLeft + 5, drawTop + 5, 
+        console.log(`[tsVirtualObjSegment] Calling renderLinkedDocumentInVirtualObj with link:`, {
+            link_id: newLink.link_id,
+            link_name: newLink.link_name,
+            has_raw: !!newLink.raw,
+            raw_length: newLink.raw ? newLink.raw.length : 0,
+            position: { x: drawLeft + 5, y: drawTop + 5 },
+            size: { width: drawRight - drawLeft - 10, height: drawBottom - drawTop - 10 }
+        });
+        renderLinkedDocumentInVirtualObj(newLink, drawLeft + 5, drawTop + 5,
                                          drawRight - drawLeft - 10, drawBottom - drawTop - 10, vobj);
         
         // 開いた仮身後の描画位置を正しく設定
@@ -8106,8 +8175,20 @@ function tsVirtualObjSegment(segLen, tadSeg) {
         console.debug(`Initializing linkRecordList[${currentFileIndex}] as empty array`);
         linkRecordList[currentFileIndex] = [];
     }
-    
+
+    console.log(`[tsVirtualObjSegment] Saving to linkRecordList[${currentFileIndex}][${linkNo}]:`, {
+        link_id: newLink.link_id,
+        link_name: newLink.link_name,
+        has_raw: !!newLink.raw,
+        raw_length: newLink.raw ? newLink.raw.length : 0,
+        coordinates: { left: newLink.left, top: newLink.top, right: newLink.right, bottom: newLink.bottom }
+    });
     linkRecordList[currentFileIndex][linkNo] = newLink;
+    console.log(`[tsVirtualObjSegment] Saved. Verifying linkRecordList[${currentFileIndex}][${linkNo}]:`, {
+        link_id: linkRecordList[currentFileIndex][linkNo].link_id,
+        link_name: linkRecordList[currentFileIndex][linkNo].link_name,
+        has_raw: !!linkRecordList[currentFileIndex][linkNo].raw
+    });
     linkNo++;
 
     //console.debug('linkRecordList after save:', linkRecordList);
@@ -9094,28 +9175,24 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
     console.debug(`isProcessingBpk: ${isProcessingBpk}, tadRecordDataArray length: ${tadRecordDataArray ? tadRecordDataArray.length : 'null'}, currentFileIndex: ${currentFileIndex}`);
     
     if (typeof window !== 'undefined' && typeof window[callbackName] === 'function') {
-        // BPK処理の場合は最後のファイル処理時のみコールバックを呼ぶ
-        // 単体TADファイルの場合は常にコールバックを呼ぶ
-        const shouldCallCallback = !isProcessingBpk || 
-                                !tadRecordDataArray || 
-                                tadRecordDataArray.length <= 1 || 
-                                currentFileIndex >= tadRecordDataArray.length - 1;
-        
-        console.debug(`shouldCallCallback: ${shouldCallCallback}`);
-        
-        if (shouldCallCallback) {
-            setTimeout(() => {
-                console.debug(`Calling ${callbackName} callback (final)`);
-                window[callbackName]({
-                    linkRecordList: linkRecordList,
-                    tadRecordDataArray: tadRecordDataArray,
-                    isProcessingBpk: isProcessingBpk,
-                    currentFileIndex: currentFileIndex
-                });
-            }, 10); // DOM更新後に実行
-        } else {
-            console.debug(`Skipping callback - not final file (currentFileIndex: ${currentFileIndex}, total files: ${tadRecordDataArray ? tadRecordDataArray.length : 'null'})`);
-        }
+        // tadjs-view専用版：常にコールバックを呼ぶ
+        console.log(`[tadjs-view tad.js] Calling ${callbackName} callback`);
+        console.log(`[tadjs-view tad.js] linkRecordList:`, linkRecordList);
+        console.log(`[tadjs-view tad.js] linkRecordList length:`, linkRecordList ? linkRecordList.length : 'null');
+        console.log(`[tadjs-view tad.js] linkRecordList[0]:`, linkRecordList && linkRecordList[0] ? linkRecordList[0] : 'null');
+        console.log(`[tadjs-view tad.js] tadRecordDataArray length:`, tadRecordDataArray ? tadRecordDataArray.length : 'null');
+        console.log(`[tadjs-view tad.js] isProcessingBpk:`, isProcessingBpk);
+        console.log(`[tadjs-view tad.js] currentFileIndex:`, currentFileIndex);
+
+        setTimeout(() => {
+            console.log(`[tadjs-view tad.js] Executing ${callbackName}`);
+            window[callbackName]({
+                linkRecordList: linkRecordList,
+                tadRecordDataArray: tadRecordDataArray,
+                isProcessingBpk: isProcessingBpk,
+                currentFileIndex: currentFileIndex
+            });
+        }, 10); // DOM更新後に実行
     } else {
         console.debug(`Callback ${callbackName} not found or not a function`);
     }

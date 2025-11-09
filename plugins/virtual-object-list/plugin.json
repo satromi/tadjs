@@ -1,0 +1,34 @@
+{
+  "id": "virtual-object-list",
+  "name": "仮身一覧",
+  "version": "1.0.0",
+  "type": "base",
+  "basefile":{
+    "json": "0199ce60-532a-7670-b8bc-84c970de11dc.json",
+    "xmltad": "0199ce60-532a-7670-b8bc-84c970de11dc_0.xtad",
+    "ico": "0199ce60-532a-7670-b8bc-84c970de11dc.ico"
+  },
+  "description": "TADファイル内の仮身（リンク）を一覧表示します",
+  "icon": "📋",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "contextMenu": [
+    {
+      "label": "仮身一覧",
+      "fileTypes": ["tad", "TAD", "bpk", "BPK", "xtad", "XTAD"],
+      "action": "open-editor"
+    }
+  ],
+  "window": {
+    "width": 600,
+    "height": 500,
+    "resizable": true,
+    "scrollable": true,
+    "openable": true
+  },
+  "permissions": [
+    "file-read",
+    "file-write"
+  ]
+}

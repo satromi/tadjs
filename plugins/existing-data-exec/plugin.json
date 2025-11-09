@@ -1,0 +1,27 @@
+{
+  "id": "existing-data-exec",
+  "name": "既存データ起動",
+  "version": "1.0.0",
+  "type": "base",
+  "description": "既存の外部ファイルをOSのデフォルトアプリで開くプラグイン",
+  "icon": "🚀",
+  "author": "BTRON Desktop",
+  "main": "index.html",
+  "basefile": {
+    "json": "019a4a5c-7e2f-4b8a-9d3c-1f6e8a9b2c4d.json",
+    "xmltad": "019a4a5c-7e2f-4b8a-9d3c-1f6e8a9b2c4d_0.xtad",
+    "ico": "019a4a5c-7e2f-4b8a-9d3c-1f6e8a9b2c4d.ico"
+  },
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 400,
+    "height": 200,
+    "resizable": false,
+    "scrollable": false,
+    "openable": false
+  },
+  "contextMenu": [],
+  "permissions": [
+    "file-read"
+  ]
+}

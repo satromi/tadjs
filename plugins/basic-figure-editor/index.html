@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>基本図形編集</title>
+    <link rel="stylesheet" href="style.css?v=20251023">
+</head>
+<body>
+    <div class="plugin-content">
+        <div class="editor-container">
+            <!-- メインキャンバス -->
+            <canvas id="figureCanvas" class="figure-canvas"></canvas>
+        </div>
+    </div>
+
+    <script src="../../tad.js?v=20251023"></script>
+    <!-- VirtualObjectRendererをグローバル変数として読み込み -->
+    <script type="module">
+        import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
+        window.VirtualObjectRenderer = VirtualObjectRenderer;
+    </script>
+    <!-- 共通ユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import { convertPtToPx } from '../../js/util.js';
+        window.convertPtToPx = convertPtToPx;
+    </script>
+    <!-- パフォーマンス最適化ユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import { debounce, throttle, throttleRAF } from '../../js/performance-utils.js';
+        window.debounce = debounce;
+        window.throttle = throttle;
+        window.throttleRAF = throttleRAF;
+    </script>
+    <script defer src="editor.js?v=20251023"></script>
+</body>
+</html>

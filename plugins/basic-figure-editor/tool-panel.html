@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>道具パネル - 基本図形編集</title>
+    <link rel="stylesheet" href="tool-panel.css?v=20251109">
+</head>
+<body>
+    <div class="tool-panel-window">
+        <!-- 1行目: パレット類 -->
+        <div class="tool-row palette-row">
+            <!-- 描画パレット（塗りつぶし色） -->
+            <button class="palette-btn" id="fillPalette" title="描画パレット">
+                <span class="palette-icon fill-icon"></span>
+            </button>
+
+            <!-- 線パレット（線色） -->
+            <button class="palette-btn" id="strokePalette" title="線パレット">
+                <span class="palette-icon stroke-icon"></span>
+            </button>
+
+            <!-- 線種パレット（線種・太さ） -->
+            <button class="palette-btn" id="lineStylePalette" title="線種パレット">
+                <span class="palette-icon linestyle-icon"></span>
+            </button>
+
+            <!-- 角属性パレット（角丸半径） -->
+            <button class="palette-btn" id="cornerPalette" title="角属性パレット">
+                <span class="palette-icon corner-icon"></span>
+            </button>
+
+            <!-- キャンバス（ピクセルマップ枠作成・画材ツール切替） -->
+            <button class="tool-btn" data-tool="canvas" id="canvasTool" title="キャンバス">
+                <span class="tool-icon">🖼</span>
+            </button>
+
+            <!-- 選択ツール -->
+            <button class="tool-btn" data-tool="select" title="選択">
+                <span class="tool-icon">⬚</span>
+            </button>
+        </div>
+
+        <!-- 2行目: テンプレート（図形描画ツール） -->
+        <div class="tool-row template-row">
+            <button class="tool-btn" data-tool="curve" title="自由曲線">
+                <span class="tool-icon">✎</span>
+            </button>
+            <button class="tool-btn" data-tool="line" title="直線">
+                <span class="tool-icon">─</span>
+            </button>
+            <button class="tool-btn" data-tool="arc" title="扇形">
+                <span class="tool-icon">◔</span>
+            </button>
+            <button class="tool-btn" data-tool="chord" title="弦">
+                <span class="tool-icon">⌓</span>
+            </button>
+            <button class="tool-btn" data-tool="elliptical_arc" title="楕円弧">
+                <span class="tool-icon">⌒</span>
+            </button>
+            <button class="tool-btn" data-tool="rect" title="長方形">
+                <span class="tool-icon">□</span>
+            </button>
+            <button class="tool-btn" data-tool="ellipse" title="楕円">
+                <span class="tool-icon">○</span>
+            </button>
+            <button class="tool-btn" data-tool="polygon" title="多角形">
+                <span class="tool-icon">⬡</span>
+            </button>
+            <button class="tool-btn" data-tool="text" title="文字入力">
+                <span class="tool-icon">Ａ</span>
+            </button>
+            <button class="tool-btn" id="fontSettings" title="フォント・書式設定">
+                <span class="tool-icon">📝</span>
+            </button>
+            <button class="palette-btn" id="gridSettings" title="格子点設定">
+                <span class="palette-icon">⊞</span>
+            </button>
+        </div>
+
+        <!-- パレットポップアップ -->
+        <div id="palettePopup" class="palette-popup" style="display: none;">
+            <div class="palette-popup-content"></div>
+        </div>
+    </div>
+
+    <script src="tool-panel.js?v=20251023"></script>
+</body>
+</html>

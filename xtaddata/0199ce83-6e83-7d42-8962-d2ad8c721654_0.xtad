@@ -1,0 +1,6 @@
+<tad version="1.0" encoding="UTF-8" filename="BTRON">
+<figure>
+<link id="f22289dc-a180-494c-a918-f856ea61b404_0.xtad" vobjleft="50" vobjtop="10" vobjright="150" vobjbottom="41" height="31" chsz="14.000000000000002" frcol="#000000" chcol="#000000" tbcol="#ffffff" bgcol="#ffffff" dlen="0" pictdisp="true" namedisp="true" roledisp="false" typedisp="false" updatedisp="false" framedisp="true" autoopen="true">原紙箱</link>
+
+<link id="019a4370-3819-79a2-9758-881e1e0de90a_0.xtad" vobjleft="50" vobjtop="60" vobjright="220" vobjbottom="91" height="31" chsz="14" frcol="#000000" chcol="#000000" tbcol="#ffffff" bgcol="#ffffff" dlen="0">仮身一覧</link></figure>
+</tad>

@@ -1,0 +1,8196 @@
+/**
+ * 基本図形編集プラグイン
+ * TADファイルの図形セグメントを編集
+ */
+
+class BasicFigureEditor {
+    constructor() {
+        this.canvas = document.getElementById('figureCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.currentFile = null;
+        this.tadData = null;
+        this.isFullscreen = false;
+        this.viewMode = 'canvas'; // 'canvas' or 'xml'
+        this.dialogMessageId = 0; // ダイアログメッセージID
+        this.realId = null; // 実身ID
+        this.isModified = false; // 編集状態フラグ
+        this.originalContent = ''; // 保存時の内容
+        this.imagePathCallbacks = {}; // 画像パス取得コールバック
+        this.imagePathRequestId = 0; // 画像パス要求ID
+        this.iconCache = new Map(); // アイコンキャッシュ
+
+        // 図形編集用のプロパティ
+        this.currentTool = 'select'; // 現在選択中のツール
+        this.shapes = []; // 描画された図形のリスト
+        this.selectedShapes = []; // 選択中の図形
+        this.isDrawing = false;
+        this.startX = 0;
+        this.startY = 0;
+        this.currentShape = null;
+        this.currentPath = []; // フリーハンド描画用のパス
+        this.isFirstPolygonLine = false; // 多角形の最初の線を描画中かどうか
+
+        // 図形移動用のプロパティ
+        this.isDraggingShape = false;
+        this.dragOffsets = []; // 各選択図形のドラッグ開始時のオフセット
+
+        // 矩形選択用のプロパティ
+        this.isRectangleSelecting = false;
+        this.selectionRect = null; // { startX, startY, endX, endY }
+
+        // リサイズプレビュー枠
+        this.resizePreviewBox = null;
+
+        // 描画設定
+        this.strokeColor = '#000000';
+        this.fillColor = '#ffffff';
+        this.fillEnabled = true;
+        this.lineWidth = 2;
+        this.linePattern = 'solid'; // 'solid', 'dotted', 'dashed'
+        this.cornerRadius = 0; // 角丸半径
+        this.bgColor = '#ffffff';
+
+        // 道具パネル
+        this.toolPanel = document.getElementById('toolPanel');
+        this.toolPanelVisible = true;
+
+        // クリップボード
+        this.clipboard = [];
+
+        // Undo/Redo スタック
+        this.undoStack = [];
+        this.redoStack = [];
+
+        // 保護フラグ
+        this.isProtected = false;
+
+        // 用紙サイズ
+        this.paperWidth = 210; // mm
+        this.paperHeight = 297; // mm
+
+        // パネル表示フラグ
+        this.realSizePanelVisible = false;
+        this.paperFrameVisible = false;
+
+        // 道具パネルウィンドウ
+        this.toolPanelWindow = null;
+        this.toolPanelWindowId = null;
+
+        // 格子点設定
+        this.gridMode = 'none'; // 'none', 'show', 'snap'
+        this.gridInterval = 16; // px
+
+        // フォント設定（文字枠用）
+        this.defaultFontSize = 16;
+        this.defaultFontFamily = 'sans-serif';
+        this.defaultTextColor = '#000000';
+
+        // 編集中の文字枠
+        this.editingTextBox = null;
+
+        // ピクセルマップモード
+        this.isPixelmapMode = false; // ピクセルマップモード状態
+        this.editingPixelmap = null; // 編集中のピクセルマップ図形
+        this.pixelmapTool = 'pencil'; // 現在のピクセルマップツール
+        this.pixelmapBrushSize = 1; // ブラシサイズ（ピクセル単位）
+
+        // 開いている実身を追跡するためのMap (realId -> windowId)
+        this.openedRealObjects = new Map();
+
+        // ダブルクリック+ドラッグ用の状態管理
+        this.dblClickDragState = {
+            lastClickTime: 0,
+            lastClickedShape: null,
+            isDblClickDragCandidate: false,
+            isDblClickDrag: false,
+            dblClickedShape: null,
+            dblClickedElement: null,
+            previewElement: null,
+            startX: 0,
+            startY: 0
+        };
+
+        // 通常のドラッグ用の状態管理
+        this.dragState = {
+            dragMode: 'move', // 'move' または 'copy'
+            isDragging: false,
+            hasMoved: false // 5px以上移動したかどうか
+        };
+
+        // VirtualObjectRenderer
+        this.virtualObjectRenderer = null; // 初期化後に設定
+
+        // ユーザ環境設定（選択枠）
+        this.selectionWidth = 2; // 選択枠太さ
+        this.selectionBlinkInterval = 600; // 選択枠チラつき間隔(ms)
+        this.selectionBlinkState = true; // 選択枠の表示状態
+        this.lastBlinkTime = 0; // 最後の点滅切り替え時刻
+        this.animationFrameId = null; // アニメーションフレームID
+
+        this.init();
+    }
+
+    init() {
+        // VirtualObjectRendererの初期化
+        if (window.VirtualObjectRenderer) {
+            this.virtualObjectRenderer = new window.VirtualObjectRenderer();
+            console.log('[FIGURE EDITOR] VirtualObjectRenderer initialized');
+        }
+
+        // パフォーマンス最適化関数の初期化
+        if (window.throttleRAF && window.debounce) {
+            // redrawのスロットル版（60FPS制限）
+            this.throttledRedraw = window.throttleRAF(() => {
+                this.redrawImmediate();
+            });
+
+            // handleMouseMoveのスロットル版（60FPS制限）
+            this.throttledHandleMouseMove = window.throttleRAF((e) => {
+                this.handleMouseMove(e);
+            });
+
+            // スクロールバー更新のデバウンス版
+            this.debouncedNotifyScrollbarUpdate = window.debounce(() => {
+                this.notifyScrollbarUpdateImmediate();
+            }, 300);
+
+            console.log('[FIGURE EDITOR] Performance optimization initialized');
+        }
+
+        // ユーザ環境設定を読み込み
+        this.loadUserConfig();
+
+        this.setupCanvas();
+        this.setupEventListeners();
+        this.setupContextMenu();
+        this.setupWindowActivation();
+        this.setupGlobalMouseHandlers();
+
+        // 選択枠点滅アニメーション開始
+        this.startSelectionBlinkAnimation();
+
+        // 親ウィンドウからのメッセージを受信
+        window.addEventListener('message', (event) => {
+            console.log('[FIGURE EDITOR] メッセージ受信:', event.data);
+
+            if (event.data && event.data.type === 'init') {
+                console.log('[FIGURE EDITOR] init受信');
+
+                // fileIdを保存（拡張子を除去）
+                if (event.data.fileData) {
+                    let rawId = event.data.fileData.realId || event.data.fileData.fileId;
+                    this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                    this.realId = this.realId; // 他のプラグインとの互換性のため
+                    console.log('[FIGURE EDITOR] fileId設定:', this.realId);
+
+                    // 背景色の設定（window.backgroundColor）
+                    if (event.data.fileData.windowConfig && event.data.fileData.windowConfig.backgroundColor) {
+                        this.bgColor = event.data.fileData.windowConfig.backgroundColor;
+                        console.log('[FIGURE EDITOR] ウィンドウ背景色を適用:', this.bgColor);
+                    }
+                }
+
+                // 全画面表示状態を復元
+                if (event.data.fileData && event.data.fileData.realObject && event.data.fileData.realObject.window) {
+                    this.isFullscreen = event.data.fileData.realObject.window.maximize || false;
+                    console.log('[FIGURE EDITOR] 全画面表示状態を復元:', this.isFullscreen);
+                }
+
+                this.loadFile(event.data.fileData);
+
+                // ファイル読み込み後に道具パネルを開く
+                setTimeout(() => {
+                    this.openToolPanelWindow();
+                }, 500);
+            } else if (event.data && event.data.type === 'tool-panel-window-created') {
+                // 道具パネルウィンドウが作成された
+                console.log('[FIGURE EDITOR] 道具パネルウィンドウ作成完了:', event.data.windowId);
+                this.toolPanelWindowId = event.data.windowId;
+            } else if (event.data && event.data.type === 'select-tool') {
+                // 道具パネルからツール選択
+                this.selectTool(event.data.tool);
+                this.currentTool = event.data.tool;
+            } else if (event.data && event.data.type === 'update-fill-color') {
+                this.fillColor = event.data.fillColor;
+                // 選択中の図形にも適用
+                this.applyFillColorToSelected(event.data.fillColor);
+            } else if (event.data && event.data.type === 'update-fill-enabled') {
+                this.fillEnabled = event.data.fillEnabled;
+                // 選択中の図形にも適用
+                this.applyFillEnabledToSelected(event.data.fillEnabled);
+            } else if (event.data && event.data.type === 'update-stroke-color') {
+                this.strokeColor = event.data.strokeColor;
+                // 選択中の図形にも適用
+                this.applyStrokeColorToSelected(event.data.strokeColor);
+            } else if (event.data && event.data.type === 'update-line-width') {
+                this.lineWidth = event.data.lineWidth;
+                // 選択中の図形にも適用
+                this.applyLineWidthToSelected(event.data.lineWidth);
+            } else if (event.data && event.data.type === 'update-line-pattern') {
+                this.linePattern = event.data.linePattern;
+                // 選択中の図形にも適用
+                this.applyLinePatternToSelected(event.data.linePattern);
+            } else if (event.data && event.data.type === 'update-corner-radius') {
+                this.cornerRadius = event.data.cornerRadius;
+                // 選択中の図形にも適用
+                this.applyCornerRadiusToSelected(event.data.cornerRadius);
+            } else if (event.data && event.data.type === 'update-grid-mode') {
+                this.gridMode = event.data.gridMode;
+                this.redraw();
+            } else if (event.data && event.data.type === 'update-grid-interval') {
+                this.gridInterval = event.data.gridInterval;
+                this.redraw();
+            } else if (event.data && event.data.type === 'update-pixelmap-tool') {
+                this.pixelmapTool = event.data.pixelmapTool;
+                console.log('[FIGURE EDITOR] ピクセルマップツール変更:', this.pixelmapTool);
+            } else if (event.data && event.data.type === 'update-pixelmap-brush-size') {
+                this.pixelmapBrushSize = event.data.pixelmapBrushSize;
+                console.log('[FIGURE EDITOR] ブラシサイズ変更:', this.pixelmapBrushSize);
+            } else if (event.data && event.data.type === 'window-moved') {
+                this.updateWindowConfig({
+                    pos: event.data.pos,
+                    width: event.data.width,
+                    height: event.data.height
+                });
+            } else if (event.data && event.data.type === 'window-resized-end') {
+                this.updateWindowConfig({
+                    pos: event.data.pos,
+                    width: event.data.width,
+                    height: event.data.height
+                });
+                this.resizeCanvas();
+            } else if (event.data && event.data.type === 'window-maximize-toggled') {
+                this.updateWindowConfig({
+                    pos: event.data.pos,
+                    width: event.data.width,
+                    height: event.data.height,
+                    maximize: event.data.maximize
+                });
+                // 全画面表示状態を同期
+                this.isFullscreen = event.data.maximize;
+                console.log('[FIGURE EDITOR] 全画面表示状態を同期:', this.isFullscreen);
+                this.resizeCanvas();
+            } else if (event.data && event.data.type === 'scroll') {
+                // スクロールイベントを受信
+                console.log('[FIGURE EDITOR] scroll受信:', event.data);
+                this.handleScroll(event.data.scrollLeft, event.data.scrollTop);
+            } else if (event.data && event.data.type === 'menu-action') {
+                console.log('[FIGURE EDITOR] menu-action受信:', event.data.action);
+                this.executeMenuAction(event.data.action, event.data.additionalData);
+            } else if (event.data && event.data.type === 'get-menu-definition') {
+                console.log('[FIGURE EDITOR] get-menu-definition受信');
+                this.getMenuDefinition().then(menuDefinition => {
+                    window.parent.postMessage({
+                        type: 'menu-definition-response',
+                        messageId: event.data.messageId,
+                        menuDefinition: menuDefinition
+                    }, '*');
+                });
+            } else if (event.data && event.data.type === 'image-file-path-response') {
+                // 画像ファイルパスの応答を処理
+                if (this.imagePathCallbacks && this.imagePathCallbacks[event.data.requestId]) {
+                    this.imagePathCallbacks[event.data.requestId](event.data.filePath);
+                    delete this.imagePathCallbacks[event.data.requestId];
+                }
+            } else if (event.data && event.data.type === 'input-dialog-response') {
+                if (this.dialogCallbacks && this.dialogCallbacks[event.data.messageId]) {
+                    this.dialogCallbacks[event.data.messageId](event.data.result);
+                    delete this.dialogCallbacks[event.data.messageId];
+                }
+            } else if (event.data && event.data.type === 'message-dialog-response') {
+                if (this.dialogCallbacks && this.dialogCallbacks[event.data.messageId]) {
+                    this.dialogCallbacks[event.data.messageId](event.data.result);
+                    delete this.dialogCallbacks[event.data.messageId];
+                }
+            } else if (event.data && event.data.type === 'window-close-request') {
+                console.log('[FIGURE EDITOR] window-close-request受信, windowId:', event.data.windowId);
+                this.handleCloseRequest(event.data.windowId);
+            } else if (event.data && event.data.type === 'check-window-id') {
+                // 親ウィンドウからwindowIdチェック要求
+                if (event.data.targetWindowId === this.windowId) {
+                    console.log('[FIGURE EDITOR] check-window-id一致、ドロップ成功として処理');
+                    // 自分宛のメッセージなので、cross-window-drop-successとして処理
+                    if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
+                        const shape = this.draggingVirtualObjectShape;
+                        const dragMode = this.dragState.dragMode;
+
+                        console.log(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
+
+                        // タイムアウトをキャンセル
+                        if (this.virtualObjectDragTimeout) {
+                            clearTimeout(this.virtualObjectDragTimeout);
+                            this.virtualObjectDragTimeout = null;
+                        }
+
+                        // 移動モードの場合のみ元の仮身を削除
+                        if (dragMode === 'move') {
+                            // 選択中の仮身を取得
+                            const selectedVirtualObjectShapes = this.selectedShapes.filter(s => s.type === 'vobj');
+                            const shapesToDelete = selectedVirtualObjectShapes.includes(shape)
+                                ? selectedVirtualObjectShapes
+                                : [shape];
+
+                            console.log('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
+
+                            // 各仮身を削除
+                            shapesToDelete.forEach(s => {
+                                // 図形を削除
+                                const index = this.shapes.indexOf(s);
+                                if (index > -1) {
+                                    this.shapes.splice(index, 1);
+                                }
+
+                                // 選択状態をクリア
+                                const selectedIndex = this.selectedShapes.indexOf(s);
+                                if (selectedIndex > -1) {
+                                    this.selectedShapes.splice(selectedIndex, 1);
+                                }
+
+                                // 展開されたiframeがあれば削除
+                                if (s.expandedElement && s.expandedElement.parentNode) {
+                                    s.expandedElement.parentNode.removeChild(s.expandedElement);
+                                }
+                            });
+
+                            // 再描画
+                            this.redraw();
+                            this.isModified = true;
+                        } else {
+                            console.log('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
+                        }
+
+                        // フラグをリセット
+                        this.isDraggingVirtualObjectShape = false;
+                        this.draggingVirtualObjectShape = null;
+                    }
+                }
+            } else if (event.data && event.data.type === 'cross-window-drop-success') {
+                // 他のウィンドウへのドロップが成功した通知（直接受信した場合）
+                console.log('[FIGURE EDITOR] cross-window-drop-success受信:', event.data);
+                if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
+                    const shape = this.draggingVirtualObjectShape;
+                    const dragMode = event.data.mode || this.dragState.dragMode;
+
+                    console.log(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
+
+                    // タイムアウトをキャンセル
+                    if (this.virtualObjectDragTimeout) {
+                        clearTimeout(this.virtualObjectDragTimeout);
+                        this.virtualObjectDragTimeout = null;
+                    }
+
+                    // 移動モードの場合のみ元の仮身を削除
+                    if (dragMode === 'move') {
+                        // 選択中の仮身を取得
+                        const selectedVirtualObjectShapes = this.selectedShapes.filter(s => s.type === 'vobj');
+                        const shapesToDelete = selectedVirtualObjectShapes.includes(shape)
+                            ? selectedVirtualObjectShapes
+                            : [shape];
+
+                        console.log('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
+
+                        // 各仮身を削除
+                        shapesToDelete.forEach(s => {
+                            // 図形を削除
+                            const index = this.shapes.indexOf(s);
+                            if (index > -1) {
+                                this.shapes.splice(index, 1);
+                            }
+
+                            // 選択状態をクリア
+                            const selectedIndex = this.selectedShapes.indexOf(s);
+                            if (selectedIndex > -1) {
+                                this.selectedShapes.splice(selectedIndex, 1);
+                            }
+
+                            // 展開されたiframeがあれば削除
+                            if (s.expandedElement && s.expandedElement.parentNode) {
+                                s.expandedElement.parentNode.removeChild(s.expandedElement);
+                            }
+                        });
+
+                        // 再描画
+                        this.redraw();
+                        this.isModified = true;
+                    } else {
+                        console.log('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
+                    }
+
+                    // フラグをリセット
+                    this.isDraggingVirtualObjectShape = false;
+                    this.draggingVirtualObjectShape = null;
+                }
+            } else if (event.data && event.data.type === 'window-opened') {
+                // ウィンドウが開いた通知を受け取る
+                console.log('[FIGURE EDITOR] window-opened受信, windowId:', event.data.windowId);
+                // このイベントは各メッセージハンドラーで個別に処理されます
+            } else if (event.data && event.data.type === 'window-closed') {
+                // ウィンドウが閉じられた通知
+                console.log('[FIGURE EDITOR] window-closed受信, windowId:', event.data.windowId);
+                // openedRealObjectsから削除
+                for (const [realId, windowId] of this.openedRealObjects.entries()) {
+                    if (windowId === event.data.windowId) {
+                        this.openedRealObjects.delete(realId);
+                        console.log('[FIGURE EDITOR] 実身ウィンドウを追跡から削除:', realId);
+                        break;
+                    }
+                }
+                // 道具パネルウィンドウが閉じられた場合
+                if (event.data.windowId === this.toolPanelWindowId) {
+                    this.toolPanelWindowId = null;
+                    console.log('[FIGURE EDITOR] 道具パネルウィンドウIDをクリア');
+                }
+            } else if (event.data && event.data.type === 'update-font-size') {
+                // フォントサイズ更新
+                this.defaultFontSize = event.data.fontSize;
+                if (this.textEditorElement) {
+                    // 編集中の選択範囲に適用
+                    this.applyFormatToSelection('fontSize', event.data.fontSize + 'px');
+                } else {
+                    // 選択中の文字枠に適用
+                    this.applyFontSizeToSelected(event.data.fontSize);
+                }
+            } else if (event.data && event.data.type === 'update-font-family') {
+                // フォント更新
+                this.defaultFontFamily = event.data.fontFamily;
+                if (this.textEditorElement) {
+                    this.applyFormatToSelection('fontFamily', event.data.fontFamily);
+                } else {
+                    this.applyFontFamilyToSelected(event.data.fontFamily);
+                }
+            } else if (event.data && event.data.type === 'update-text-color') {
+                // 文字色更新
+                this.defaultTextColor = event.data.textColor;
+                if (this.textEditorElement) {
+                    this.applyFormatToSelection('color', event.data.textColor);
+                } else {
+                    this.applyTextColorToSelected(event.data.textColor);
+                }
+            } else if (event.data && event.data.type === 'update-text-decoration') {
+                // 文字修飾更新
+                if (this.textEditorElement) {
+                    this.applyTextDecorationToSelection(event.data.decoration, event.data.enabled);
+                } else {
+                    this.applyTextDecorationToSelected(event.data.decoration, event.data.enabled);
+                }
+            } else if (event.data && event.data.type === 'get-current-font-settings') {
+                // 現在のフォント設定を道具パネルに返す
+                this.sendCurrentFontSettings();
+            } else if (event.data && event.data.type === 'load-data') {
+                // 開いた仮身表示用のデータ受信
+                console.log('[FIGURE EDITOR] load-data受信:', event.data);
+
+                // readonlyモードの設定
+                if (event.data.readonly) {
+                    this.readonly = true;
+                    document.body.classList.add('readonly-mode');
+                    console.log('[FIGURE EDITOR] 読み取り専用モードを適用');
+                }
+
+                // noScrollbarモードの設定
+                if (event.data.noScrollbar) {
+                    document.body.style.overflow = 'hidden';
+                    console.log('[FIGURE EDITOR] スクロールバー非表示モードを適用');
+                }
+
+                // 実身データを読み込む
+                const realObject = event.data.realObject;
+                if (realObject) {
+                    // fileIdを保存（_数字.xtad の形式を除去して実身IDのみを取得）
+                    let rawId = event.data.realId;
+                    this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
+                    this.realId = this.realId; // 他のプラグインとの互換性のため
+                    console.log('[FIGURE EDITOR] fileId設定:', this.realId, '(元:', rawId, ')');
+
+                    // データを読み込む
+                    this.loadFile({
+                        realId: event.data.realId,
+                        xmlData: realObject.xtad || realObject.records?.[0]?.xtad || realObject.xmlData
+                    });
+                }
+            } else if (event.data && event.data.type === 'load-virtual-object') {
+                // 基本文章編集プラグインから開いた仮身表示用のデータ受信
+                console.log('[FIGURE EDITOR] load-virtual-object受信:', event.data);
+
+                // readonlyモードの設定
+                if (event.data.readonly) {
+                    this.readonly = true;
+                    document.body.classList.add('readonly-mode');
+                    console.log('[FIGURE EDITOR] 読み取り専用モードを適用');
+                }
+
+                // noScrollbarモードの設定
+                if (event.data.noScrollbar) {
+                    document.body.style.overflow = 'hidden';
+                    console.log('[FIGURE EDITOR] スクロールバー非表示モードを適用');
+                }
+
+                // 実身データを読み込む
+                const realObject = event.data.realObject;
+                if (realObject) {
+                    // virtualObjからrealIdを取得
+                    const virtualObj = event.data.virtualObj;
+                    let rawId = virtualObj?.link_id;
+                    if (rawId) {
+                        // _数字.xtad の形式を除去して実身IDのみを取得
+                        this.realId = rawId.replace(/_\d+\.xtad$/i, '');
+                        console.log('[FIGURE EDITOR] fileId設定:', this.realId, '(元:', rawId, ')');
+                    }
+
+                    // データを読み込む
+                    this.loadFile({
+                        realId: this.realId,
+                        xmlData: realObject.xtad || realObject.records?.[0]?.xtad || realObject.xmlData
+                    });
+                }
+            } else if (event.data && event.data.type === 'add-virtual-object-from-base') {
+                console.log('[FIGURE EDITOR] 原紙箱から仮身追加:', event.data.realId, event.data.name);
+                this.addVirtualObjectFromRealId(event.data.realId, event.data.name, event.data.dropPosition, event.data.applist);
+            } else if (event.data && event.data.type === 'user-config-updated') {
+                // ユーザ環境設定が更新された
+                console.log('[FIGURE EDITOR] ユーザ環境設定更新通知を受信');
+                this.loadUserConfig();
+            } else if (event.data && event.data.type === 'load-data-file-request') {
+                // 開いた仮身内のプラグインからのファイル読み込み要求を親ウィンドウに転送
+                console.log('[FIGURE EDITOR] load-data-file-request受信、親ウィンドウに転送:', event.data.fileName);
+                if (window.parent && window.parent !== window) {
+                    window.parent.postMessage(event.data, '*');
+                }
+            } else if (event.data && event.data.type === 'load-data-file-response') {
+                // 親ウィンドウからのファイル読み込みレスポンスを開いた仮身内のプラグインに転送
+                console.log('[FIGURE EDITOR] load-data-file-response受信、子iframeに転送:', event.data.fileName);
+                // すべての子iframeに転送（requestIdで識別されるので問題ない）
+                const iframes = document.querySelectorAll('iframe');
+                iframes.forEach(iframe => {
+                    if (iframe.contentWindow) {
+                        iframe.contentWindow.postMessage(event.data, '*');
+                    }
+                });
+            }
+        });
+
+        // ダイアログコールバック管理
+        this.dialogCallbacks = {};
+
+        console.log('[基本図形編集] 準備完了');
+    }
+
+    /**
+     * ユーザ環境設定を読み込み
+     */
+    loadUserConfig() {
+        // CSS変数から選択枠太さを読み取り
+        const selectionWidth = parseInt(getComputedStyle(document.documentElement)
+            .getPropertyValue('--selection-width')) || 2;
+        this.selectionWidth = selectionWidth;
+
+        // CSS変数から選択枠チラつき間隔を読み取り
+        const selectionBlinkInterval = parseInt(getComputedStyle(document.documentElement)
+            .getPropertyValue('--selection-blink-interval')) || 600;
+        this.selectionBlinkInterval = selectionBlinkInterval;
+
+        console.log('[FIGURE EDITOR] ユーザ環境設定読み込み:', {
+            selectionWidth: this.selectionWidth,
+            selectionBlinkInterval: this.selectionBlinkInterval
+        });
+    }
+
+    /**
+     * 選択枠点滅アニメーション開始
+     */
+    startSelectionBlinkAnimation() {
+        const animate = (currentTime) => {
+            // 前回の点滅切り替えからの経過時間をチェック
+            if (currentTime - this.lastBlinkTime >= this.selectionBlinkInterval) {
+                this.selectionBlinkState = !this.selectionBlinkState;
+                this.lastBlinkTime = currentTime;
+
+                // 選択中の図形がある場合のみ再描画
+                if (this.selectedShapes.length > 0) {
+                    this.redraw();
+                }
+            }
+
+            // アニメーション継続
+            this.animationFrameId = requestAnimationFrame(animate);
+        };
+
+        // アニメーション開始
+        this.animationFrameId = requestAnimationFrame(animate);
+        console.log('[FIGURE EDITOR] 選択枠点滅アニメーション開始');
+    }
+
+    setupCanvas() {
+        // Canvasのサイズを設定
+        this.resizeCanvas();
+
+        // 背景色を設定
+        this.ctx.fillStyle = this.bgColor;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+
+    resizeCanvas() {
+        const container = document.querySelector('.plugin-content');
+        if (container) {
+            // コンテンツサイズを計算
+            const contentSize = this.calculateContentSize();
+            const windowWidth = container.clientWidth || 800;
+            const windowHeight = container.clientHeight || 600;
+
+            // キャンバスサイズを設定（コンテンツサイズとウィンドウサイズの大きい方、最小サイズも保証）
+            const finalWidth = Math.max(contentSize.width, windowWidth, 800);
+            const finalHeight = Math.max(contentSize.height, windowHeight, 600);
+
+            this.canvas.width = finalWidth;
+            this.canvas.height = finalHeight;
+
+            // キャンバスのCSSサイズを描画バッファサイズと同じに設定
+            // これにより、描画可能領域と表示領域が一致します
+            this.canvas.style.width = finalWidth + 'px';
+            this.canvas.style.height = finalHeight + 'px';
+
+            console.log('[FIGURE EDITOR] キャンバスサイズ更新:', finalWidth, 'x', finalHeight, '(コンテンツ:', contentSize.width, 'x', contentSize.height, ', ウィンドウ:', windowWidth, 'x', windowHeight, ')');
+
+            this.redraw();
+
+            // スクロールバー更新を通知
+            this.notifyScrollbarUpdate();
+        }
+    }
+
+    setupEventListeners() {
+        // Canvasのマウスイベント
+        this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
+
+        // mousemoveはスロットル版を使用（60FPS制限）
+        const mouseMoveHandler = this.throttledHandleMouseMove || ((e) => this.handleMouseMove(e));
+        this.canvas.addEventListener('mousemove', mouseMoveHandler);
+
+        this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
+        this.canvas.addEventListener('dblclick', (e) => this.handleDoubleClick(e));
+
+        // キーボードショートカット
+        document.addEventListener('keydown', (e) => {
+            this.handleKeyboardShortcuts(e);
+        });
+
+        // クリックイベントで親ウィンドウのコンテキストメニューを閉じる
+        document.addEventListener('click', (e) => {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'close-context-menu'
+                }, '*');
+            }
+        });
+
+        // ウィンドウリサイズ
+        window.addEventListener('resize', () => {
+            this.resizeCanvas();
+        });
+
+        // ドラッグ&ドロップイベント
+        this.setupDragAndDrop();
+    }
+
+    setupDragAndDrop() {
+        // ドラッグオーバー
+        this.canvas.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            // copy と move の両方を受け付ける
+            if (e.dataTransfer.effectAllowed === 'move' || e.dataTransfer.effectAllowed === 'copyMove') {
+                e.dataTransfer.dropEffect = 'move';
+            } else {
+                e.dataTransfer.dropEffect = 'copy';
+            }
+            this.canvas.style.opacity = '0.8';
+        });
+
+        // ドラッグリーブ
+        this.canvas.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            this.canvas.style.opacity = '1.0';
+        });
+
+        // ドロップ
+        this.canvas.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            this.canvas.style.opacity = '1.0';
+
+            try {
+                // 画像ファイルのドロップをチェック
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    const file = e.dataTransfer.files[0];
+                    if (file.type.startsWith('image/')) {
+                        const rect = this.canvas.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
+                        console.log('[FIGURE EDITOR] 画像ファイルドロップ:', file.name);
+                        await this.insertImage(x, y, file);
+                        return;
+                    }
+                }
+
+                const data = e.dataTransfer.getData('text/plain');
+                if (data) {
+                    // JSON形式かどうかチェック
+                    try {
+                        const dragData = JSON.parse(data);
+
+                        if (dragData.type === 'virtual-object-drag') {
+                            // 仮身ドロップ（仮身一覧、基本文章編集などから）
+                            const rect = this.canvas.getBoundingClientRect();
+                            const x = e.clientX - rect.left;
+                            const y = e.clientY - rect.top;
+
+                            const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
+                            console.log('[FIGURE EDITOR] 仮身ドロップ受信:', virtualObjects.length, '個');
+
+                            // 複数の仮身を配置（相対位置オフセットを使用して元の空間的な関係を保持）
+                            virtualObjects.forEach((virtualObject, index) => {
+                                const offsetX = virtualObject.offsetX || 0; // マウスが掴んだ位置の仮身内オフセット
+                                const offsetY = virtualObject.offsetY || 0; // マウスが掴んだ位置の仮身内オフセット
+                                // ドロップ位置からオフセットを引いて、正しい位置に配置
+                                this.insertVirtualObject(x - offsetX, y - offsetY, virtualObject);
+                            });
+
+                            // ドラッグ元のウィンドウに「クロスウィンドウドロップ成功」を通知
+                            if (window.parent && window.parent !== window) {
+                                window.parent.postMessage({
+                                    type: 'cross-window-drop-success',
+                                    mode: dragData.mode,
+                                    source: dragData.source,
+                                    sourceWindowId: dragData.sourceWindowId,
+                                    virtualObjectId: virtualObjects[0].link_id // 最初の仮身のIDを通知
+                                }, '*');
+                            }
+                            return;
+                        } else if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
+                            // 原紙箱からのコピー
+                            console.log('[FIGURE EDITOR] 原紙箱からのドロップを親ウィンドウに委譲');
+
+                            // ドロップ位置を取得
+                            const rect = this.canvas.getBoundingClientRect();
+                            const x = e.clientX - rect.left;
+                            const y = e.clientY - rect.top;
+
+                            // 親ウィンドウにメッセージを送信
+                            if (window.parent && window.parent !== window) {
+                                window.parent.postMessage({
+                                    type: 'base-file-drop-request',
+                                    dragData: dragData,
+                                    dropPosition: { x, y },
+                                    clientX: e.clientX,
+                                    clientY: e.clientY
+                                }, '*');
+                            }
+                            return;
+                        }
+                    } catch (_jsonError) {
+                        // JSON形式でない場合は無視
+                        console.log('[FIGURE EDITOR] 通常のテキストドロップ（無視）');
+                    }
+                }
+            } catch (error) {
+                console.error('[FIGURE EDITOR] ドロップ処理エラー:', error);
+            }
+        });
+
+        // クリップボードペースト
+        document.addEventListener('paste', async (e) => {
+            // このエディタがアクティブな場合のみ処理
+            if (!this.canvas || document.activeElement !== this.canvas) {
+                return;
+            }
+
+            // まずグローバルクリップボードをチェック（仮身データ）
+            const globalClipboard = await this.getGlobalClipboard();
+            if (globalClipboard && globalClipboard.link_id) {
+                e.preventDefault();
+                console.log('[FIGURE EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
+                // キャンバス中央に配置
+                const x = this.canvas.width / 2;
+                const y = this.canvas.height / 2;
+                this.insertVirtualObject(x, y, globalClipboard);
+                this.setStatus('仮身をクリップボードから貼り付けました');
+                return;
+            }
+
+            // 画像データをチェック
+            const items = e.clipboardData.items;
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].type.startsWith('image/')) {
+                    e.preventDefault();
+                    const blob = items[i].getAsFile();
+                    console.log('[FIGURE EDITOR] 画像をクリップボードからペースト');
+                    // キャンバス中央に配置
+                    const x = this.canvas.width / 2;
+                    const y = this.canvas.height / 2;
+                    await this.insertImage(x, y, blob);
+                    return;
+                }
+            }
+        });
+    }
+
+    /**
+     * グローバルマウスイベントハンドラーを設定（仮身一覧プラグインと同じパターン）
+     */
+    setupGlobalMouseHandlers() {
+        // ドラッグ用のmousemoveハンドラ
+        const handleDragMouseMove = (_e) => {
+        };
+
+        // スロットル版のmousemoveハンドラ（60FPS制限）
+        const throttledDragMouseMove = window.throttleRAF ? window.throttleRAF(handleDragMouseMove) : handleDragMouseMove;
+
+        // document全体でのmousedown（iframe上のクリックも検出するため）
+        document.addEventListener('mousedown', (e) => {
+            // 仮身要素内でのmousedownを検出
+            const vobjElement = e.target.closest('.virtual-object');
+            if (vobjElement) {
+                // 基本図形編集プラグインではiframe無効化は不要
+                console.log('[FIGURE EDITOR] document mousedown: 仮身要素内');
+            }
+        }, { capture: true });
+
+        // document全体でのmousemove
+        document.addEventListener('mousemove', throttledDragMouseMove);
+
+        // document全体でのmouseup
+        document.addEventListener('mouseup', (e) => {
+            console.log('[FIGURE EDITOR] document mouseup検知 isDblClickDrag:', this.dblClickDragState.isDblClickDrag, 'isDblClickDragCandidate:', this.dblClickDragState.isDblClickDragCandidate, 'button:', e.button);
+
+            // ダブルクリック+ドラッグのプレビュー要素を削除
+            const preview = this.dblClickDragState.previewElement;
+            if (preview) {
+                preview.remove();
+                this.dblClickDragState.previewElement = null;
+            }
+
+            // ダブルクリック候補でドラッグしなかった場合、仮身を開く
+            if (this.dblClickDragState.isDblClickDragCandidate) {
+                console.log('[FIGURE EDITOR] ダブルクリック検出、仮身を開く');
+
+                const dblClickedShape = this.dblClickDragState.dblClickedShape;
+                const dblClickedElement = this.dblClickDragState.dblClickedElement;
+
+                if (dblClickedShape && dblClickedElement && !this.readonly) {
+                    // ダブルクリックされた仮身を選択状態にする
+                    if (!this.selectedShapes.includes(dblClickedShape)) {
+                        this.selectedShapes = [dblClickedShape];
+                    }
+
+                    // 仮身を開く
+                    this.openRealObjectWithDefaultApp();
+                }
+
+                // draggableをtrueに戻す
+                if (dblClickedElement) {
+                    dblClickedElement.setAttribute('draggable', 'true');
+                }
+
+                // 状態をクリア
+                this.dblClickDragState.isDblClickDragCandidate = false;
+                this.dblClickDragState.dblClickedShape = null;
+                this.dblClickDragState.dblClickedElement = null;
+            }
+        });
+    }
+
+    /**
+     * コンテンツサイズを計算
+     */
+    calculateContentSize() {
+        // マージン
+        const MARGIN = 50;
+
+        // 図形が無い場合は最小サイズを返す（十分な描画領域を確保）
+        if (this.shapes.length === 0) {
+            return {
+                width: 800,
+                height: 600
+            };
+        }
+
+        // すべての図形の範囲を計算
+        let maxRight = 0;
+        let maxBottom = 0;
+
+        this.shapes.forEach(shape => {
+            let right = 0;
+            let bottom = 0;
+
+            if (shape.type === 'rect' || shape.type === 'textbox' || shape.type === 'virtual-object' || shape.type === 'image' || shape.type === 'pixelmap') {
+                // startX, startY, endX, endY を使う図形
+                right = Math.max(shape.startX || 0, shape.endX || 0);
+                bottom = Math.max(shape.startY || 0, shape.endY || 0);
+            } else if (shape.type === 'circle') {
+                // 円: x, y, radius
+                right = (shape.x || 0) + (shape.radius || 0) * 2;
+                bottom = (shape.y || 0) + (shape.radius || 0) * 2;
+            } else if (shape.type === 'ellipse') {
+                // 楕円: x, y, radiusX, radiusY
+                right = (shape.x || 0) + (shape.radiusX || 0) * 2;
+                bottom = (shape.y || 0) + (shape.radiusY || 0) * 2;
+            } else if (shape.type === 'line') {
+                right = Math.max(shape.startX || 0, shape.endX || 0);
+                bottom = Math.max(shape.startY || 0, shape.endY || 0);
+            } else if (shape.type === 'polygon' || shape.type === 'polyline' || shape.type === 'spline' || shape.type === 'curve') {
+                // ポリゴン/ポリライン: points配列
+                if (shape.points && shape.points.length > 0) {
+                    shape.points.forEach(point => {
+                        right = Math.max(right, point.x || 0);
+                        bottom = Math.max(bottom, point.y || 0);
+                    });
+                }
+            } else if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') {
+                // 弧: x, y, radius (または radiusX, radiusY)
+                const rx = shape.radiusX || shape.radius || 0;
+                const ry = shape.radiusY || shape.radius || 0;
+                right = (shape.x || 0) + rx;
+                bottom = (shape.y || 0) + ry;
+            }
+
+            maxRight = Math.max(maxRight, right);
+            maxBottom = Math.max(maxBottom, bottom);
+        });
+
+        // マージンを追加
+        const contentWidth = maxRight + MARGIN;
+        const contentHeight = maxBottom + MARGIN;
+
+        return {
+            width: contentWidth,
+            height: contentHeight
+        };
+    }
+
+    /**
+     * スクロールバー更新通知（通常はデバウンス版を使用）
+     */
+    notifyScrollbarUpdate() {
+        // デバウンス版が利用可能ならそれを使用
+        if (this.debouncedNotifyScrollbarUpdate) {
+            this.debouncedNotifyScrollbarUpdate();
+        } else {
+            // フォールバック: 即座に実行
+            this.notifyScrollbarUpdateImmediate();
+        }
+    }
+
+    /**
+     * スクロールバー更新通知（即座実行版）
+     */
+    notifyScrollbarUpdateImmediate() {
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'update-scrollbars'
+            }, '*');
+        }
+    }
+
+    /**
+     * スクロールイベントを処理
+     */
+    handleScroll(scrollLeft, scrollTop) {
+        const container = document.querySelector('.plugin-content');
+        if (container) {
+            // コンテナをスクロール
+            container.scrollLeft = scrollLeft;
+            container.scrollTop = scrollTop;
+            console.log('[FIGURE EDITOR] スクロール位置更新:', scrollLeft, scrollTop);
+        }
+    }
+
+    selectTool(tool) {
+        this.currentTool = tool;
+        console.log('[FIGURE EDITOR] ツール選択:', tool);
+
+        // キャンバスツール以外が選択された場合、ピクセルマップモードを抜ける
+        if (tool !== 'canvas' && this.isPixelmapMode) {
+            this.exitPixelmapMode();
+        }
+
+        // カーソルの形状を変更
+        switch (tool) {
+            case 'select':
+                this.canvas.style.cursor = 'default';
+                break;
+            case 'pencil':
+            case 'brush':
+                this.canvas.style.cursor = 'crosshair';
+                break;
+            default:
+                this.canvas.style.cursor = 'crosshair';
+        }
+    }
+
+    /**
+     * 道具パネルウィンドウを開く
+     */
+    openToolPanelWindow() {
+        console.log('[FIGURE EDITOR] 道具パネルウィンドウを開く');
+
+        // 親ウィンドウに道具パネルウィンドウの作成を要求
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'open-tool-panel-window',
+                pluginId: 'basic-figure-editor',
+                settings: {
+                    fillColor: this.fillColor,
+                    fillEnabled: this.fillEnabled,
+                    strokeColor: this.strokeColor,
+                    lineWidth: this.lineWidth,
+                    linePattern: this.linePattern,
+                    cornerRadius: this.cornerRadius
+                }
+            }, '*');
+        }
+    }
+
+    /**
+     * 線種パターンを適用
+     */
+    applyLinePattern(pattern) {
+        switch (pattern) {
+            case 'dotted':
+                this.ctx.setLineDash([2, 3]);
+                break;
+            case 'dashed':
+                this.ctx.setLineDash([8, 5]);
+                break;
+            case 'solid':
+            default:
+                this.ctx.setLineDash([]);
+                break;
+        }
+    }
+
+    /**
+     * 角丸長方形を描画
+     */
+    drawRoundedRect(x, y, width, height, radius, fillEnabled) {
+        this.ctx.beginPath();
+        this.ctx.moveTo(x + radius, y);
+        this.ctx.lineTo(x + width - radius, y);
+        this.ctx.arcTo(x + width, y, x + width, y + radius, radius);
+        this.ctx.lineTo(x + width, y + height - radius);
+        this.ctx.arcTo(x + width, y + height, x + width - radius, y + height, radius);
+        this.ctx.lineTo(x + radius, y + height);
+        this.ctx.arcTo(x, y + height, x, y + height - radius, radius);
+        this.ctx.lineTo(x, y + radius);
+        this.ctx.arcTo(x, y, x + radius, y, radius);
+        this.ctx.closePath();
+        const shouldFill = fillEnabled !== undefined ? fillEnabled : true;
+        if (shouldFill) {
+            this.ctx.fill();
+        }
+        this.ctx.stroke();
+    }
+
+    /**
+     * 角丸多角形を描画
+     */
+    drawRoundedPolygon(points, radius, fillEnabled) {
+        if (points.length < 3) return;
+
+        this.ctx.beginPath();
+
+        for (let i = 0; i < points.length; i++) {
+            const p1 = points[i];
+            const p2 = points[(i + 1) % points.length];
+            const p0 = points[(i - 1 + points.length) % points.length];
+
+            // 頂点への方向ベクトルを計算
+            const dx1 = p1.x - p0.x;
+            const dy1 = p1.y - p0.y;
+            const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+
+            const dx2 = p2.x - p1.x;
+            const dy2 = p2.y - p1.y;
+            const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+
+            // 正規化
+            const nx1 = dx1 / len1;
+            const ny1 = dy1 / len1;
+            const nx2 = dx2 / len2;
+            const ny2 = dy2 / len2;
+
+            // 角丸の開始点と終了点
+            const offset = Math.min(radius, len1 / 2, len2 / 2);
+            const startX = p1.x - nx1 * offset;
+            const startY = p1.y - ny1 * offset;
+            const endX = p1.x + nx2 * offset;
+            const endY = p1.y + ny2 * offset;
+
+            if (i === 0) {
+                this.ctx.moveTo(startX, startY);
+            } else {
+                this.ctx.lineTo(startX, startY);
+            }
+
+            this.ctx.arcTo(p1.x, p1.y, endX, endY, offset);
+        }
+
+        this.ctx.closePath();
+        const shouldFill = fillEnabled !== undefined ? fillEnabled : true;
+        if (shouldFill) {
+            this.ctx.fill();
+        }
+        this.ctx.stroke();
+    }
+
+    handleMouseDown(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        let x = e.clientX - rect.left;
+        let y = e.clientY - rect.top;
+
+        // 格子点拘束を適用
+        const snapped = this.snapToGrid(x, y);
+        this.startX = snapped.x;
+        this.startY = snapped.y;
+        this.isDrawing = true;
+
+        if (this.currentTool === 'select') {
+            // 図形選択モード
+            // リサイズハンドルをクリックしたかチェック
+            const resizeHandle = this.getResizeHandleAt(this.startX, this.startY);
+            if (resizeHandle) {
+                // 保護されている図形かチェック
+                if (resizeHandle.shape.locked || resizeHandle.shape.isBackground) {
+                    const protectionType = resizeHandle.shape.isBackground ? '背景化' : '固定化';
+                    console.log('[FIGURE EDITOR] 保護されている図形のためリサイズできません:', protectionType);
+                    this.setStatus(`保護されている図形のためリサイズできません (${protectionType})`);
+                    return;
+                }
+
+                // リサイズ開始
+                this.isResizing = true;
+                this.resizingShape = resizeHandle.shape;
+                this.resizeStartX = this.startX;
+                this.resizeStartY = this.startY;
+                this.resizeOriginalBounds = {
+                    startX: resizeHandle.shape.startX,
+                    startY: resizeHandle.shape.startY,
+                    endX: resizeHandle.shape.endX,
+                    endY: resizeHandle.shape.endY
+                };
+
+                // リサイズプレビュー枠を作成
+                this.createResizePreviewBox(resizeHandle.shape);
+
+                // 仮身の場合、iframe の pointer-events を無効化し、z-indexを下げる
+                if (resizeHandle.shape.type === 'virtual-object' && resizeHandle.shape.expandedElement) {
+                    resizeHandle.shape.expandedElement.style.pointerEvents = 'none';
+                    resizeHandle.shape.originalZIndex = resizeHandle.shape.expandedElement.style.zIndex;
+                    resizeHandle.shape.expandedElement.style.zIndex = '1';
+                }
+
+                return;
+            }
+
+            // クリック位置に選択中の図形があるかチェック
+            let clickedSelectedShape = false;
+            for (const shape of this.selectedShapes) {
+                if (this.isPointInShape(this.startX, this.startY, shape)) {
+                    clickedSelectedShape = true;
+                    break;
+                }
+            }
+
+            if (clickedSelectedShape && !e.shiftKey) {
+                // 選択済みの図形をクリックした場合
+
+                // 保護されている図形があるかチェック
+                const hasProtectedShape = this.selectedShapes.some(shape =>
+                    shape.locked || shape.isBackground
+                );
+
+                if (hasProtectedShape) {
+                    // 保護されている図形が含まれている場合はドラッグを禁止
+                    const protectedShapes = this.selectedShapes.filter(shape =>
+                        shape.locked || shape.isBackground
+                    );
+                    const protectionTypes = protectedShapes.map(shape => {
+                        if (shape.isBackground) return '背景化';
+                        if (shape.locked) return '固定化';
+                        return '';
+                    }).filter(t => t).join('、');
+
+                    console.log('[FIGURE EDITOR] 保護されている図形が含まれているため移動できません:', protectionTypes);
+                    this.setStatus(`保護されている図形が含まれているため移動できません (${protectionTypes})`);
+                    return;
+                }
+
+                // 仮身図形の場合、DOM要素のpointer-eventsを有効化（ドラッグ用）
+                this.selectedShapes.forEach(shape => {
+                    if (shape.type === 'virtual-object' && shape.vobjElement) {
+                        shape.vobjElement.style.pointerEvents = 'auto';
+                    }
+                });
+
+                // ドラッグ開始（仮身も含む）
+                this.isDraggingShape = true;
+                this.dragOffsets = this.selectedShapes.map(shape => ({
+                    shape: shape,
+                    offsetX: this.startX - (shape.startX || 0),
+                    offsetY: this.startY - (shape.startY || 0),
+                    offsetEndX: shape.endX !== undefined ? this.startX - shape.endX : 0,
+                    offsetEndY: shape.endY !== undefined ? this.startY - shape.endY : 0
+                }));
+            } else {
+                // クリック位置に図形があるかチェック
+                let shapeFound = false;
+                for (let i = this.shapes.length - 1; i >= 0; i--) {
+                    const shape = this.shapes[i];
+                    if (this.isPointInShape(this.startX, this.startY, shape)) {
+                        shapeFound = true;
+                        break;
+                    }
+                }
+
+                if (shapeFound) {
+                    // 図形をクリックした場合は選択
+                    this.selectShapeAt(this.startX, this.startY, e.shiftKey);
+                } else {
+                    // 空白エリアをクリックした場合は矩形選択モード開始
+                    this.isRectangleSelecting = true;
+                    this.selectionRect = {
+                        startX: this.startX,
+                        startY: this.startY,
+                        endX: this.startX,
+                        endY: this.startY
+                    };
+
+                    // Shiftキーが押されていない場合は既存の選択をクリア
+                    if (!e.shiftKey) {
+                        this.selectedShapes = [];
+                        this.redraw();
+                    }
+                }
+            }
+        } else if (this.currentTool === 'text') {
+            // 文字枠作成モード - 長方形を描くように枠を作成
+            this.currentShape = {
+                type: 'textbox',
+                startX: this.startX,
+                startY: this.startY,
+                endX: this.startX,
+                endY: this.startY,
+                content: '',
+                fontSize: this.defaultFontSize,
+                fontFamily: this.defaultFontFamily,
+                textColor: this.defaultTextColor,
+                fillColor: 'transparent',
+                strokeColor: 'transparent',
+                lineWidth: 0,
+                decorations: {
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    strikethrough: false
+                }
+            };
+        } else if (this.currentTool === 'canvas') {
+            // ピクセルマップモード
+            console.log('[FIGURE EDITOR] キャンバスツールクリック - isPixelmapMode:', this.isPixelmapMode, '座標:', this.startX, this.startY);
+
+            if (!this.isPixelmapMode) {
+                // ピクセルマップ枠作成モード - クリック位置の既存ピクセルマップをチェック
+                const clickedPixelmap = this.findShapeAt(this.startX, this.startY, 'pixelmap');
+                console.log('[FIGURE EDITOR] clickedPixelmap:', clickedPixelmap);
+
+                if (clickedPixelmap) {
+                    // 既存のピクセルマップをクリック -> 編集モードに入る
+                    console.log('[FIGURE EDITOR] 既存ピクセルマップをクリック、編集モードに入ります');
+                    this.enterPixelmapMode(clickedPixelmap);
+                    this.isDrawing = false;
+                } else {
+                    // 新規ピクセルマップ枠を作成
+                    console.log('[FIGURE EDITOR] 新規ピクセルマップ枠を作成開始');
+                    this.currentShape = {
+                        type: 'pixelmap',
+                        startX: this.startX,
+                        startY: this.startY,
+                        endX: this.startX,
+                        endY: this.startY,
+                        backgroundColor: '#ffffff',
+                        imageData: null
+                    };
+                }
+            } else {
+                // ピクセルマップモード内での描画
+                console.log('[FIGURE EDITOR] ピクセルマップモード内でのクリック - 描画処理を実行');
+
+                // ピクセルマップ枠内かチェック
+                if (this.editingPixelmap && this.isPointInShape(this.startX, this.startY, this.editingPixelmap)) {
+                    // 枠内でのクリック -> 描画
+                    this.handlePixelmapDraw(this.startX, this.startY);
+                } else {
+                    // 枠外でのクリック -> 編集モードを終了
+                    console.log('[FIGURE EDITOR] ピクセルマップ枠外をクリック - 編集モードを終了');
+                    this.exitPixelmapMode();
+                    this.isDrawing = false;
+                }
+            }
+        } else if (this.currentTool === 'pencil' || this.currentTool === 'brush' || this.currentTool === 'curve') {
+            // フリーハンド描画開始
+            this.currentPath = [{ x: this.startX, y: this.startY }];
+            this.currentShape = {
+                type: this.currentTool,
+                path: this.currentPath,
+                strokeColor: this.strokeColor,
+                fillColor: this.fillColor,
+                lineWidth: this.currentTool === 'brush' ? this.lineWidth * 2 : this.lineWidth,
+                linePattern: this.linePattern
+            };
+        } else if (this.currentTool === 'polygon') {
+            // 多角形描画（最初はドラッグ、その後クリックで頂点追加）
+            if (!this.currentShape) {
+                // 最初の頂点：ドラッグで第2頂点を決定
+                this.currentShape = {
+                    type: 'polygon',
+                    points: [{ x: this.startX, y: this.startY }],
+                    strokeColor: this.strokeColor,
+                    fillColor: this.fillEnabled ? this.fillColor : 'transparent',
+                    lineWidth: this.lineWidth,
+                    linePattern: this.linePattern,
+                    cornerRadius: this.cornerRadius,
+                    tempEndX: this.startX,
+                    tempEndY: this.startY
+                };
+                this.isFirstPolygonLine = true;
+                // isDrawingをtrueのままにしてドラッグ可能にする
+                // 初期表示（開始点のみ）を描画
+                this.redraw();
+                this.drawShape(this.currentShape);
+            } else {
+                // 2つ目以降の頂点追加
+                this.currentShape.points.push({ x: this.startX, y: this.startY });
+                this.currentShape.tempEndX = this.startX;
+                this.currentShape.tempEndY = this.startY;
+                this.redraw();
+                this.drawShape(this.currentShape);
+                // ドラッグ不要なのでisDrawingをfalseに
+                this.isDrawing = false;
+            }
+        } else {
+            // 通常の図形描画開始
+            this.currentShape = {
+                type: this.currentTool,
+                startX: this.startX,
+                startY: this.startY,
+                endX: this.startX,
+                endY: this.startY,
+                strokeColor: this.strokeColor,
+                fillColor: this.fillEnabled ? this.fillColor : 'transparent',
+                lineWidth: this.lineWidth,
+                linePattern: this.linePattern,
+                cornerRadius: this.currentTool === 'rect' || this.currentTool === 'polygon' ? this.cornerRadius : 0
+            };
+        }
+    }
+
+    handleMouseMove(e) {
+        // 多角形描画中は常にプレビュー表示を更新
+        const isPolygonDrawing = this.currentTool === 'polygon' && this.currentShape;
+        if (!this.isDrawing && !isPolygonDrawing && !this.isRectangleSelecting) return;
+
+        const rect = this.canvas.getBoundingClientRect();
+        let currentX = e.clientX - rect.left;
+        let currentY = e.clientY - rect.top;
+
+        // 矩形選択中
+        if (this.isRectangleSelecting) {
+            this.selectionRect.endX = currentX;
+            this.selectionRect.endY = currentY;
+            this.redraw();
+            return;
+        }
+
+        // ピクセルマップモードでの描画
+        if (this.isPixelmapMode && this.currentTool === 'canvas') {
+            this.handlePixelmapDraw(currentX, currentY);
+            return;
+        }
+
+        if (this.isResizing) {
+            // リサイズ中
+            const shape = this.resizingShape;
+            const deltaX = currentX - this.resizeStartX;
+            const deltaY = currentY - this.resizeStartY;
+
+            // 仮身の場合の最小サイズを設定
+            let minWidth = 10; // 通常の図形の最小幅
+            let minHeight = 10; // 通常の図形の最小高さ
+
+            if (shape.type === 'virtual-object') {
+                minWidth = 50; // 仮身の最小幅
+                minHeight = shape.originalHeight || 32; // chszから計算された元の高さ
+            }
+
+            // シフトキーが押されている場合は縦横比を維持
+            if (e.shiftKey) {
+                const originalWidth = Math.abs(this.resizeOriginalBounds.endX - this.resizeOriginalBounds.startX);
+                const originalHeight = Math.abs(this.resizeOriginalBounds.endY - this.resizeOriginalBounds.startY);
+                const aspectRatio = originalWidth / originalHeight;
+
+                // より変化量の大きい方向に合わせる
+                if (Math.abs(deltaX) > Math.abs(deltaY)) {
+                    shape.endX = this.resizeOriginalBounds.endX + deltaX;
+                    shape.endY = this.resizeOriginalBounds.endY + deltaX / aspectRatio;
+                } else {
+                    shape.endY = this.resizeOriginalBounds.endY + deltaY;
+                    shape.endX = this.resizeOriginalBounds.endX + deltaY * aspectRatio;
+                }
+            } else {
+                // 自由変形
+                shape.endX = this.resizeOriginalBounds.endX + deltaX;
+                shape.endY = this.resizeOriginalBounds.endY + deltaY;
+            }
+
+            // 最小サイズを適用
+            const currentWidth = shape.endX - shape.startX;
+            const currentHeight = shape.endY - shape.startY;
+
+            if (currentWidth < minWidth) {
+                shape.endX = shape.startX + minWidth;
+            }
+            if (currentHeight < minHeight) {
+                shape.endY = shape.startY + minHeight;
+            }
+
+            // 仮身の場合、iframe のサイズを更新（展開済みの場合のみ）
+            if (shape.type === 'virtual-object' && shape.expanded) {
+                const newHeight = shape.endY - shape.startY;
+                const newWidth = shape.endX - shape.startX;
+                this.updateExpandedVirtualObjectSize(shape, newWidth, newHeight);
+            }
+
+            // 仮身DOM要素のサイズを更新
+            if (shape.type === 'virtual-object' && shape.vobjElement) {
+                const newWidth = shape.endX - shape.startX;
+                const newHeight = shape.endY - shape.startY;
+                shape.vobjElement.style.width = `${newWidth}px`;
+                shape.vobjElement.style.height = `${newHeight}px`;
+            }
+
+            // リサイズプレビュー枠を更新
+            this.updateResizePreviewBox(shape);
+
+            this.redraw();
+            this.isModified = true;
+            return;
+        }
+
+        if (this.isDraggingShape) {
+            // 図形をドラッグ移動中
+            this.dragOffsets.forEach(offset => {
+                const shape = offset.shape;
+                // 図形の左上座標を計算
+                let newStartX = currentX - offset.offsetX;
+                let newStartY = currentY - offset.offsetY;
+
+                // 格子点拘束を図形の左上座標に適用
+                if (this.gridMode === 'snap' && shape.startX !== undefined && shape.startY !== undefined) {
+                    const snapped = this.snapToGrid(newStartX, newStartY);
+                    const deltaX = snapped.x - newStartX;
+                    const deltaY = snapped.y - newStartY;
+                    newStartX = snapped.x;
+                    newStartY = snapped.y;
+
+                    // endXとendYも同じdeltaで調整
+                    if (shape.endX !== undefined && shape.endY !== undefined) {
+                        shape.endX = (currentX - offset.offsetEndX) + deltaX;
+                        shape.endY = (currentY - offset.offsetEndY) + deltaY;
+                    }
+                } else if (shape.endX !== undefined && shape.endY !== undefined) {
+                    shape.endX = currentX - offset.offsetEndX;
+                    shape.endY = currentY - offset.offsetEndY;
+                }
+
+                if (shape.startX !== undefined && shape.startY !== undefined) {
+                    const deltaX = newStartX - shape.startX;
+                    const deltaY = newStartY - shape.startY;
+
+                    shape.startX = newStartX;
+                    shape.startY = newStartY;
+
+                    // グループの場合、子図形も移動
+                    if (shape.type === 'group' && shape.shapes) {
+                        this.moveGroupShapes(shape, deltaX, deltaY);
+                    }
+                }
+
+                // パスを持つ図形（フリーハンド、多角形）の場合
+                if (shape.path) {
+                    const deltaX = currentX - this.startX;
+                    const deltaY = currentY - this.startY;
+                    shape.path = shape.path.map(p => ({
+                        x: p.x + deltaX,
+                        y: p.y + deltaY
+                    }));
+                }
+
+                if (shape.points) {
+                    const deltaX = currentX - this.startX;
+                    const deltaY = currentY - this.startY;
+                    shape.points = shape.points.map(p => ({
+                        x: p.x + deltaX,
+                        y: p.y + deltaY
+                    }));
+                }
+
+                // 展開された仮身のiframe位置を更新
+                if (shape.type === 'virtual-object' && shape.expanded && shape.expandedElement) {
+                    const chsz = shape.virtualObject.chsz || 14;
+                    const titleBarHeight = chsz + 16;
+                    shape.expandedElement.style.left = `${shape.startX}px`;
+                    shape.expandedElement.style.top = `${shape.startY + titleBarHeight}px`;
+                }
+
+                // 仮身DOM要素の位置を更新
+                if (shape.type === 'virtual-object' && shape.vobjElement) {
+                    shape.vobjElement.style.left = `${shape.startX}px`;
+                    shape.vobjElement.style.top = `${shape.startY}px`;
+                }
+            });
+
+            // ドラッグ開始位置を更新
+            this.startX = currentX;
+            this.startY = currentY;
+            this.redraw();
+            this.isModified = true;
+        } else if (this.isPixelmapMode && this.currentTool === 'canvas') {
+            // ピクセルマップモードでのドラッグ描画
+            this.handlePixelmapDraw(currentX, currentY);
+        } else if (this.currentTool === 'pencil' || this.currentTool === 'brush' || this.currentTool === 'curve') {
+            // フリーハンド描画のパスに点を追加
+            this.currentPath.push({ x: currentX, y: currentY });
+            this.currentShape.path = this.currentPath;
+            this.redraw();
+            this.drawShape(this.currentShape);
+        } else if (this.currentTool === 'polygon' && this.currentShape) {
+            // 多角形描画中：次の頂点位置をプレビュー表示
+            if (this.isFirstPolygonLine) {
+                // 最初の線はドラッグ中
+                this.currentShape.tempEndX = currentX;
+                this.currentShape.tempEndY = currentY;
+            } else {
+                // 2つ目以降：マウス位置に向かってプレビューライン表示
+                this.currentShape.tempEndX = currentX;
+                this.currentShape.tempEndY = currentY;
+            }
+            this.redraw();
+            this.drawShape(this.currentShape);
+        } else if (this.currentShape) {
+            // 通常の図形描画
+            // 格子点拘束を適用（フリーハンド以外）
+            if (this.gridMode === 'snap' && this.currentTool !== 'curve' && this.currentTool !== 'pencil' && this.currentTool !== 'brush') {
+                const snapped = this.snapToGrid(currentX, currentY);
+                currentX = snapped.x;
+                currentY = snapped.y;
+            }
+
+            // Shiftキーが押されている場合、長方形と円は縦横比1:1にする
+            if (e.shiftKey && (this.currentTool === 'rect' || this.currentTool === 'ellipse')) {
+                const deltaX = currentX - this.startX;
+                const deltaY = currentY - this.startY;
+
+                // 変化量の大きい方向に合わせて正方形/正円にする
+                const size = Math.max(Math.abs(deltaX), Math.abs(deltaY));
+
+                // 符号を保持して適用
+                currentX = this.startX + (deltaX >= 0 ? size : -size);
+                currentY = this.startY + (deltaY >= 0 ? size : -size);
+            }
+
+            this.currentShape.endX = currentX;
+            this.currentShape.endY = currentY;
+            this.redraw();
+            this.drawShape(this.currentShape);
+        }
+    }
+
+    handleMouseUp(e) {
+        // 矩形選択終了
+        if (this.isRectangleSelecting) {
+            this.isRectangleSelecting = false;
+
+            if (this.selectionRect) {
+                const shapesInRect = this.getShapesInRectangle(
+                    this.selectionRect.startX,
+                    this.selectionRect.startY,
+                    this.selectionRect.endX,
+                    this.selectionRect.endY
+                );
+
+                if (e.shiftKey) {
+                    // Shiftキー: 既存の選択にトグル追加
+                    shapesInRect.forEach(shape => {
+                        const index = this.selectedShapes.indexOf(shape);
+                        if (index >= 0) {
+                            // 既に選択されている場合は解除
+                            this.selectedShapes.splice(index, 1);
+                        } else {
+                            // 選択されていない場合は追加
+                            this.selectedShapes.push(shape);
+                        }
+                    });
+                } else {
+                    // 通常: 矩形内の図形のみを選択
+                    this.selectedShapes = shapesInRect;
+                }
+
+                this.selectionRect = null;
+                this.redraw();
+            }
+            return;
+        }
+
+        if (!this.isDrawing) return;
+
+        // 多角形描画中の処理
+        if (this.currentTool === 'polygon') {
+            if (this.isFirstPolygonLine) {
+                // 最初の線のドラッグ終了：2つ目の頂点を追加
+                const rect = this.canvas.getBoundingClientRect();
+                const endX = e.clientX - rect.left;
+                const endY = e.clientY - rect.top;
+                this.currentShape.points.push({ x: endX, y: endY });
+                this.currentShape.tempEndX = endX;
+                this.currentShape.tempEndY = endY;
+                this.isFirstPolygonLine = false;
+                this.redraw();
+                this.drawShape(this.currentShape);
+            }
+            this.isDrawing = false;
+            return;
+        }
+
+        this.isDrawing = false;
+
+        if (this.isResizing) {
+            // リサイズ終了
+            const resizedShape = this.resizingShape;
+
+            // リサイズプレビュー枠を削除
+            this.removeResizePreviewBox();
+
+            // 仮身の場合、iframe の pointer-events と z-index を元に戻す
+            if (resizedShape && resizedShape.type === 'virtual-object' && resizedShape.expandedElement) {
+                resizedShape.expandedElement.style.pointerEvents = 'none'; // キャンバス側でイベント処理
+                if (resizedShape.originalZIndex !== undefined) {
+                    resizedShape.expandedElement.style.zIndex = resizedShape.originalZIndex;
+                    delete resizedShape.originalZIndex;
+                }
+            }
+
+            this.isResizing = false;
+            this.resizingShape = null;
+            this.resizeOriginalBounds = null;
+
+            // 仮身のリサイズは makeVirtualObjectResizable() で処理されるため、ここでは何もしない
+            // （古い処理は無効化）
+
+            // Undo用に状態を保存
+            this.saveStateForUndo();
+            // スクロールバー更新を通知
+            this.resizeCanvas();
+        } else if (this.isDraggingShape) {
+            // ドラッグ終了
+            this.isDraggingShape = false;
+
+            // 仮身図形のDOM要素のpointer-eventsを無効化
+            this.shapes.forEach(shape => {
+                if (shape.type === 'virtual-object' && shape.vobjElement) {
+                    shape.vobjElement.style.pointerEvents = 'none';
+                }
+            });
+
+            this.dragOffsets = [];
+            // Undo用に状態を保存
+            this.saveStateForUndo();
+            // スクロールバー更新を通知
+            this.resizeCanvas();
+        } else if (this.currentShape) {
+            // Undo用に状態を保存
+            this.saveStateForUndo();
+
+            // 図形を確定
+            this.shapes.push(this.currentShape);
+
+            // 文字枠の場合は自動的に選択状態にする
+            if (this.currentShape.type === 'textbox') {
+                this.selectedShapes = [this.currentShape];
+            }
+
+            // ピクセルマップ枠の場合は自動的にピクセルマップモードに入る
+            if (this.currentShape.type === 'pixelmap') {
+                this.enterPixelmapMode(this.currentShape);
+            }
+
+            this.currentShape = null;
+            this.currentPath = [];
+            this.redraw();
+            this.isModified = true;
+            // スクロールバー更新を通知
+            this.resizeCanvas();
+        }
+    }
+
+    handleDoubleClick(e) {
+        // 多角形描画中のダブルクリック：多角形を確定
+        if (this.currentTool === 'polygon' && this.currentShape) {
+            this.finishPolygon();
+            return;
+        }
+
+        const rect = this.canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        // ダブルクリック位置にある図形を探す
+        for (let i = this.shapes.length - 1; i >= 0; i--) {
+            const shape = this.shapes[i];
+            if (shape.type === 'textbox' && this.isPointInShape(x, y, shape)) {
+                // 文字枠の編集モードに入る
+                this.enterTextEditMode(shape);
+                return;
+            } else if (shape.type === 'pixelmap' && this.isPointInShape(x, y, shape)) {
+                // ピクセルマップ枠の編集モードに入る（既にモード中でない場合のみ）
+                if (!this.isPixelmapMode) {
+                    this.enterPixelmapMode(shape);
+                }
+                return;
+            } else if (shape.type === 'virtual-object' && this.isPointInShape(x, y, shape)) {
+                // 仮身をダブルクリック：defaultOpenプラグインで実身を開く
+                // 選択状態にしてから開く
+                if (!this.selectedShapes.includes(shape)) {
+                    this.selectedShapes = [shape];
+                }
+                this.openRealObjectWithDefaultApp();
+                return;
+            }
+        }
+    }
+
+    enterTextEditMode(shape) {
+        // 編集中の文字枠を記録
+        this.editingTextBox = shape;
+
+        // contenteditable divを使用してリッチテキスト編集を実現
+        const editor = document.createElement('div');
+        editor.id = 'textbox-editor';
+        editor.contentEditable = true;
+
+        // 既存のコンテンツを設定（HTMLとして）
+        if (shape.richContent) {
+            editor.innerHTML = shape.richContent;
+        } else {
+            editor.textContent = shape.content || '';
+        }
+
+        const minX = Math.min(shape.startX, shape.endX);
+        const minY = Math.min(shape.startY, shape.endY);
+        const width = Math.abs(shape.endX - shape.startX);
+        const height = Math.abs(shape.endY - shape.startY);
+
+        editor.style.position = 'absolute';
+        editor.style.left = `${minX}px`;
+        editor.style.top = `${minY}px`;
+        editor.style.width = `${width}px`;
+        editor.style.height = `${height}px`;
+        editor.style.fontSize = `${shape.fontSize}px`;
+        editor.style.fontFamily = shape.fontFamily;
+        editor.style.color = shape.textColor;
+        editor.style.border = '2px solid #ff8f00';
+        editor.style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
+        editor.style.padding = '5px';
+        editor.style.overflow = 'auto';
+        editor.style.zIndex = '1000';
+        editor.style.outline = 'none';
+        editor.style.whiteSpace = 'pre-wrap';
+        editor.style.overflowWrap = 'break-word';
+
+        this.canvas.parentElement.appendChild(editor);
+        editor.focus();
+
+        // 編集完了
+        const finishEdit = () => {
+            // リッチコンテンツとプレーンテキストを保存
+            shape.richContent = editor.innerHTML;
+            shape.content = editor.textContent || editor.innerText;
+
+            editor.remove();
+            this.editingTextBox = null;
+            this.textEditorElement = null;
+            this.redraw();
+            this.isModified = true;
+            this.saveStateForUndo();
+        };
+
+        editor.addEventListener('blur', finishEdit);
+        editor.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                finishEdit();
+            }
+            e.stopPropagation();
+        });
+
+        // フォント設定変更を受信するためのリスナーを保持
+        this.textEditorElement = editor;
+    }
+
+    /**
+     * 選択範囲にCSSスタイルを適用
+     * @param {string} styleName - CSSスタイル名（例：'fontSize', 'fontFamily', 'color'）
+     * @param {string} value - 適用する値
+     */
+    applyFormatToSelection(styleName, value) {
+        if (!this.textEditorElement) {
+            console.warn('[EDITOR] テキストエディタが開いていません');
+            return;
+        }
+
+        const selection = window.getSelection();
+        if (!selection.rangeCount) {
+            console.warn('[EDITOR] 選択範囲がありません');
+            return;
+        }
+
+        const range = selection.getRangeAt(0);
+
+        // 選択範囲が空の場合は全体に適用
+        if (range.collapsed) {
+            this.textEditorElement.style[styleName] = value;
+            console.log(`[EDITOR] テキスト全体に ${styleName}=${value} を適用`);
+            return;
+        }
+
+        // 選択範囲のコンテンツを取得
+        const selectedContent = range.extractContents();
+
+        // スタイルを適用したspanで包む
+        const span = document.createElement('span');
+        span.style[styleName] = value;
+        span.appendChild(selectedContent);
+
+        // 範囲に挿入
+        range.insertNode(span);
+
+        // 選択範囲を復元
+        selection.removeAllRanges();
+        const newRange = document.createRange();
+        newRange.selectNodeContents(span);
+        selection.addRange(newRange);
+
+        console.log(`[EDITOR] 選択範囲に ${styleName}=${value} を適用`);
+    }
+
+    /**
+     * 選択範囲にテキスト装飾を適用
+     * @param {string} decoration - 装飾タイプ（'bold', 'italic', 'underline', 'strikethrough'）
+     * @param {boolean} enabled - 有効/無効
+     */
+    applyTextDecorationToSelection(decoration, enabled) {
+        if (!this.textEditorElement) {
+            console.warn('[EDITOR] テキストエディタが開いていません');
+            return;
+        }
+
+        const selection = window.getSelection();
+        if (!selection.rangeCount) {
+            console.warn('[EDITOR] 選択範囲がありません');
+            return;
+        }
+
+        const range = selection.getRangeAt(0);
+
+        // 選択範囲が空の場合は全体に適用
+        if (range.collapsed) {
+            this.applyDecorationToElement(this.textEditorElement, decoration, enabled);
+            console.log(`[EDITOR] テキスト全体に ${decoration}=${enabled} を適用`);
+            return;
+        }
+
+        // 選択範囲のコンテンツを取得
+        const selectedContent = range.extractContents();
+
+        // 装飾を適用したspanで包む
+        const span = document.createElement('span');
+        this.applyDecorationToElement(span, decoration, enabled);
+        span.appendChild(selectedContent);
+
+        // 範囲に挿入
+        range.insertNode(span);
+
+        // 選択範囲を復元
+        selection.removeAllRanges();
+        const newRange = document.createRange();
+        newRange.selectNodeContents(span);
+        selection.addRange(newRange);
+
+        console.log(`[EDITOR] 選択範囲に ${decoration}=${enabled} を適用`);
+    }
+
+    /**
+     * 要素に装飾スタイルを適用
+     * @param {HTMLElement} element - 対象要素
+     * @param {string} decoration - 装飾タイプ
+     * @param {boolean} enabled - 有効/無効
+     */
+    applyDecorationToElement(element, decoration, enabled) {
+        switch (decoration) {
+            case 'bold':
+                element.style.fontWeight = enabled ? 'bold' : 'normal';
+                break;
+            case 'italic':
+                element.style.fontStyle = enabled ? 'italic' : 'normal';
+                break;
+            case 'underline':
+                if (enabled) {
+                    const currentDecoration = element.style.textDecoration || '';
+                    if (!currentDecoration.includes('underline')) {
+                        element.style.textDecoration = currentDecoration ? `${currentDecoration} underline` : 'underline';
+                    }
+                } else {
+                    element.style.textDecoration = (element.style.textDecoration || '').replace(/\s*underline\s*/g, '').trim();
+                }
+                break;
+            case 'strikethrough':
+                if (enabled) {
+                    const currentDecoration = element.style.textDecoration || '';
+                    if (!currentDecoration.includes('line-through')) {
+                        element.style.textDecoration = currentDecoration ? `${currentDecoration} line-through` : 'line-through';
+                    }
+                } else {
+                    element.style.textDecoration = (element.style.textDecoration || '').replace(/\s*line-through\s*/g, '').trim();
+                }
+                break;
+        }
+    }
+
+    selectShapeAt(x, y, shiftKey = false) {
+        // クリック位置にある図形を選択
+        for (let i = this.shapes.length - 1; i >= 0; i--) {
+            const shape = this.shapes[i];
+
+            if (this.isPointInShape(x, y, shape)) {
+                if (shiftKey) {
+                    // Shiftキーが押されている場合
+                    const index = this.selectedShapes.indexOf(shape);
+                    if (index >= 0) {
+                        // 既に選択されている場合は選択解除
+                        this.selectedShapes.splice(index, 1);
+                    } else {
+                        // 選択されていない場合は追加
+                        this.selectedShapes.push(shape);
+                    }
+                } else {
+                    // 通常のクリック
+                    const index = this.selectedShapes.indexOf(shape);
+                    if (index >= 0 && this.selectedShapes.length === 1) {
+                        // 単独で選択されている図形をクリックした場合は選択解除
+                        this.selectedShapes = [];
+                    } else {
+                        // 新しく選択
+                        this.selectedShapes = [shape];
+                    }
+                }
+                this.redraw();
+                return;
+            }
+        }
+
+        // 何も選択されなかった場合
+        if (!shiftKey) {
+            this.selectedShapes = [];
+            this.redraw();
+        }
+    }
+
+    isPointInShape(x, y, shape) {
+        // 簡易的な当たり判定
+        const minX = Math.min(shape.startX, shape.endX);
+        const maxX = Math.max(shape.startX, shape.endX);
+        const minY = Math.min(shape.startY, shape.endY);
+        const maxY = Math.max(shape.startY, shape.endY);
+
+        return x >= minX && x <= maxX && y >= minY && y <= maxY;
+    }
+
+    getShapesInRectangle(x1, y1, x2, y2) {
+        // 矩形内の図形を取得（一部でも重なっていればOK）
+        const rectMinX = Math.min(x1, x2);
+        const rectMaxX = Math.max(x1, x2);
+        const rectMinY = Math.min(y1, y2);
+        const rectMaxY = Math.max(y1, y2);
+
+        const shapesInRect = [];
+        for (const shape of this.shapes) {
+            const shapeMinX = Math.min(shape.startX, shape.endX);
+            const shapeMaxX = Math.max(shape.startX, shape.endX);
+            const shapeMinY = Math.min(shape.startY, shape.endY);
+            const shapeMaxY = Math.max(shape.startY, shape.endY);
+
+            // 矩形同士の重なり判定
+            if (!(shapeMaxX < rectMinX || shapeMinX > rectMaxX ||
+                  shapeMaxY < rectMinY || shapeMinY > rectMaxY)) {
+                shapesInRect.push(shape);
+            }
+        }
+        return shapesInRect;
+    }
+
+    getResizeHandleAt(x, y) {
+        // 選択中の図形のリサイズハンドルをチェック
+        const handleSize = 8;
+        const hitArea = handleSize + 2; // ヒット判定領域を少し大きく
+
+        for (const shape of this.selectedShapes) {
+            // 仮身の場合は専用リサイズを使うため、通常のリサイズハンドルは無効
+            if (shape.type === 'virtual-object') {
+                continue;
+            }
+
+            const maxX = Math.max(shape.startX, shape.endX);
+            const maxY = Math.max(shape.startY, shape.endY);
+
+            // 右下のハンドル
+            if (Math.abs(x - maxX) <= hitArea / 2 && Math.abs(y - maxY) <= hitArea / 2) {
+                return { shape: shape, handle: 'bottom-right' };
+            }
+        }
+
+        return null;
+    }
+
+    drawShape(shape) {
+        this.ctx.strokeStyle = shape.strokeColor;
+        this.ctx.fillStyle = shape.fillColor;
+        this.ctx.lineWidth = shape.lineWidth;
+
+        // 線種パターンを設定
+        this.applyLinePattern(shape.linePattern || 'solid');
+
+        const width = shape.endX - shape.startX;
+        const height = shape.endY - shape.startY;
+
+        switch (shape.type) {
+            case 'line':
+                this.ctx.beginPath();
+                this.ctx.moveTo(shape.startX, shape.startY);
+                this.ctx.lineTo(shape.endX, shape.endY);
+                this.ctx.stroke();
+                break;
+
+            case 'rect':
+            case 'roundRect':
+                const cornerRadius = shape.cornerRadius || 0;
+                if (cornerRadius > 0) {
+                    // 角丸長方形
+                    this.drawRoundedRect(shape.startX, shape.startY, width, height, cornerRadius, shape.fillEnabled);
+                } else {
+                    // 通常の長方形
+                    const fillEnabled = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
+                    if (fillEnabled) {
+                        this.ctx.fillRect(shape.startX, shape.startY, width, height);
+                    }
+                    this.ctx.strokeRect(shape.startX, shape.startY, width, height);
+                }
+                break;
+
+            case 'ellipse':
+                const centerX = shape.startX + width / 2;
+                const centerY = shape.startY + height / 2;
+                const radiusX = Math.abs(width / 2);
+                const radiusY = Math.abs(height / 2);
+
+                this.ctx.beginPath();
+                this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+                const fillEnabledEllipse = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
+                if (fillEnabledEllipse) {
+                    this.ctx.fill();
+                }
+                this.ctx.stroke();
+                break;
+
+            case 'arc':
+                // 扇形（円弧 + 中心点への線）
+                const arcCenterX = shape.startX + width / 2;
+                const arcCenterY = shape.startY + height / 2;
+                const arcRadiusX = Math.abs(width / 2);
+                const arcRadiusY = Math.abs(height / 2);
+
+                this.ctx.beginPath();
+                this.ctx.moveTo(arcCenterX, arcCenterY);
+                this.ctx.ellipse(arcCenterX, arcCenterY, arcRadiusX, arcRadiusY, 0, 0, Math.PI / 2);
+                this.ctx.closePath();
+                const fillEnabledArc = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
+                if (fillEnabledArc) {
+                    this.ctx.fill();
+                }
+                this.ctx.stroke();
+                break;
+
+            case 'chord':
+                // 弦（円弧の両端を直線で結ぶ）
+                const chordCenterX = shape.startX + width / 2;
+                const chordCenterY = shape.startY + height / 2;
+                const chordRadiusX = Math.abs(width / 2);
+                const chordRadiusY = Math.abs(height / 2);
+
+                this.ctx.beginPath();
+                this.ctx.ellipse(chordCenterX, chordCenterY, chordRadiusX, chordRadiusY, 0, 0, Math.PI / 2);
+                this.ctx.closePath();
+                const fillEnabledChord = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
+                if (fillEnabledChord) {
+                    this.ctx.fill();
+                }
+                this.ctx.stroke();
+                break;
+
+            case 'elliptical_arc':
+                // 楕円弧（円弧のみ、閉じない）
+                const ellArcCenterX = shape.startX + width / 2;
+                const ellArcCenterY = shape.startY + height / 2;
+                const ellArcRadiusX = Math.abs(width / 2);
+                const ellArcRadiusY = Math.abs(height / 2);
+
+                this.ctx.beginPath();
+                this.ctx.ellipse(ellArcCenterX, ellArcCenterY, ellArcRadiusX, ellArcRadiusY, 0, 0, Math.PI / 2);
+                this.ctx.stroke();
+                break;
+
+            case 'pencil':
+            case 'brush':
+                // フリーハンド描画
+                if (shape.path && shape.path.length > 1) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(shape.path[0].x, shape.path[0].y);
+                    for (let i = 1; i < shape.path.length; i++) {
+                        this.ctx.lineTo(shape.path[i].x, shape.path[i].y);
+                    }
+                    this.ctx.stroke();
+                }
+                break;
+
+            case 'text':
+                // テキスト描画（旧形式）
+                if (shape.text) {
+                    this.ctx.font = shape.fontSize || '16px sans-serif';
+                    this.ctx.fillStyle = shape.strokeColor;
+                    this.ctx.fillText(shape.text, shape.startX, shape.startY);
+                }
+                break;
+
+            case 'textbox':
+                // 文字枠描画
+                this.drawTextBox(shape);
+                break;
+
+            case 'pixelmap':
+                // ピクセルマップ描画
+                this.drawPixelmap(shape);
+                break;
+
+            case 'polygon':
+                // 多角形描画
+                if (shape.points && shape.points.length > 0) {
+                    // 描画中のプレビュー表示
+                    if (shape.tempEndX !== undefined && shape.tempEndY !== undefined) {
+                        // プレビュー中は線のみ描画（塗りつぶしなし）
+                        this.ctx.beginPath();
+
+                        // 既存の全ての頂点を繋ぐ
+                        this.ctx.moveTo(shape.points[0].x, shape.points[0].y);
+                        for (let i = 1; i < shape.points.length; i++) {
+                            this.ctx.lineTo(shape.points[i].x, shape.points[i].y);
+                        }
+
+                        // マウス位置への線（次の頂点候補）
+                        this.ctx.lineTo(shape.tempEndX, shape.tempEndY);
+
+                        // 2点以上ある場合は、開始点への戻り線もプレビュー表示
+                        if (shape.points.length >= 2) {
+                            this.ctx.lineTo(shape.points[0].x, shape.points[0].y);
+                        }
+
+                        // 線のみ描画
+                        this.ctx.stroke();
+                    } else if (shape.points.length > 2) {
+                        // 確定済みの多角形
+                        const cornerRadius = shape.cornerRadius || 0;
+                        if (cornerRadius > 0) {
+                            // 角丸多角形
+                            this.drawRoundedPolygon(shape.points, cornerRadius, shape.fillEnabled);
+                        } else {
+                            // 通常の多角形
+                            this.ctx.beginPath();
+                            this.ctx.moveTo(shape.points[0].x, shape.points[0].y);
+                            for (let i = 1; i < shape.points.length; i++) {
+                                this.ctx.lineTo(shape.points[i].x, shape.points[i].y);
+                            }
+                            this.ctx.closePath();
+                            const fillEnabledPolygon = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
+                            if (fillEnabledPolygon) {
+                                this.ctx.fill();
+                            }
+                            this.ctx.stroke();
+                        }
+                    }
+                }
+                break;
+
+            case 'arc':
+                // 扇形 (arc)
+                if (shape.centerX !== undefined && shape.centerY !== undefined &&
+                    shape.radiusX !== undefined && shape.radiusY !== undefined &&
+                    shape.startAngle !== undefined && shape.endAngle !== undefined) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(shape.centerX, shape.centerY);
+                    this.ctx.lineTo(shape.startX, shape.startY);
+                    this.ctx.ellipse(shape.centerX, shape.centerY, shape.radiusX, shape.radiusY,
+                                     shape.angle || 0, shape.startAngle, shape.endAngle, false);
+                    this.ctx.lineTo(shape.centerX, shape.centerY);
+                    this.ctx.closePath();
+                    this.ctx.fill();
+                    this.ctx.stroke();
+                }
+                break;
+
+            case 'chord':
+                // 弦 (chord)
+                if (shape.centerX !== undefined && shape.centerY !== undefined &&
+                    shape.radiusX !== undefined && shape.radiusY !== undefined &&
+                    shape.startAngle !== undefined && shape.endAngle !== undefined) {
+                    this.ctx.beginPath();
+                    this.ctx.ellipse(shape.centerX, shape.centerY, shape.radiusX, shape.radiusY,
+                                     shape.angle || 0, shape.startAngle, shape.endAngle, false);
+                    this.ctx.closePath();
+                    this.ctx.fill();
+                    this.ctx.stroke();
+                }
+                break;
+
+            case 'elliptical_arc':
+                // 楕円弧 (elliptical arc) - 線のみで塗りつぶしなし
+                if (shape.centerX !== undefined && shape.centerY !== undefined &&
+                    shape.radiusX !== undefined && shape.radiusY !== undefined &&
+                    shape.startAngle !== undefined && shape.endAngle !== undefined) {
+                    this.ctx.beginPath();
+                    this.ctx.ellipse(shape.centerX, shape.centerY, shape.radiusX, shape.radiusY,
+                                     shape.angle || 0, shape.startAngle, shape.endAngle, false);
+                    this.ctx.stroke();
+                }
+                break;
+
+            case 'curve':
+                // 自由曲線（ベジェ曲線）
+                if (shape.path && shape.path.length > 1) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(shape.path[0].x, shape.path[0].y);
+
+                    for (let i = 1; i < shape.path.length - 2; i++) {
+                        const xc = (shape.path[i].x + shape.path[i + 1].x) / 2;
+                        const yc = (shape.path[i].y + shape.path[i + 1].y) / 2;
+                        this.ctx.quadraticCurveTo(shape.path[i].x, shape.path[i].y, xc, yc);
+                    }
+
+                    if (shape.path.length > 2) {
+                        const last = shape.path.length - 1;
+                        this.ctx.quadraticCurveTo(
+                            shape.path[last - 1].x,
+                            shape.path[last - 1].y,
+                            shape.path[last].x,
+                            shape.path[last].y
+                        );
+                    }
+                    this.ctx.stroke();
+                }
+                break;
+
+            case 'group':
+                // グループ化された図形
+                if (shape.shapes) {
+                    shape.shapes.forEach(s => this.drawShape(s));
+                }
+                break;
+
+            case 'virtual-object':
+                // 仮身はDOM要素として描画するため、キャンバス描画はスキップ
+                // renderVirtualObjectsAsElementsメソッドで描画される
+                break;
+
+            case 'image':
+                // 画像描画
+                if (shape.imageElement && shape.imageElement.complete) {
+                    const width = shape.endX - shape.startX;
+                    const height = shape.endY - shape.startY;
+                    const centerX = shape.startX + width / 2;
+                    const centerY = shape.startY + height / 2;
+
+                    this.ctx.save();
+
+                    // 中心点に移動
+                    this.ctx.translate(centerX, centerY);
+
+                    // 回転を適用
+                    if (shape.rotation) {
+                        this.ctx.rotate(shape.rotation * Math.PI / 180);
+                    }
+
+                    // 反転を適用
+                    const scaleX = shape.flipH ? -1 : 1;
+                    const scaleY = shape.flipV ? -1 : 1;
+                    this.ctx.scale(scaleX, scaleY);
+
+                    // 画像を描画（中心を原点として）
+                    this.ctx.drawImage(shape.imageElement, -width / 2, -height / 2, width, height);
+
+                    this.ctx.restore();
+
+                    // 選択されていない場合は枠線を表示
+                    if (!this.selectedShapes.includes(shape)) {
+                        this.ctx.strokeStyle = '#cccccc';
+                        this.ctx.lineWidth = 1;
+                        this.ctx.setLineDash([]);
+                        this.ctx.strokeRect(shape.startX, shape.startY, width, height);
+                    }
+                }
+                break;
+        }
+    }
+
+    /**
+     * キャンバス再描画（通常はスロットル版を使用）
+     */
+    redraw() {
+        // スロットル版が利用可能ならそれを使用
+        if (this.throttledRedraw) {
+            this.throttledRedraw();
+        } else {
+            // フォールバック: 即座に実行
+            this.redrawImmediate();
+        }
+    }
+
+    /**
+     * キャンバス再描画（即座実行版）
+     */
+    redrawImmediate() {
+        // キャンバスをクリア
+        this.ctx.fillStyle = this.bgColor;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // 格子点を描画（最後部）
+        if (this.gridMode === 'show' || this.gridMode === 'snap') {
+            this.drawGrid();
+        }
+
+        // すべての図形を再描画
+        this.shapes.forEach(shape => {
+            this.drawShape(shape);
+        });
+
+        // 選択中の図形にハイライトを表示
+        this.selectedShapes.forEach(shape => {
+            this.drawSelectionHighlight(shape);
+        });
+
+        // 矩形選択のプレビューを描画
+        if (this.isRectangleSelecting && this.selectionRect) {
+            const minX = Math.min(this.selectionRect.startX, this.selectionRect.endX);
+            const maxX = Math.max(this.selectionRect.startX, this.selectionRect.endX);
+            const minY = Math.min(this.selectionRect.startY, this.selectionRect.endY);
+            const maxY = Math.max(this.selectionRect.startY, this.selectionRect.endY);
+
+            this.ctx.save();
+            this.ctx.strokeStyle = 'rgba(0, 123, 255, 0.8)';
+            this.ctx.lineWidth = 1;
+            this.ctx.setLineDash([5, 5]);
+            this.ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+            this.ctx.fillStyle = 'rgba(0, 123, 255, 0.1)';
+            this.ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
+            this.ctx.restore();
+        }
+
+        // 描画中の図形プレビューを表示（マウス停止時もプレビューを維持）
+        if (this.currentShape && (this.isDrawing || this.currentTool === 'polygon')) {
+            this.drawShape(this.currentShape);
+        }
+
+        // 仮身をDOM要素として描画
+        this.renderVirtualObjectsAsElements();
+    }
+
+    drawGrid() {
+        const interval = this.gridInterval;
+        this.ctx.fillStyle = '#666666'; // より濃い色に変更
+
+        // 格子点を描画（1x1ピクセルで正確に）
+        for (let x = 0; x < this.canvas.width; x += interval) {
+            for (let y = 0; y < this.canvas.height; y += interval) {
+                this.ctx.fillRect(x, y, 1, 1);
+            }
+        }
+    }
+
+    snapToGrid(x, y) {
+        // 格子点拘束が有効な場合、座標を最も近い格子点にスナップ
+        if (this.gridMode === 'snap') {
+            const interval = this.gridInterval;
+            return {
+                x: Math.round(x / interval) * interval,
+                y: Math.round(y / interval) * interval
+            };
+        }
+        return { x, y };
+    }
+
+    /**
+     * HTMLリッチテキストをパースして、スタイル付きテキストセグメントに変換
+     * @param {string} html - HTMLリッチテキスト
+     * @param {object} defaultStyle - デフォルトスタイル
+     * @returns {Array} テキストセグメント配列
+     */
+    parseRichText(html, defaultStyle) {
+        if (!html || typeof html !== 'string') {
+            return [];
+        }
+
+        // 一時的なdiv要素を作成してHTMLをパース
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+
+        const segments = [];
+        const parseNode = (node, inheritedStyle) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+                // テキストノードの場合
+                const text = node.textContent;
+                if (text) {
+                    segments.push({
+                        text: text,
+                        style: { ...inheritedStyle }
+                    });
+                }
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                // 要素ノードの場合、スタイルを継承・更新
+                const element = node;
+                const newStyle = { ...inheritedStyle };
+
+                // インラインスタイルから取得
+                if (element.style.fontSize) newStyle.fontSize = parseFloat(element.style.fontSize);
+                if (element.style.fontFamily) newStyle.fontFamily = element.style.fontFamily;
+                if (element.style.color) newStyle.color = element.style.color;
+                if (element.style.fontWeight === 'bold') newStyle.bold = true;
+                if (element.style.fontStyle === 'italic') newStyle.italic = true;
+                if (element.style.textDecoration) {
+                    if (element.style.textDecoration.includes('underline')) newStyle.underline = true;
+                    if (element.style.textDecoration.includes('line-through')) newStyle.strikethrough = true;
+                }
+
+                // タグ名からスタイルを推測
+                if (element.tagName === 'B' || element.tagName === 'STRONG') newStyle.bold = true;
+                if (element.tagName === 'I' || element.tagName === 'EM') newStyle.italic = true;
+                if (element.tagName === 'U') newStyle.underline = true;
+                if (element.tagName === 'S' || element.tagName === 'STRIKE' || element.tagName === 'DEL') newStyle.strikethrough = true;
+
+                // 子ノードを再帰的に処理
+                for (const child of element.childNodes) {
+                    parseNode(child, newStyle);
+                }
+
+                // BRタグの場合は改行を追加
+                if (element.tagName === 'BR') {
+                    segments.push({
+                        text: '\n',
+                        style: { ...newStyle }
+                    });
+                }
+            }
+        };
+
+        // ルートノードから解析開始
+        for (const child of tempDiv.childNodes) {
+            parseNode(child, defaultStyle);
+        }
+
+        return segments;
+    }
+
+    drawTextBox(shape) {
+        const minX = Math.min(shape.startX, shape.endX);
+        const minY = Math.min(shape.startY, shape.endY);
+        const maxX = Math.max(shape.startX, shape.endX);
+        const maxY = Math.max(shape.startY, shape.endY);
+        const width = Math.abs(shape.endX - shape.startX);
+        const height = Math.abs(shape.endY - shape.startY);
+
+        // 選択状態、または作成中（currentShape）、または空の文字枠の場合は枠線を表示
+        const isSelected = this.selectedShapes.includes(shape);
+        const isCurrentShape = this.currentShape === shape;
+        const isEmpty = !shape.content || shape.content.trim() === '';
+
+        if (isSelected || isCurrentShape || isEmpty) {
+            if (isSelected) {
+                // 選択中は橙色の点線
+                this.ctx.strokeStyle = '#ff8f00';
+                this.ctx.lineWidth = 2;
+                this.ctx.setLineDash([5, 5]);
+            } else {
+                // 作成中または空の場合は薄いグレーの点線
+                this.ctx.strokeStyle = '#cccccc';
+                this.ctx.lineWidth = 1;
+                this.ctx.setLineDash([5, 5]);
+            }
+            this.ctx.strokeRect(minX, minY, width, height);
+            this.ctx.setLineDash([]);
+        }
+
+        // テキストを描画（内容がある場合のみ）
+        if (shape.content && shape.content.trim() !== '') {
+            const padding = 5;
+            const maxWidth = width - padding * 2;
+
+            // リッチテキストがある場合はHTML解析、ない場合は通常テキスト
+            let segments = [];
+            if (shape.richContent) {
+                // デフォルトスタイル
+                const defaultStyle = {
+                    fontSize: shape.fontSize,
+                    fontFamily: shape.fontFamily,
+                    color: shape.textColor,
+                    bold: shape.decorations.bold,
+                    italic: shape.decorations.italic,
+                    underline: shape.decorations.underline,
+                    strikethrough: shape.decorations.strikethrough
+                };
+                segments = this.parseRichText(shape.richContent, defaultStyle);
+            } else {
+                // 通常のテキストを1つのセグメントとして扱う
+                segments = [{
+                    text: shape.content,
+                    style: {
+                        fontSize: shape.fontSize,
+                        fontFamily: shape.fontFamily,
+                        color: shape.textColor,
+                        bold: shape.decorations.bold,
+                        italic: shape.decorations.italic,
+                        underline: shape.decorations.underline,
+                        strikethrough: shape.decorations.strikethrough
+                    }
+                }];
+            }
+
+            // セグメントを描画
+            let y = minY + padding;
+            let currentLineSegments = []; // 現在の行のセグメント
+            let currentLineWidth = 0;
+
+            const drawLine = (lineSegments, lineY) => {
+                let lineX = minX + padding;
+                for (const seg of lineSegments) {
+                    const style = seg.style;
+                    const text = seg.text;
+
+                    // フォント設定
+                    let fontStyle = '';
+                    if (style.italic) fontStyle += 'italic ';
+                    if (style.bold) fontStyle += 'bold ';
+                    this.ctx.font = `${fontStyle}${style.fontSize}px ${style.fontFamily}`;
+                    this.ctx.fillStyle = style.color;
+                    this.ctx.textBaseline = 'top';
+
+                    // テキスト描画
+                    this.ctx.fillText(text, lineX, lineY);
+
+                    const textWidth = this.ctx.measureText(text).width;
+
+                    // 下線
+                    if (style.underline) {
+                        this.ctx.strokeStyle = style.color;
+                        this.ctx.lineWidth = 1;
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(lineX, lineY + style.fontSize);
+                        this.ctx.lineTo(lineX + textWidth, lineY + style.fontSize);
+                        this.ctx.stroke();
+                    }
+
+                    // 打ち消し線
+                    if (style.strikethrough) {
+                        this.ctx.strokeStyle = style.color;
+                        this.ctx.lineWidth = 1;
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(lineX, lineY + style.fontSize / 2);
+                        this.ctx.lineTo(lineX + textWidth, lineY + style.fontSize / 2);
+                        this.ctx.stroke();
+                    }
+
+                    lineX += textWidth;
+                }
+            };
+
+            // セグメントごとに処理
+            for (const segment of segments) {
+                const style = segment.style;
+                const text = segment.text;
+
+                // フォント設定
+                let fontStyle = '';
+                if (style.italic) fontStyle += 'italic ';
+                if (style.bold) fontStyle += 'bold ';
+                this.ctx.font = `${fontStyle}${style.fontSize}px ${style.fontFamily}`;
+
+                // 改行で分割
+                const lines = text.split('\n');
+                for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+                    const paragraph = lines[lineIdx];
+
+                    // 改行の場合（または段落の区切り）
+                    if (lineIdx > 0) {
+                        // 現在の行を描画
+                        if (currentLineSegments.length > 0) {
+                            drawLine(currentLineSegments, y);
+                            y += style.fontSize * 1.2;
+                            currentLineSegments = [];
+                            currentLineWidth = 0;
+                        } else {
+                            // 空行
+                            y += style.fontSize * 1.2;
+                        }
+                    }
+
+                    // 1文字ずつチェックして折り返し
+                    let currentText = '';
+                    for (let i = 0; i < paragraph.length; i++) {
+                        const char = paragraph[i];
+                        const testText = currentText + char;
+                        const metrics = this.ctx.measureText(testText);
+
+                        if (currentLineWidth + metrics.width > maxWidth && currentText.length > 0) {
+                            // 現在のセグメントを行に追加
+                            currentLineSegments.push({
+                                text: currentText,
+                                style: style
+                            });
+
+                            // 行を描画
+                            drawLine(currentLineSegments, y);
+                            y += style.fontSize * 1.2;
+
+                            // 次の行を開始
+                            currentLineSegments = [];
+                            currentLineWidth = 0;
+                            currentText = char;
+                        } else {
+                            currentText = testText;
+                        }
+                    }
+
+                    // 残りのテキストを現在の行に追加
+                    if (currentText.length > 0) {
+                        const metrics = this.ctx.measureText(currentText);
+                        currentLineSegments.push({
+                            text: currentText,
+                            style: style
+                        });
+                        currentLineWidth += metrics.width;
+                    }
+                }
+            }
+
+            // 最後の行を描画
+            if (currentLineSegments.length > 0) {
+                drawLine(currentLineSegments, y);
+            }
+        }
+    }
+
+    drawSelectionHighlight(shape) {
+        // 点滅状態がfalseの場合は選択枠を描画しない
+        if (!this.selectionBlinkState) {
+            return;
+        }
+
+        this.ctx.strokeStyle = '#ff8f00';
+        this.ctx.lineWidth = this.selectionWidth; // ユーザ環境設定の太さを使用
+        this.ctx.setLineDash([5, 5]);
+
+        const minX = Math.min(shape.startX, shape.endX);
+        const minY = Math.min(shape.startY, shape.endY);
+        const maxX = Math.max(shape.startX, shape.endX);
+        const maxY = Math.max(shape.startY, shape.endY);
+        const width = Math.abs(shape.endX - shape.startX);
+        const height = Math.abs(shape.endY - shape.startY);
+
+        this.ctx.strokeRect(minX, minY, width, height);
+        this.ctx.setLineDash([]);
+
+        // 仮身の場合は専用リサイズを使うため、通常のリサイズハンドルは描画しない
+        if (shape.type === 'virtual-object') {
+            return;
+        }
+
+        // リサイズハンドルを描画（右下）
+        const handleSize = 8;
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.strokeStyle = '#ff8f00';
+        this.ctx.lineWidth = this.selectionWidth; // ユーザ環境設定の太さを使用
+        this.ctx.fillRect(maxX - handleSize / 2, maxY - handleSize / 2, handleSize, handleSize);
+        this.ctx.strokeRect(maxX - handleSize / 2, maxY - handleSize / 2, handleSize, handleSize);
+    }
+
+    drawPixelmap(shape) {
+        const minX = Math.min(shape.startX, shape.endX);
+        const minY = Math.min(shape.startY, shape.endY);
+        const width = Math.abs(shape.endX - shape.startX);
+        const height = Math.abs(shape.endY - shape.startY);
+
+        // ImageDataが存在する場合は描画
+        if (shape.imageData) {
+            // 一時的なcanvasにImageDataを描画
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = shape.imageData.width;
+            tempCanvas.height = shape.imageData.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.putImageData(shape.imageData, 0, 0);
+
+            const centerX = minX + width / 2;
+            const centerY = minY + height / 2;
+
+            this.ctx.save();
+
+            // 中心点に移動
+            this.ctx.translate(centerX, centerY);
+
+            // 回転を適用
+            if (shape.rotation) {
+                this.ctx.rotate(shape.rotation * Math.PI / 180);
+            }
+
+            // 反転を適用
+            const scaleX = shape.flipH ? -1 : 1;
+            const scaleY = shape.flipV ? -1 : 1;
+            this.ctx.scale(scaleX, scaleY);
+
+            // メインcanvasに拡大/縮小して描画（中心を原点として）
+            this.ctx.drawImage(tempCanvas, -width / 2, -height / 2, width, height);
+
+            this.ctx.restore();
+        } else {
+            // ImageDataがない場合は背景色で塗りつぶし
+            this.ctx.fillStyle = shape.backgroundColor || '#ffffff';
+            this.ctx.fillRect(minX, minY, width, height);
+        }
+
+        // ピクセルマップモードで編集中の場合は枠を表示
+        if (this.isPixelmapMode && this.editingPixelmap === shape) {
+            this.ctx.strokeStyle = '#ff8f00';
+            this.ctx.lineWidth = 2;
+            this.ctx.setLineDash([5, 5]);
+            this.ctx.strokeRect(minX, minY, width, height);
+            this.ctx.setLineDash([]);
+        } else if (this.selectedShapes.includes(shape)) {
+            // 選択中の場合も枠を表示
+            this.ctx.strokeStyle = '#ff8f00';
+            this.ctx.lineWidth = 2;
+            this.ctx.setLineDash([5, 5]);
+            this.ctx.strokeRect(minX, minY, width, height);
+            this.ctx.setLineDash([]);
+        } else if (!shape.imageData || this.currentShape === shape) {
+            // 作成中または空の場合は薄いグレーの枠線
+            this.ctx.strokeStyle = '#cccccc';
+            this.ctx.lineWidth = 1;
+            this.ctx.setLineDash([5, 5]);
+            this.ctx.strokeRect(minX, minY, width, height);
+            this.ctx.setLineDash([]);
+        }
+    }
+
+    handleKeyboardShortcuts(e) {
+        // Ctrl+S: 保存
+        if (e.ctrlKey && e.key === 's') {
+            e.preventDefault();
+            this.saveFile();
+            return;
+        }
+
+        // Ctrl+E: ウィンドウを閉じる
+        if (e.ctrlKey && e.key === 'e') {
+            e.preventDefault();
+            this.requestCloseWindow();
+            return;
+        }
+
+        // Ctrl+O: 選択中の仮身をdefaultOpenアプリで開く
+        if (e.ctrlKey && e.key === 'o') {
+            e.preventDefault();
+            this.openRealObjectWithDefaultApp();
+            return;
+        }
+
+        // Ctrl+L: 全画面表示オンオフ
+        if (e.ctrlKey && e.key === 'l') {
+            e.preventDefault();
+            this.toggleFullscreen();
+            return;
+        }
+
+        // Ctrl+A: 全選択
+        if (e.ctrlKey && e.key === 'a') {
+            e.preventDefault();
+            this.selectAllShapes();
+        }
+
+        // Delete: 選択図形を削除
+        if (e.key === 'Delete') {
+            this.deleteSelectedShapes();
+        }
+
+        // Ctrl+Z: 元に戻す
+        if (e.ctrlKey && e.key === 'z') {
+            e.preventDefault();
+            this.undo();
+        }
+
+        // Enter または Escape: 多角形描画を完了
+        if ((e.key === 'Enter' || e.key === 'Escape') && this.currentTool === 'polygon' && this.currentShape) {
+            e.preventDefault();
+            this.finishPolygon();
+        }
+
+        // Escape: ピクセルマップモードを抜ける
+        if (e.key === 'Escape' && this.isPixelmapMode) {
+            e.preventDefault();
+            this.exitPixelmapMode();
+        }
+    }
+
+    finishPolygon() {
+        if (this.currentShape && this.currentShape.type === 'polygon') {
+            // Undo用に状態を保存
+            this.saveStateForUndo();
+
+            // tempEndXとtempEndYを削除
+            delete this.currentShape.tempEndX;
+            delete this.currentShape.tempEndY;
+
+            // 多角形を確定
+            this.shapes.push(this.currentShape);
+            this.currentShape = null;
+            this.isFirstPolygonLine = false;
+            this.redraw();
+            this.isModified = true;
+            this.setStatus('多角形を確定しました');
+        }
+    }
+
+    async insertText(x, y) {
+        const result = await this.showInputDialog('テキストを入力してください', '');
+
+        if (result && result.value) {
+            // Undo用に状態を保存
+            this.saveStateForUndo();
+
+            const textShape = {
+                type: 'text',
+                startX: x,
+                startY: y,
+                text: result.value,
+                fontSize: '16px sans-serif',
+                strokeColor: this.strokeColor,
+                fillColor: this.fillColor,
+                lineWidth: this.lineWidth
+            };
+
+            this.shapes.push(textShape);
+            this.redraw();
+            this.isModified = true;
+            this.setStatus('テキストを追加しました');
+        }
+
+        this.isDrawing = false;
+    }
+
+    async insertVirtualObject(x, y, virtualObject) {
+        console.log('[FIGURE EDITOR] 仮身を配置:', virtualObject.link_name, 'at', x, y);
+
+        // Undo用に状態を保存
+        this.saveStateForUndo();
+
+        // 幅と高さを決定（virtualObjectに含まれていればそれを使用、なければデフォルト値を計算）
+        let width, height;
+
+        if (virtualObject.width && virtualObject.heightPx) {
+            // リサイズされた値がある場合はそれを使用
+            width = virtualObject.width;
+            height = virtualObject.heightPx;
+        } else {
+            // デフォルト値を計算
+            const chsz = virtualObject.chsz || 14;
+            const chszPx = window.convertPtToPx(chsz);
+            const lineHeight = 1.2;
+            const textHeight = Math.ceil(chszPx * lineHeight);
+            width = 100;
+            height = textHeight + 8; // 閉じた仮身の高さ
+        }
+
+        // 仮身を図形として追加
+        const voShape = {
+            type: 'virtual-object',
+            startX: x,
+            startY: y,
+            endX: x + width,
+            endY: y + height,
+            virtualObject: virtualObject,
+            strokeColor: virtualObject.frcol || '#000000',
+            textColor: virtualObject.chcol || '#000000',
+            fillColor: virtualObject.tbcol || '#ffffff',
+            lineWidth: 1,
+            originalHeight: height  // 元の高さを保存
+        };
+
+        this.shapes.push(voShape);
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`仮身「${virtualObject.link_name}」を配置しました`);
+        // スクロールバー更新を通知
+        this.resizeCanvas();
+    }
+
+    addVirtualObjectFromRealId(realId, name, dropPosition, applist) {
+        console.log('[FIGURE EDITOR] 原紙箱から仮身を追加:', name, 'at', dropPosition);
+
+        // メニュー文字サイズを取得（ユーザ環境設定から）
+        const menuFontSize = localStorage.getItem('menu-font-size') || '14';
+        const chsz = parseFloat(menuFontSize);
+
+        // デフォルト値で仮身オブジェクトを作成
+        const virtualObj = {
+            link_id: realId,
+            link_name: name,
+            width: 150,
+            heightPx: 30,
+            chsz: chsz,  // メニュー文字サイズを使用
+            frcol: '#000000',
+            chcol: '#000000',
+            tbcol: '#ffffff',
+            bgcol: '#ffffff',
+            dlen: 0,
+            pictdisp: 'true',  // ピクトグラムを表示
+            namedisp: 'true',  // 名称を表示
+            applist: applist || {}
+        };
+
+        // ドロップ位置に仮身を配置
+        this.insertVirtualObject(dropPosition.x, dropPosition.y, virtualObj);
+        console.log('[FIGURE EDITOR] 原紙箱から仮身追加完了');
+    }
+
+    /**
+     * 親ウィンドウからグローバルクリップボードを取得
+     * @returns {Promise<Object|null>}
+     */
+    getGlobalClipboard() {
+        return new Promise((resolve) => {
+            if (!window.parent || window.parent === window) {
+                resolve(null);
+                return;
+            }
+
+            const messageId = `get-clipboard-${Date.now()}-${Math.random()}`;
+
+            const handleMessage = (e) => {
+                if (e.data && e.data.type === 'clipboard-data' && e.data.messageId === messageId) {
+                    window.removeEventListener('message', handleMessage);
+                    resolve(e.data.clipboardData);
+                }
+            };
+
+            window.addEventListener('message', handleMessage);
+
+            window.parent.postMessage({
+                type: 'get-clipboard',
+                messageId: messageId
+            }, '*');
+
+            // タイムアウト処理（5秒）
+            setTimeout(() => {
+                window.removeEventListener('message', handleMessage);
+                resolve(null);
+            }, 5000);
+        });
+    }
+
+    async insertImage(x, y, file) {
+        console.log('[FIGURE EDITOR] 画像を配置:', file.name, 'at', x, y);
+
+        // Undo用に状態を保存
+        this.saveStateForUndo();
+
+        // 画像をロード
+        const img = new Image();
+        const reader = new FileReader();
+
+        return new Promise((resolve, reject) => {
+            reader.onload = async (e) => {
+                img.onload = async () => {
+                    console.log('[FIGURE EDITOR] 画像ロード完了:', img.width, 'x', img.height);
+
+                    // 画像が大きすぎる場合は縮小（最大600px）
+                    const maxSize = 600;
+                    let width = img.width;
+                    let height = img.height;
+
+                    if (width > maxSize || height > maxSize) {
+                        const scale = Math.min(maxSize / width, maxSize / height);
+                        width = width * scale;
+                        height = height * scale;
+                    }
+
+                    // 画像番号を取得
+                    const imgNo = this.getNextImageNumber();
+
+                    // ファイル名を生成: fileId_recordNo_imgNo.png
+                    const fileId = this.realId || 'unknown';
+                    const recordNo = 0;  // 常に0（レコード番号は使用しない）
+                    const savedFileName = `${fileId}_${recordNo}_${imgNo}.png`;
+
+                    // 画像ファイルを保存
+                    await this.saveImageFile(file, savedFileName);
+
+                    // 画像を図形として追加
+                    const imageShape = {
+                        type: 'image',
+                        startX: x - width / 2,  // 中心に配置
+                        startY: y - height / 2,
+                        endX: x + width / 2,
+                        endY: y + height / 2,
+                        imageElement: img,
+                        imageData: e.target.result,  // Base64データ（後方互換性のため保持）
+                        fileName: savedFileName,  // 保存されたファイル名
+                        originalFileName: file.name,  // 元のファイル名
+                        mimeType: file.type,
+                        imgNo: imgNo,
+                        rotation: 0,
+                        flipH: false,
+                        flipV: false
+                    };
+
+                    this.shapes.push(imageShape);
+                    this.redraw();
+                    this.isModified = true;
+                    this.setStatus(`画像「${file.name}」を配置しました`);
+                    // スクロールバー更新を通知
+                    this.resizeCanvas();
+                    resolve();
+                };
+
+                img.onerror = () => {
+                    console.error('[FIGURE EDITOR] 画像読み込みエラー');
+                    this.setStatus('画像の読み込みに失敗しました');
+                    reject(new Error('画像読み込みエラー'));
+                };
+
+                img.src = e.target.result;
+            };
+
+            reader.onerror = () => {
+                console.error('[FIGURE EDITOR] ファイル読み込みエラー');
+                this.setStatus('ファイルの読み込みに失敗しました');
+                reject(new Error('ファイル読み込みエラー'));
+            };
+
+            reader.readAsDataURL(file);
+        });
+    }
+
+    getNextImageNumber() {
+        // 現在の画像セグメントから最大のimgNoを取得
+        let maxImgNo = -1;
+        this.shapes.forEach(shape => {
+            if (shape.type === 'image' && shape.imgNo !== undefined) {
+                maxImgNo = Math.max(maxImgNo, shape.imgNo);
+            }
+        });
+        return maxImgNo + 1;
+    }
+
+    getNextPixelmapNumber() {
+        // 現在のピクセルマップセグメントから最大のpixelmapNoを取得
+        let maxPixelmapNo = -1;
+        this.shapes.forEach(shape => {
+            if (shape.type === 'pixelmap' && shape.pixelmapNo !== undefined) {
+                maxPixelmapNo = Math.max(maxPixelmapNo, shape.pixelmapNo);
+            }
+        });
+        return maxPixelmapNo + 1;
+    }
+
+    async saveImageFile(file, fileName) {
+        try {
+            // ArrayBufferとして読み込み
+            const arrayBuffer = await file.arrayBuffer();
+            const buffer = new Uint8Array(arrayBuffer);
+
+            // 最上位ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
+            window.top.postMessage({
+                type: 'save-image-file',
+                fileName: fileName,
+                imageData: Array.from(buffer),
+                mimeType: file.type
+            }, '*');
+
+            console.log('[FIGURE EDITOR] 画像ファイル保存依頼:', fileName);
+        } catch (error) {
+            console.error('[FIGURE EDITOR] 画像ファイル保存エラー:', error);
+        }
+    }
+
+    async savePixelmapImageFile(imageData, fileName) {
+        try {
+            // ImageDataをPNG形式のBlobに変換
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = imageData.width;
+            tempCanvas.height = imageData.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.putImageData(imageData, 0, 0);
+
+            // CanvasからBlobを取得
+            const blob = await new Promise((resolve) => {
+                tempCanvas.toBlob(resolve, 'image/png');
+            });
+
+            // BlobをArrayBufferに変換
+            const arrayBuffer = await blob.arrayBuffer();
+            const buffer = new Uint8Array(arrayBuffer);
+
+            // 最上位ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
+            window.top.postMessage({
+                type: 'save-image-file',
+                fileName: fileName,
+                imageData: Array.from(buffer),
+                mimeType: 'image/png'
+            }, '*');
+
+            console.log('[FIGURE EDITOR] ピクセルマップ画像ファイル保存依頼:', fileName);
+        } catch (error) {
+            console.error('[FIGURE EDITOR] ピクセルマップ画像ファイル保存エラー:', error);
+        }
+    }
+
+    deleteSelectedShapes() {
+        if (this.selectedShapes.length === 0) return;
+
+        // 保護されている図形をフィルタリング
+        const protectedShapes = this.selectedShapes.filter(shape =>
+            shape.locked || shape.isBackground
+        );
+        const deletableShapes = this.selectedShapes.filter(shape =>
+            !shape.locked && !shape.isBackground
+        );
+
+        // 保護されている図形がある場合は警告を表示
+        if (protectedShapes.length > 0) {
+            const protectionTypes = protectedShapes.map(shape => {
+                if (shape.isBackground) return '背景化';
+                if (shape.locked) return '固定化';
+                return '';
+            }).filter(t => t).join('、');
+
+            console.log('[FIGURE EDITOR] 保護されている図形が含まれているため削除できません:', protectionTypes);
+            this.setStatus(`${protectedShapes.length}個の図形が保護されているため削除できません (${protectionTypes})`);
+
+            // 削除可能な図形がない場合は終了
+            if (deletableShapes.length === 0) {
+                return;
+            }
+        }
+
+        // 削除可能な図形のみ削除
+        deletableShapes.forEach(shape => {
+            // 開いた仮身の場合はiframe要素を削除
+            if (shape.type === 'virtual-object' && shape.expanded && shape.expandedElement) {
+                shape.expandedElement.remove();
+                delete shape.expandedElement;
+                console.log('[FIGURE EDITOR] 開いた仮身のiframe要素を削除:', shape.virtualObject.link_name);
+            }
+
+            const index = this.shapes.indexOf(shape);
+            if (index > -1) {
+                this.shapes.splice(index, 1);
+            }
+        });
+
+        // 削除された図形を選択から除外し、保護された図形のみを選択状態に保つ
+        this.selectedShapes = protectedShapes;
+        this.redraw();
+        this.isModified = true;
+        // スクロールバー更新を通知
+        this.resizeCanvas();
+    }
+
+    undo() {
+        if (this.undoStack.length > 0) {
+            const state = this.undoStack.pop();
+            this.redoStack.push(JSON.stringify(this.shapes));
+            this.shapes = JSON.parse(state);
+            this.redraw();
+            this.isModified = true;
+            this.setStatus('元に戻しました');
+            // スクロールバー更新を通知
+            this.resizeCanvas();
+        } else {
+            // 最後の図形を削除（後方互換性）
+            if (this.shapes.length > 0) {
+                this.shapes.pop();
+                this.redraw();
+                this.isModified = true;
+                // スクロールバー更新を通知
+                this.resizeCanvas();
+            }
+        }
+    }
+
+    // 状態を保存してからアクションを実行
+    saveStateForUndo() {
+        this.undoStack.push(JSON.stringify(this.shapes));
+        // Undoスタックが大きくなりすぎないように制限
+        if (this.undoStack.length > 50) {
+            this.undoStack.shift();
+        }
+        // Redoスタックをクリア
+        this.redoStack = [];
+    }
+
+    async loadFile(fileData) {
+        try {
+            console.log('[FIGURE EDITOR] ファイル読み込み:', fileData);
+
+            this.currentFile = fileData;
+
+            // XMLデータを解析して図形を読み込む
+            if (fileData.xmlData) {
+                this.parseXmlTadData(fileData.xmlData);
+            } else {
+                // 新規ファイルの場合は空のキャンバス
+                this.shapes = [];
+                this.redraw();
+            }
+
+            this.originalContent = JSON.stringify(this.shapes);
+            this.isModified = false;
+
+            // スクロールバー更新を通知
+            this.resizeCanvas();
+
+        } catch (error) {
+            console.error('[FIGURE EDITOR] ファイル読み込みエラー:', error);
+        }
+    }
+
+    async parseXmlTadData(xmlData) {
+        // XMLから図形情報を抽出
+        console.log('[FIGURE EDITOR] XML解析:', xmlData);
+
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlData, 'text/xml');
+
+            // パースエラーチェック
+            const parserError = xmlDoc.querySelector('parsererror');
+            if (parserError) {
+                console.error('[FIGURE EDITOR] XML解析エラー:', parserError.textContent);
+                this.shapes = [];
+                this.redraw();
+                return;
+            }
+
+            // 用紙サイズを取得
+            const papersize = xmlDoc.querySelector('papersize');
+            if (papersize) {
+                this.paperWidth = parseFloat(papersize.getAttribute('width')) || 210;
+                this.paperHeight = parseFloat(papersize.getAttribute('height')) || 297;
+            }
+
+            // 図形セグメント全体を取得
+            const figureElem = xmlDoc.querySelector('figure');
+            if (!figureElem) {
+                console.log('[FIGURE EDITOR] 図形セグメントが見つかりません');
+                this.shapes = [];
+                this.redraw();
+                return;
+            }
+
+            // 図形要素を解析
+            this.shapes = [];
+
+            // figure要素の子要素を順番に処理（text+documentの組み合わせを認識するため）
+            const children = Array.from(figureElem.children);
+            for (let i = 0; i < children.length; i++) {
+                const elem = children[i];
+                const tagName = elem.tagName.toLowerCase();
+
+                if (tagName === 'line') {
+                    this.shapes.push(this.parseLineElement(elem));
+                } else if (tagName === 'rect') {
+                    this.shapes.push(this.parseRectElement(elem));
+                } else if (tagName === 'ellipse') {
+                    this.shapes.push(this.parseEllipseElement(elem));
+                } else if (tagName === 'text') {
+                    // 次の要素がdocumentか確認（文字枠の場合）
+                    const nextElem = i + 1 < children.length ? children[i + 1] : null;
+                    if (nextElem && nextElem.tagName.toLowerCase() === 'document') {
+                        // 文字枠として解析
+                        this.shapes.push(this.parseTextBoxElement(elem, nextElem));
+                        i++; // documentもスキップ
+                    } else {
+                        // 通常のtext要素として解析（互換性のため）
+                        this.shapes.push(this.parseTextElement(elem));
+                    }
+                } else if (tagName === 'polyline') {
+                    this.shapes.push(this.parsePolylineElement(elem));
+                } else if (tagName === 'spline') {
+                    this.shapes.push(this.parseSplineElement(elem));
+                } else if (tagName === 'curve') {
+                    this.shapes.push(this.parseCurveElement(elem));
+                } else if (tagName === 'polygon') {
+                    this.shapes.push(this.parsePolygonElement(elem));
+                } else if (tagName === 'link') {
+                    this.shapes.push(this.parseLinkElement(elem));
+                } else if (tagName === 'arc') {
+                    this.shapes.push(this.parseArcElement(elem));
+                } else if (tagName === 'chord') {
+                    this.shapes.push(this.parseChordElement(elem));
+                } else if (tagName === 'elliptical_arc') {
+                    this.shapes.push(this.parseEllipticalArcElement(elem));
+                } else if (tagName === 'image') {
+                    this.shapes.push(this.parseImageElement(elem));
+                } else if (tagName === 'pixelmap') {
+                    this.shapes.push(this.parsePixelmapElement(elem));
+                } else if (tagName === 'group') {
+                    this.shapes.push(this.parseGroupElement(elem));
+                } else if (tagName === 'document') {
+                    // textなしのdocumentは無視（既に処理済み、またはスタンドアロン）
+                    continue;
+                }
+            }
+
+            console.log('[FIGURE EDITOR] 図形を読み込みました:', this.shapes.length, '個');
+
+            // 仮身のメタデータ（applist等）を読み込み
+            const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'virtual-object' && shape.virtualObject);
+            console.log('[FIGURE EDITOR] 仮身のメタデータを読み込み中:', virtualObjectShapes.length, '個');
+            for (const shape of virtualObjectShapes) {
+                await this.loadVirtualObjectMetadata(shape.virtualObject);
+            }
+            console.log('[FIGURE EDITOR] 仮身のメタデータ読み込み完了');
+
+            // 仮身のアイコンを事前読み込み
+            await this.preloadVirtualObjectIcons();
+
+            this.redraw();
+
+        } catch (error) {
+            console.error('[FIGURE EDITOR] XML解析エラー:', error);
+            this.shapes = [];
+            this.redraw();
+        }
+    }
+
+
+    parseLineElement(elem) {
+        // tad.js形式: <line l_atr="..." points="x1,y1 x2,y2">
+        const pointsStr = elem.getAttribute('points');
+        let startX = 0, startY = 0, endX = 0, endY = 0;
+
+        if (pointsStr) {
+            // "x1,y1 x2,y2" 形式をパース
+            const pairs = pointsStr.trim().split(/\s+/);
+            if (pairs.length >= 2) {
+                const start = pairs[0].split(',').map(parseFloat);
+                const end = pairs[1].split(',').map(parseFloat);
+                if (start.length >= 2) {
+                    startX = start[0];
+                    startY = start[1];
+                }
+                if (end.length >= 2) {
+                    endX = end[0];
+                    endY = end[1];
+                }
+            }
+        }
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 色情報を取得
+        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+
+        return {
+            type: 'line',
+            startX: startX,
+            startY: startY,
+            endX: endX,
+            endY: endY,
+            strokeColor: strokeColor,
+            fillColor: 'transparent',
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: false
+        };
+    }
+
+    parseRectElement(elem) {
+        // tad.js形式: <rect round="0/1" l_atr="..." l_pat="..." f_pat="..." angle="..." left="..." top="..." right="..." bottom="...">
+        const left = parseFloat(elem.getAttribute('left')) || 0;
+        const top = parseFloat(elem.getAttribute('top')) || 0;
+        const right = parseFloat(elem.getAttribute('right')) || 0;
+        const bottom = parseFloat(elem.getAttribute('bottom')) || 0;
+        const round = parseInt(elem.getAttribute('round')) || 0;
+        const angle = parseFloat(elem.getAttribute('angle')) || 0;
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 塗りパターンを取得 (0=有効, 1=無効)
+        const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
+        const fillEnabled = f_pat === 0;
+
+        // 色情報を取得
+        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
+        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+
+        // 文字枠の判定（新形式：属性としてfontSizeを持つ、または旧形式：documentを持つ）
+        const hasFontSize = elem.hasAttribute('fontSize');
+        const documentElem = elem.querySelector('document');
+
+        if (hasFontSize || documentElem) {
+            // 文字枠として解析
+            let content = '';
+            let fontSize = 16;
+            let fontFamily = 'sans-serif';
+            let textColor = '#000000';
+            const decorations = {
+                bold: false,
+                italic: false,
+                underline: false,
+                strikethrough: false
+            };
+
+            if (hasFontSize) {
+                // 新形式：属性から取得
+                fontSize = parseInt(elem.getAttribute('fontSize')) || 16;
+                fontFamily = elem.getAttribute('fontFamily') || 'sans-serif';
+                textColor = elem.getAttribute('textColor') || '#000000';
+
+                const decoration = elem.getAttribute('decoration') || '';
+                decorations.bold = decoration.includes('B');
+                decorations.italic = decoration.includes('I');
+                decorations.underline = decoration.includes('U');
+                decorations.strikethrough = decoration.includes('S');
+
+                // テキスト内容を取得（BRタグを改行に変換）
+                content = elem.innerHTML
+                    .replace(/<br\s*\/?>/gi, '\n')
+                    .replace(/<[^>]*>/g, '') // その他のタグを除去
+                    .trim();
+            } else if (documentElem) {
+                // 旧形式：document/text要素から取得
+                const textElem = documentElem.querySelector('text');
+                if (textElem) {
+                    content = textElem.textContent || '';
+                    fontSize = parseInt(textElem.getAttribute('fontSize')) || 16;
+                    fontFamily = textElem.getAttribute('fontFamily') || 'sans-serif';
+                    textColor = textElem.getAttribute('color') || '#000000';
+
+                    const decoration = textElem.getAttribute('decoration') || '';
+                    decorations.bold = decoration.includes('B');
+                    decorations.italic = decoration.includes('I');
+                    decorations.underline = decoration.includes('U');
+                    decorations.strikethrough = decoration.includes('S');
+                }
+            }
+
+            return {
+                type: 'textbox',
+                startX: left,
+                startY: top,
+                endX: right,
+                endY: bottom,
+                content: content,
+                fontSize: fontSize,
+                fontFamily: fontFamily,
+                textColor: textColor,
+                fillColor: 'transparent',
+                strokeColor: 'transparent',
+                lineWidth: 0,
+                decorations: decorations
+            };
+        }
+
+        // 通常の長方形
+        return {
+            type: round > 0 ? 'roundRect' : 'rect',
+            startX: left,
+            startY: top,
+            endX: right,
+            endY: bottom,
+            strokeColor: strokeColor,
+            fillColor: fillColor,
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: fillEnabled,
+            cornerRadius: round > 0 ? 5 : 0,
+            angle: angle
+        };
+    }
+
+    parseEllipseElement(elem) {
+        // tad.js形式: <ellipse l_atr="..." l_pat="..." f_pat="..." angle="..." cx="..." cy="..." rx="..." ry="...">
+        const cx = parseFloat(elem.getAttribute('cx')) || 0;
+        const cy = parseFloat(elem.getAttribute('cy')) || 0;
+        const rx = parseFloat(elem.getAttribute('rx')) || 0;
+        const ry = parseFloat(elem.getAttribute('ry')) || 0;
+        const angle = parseFloat(elem.getAttribute('angle')) || 0;
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 塗りパターンを取得 (0=有効, 1=無効)
+        const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
+        const fillEnabled = f_pat === 0;
+
+        // 色情報を取得
+        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
+        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+
+        return {
+            type: 'ellipse',
+            startX: cx - rx,
+            startY: cy - ry,
+            endX: cx + rx,
+            endY: cy + ry,
+            strokeColor: strokeColor,
+            fillColor: fillColor,
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: fillEnabled,
+            angle: angle
+        };
+    }
+
+    parseTextElement(elem) {
+        // テキスト要素
+        return {
+            type: 'text',
+            startX: parseFloat(elem.getAttribute('x')) || 0,
+            startY: parseFloat(elem.getAttribute('y')) || 0,
+            text: elem.textContent || '',
+            fontSize: elem.getAttribute('size') || '16px sans-serif',
+            strokeColor: elem.getAttribute('color') || '#000000',
+            fillColor: 'transparent',
+            lineWidth: 1
+        };
+    }
+
+    parseTextBoxElement(textElem, documentElem) {
+        // text要素とdocument要素を組み合わせて文字枠を構築
+        // text要素から位置情報を取得
+        const viewLeft = parseFloat(textElem.getAttribute('viewleft')) || 0;
+        const viewTop = parseFloat(textElem.getAttribute('viewtop')) || 0;
+        const viewRight = parseFloat(textElem.getAttribute('viewright')) || 100;
+        const viewBottom = parseFloat(textElem.getAttribute('viewbottom')) || 100;
+
+        // document要素から文字情報を取得
+        let content = '';
+        let fontSize = 16;
+        let fontFamily = 'sans-serif';
+        let textColor = '#000000';
+        const decorations = {
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false
+        };
+
+        if (documentElem) {
+            // document要素の子要素を解析
+            let currentText = '';
+            const processNode = (node) => {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    currentText += node.textContent;
+                } else if (node.nodeType === Node.ELEMENT_NODE) {
+                    const tagName = node.tagName.toLowerCase();
+
+                    if (tagName === 'font') {
+                        // フォント設定
+                        if (node.hasAttribute('size')) {
+                            fontSize = parseInt(node.getAttribute('size')) || 16;
+                        }
+                        if (node.hasAttribute('face')) {
+                            fontFamily = node.getAttribute('face') || 'sans-serif';
+                        }
+                        if (node.hasAttribute('color')) {
+                            textColor = node.getAttribute('color') || '#000000';
+                        }
+                    } else if (tagName === 'br') {
+                        // 改行
+                        currentText += '\n';
+                    } else if (tagName === 'underline') {
+                        decorations.underline = true;
+                        // 子要素を処理
+                        for (let child of node.childNodes) {
+                            processNode(child);
+                        }
+                        return; // 子要素は処理済み
+                    } else if (tagName === 'strikethrough') {
+                        decorations.strikethrough = true;
+                        // 子要素を処理
+                        for (let child of node.childNodes) {
+                            processNode(child);
+                        }
+                        return; // 子要素は処理済み
+                    }
+
+                    // その他の要素の子要素を処理
+                    for (let child of node.childNodes) {
+                        processNode(child);
+                    }
+                }
+            };
+
+            for (let child of documentElem.childNodes) {
+                processNode(child);
+            }
+
+            content = currentText.trim();
+        }
+
+        return {
+            type: 'textbox',
+            startX: viewLeft,
+            startY: viewTop,
+            endX: viewRight,
+            endY: viewBottom,
+            content: content,
+            fontSize: fontSize,
+            fontFamily: fontFamily,
+            textColor: textColor,
+            fillColor: 'transparent',
+            strokeColor: 'transparent',
+            lineWidth: 0,
+            decorations: decorations
+        };
+    }
+
+    parsePolylineElement(elem) {
+        // tad.js形式: <polyline l_atr="..." l_pat="..." points="x1,y1 x2,y2 ...">
+        const pointsStr = elem.getAttribute('points');
+        const points = [];
+
+        if (pointsStr) {
+            const pairs = pointsStr.trim().split(/\s+/);
+            pairs.forEach(pair => {
+                const coords = pair.split(',').map(parseFloat);
+                if (coords.length >= 2) {
+                    points.push({ x: coords[0], y: coords[1] });
+                }
+            });
+        }
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 色情報を取得
+        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+
+        return {
+            type: 'pencil',
+            path: points,
+            strokeColor: strokeColor,
+            fillColor: 'transparent',
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: false
+        };
+    }
+
+    parseSplineElement(elem) {
+        // スプライン曲線 (curveと同じ形式)
+        const pointsStr = elem.getAttribute('points');
+        const points = [];
+
+        if (pointsStr) {
+            const pairs = pointsStr.trim().split(/\s+/);
+            pairs.forEach(pair => {
+                const coords = pair.split(',').map(parseFloat);
+                if (coords.length >= 2) {
+                    points.push({ x: coords[0], y: coords[1] });
+                }
+            });
+        }
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 色情報を取得
+        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+
+        return {
+            type: 'curve',
+            path: points,
+            strokeColor: strokeColor,
+            fillColor: 'transparent',
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: false
+        };
+    }
+
+    parseCurveElement(elem) {
+        // tad.js形式: <curve l_atr="..." l_pat="..." f_pat="..." fillColor="..." strokeColor="..." points="x1,y1 x2,y2 ...">
+        const pointsStr = elem.getAttribute('points');
+        const points = [];
+
+        if (pointsStr) {
+            const pairs = pointsStr.trim().split(/\s+/);
+            pairs.forEach(pair => {
+                const coords = pair.split(',').map(parseFloat);
+                if (coords.length >= 2) {
+                    points.push({ x: coords[0], y: coords[1] });
+                }
+            });
+        }
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 塗りパターンを取得 (0=有効, 1=無効)
+        const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
+        const fillEnabled = f_pat === 0;
+
+        // 色情報を取得
+        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
+        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+
+        return {
+            type: 'curve',
+            path: points,
+            strokeColor: strokeColor,
+            fillColor: fillEnabled ? fillColor : 'transparent',
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: fillEnabled
+        };
+    }
+
+    parsePolygonElement(elem) {
+        // tad.js形式: <polygon l_atr="..." l_pat="..." f_pat="..." fillColor="..." strokeColor="..." points="x1,y1 x2,y2 ...">
+        const pointsStr = elem.getAttribute('points');
+        const points = [];
+
+        if (pointsStr) {
+            const pairs = pointsStr.trim().split(/\s+/);
+            pairs.forEach(pair => {
+                const coords = pair.split(',').map(parseFloat);
+                if (coords.length >= 2) {
+                    points.push({ x: coords[0], y: coords[1] });
+                }
+            });
+        }
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 塗りパターンを取得 (0=有効, 1=無効)
+        const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
+        const fillEnabled = f_pat === 0;
+
+        // 色情報を取得
+        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
+        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+
+        return {
+            type: 'polygon',
+            points: points,
+            strokeColor: strokeColor,
+            fillColor: fillColor,
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: fillEnabled
+        };
+    }
+
+    parseLinkElement(elem) {
+        // tad.js形式: <link id="..." vobjleft="..." vobjtop="..." vobjright="..." vobjbottom="..." frcol="..." chcol="..." tbcol="...">
+        const left = parseFloat(elem.getAttribute('vobjleft')) || 0;
+        const top = parseFloat(elem.getAttribute('vobjtop')) || 0;
+        const right = parseFloat(elem.getAttribute('vobjright')) || 0;
+        const bottom = parseFloat(elem.getAttribute('vobjbottom')) || 0;
+        const chsz = parseFloat(elem.getAttribute('chsz')) || 14;
+
+        // originalHeightを計算（chszはポイント値なのでピクセルに変換）
+        const chszPx = window.convertPtToPx(chsz);
+        const lineHeight = 1.2;
+        const textHeight = Math.ceil(chszPx * lineHeight);
+        const originalHeight = textHeight + 8; // 閉じた仮身の高さ
+
+        return {
+            type: 'virtual-object',
+            startX: left,
+            startY: top,
+            endX: right,
+            endY: bottom,
+            virtualObject: {
+                link_id: elem.getAttribute('id') || '',
+                link_name: elem.textContent || '仮身',
+                chsz: chsz,
+                frcol: elem.getAttribute('frcol') || '#000000',
+                chcol: elem.getAttribute('chcol') || '#000000',
+                tbcol: elem.getAttribute('tbcol') || '#ffffff',
+                bgcol: elem.getAttribute('bgcol') || '#ffffff',
+                pictdisp: elem.getAttribute('pictdisp') || 'true',  // ピクトグラム表示
+                namedisp: elem.getAttribute('namedisp') || 'true',  // 名称表示
+                roledisp: elem.getAttribute('roledisp') || 'false',
+                typedisp: elem.getAttribute('typedisp') || 'false',
+                updatedisp: elem.getAttribute('updatedisp') || 'false',
+                framedisp: elem.getAttribute('framedisp') || 'true',
+                autoopen: elem.getAttribute('autoopen') || 'false'
+            },
+            strokeColor: elem.getAttribute('frcol') || '#000000',
+            textColor: elem.getAttribute('chcol') || '#000000',
+            fillColor: elem.getAttribute('tbcol') || '#ffffff',
+            lineWidth: 1,
+            originalHeight: originalHeight,
+            locked: elem.getAttribute('fixed') === 'true',  // 固定化
+            isBackground: elem.getAttribute('background') === 'true'  // 背景化
+        };
+    }
+
+    parseImageElement(elem) {
+        // 画像セグメント: <image l_atr="..." l_pat="..." f_pat="..." angle="..." left="..." top="..." right="..." bottom="..." href="..." />
+        const left = parseFloat(elem.getAttribute('left')) || 0;
+        const top = parseFloat(elem.getAttribute('top')) || 0;
+        const right = parseFloat(elem.getAttribute('right')) || 100;
+        const bottom = parseFloat(elem.getAttribute('bottom')) || 100;
+        const href = elem.getAttribute('href') || '';
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 塗りパターンを取得 (0=有効, 1=無効)
+        const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
+        const fillEnabled = f_pat === 0;
+
+        // 画像番号を抽出
+        let imgNo = 0;
+        const match = href.match(/_(\d+)\.png$/);
+        if (match) {
+            imgNo = parseInt(match[1]);
+        }
+
+        // 画像要素を作成
+        const img = new Image();
+        // 画像ファイルのパスを生成
+        if (href) {
+            // 親ウィンドウから画像ファイルの絶対パスを取得
+            this.getImageFilePath(href).then(filePath => {
+                console.log('[FIGURE EDITOR] 画像パス取得成功:', href, '->', filePath);
+                img.src = filePath;
+                // 画像読み込み完了時に再描画
+                img.onload = () => {
+                    console.log('[FIGURE EDITOR] 画像読み込み完了:', href);
+                    this.redraw();
+                };
+                img.onerror = () => {
+                    console.error('[FIGURE EDITOR] 画像読み込みエラー:', href, filePath);
+                };
+            }).catch(error => {
+                console.error('[FIGURE EDITOR] 画像パス取得エラー:', href, error);
+            });
+        }
+
+        return {
+            type: 'image',
+            startX: left,
+            startY: top,
+            endX: right,
+            endY: bottom,
+            imageElement: img,
+            fileName: href,
+            imgNo: imgNo,
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: fillEnabled,
+            angle: parseFloat(elem.getAttribute('angle')) || 0,
+            rotation: parseFloat(elem.getAttribute('rotation')) || 0,
+            flipH: elem.getAttribute('flipH') === 'true',
+            flipV: elem.getAttribute('flipV') === 'true'
+        };
+    }
+
+    parsePixelmapElement(elem) {
+        // ピクセルマップセグメント: <pixelmap left="..." top="..." right="..." bottom="..." bgcolor="..." href="..." />
+        const left = parseFloat(elem.getAttribute('left')) || 0;
+        const top = parseFloat(elem.getAttribute('top')) || 0;
+        const right = parseFloat(elem.getAttribute('right')) || 100;
+        const bottom = parseFloat(elem.getAttribute('bottom')) || 100;
+        const backgroundColor = elem.getAttribute('bgcolor') || '#ffffff';
+        const href = elem.getAttribute('href') || '';
+
+        // ピクセルマップ番号を抽出
+        let pixelmapNo = 0;
+        const match = href.match(/_(\d+)\.png$/);
+        if (match) {
+            pixelmapNo = parseInt(match[1]);
+        }
+
+        const shape = {
+            type: 'pixelmap',
+            startX: left,
+            startY: top,
+            endX: right,
+            endY: bottom,
+            backgroundColor: backgroundColor,
+            imageData: null,
+            pixelmapNo: pixelmapNo,
+            fileName: href,
+            rotation: parseFloat(elem.getAttribute('rotation')) || 0,
+            flipH: elem.getAttribute('flipH') === 'true',
+            flipV: elem.getAttribute('flipV') === 'true'
+        };
+
+        // href属性がある場合、画像ファイルからImageDataを復元
+        if (href) {
+            // 親ウィンドウから画像ファイルの絶対パスを取得
+            this.getImageFilePath(href).then(filePath => {
+                console.log('[FIGURE EDITOR] ピクセルマップ画像パス取得成功:', href, '->', filePath);
+                const img = new Image();
+                img.onload = () => {
+                    console.log('[FIGURE EDITOR] ピクセルマップ画像読み込み完了:', href);
+                    const width = Math.abs(right - left);
+                    const height = Math.abs(bottom - top);
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = width;
+                    tempCanvas.height = height;
+                    const tempCtx = tempCanvas.getContext('2d');
+                    tempCtx.drawImage(img, 0, 0, width, height);
+                    shape.imageData = tempCtx.getImageData(0, 0, width, height);
+                    this.redraw();
+                };
+                img.onerror = (error) => {
+                    console.error('[FIGURE EDITOR] ピクセルマップ画像読み込みエラー:', href, error);
+                };
+                img.src = filePath;
+            }).catch(error => {
+                console.error('[FIGURE EDITOR] ピクセルマップ画像パス取得エラー:', href, error);
+            });
+        }
+
+        return shape;
+    }
+
+    parseGroupElement(elem) {
+        // グループセグメント: <group left="..." top="..." right="..." bottom="...">子図形...</group>
+        const left = parseFloat(elem.getAttribute('left')) || 0;
+        const top = parseFloat(elem.getAttribute('top')) || 0;
+        const right = parseFloat(elem.getAttribute('right')) || 100;
+        const bottom = parseFloat(elem.getAttribute('bottom')) || 100;
+
+        // 子図形を解析
+        const childShapes = [];
+        const children = elem.children;
+        for (let i = 0; i < children.length; i++) {
+            const child = children[i];
+            const tagName = child.tagName.toLowerCase();
+
+            // 子図形を再帰的に解析
+            if (tagName === 'line') {
+                childShapes.push(this.parseLineElement(child));
+            } else if (tagName === 'rect') {
+                childShapes.push(this.parseRectElement(child));
+            } else if (tagName === 'ellipse') {
+                childShapes.push(this.parseEllipseElement(child));
+            } else if (tagName === 'polyline') {
+                childShapes.push(this.parsePolylineElement(child));
+            } else if (tagName === 'spline') {
+                childShapes.push(this.parseSplineElement(child));
+            } else if (tagName === 'curve') {
+                childShapes.push(this.parseCurveElement(child));
+            } else if (tagName === 'polygon') {
+                childShapes.push(this.parsePolygonElement(child));
+            } else if (tagName === 'link') {
+                childShapes.push(this.parseLinkElement(child));
+            } else if (tagName === 'arc') {
+                childShapes.push(this.parseArcElement(child));
+            } else if (tagName === 'chord') {
+                childShapes.push(this.parseChordElement(child));
+            } else if (tagName === 'elliptical_arc') {
+                childShapes.push(this.parseEllipticalArcElement(child));
+            } else if (tagName === 'image') {
+                childShapes.push(this.parseImageElement(child));
+            } else if (tagName === 'pixelmap') {
+                childShapes.push(this.parsePixelmapElement(child));
+            } else if (tagName === 'group') {
+                // ネストされたグループを再帰的に解析
+                childShapes.push(this.parseGroupElement(child));
+            }
+        }
+
+        return {
+            type: 'group',
+            shapes: childShapes,
+            startX: left,
+            startY: top,
+            endX: right,
+            endY: bottom,
+            strokeColor: '#000000',
+            fillColor: 'transparent',
+            lineWidth: 1
+        };
+    }
+
+    parseArcElement(elem) {
+        // tad.js形式: <arc l_atr="..." l_pat="..." f_pat="..." angle="..." cx="..." cy="..." rx="..." ry="..." startX="..." startY="..." endX="..." endY="..." startAngle="..." endAngle="...">
+        const centerX = parseFloat(elem.getAttribute('cx')) || 0;
+        const centerY = parseFloat(elem.getAttribute('cy')) || 0;
+        const radiusX = parseFloat(elem.getAttribute('rx')) || 0;
+        const radiusY = parseFloat(elem.getAttribute('ry')) || 0;
+        const startX = parseFloat(elem.getAttribute('startX')) || 0;
+        const startY = parseFloat(elem.getAttribute('startY')) || 0;
+        const endX = parseFloat(elem.getAttribute('endX')) || 0;
+        const endY = parseFloat(elem.getAttribute('endY')) || 0;
+        const startAngle = parseFloat(elem.getAttribute('startAngle')) || 0;
+        const endAngle = parseFloat(elem.getAttribute('endAngle')) || 0;
+        const angle = parseFloat(elem.getAttribute('angle')) || 0;
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 塗りパターンを取得 (0=有効, 1=無効)
+        const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
+        const fillEnabled = f_pat === 0;
+
+        // 色情報を取得
+        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
+        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+
+        return {
+            type: 'arc',
+            centerX: centerX,
+            centerY: centerY,
+            radiusX: radiusX,
+            radiusY: radiusY,
+            startX: startX,
+            startY: startY,
+            endX: endX,
+            endY: endY,
+            startAngle: startAngle,
+            endAngle: endAngle,
+            angle: angle,
+            strokeColor: strokeColor,
+            fillColor: fillColor,
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: fillEnabled
+        };
+    }
+
+    parseChordElement(elem) {
+        // tad.js形式: <chord l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." cx="..." cy="..." rx="..." ry="..." startX="..." startY="..." endX="..." endY="..." startAngle="..." endAngle="...">
+        const centerX = parseFloat(elem.getAttribute('cx')) || 0;
+        const centerY = parseFloat(elem.getAttribute('cy')) || 0;
+        const radiusX = parseFloat(elem.getAttribute('rx')) || 0;
+        const radiusY = parseFloat(elem.getAttribute('ry')) || 0;
+        const startX = parseFloat(elem.getAttribute('startX')) || 0;
+        const startY = parseFloat(elem.getAttribute('startY')) || 0;
+        const endX = parseFloat(elem.getAttribute('endX')) || 0;
+        const endY = parseFloat(elem.getAttribute('endY')) || 0;
+        const startAngle = parseFloat(elem.getAttribute('startAngle')) || 0;
+        const endAngle = parseFloat(elem.getAttribute('endAngle')) || 0;
+        const angle = parseFloat(elem.getAttribute('angle')) || 0;
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 塗りパターンを取得 (0=有効, 1=無効)
+        const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
+        const fillEnabled = f_pat === 0;
+
+        // 色情報を取得
+        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
+        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+
+        return {
+            type: 'chord',
+            centerX: centerX,
+            centerY: centerY,
+            radiusX: radiusX,
+            radiusY: radiusY,
+            startX: startX,
+            startY: startY,
+            endX: endX,
+            endY: endY,
+            startAngle: startAngle,
+            endAngle: endAngle,
+            angle: angle,
+            strokeColor: strokeColor,
+            fillColor: fillColor,
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: fillEnabled
+        };
+    }
+
+    parseEllipticalArcElement(elem) {
+        // tad.js形式: <elliptical_arc l_atr="..." l_pat="..." angle="..." cx="..." cy="..." rx="..." ry="..." startX="..." startY="..." endX="..." endY="..." startAngle="..." endAngle="...">
+        const centerX = parseFloat(elem.getAttribute('cx')) || 0;
+        const centerY = parseFloat(elem.getAttribute('cy')) || 0;
+        const radiusX = parseFloat(elem.getAttribute('rx')) || 0;
+        const radiusY = parseFloat(elem.getAttribute('ry')) || 0;
+        const startX = parseFloat(elem.getAttribute('startX')) || 0;
+        const startY = parseFloat(elem.getAttribute('startY')) || 0;
+        const endX = parseFloat(elem.getAttribute('endX')) || 0;
+        const endY = parseFloat(elem.getAttribute('endY')) || 0;
+        const startAngle = parseFloat(elem.getAttribute('startAngle')) || 0;
+        const endAngle = parseFloat(elem.getAttribute('endAngle')) || 0;
+        const angle = parseFloat(elem.getAttribute('angle')) || 0;
+
+        // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
+        const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
+        const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 色情報を取得
+        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+
+        return {
+            type: 'elliptical_arc',
+            centerX: centerX,
+            centerY: centerY,
+            radiusX: radiusX,
+            radiusY: radiusY,
+            startX: startX,
+            startY: startY,
+            endX: endX,
+            endY: endY,
+            startAngle: startAngle,
+            endAngle: endAngle,
+            angle: angle,
+            strokeColor: strokeColor,
+            fillColor: 'transparent',
+            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            linePattern: linePattern,
+            fillEnabled: false
+        };
+    }
+
+    async saveFile() {
+        try {
+            console.log('[FIGURE EDITOR] 保存処理開始');
+
+            // 図形データをXMLに変換
+            const xmlData = this.convertToXmlTad();
+
+            // 親ウィンドウにXMLデータを送信
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'xml-data-changed',
+                    xmlData: xmlData,
+                    fileId: this.realId
+                }, '*');
+            }
+
+            this.originalContent = JSON.stringify(this.shapes);
+            this.isModified = false;
+            this.setStatus('保存しました');
+
+        } catch (error) {
+            console.error('[FIGURE EDITOR] 保存エラー:', error);
+            this.setStatus('保存に失敗しました');
+        }
+    }
+
+    saveAsNewRealObject() {
+        if (!this.realId && !this.realId) {
+            console.warn('[FIGURE EDITOR] 保存するデータがありません');
+            this.setStatus('保存するデータがありません');
+            return;
+        }
+
+        // realIdが未設定の場合はfileIdを使用
+        const realIdToUse = this.realId || this.realId;
+        console.log('[FIGURE EDITOR] saveAsNewRealObject - realId:', this.realId, 'fileId:', this.realId, '使用:', realIdToUse);
+
+        try {
+            // まず現在のデータを保存
+            const xmlData = this.convertToXmlTad();
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'xml-data-changed',
+                    xmlData: xmlData,
+                    fileId: this.realId
+                }, '*');
+            }
+
+            this.originalContent = JSON.stringify(this.shapes);
+            this.isModified = false;
+
+            // 選択されている仮身を取得
+            const selectedVobjShape = this.selectedShapes.find(shape => shape.type === 'virtual-object');
+            if (!selectedVobjShape) {
+                console.warn('[FIGURE EDITOR] 仮身が選択されていません');
+                this.setStatus('仮身を選択してください');
+                return;
+            }
+
+            // 親ウィンドウに新たな実身への保存を要求
+            const messageId = 'save-as-new-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
+            // 応答を待つハンドラ
+            const handleMessage = (e) => {
+                if (e.data && e.data.type === 'save-as-new-real-object-completed' && e.data.messageId === messageId) {
+                    window.removeEventListener('message', handleMessage);
+
+                    if (e.data.cancelled) {
+                        this.setStatus('保存がキャンセルされました');
+                    } else if (e.data.success) {
+                        this.setStatus('新しい実身に保存しました: ' + e.data.newName);
+                        console.log('[FIGURE EDITOR] 新しい実身に保存成功:', e.data.newRealId);
+
+                        // 元の仮身の属性をコピーして新しい仮身を作成
+                        const originalVobj = selectedVobjShape.virtualObject;
+                        const newVirtualObject = {
+                            link_id: `${e.data.newRealId}_0.xtad`,
+                            link_name: e.data.newName,
+                            chsz: originalVobj.chsz || 14,
+                            frcol: originalVobj.frcol || '#000000',
+                            chcol: originalVobj.chcol || '#000000',
+                            tbcol: originalVobj.tbcol || '#ffffff',
+                            bgcol: originalVobj.bgcol || '#ffffff',
+                            pictdisp: originalVobj.pictdisp || 'true',
+                            namedisp: originalVobj.namedisp || 'true',
+                            roledisp: originalVobj.roledisp || 'false',
+                            framedisp: originalVobj.framedisp || 'true',
+                            typedisp: originalVobj.typedisp || 'false',
+                            updatedisp: originalVobj.updatedisp || 'false',
+                            dlen: originalVobj.dlen || 0,
+                            applist: originalVobj.applist || {}
+                        };
+
+                        // 元の仮身の下に配置（10px下）
+                        const chszPx = (newVirtualObject.chsz || 14) * (96 / 72);
+                        const lineHeight = 1.2;
+                        const textHeight = Math.ceil(chszPx * lineHeight);
+                        const newHeight = textHeight + 8;
+
+                        const newVobjShape = {
+                            type: 'virtual-object',
+                            startX: selectedVobjShape.startX,
+                            startY: selectedVobjShape.endY + 10,
+                            endX: selectedVobjShape.endX,
+                            endY: selectedVobjShape.endY + 10 + newHeight,
+                            virtualObject: newVirtualObject,
+                            strokeColor: newVirtualObject.frcol,
+                            textColor: newVirtualObject.chcol,
+                            fillColor: newVirtualObject.tbcol,
+                            lineWidth: 1,
+                            originalHeight: newHeight
+                        };
+
+                        // 図形に追加
+                        this.shapes.push(newVobjShape);
+
+                        // アイコンを事前読み込み
+                        const realId = e.data.newRealId.replace(/_\d+\.xtad$/i, '');
+                        this.loadIconFromParent(realId).then(iconData => {
+                            if (iconData && this.virtualObjectRenderer) {
+                                this.virtualObjectRenderer.loadIconToCache(realId, iconData);
+                            }
+                            // 再描画
+                            this.draw();
+                        });
+
+                        // XMLデータを更新
+                        const updatedXmlData = this.convertToXmlTad();
+                        if (window.parent && window.parent !== window) {
+                            window.parent.postMessage({
+                                type: 'xml-data-changed',
+                                xmlData: updatedXmlData,
+                                fileId: this.realId
+                            }, '*');
+                        }
+
+                        this.originalContent = JSON.stringify(this.shapes);
+                        this.isModified = false;
+                    } else {
+                        this.setStatus('新しい実身への保存に失敗しました');
+                        console.error('[FIGURE EDITOR] 新しい実身への保存失敗');
+                    }
+                }
+            };
+
+            window.addEventListener('message', handleMessage);
+
+            // 親ウィンドウに保存を要求
+            window.parent.postMessage({
+                type: 'save-as-new-real-object',
+                realId: realIdToUse,
+                messageId: messageId
+            }, '*');
+
+            this.setStatus('新しい実身への保存を準備中...');
+
+        } catch (error) {
+            console.error('[FIGURE EDITOR] 新しい実身への保存エラー:', error);
+            this.setStatus('新しい実身への保存に失敗しました');
+        }
+    }
+
+    convertToXmlTad() {
+        // 図形データをTAD XML形式に変換（配列を使用して高速化）
+        const xmlParts = ['<tad version="02.00" encoding="UTF-8">\r\n'];
+
+        // 図形セグメント開始
+        if (this.shapes.length > 0) {
+            xmlParts.push('<figure>\r\n');
+            xmlParts.push(`<figView top="0" left="0" right="${this.canvas.width}" bottom="${this.canvas.height}"/>\r\n`);
+            xmlParts.push(`<figDraw top="0" left="0" right="${this.canvas.width}" bottom="${this.canvas.height}"/>\r\n`);
+            xmlParts.push(`<figScale hunit="0.1" vunit="0.1"/>\r\n`);
+
+            // 各図形を追加
+            this.shapes.forEach((shape, index) => {
+                this.shapeToXML(shape, index, xmlParts);
+            });
+
+            xmlParts.push('</figure>\r\n');
+        }
+
+        xmlParts.push('</tad>');
+        return xmlParts.join('');
+    }
+
+    shapeToXML(shape, index, xmlParts) {
+        // 図形の線属性とパターン (tad.js互換)
+        const l_atr = shape.lineWidth || 1;
+        // 線パターン: solid=0, dotted=1, dashed=2
+        const l_pat = shape.linePattern === 'dotted' ? 1 : shape.linePattern === 'dashed' ? 2 : 0;
+        // 塗りパターン: 塗りつぶし有効=0, 無効=1
+        const f_pat = (shape.fillEnabled !== undefined ? shape.fillEnabled : true) ? 0 : 1;
+        // 角度
+        const angle = shape.angle || 0;
+        // 色情報
+        const fillColor = shape.fillColor || '#ffffff';
+        const strokeColor = shape.strokeColor || '#000000';
+
+        switch (shape.type) {
+            case 'line':
+                // tad.js形式: <line l_atr="..." l_pat="..." f_pat="0" strokeColor="..." start_arrow="0" end_arrow="0" points="x1,y1 x2,y2" />
+                const linePoints = `${shape.startX},${shape.startY} ${shape.endX},${shape.endY}`;
+                xmlParts.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" strokeColor="${strokeColor}" start_arrow="0" end_arrow="0" points="${linePoints}" />\r\n`);
+                break;
+
+            case 'rect':
+            case 'roundRect':
+                // tad.js形式: <rect round="0/1" l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." left="..." top="..." right="..." bottom="..." />
+                const round = shape.cornerRadius && shape.cornerRadius > 0 ? 1 : 0;
+                xmlParts.push(`<rect round="${round}" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" />\r\n`);
+                break;
+
+            case 'ellipse':
+                const cx = (shape.startX + shape.endX) / 2;
+                const cy = (shape.startY + shape.endY) / 2;
+                const rx = Math.abs(shape.endX - shape.startX) / 2;
+                const ry = Math.abs(shape.endY - shape.startY) / 2;
+                // tad.js形式: <ellipse l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." cx="..." cy="..." rx="..." ry="..." />
+                xmlParts.push(`<ellipse l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" />\r\n`);
+                break;
+
+            case 'text':
+                // テキストは文章セグメントとして扱う (簡易実装)
+                xmlParts.push(`<text x="${shape.startX}" y="${shape.startY}" color="${shape.strokeColor}" size="${shape.fontSize}">${this.escapeXml(shape.text)}</text>\r\n`);
+                break;
+
+            case 'pencil':
+            case 'brush':
+                // 折れ線として出力 (tad.js形式: <polyline l_atr="..." l_pat="..." strokeColor="..." round="0" start_arrow="0" end_arrow="0" points="x1,y1 x2,y2 ..." />)
+                if (shape.path && shape.path.length > 0) {
+                    const polylinePoints = shape.path.map(p => `${p.x},${p.y}`).join(' ');
+                    xmlParts.push(`<polyline l_atr="${l_atr}" l_pat="${l_pat}" strokeColor="${strokeColor}" round="0" start_arrow="0" end_arrow="0" points="${polylinePoints}" />\r\n`);
+                }
+                break;
+
+            case 'curve':
+                // スプライン曲線として出力 (tad.js形式: <curve l_atr="..." l_pat="..." f_pat="..." fillColor="..." strokeColor="..." type="..." closed="..." points="x1,y1 x2,y2 ..." />)
+                if (shape.path && shape.path.length > 0) {
+                    const curvePoints = shape.path.map(p => `${p.x},${p.y}`).join(' ');
+                    xmlParts.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" fillColor="${fillColor}" strokeColor="${strokeColor}" type="0" closed="0" start_arrow="0" end_arrow="0" points="${curvePoints}" />\r\n`);
+                }
+                break;
+
+            case 'polygon':
+                // tad.js形式: <polygon l_atr="..." l_pat="..." f_pat="..." fillColor="..." strokeColor="..." points="x1,y1 x2,y2 ..." />
+                if (shape.points && shape.points.length > 0) {
+                    const polygonPoints = shape.points.map(p => `${p.x},${p.y}`).join(' ');
+                    xmlParts.push(`<polygon l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${polygonPoints}" />\r\n`);
+                }
+                break;
+
+            case 'arc':
+            case 'chord':
+            case 'elliptical_arc':
+                // 中心座標と半径を計算
+                const acCenterX = shape.centerX || (shape.startX + shape.endX) / 2;
+                const acCenterY = shape.centerY || (shape.startY + shape.endY) / 2;
+                const acRadiusX = shape.radiusX || Math.abs(shape.endX - shape.startX) / 2;
+                const acRadiusY = shape.radiusY || Math.abs(shape.endY - shape.startY) / 2;
+                const acStartAngle = shape.startAngle || 0;
+                const acEndAngle = shape.endAngle || 90;
+
+                if (shape.type === 'arc') {
+                    // 扇形
+                    xmlParts.push(`<arc l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${shape.angle || 0}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0" />\r\n`);
+                } else if (shape.type === 'chord') {
+                    // 弦
+                    xmlParts.push(`<chord l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${shape.angle || 0}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0" />\r\n`);
+                } else {
+                    // 楕円弧
+                    xmlParts.push(`<elliptical_arc l_atr="${l_atr}" l_pat="${l_pat}" angle="${shape.angle || 0}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0" />\r\n`);
+                }
+                break;
+
+            case 'virtual-object':
+                // tad.js形式: <link id="..." vobjleft="..." vobjtop="..." vobjright="..." vobjbottom="...">
+                if (shape.virtualObject) {
+                    const vo = shape.virtualObject;
+                    const height = shape.endY - shape.startY;
+                    // 保護属性を追加
+                    const fixedAttr = shape.locked ? ' fixed="true"' : '';
+                    const backgroundAttr = shape.isBackground ? ' background="true"' : '';
+                    xmlParts.push(`<link id="${vo.link_id}" vobjleft="${shape.startX}" vobjtop="${shape.startY}" vobjright="${shape.endX}" vobjbottom="${shape.endY}" height="${height}" chsz="${vo.chsz || 14}" frcol="${vo.frcol || '#000000'}" chcol="${vo.chcol || '#000000'}" tbcol="${vo.tbcol || '#ffffff'}" bgcol="${vo.bgcol || '#ffffff'}" dlen="${vo.link_name.length}" pictdisp="${vo.pictdisp || 'true'}" namedisp="${vo.namedisp || 'true'}" roledisp="${vo.roledisp || 'false'}" typedisp="${vo.typedisp || 'false'}" updatedisp="${vo.updatedisp || 'false'}" framedisp="${vo.framedisp || 'true'}" autoopen="${vo.autoopen || 'false'}"${fixedAttr}${backgroundAttr}>${this.escapeXml(vo.link_name)}</link>\r\n`);
+                }
+                break;
+
+            case 'image':
+                // 画像セグメント - tadjs-viewと同じ形式
+                if (shape.fileName) {
+                    const rotation = shape.rotation || 0;
+                    const flipH = shape.flipH ? 'true' : 'false';
+                    const flipV = shape.flipV ? 'true' : 'false';
+                    xmlParts.push(`<image l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" href="${this.escapeXml(shape.fileName)}" />\r\n`);
+                }
+                break;
+
+            case 'textbox':
+                // 文字枠 - TAD.js形式に準拠
+                // 1. text要素で位置を定義（図形TADにおける文字枠の位置指定）
+                xmlParts.push(`<text viewleft="${shape.startX}" viewtop="${shape.startY}" viewright="${shape.endX}" viewbottom="${shape.endY}" drawleft="${shape.startX}" drawtop="${shape.startY}" drawright="${shape.endX}" drawbottom="${shape.endY}"/>\r\n`);
+
+                // 2. document要素で文章セグメントを開始
+                if (shape.content && shape.content.trim() !== '') {
+                    xmlParts.push(`<document>\r\n`);
+
+                    // 3. フォント設定
+                    const fontSize = shape.fontSize || 16;
+                    const fontFamily = shape.fontFamily || 'sans-serif';
+                    const textColor = shape.textColor || '#000000';
+                    xmlParts.push(`<font size="${fontSize}"/>\r\n`);
+                    xmlParts.push(`<font face="${this.escapeXml(fontFamily)}"/>\r\n`);
+                    xmlParts.push(`<font color="${this.escapeXml(textColor)}"/>\r\n`);
+
+                    // 4. 文字修飾の開始タグ
+                    const decorations = shape.decorations || {};
+                    if (decorations.underline) {
+                        xmlParts.push(`<underline>\r\n`);
+                    }
+                    if (decorations.strikethrough) {
+                        xmlParts.push(`<strikethrough>\r\n`);
+                    }
+
+                    // 5. テキスト内容（改行は段落として扱う）
+                    const lines = shape.content.split('\n');
+                    for (let i = 0; i < lines.length; i++) {
+                        if (i > 0) {
+                            xmlParts.push(`<br/>\r\n`);
+                        }
+                        xmlParts.push(this.escapeXml(lines[i]));
+                    }
+
+                    // 6. 文字修飾の終了タグ（開始と逆順）
+                    if (decorations.strikethrough) {
+                        xmlParts.push(`</strikethrough>\r\n`);
+                    }
+                    if (decorations.underline) {
+                        xmlParts.push(`</underline>\r\n`);
+                    }
+
+                    // 7. document終了
+                    xmlParts.push(`</document>\r\n`);
+                }
+                break;
+
+            case 'pixelmap':
+                // ピクセルマップ - ImageDataをPNGファイルとして保存
+                if (shape.imageData) {
+                    // ピクセルマップ番号を取得または生成
+                    if (shape.pixelmapNo === undefined) {
+                        shape.pixelmapNo = this.getNextPixelmapNumber();
+                    }
+
+                    // ファイル名を生成: fileId_recordNo_pixelmapNo.png
+                    const fileId = this.realId || 'unknown';
+                    const pixelmapFileName = `${fileId}_${shape.pixelmapNo}.png`;
+
+                    // ImageDataをPNGとして保存（非同期だが、XMLは同期的に生成）
+                    this.savePixelmapImageFile(shape.imageData, pixelmapFileName);
+
+                    const rotation = shape.rotation || 0;
+                    const flipH = shape.flipH ? 'true' : 'false';
+                    const flipV = shape.flipV ? 'true' : 'false';
+
+                    // pixelmap要素として保存（href属性でファイル名を指定）
+                    xmlParts.push(`<pixelmap left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" bgcolor="${shape.backgroundColor || '#ffffff'}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}" href="${this.escapeXml(pixelmapFileName)}"/>\r\n`);
+                } else {
+                    const rotation = shape.rotation || 0;
+                    const flipH = shape.flipH ? 'true' : 'false';
+                    const flipV = shape.flipV ? 'true' : 'false';
+
+                    // ImageDataがない場合は空のピクセルマップとして保存
+                    xmlParts.push(`<pixelmap left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" bgcolor="${shape.backgroundColor || '#ffffff'}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}"/>\r\n`);
+                }
+                break;
+
+            case 'group':
+                // グループをXMLタグで囲んで保存
+                if (shape.shapes) {
+                    xmlParts.push(`<group left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}">\r\n`);
+                    shape.shapes.forEach((s, i) => {
+                        this.shapeToXML(s, `${index}_${i}`, xmlParts);
+                    });
+                    xmlParts.push(`</group>\r\n`);
+                }
+                break;
+        }
+    }
+
+    escapeXml(text) {
+        if (!text) return '';
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+    }
+
+    setupContextMenu() {
+        this.canvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+
+            // ダブルクリック+ドラッグ状態をクリア（コンテキストメニュー表示時は通常操作を優先）
+            if (this.dblClickDragState.dblClickedElement) {
+                this.dblClickDragState.dblClickedElement.setAttribute('draggable', 'true');
+            }
+            this.dblClickDragState.isDblClickDragCandidate = false;
+            this.dblClickDragState.isDblClickDrag = false;
+            this.dblClickDragState.dblClickedShape = null;
+            this.dblClickDragState.dblClickedElement = null;
+            this.dblClickDragState.lastClickTime = 0; // ダブルクリック検出をリセット
+            this.dblClickDragState.lastClickedShape = null;
+            // プレビュー要素を削除
+            if (this.dblClickDragState.previewElement) {
+                this.dblClickDragState.previewElement.remove();
+                this.dblClickDragState.previewElement = null;
+            }
+
+            if (window.parent && window.parent !== window) {
+                const rect = window.frameElement.getBoundingClientRect();
+                window.parent.postMessage({
+                    type: 'context-menu-request',
+                    x: rect.left + e.clientX,
+                    y: rect.top + e.clientY
+                }, '*');
+            }
+        });
+    }
+
+    setupWindowActivation() {
+        window.addEventListener('focus', () => {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'window-focus'
+                }, '*');
+            }
+        });
+    }
+
+    updateWindowConfig(config) {
+        // ウィンドウ設定を更新
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'update-window-config',
+                fileId: this.realId,
+                windowConfig: config
+            }, '*');
+        }
+    }
+
+    async getMenuDefinition() {
+        const menuDef = [
+            {
+                label: '保存',
+                submenu: [
+                    { label: '元の実身に保存', action: 'save', shortcut: 'Ctrl+S' },
+                    { label: '新たな実身に保存', action: 'save-as-new' }
+                ]
+            },
+            {
+                label: '表示',
+                submenu: [
+                    { label: '道具パネル表示オンオフ', action: 'toggle-tool-panel' },
+                    { label: '実寸パネル表示', action: 'toggle-real-size-panel' },
+                    { label: 'パターン編集', action: 'edit-pattern' },
+                    { label: '全画面表示オンオフ', action: 'toggle-fullscreen', shortcut: 'Ctrl+L' },
+                    { label: '再表示', action: 'refresh' },
+                    { label: '背景色変更', action: 'change-bg-color' }
+                ]
+            },
+            {
+                label: '編集',
+                submenu: [
+                    { label: '取消', action: 'undo', shortcut: 'Ctrl+Z' },
+                    { label: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
+                    { label: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
+                    { label: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
+                    { label: 'クリップボードから移動', action: 'paste-move' },
+                    { label: '削除', action: 'delete-shape', shortcut: 'Delete' },
+                    { separator: true },
+                    { label: 'グループ化', action: 'group-shapes' },
+                    { label: 'グループ化解除', action: 'ungroup-shapes' },
+                    { label: '全て選択', action: 'select-all' },
+                    { separator: true },
+                    { label: 'いちばん前へ', action: 'bring-to-front' },
+                    { label: 'いちばん後へ', action: 'send-to-back' },
+                    { label: 'ひとつ前へ', action: 'bring-forward' },
+                    { label: 'ひとつ後へ', action: 'send-backward' },
+                    { label: '位置あわせ', action: 'align-shapes' }
+                ]
+            },
+            {
+                label: '図形操作',
+                submenu: [
+                    { label: '取消', action: 'undo' },
+                    { separator: true },
+                    { label: '変形', action: 'transform-shape' },
+                    { label: '色反転', action: 'invert-color' },
+                    { label: '焼き付け', action: 'burn-shape' },
+                    { label: '左右反転', action: 'flip-horizontal' },
+                    { label: '上下反転', action: 'flip-vertical' },
+                    { label: '左90度回転', action: 'rotate-left' },
+                    { label: '右90度回転', action: 'rotate-right' }
+                ]
+            },
+            {
+                label: '保護',
+                submenu: [
+                    { label: '固定化', action: 'lock-shape' },
+                    { label: '固定解除', action: 'unlock-shape' },
+                    { separator: true },
+                    { label: '背景化', action: 'to-background' },
+                    { label: '背景解除', action: 'from-background' }
+                ]
+            },
+            {
+                label: '書式/印刷',
+                submenu: [
+                    { label: '用紙枠表示オンオフ', action: 'toggle-paper-frame' },
+                    { label: '用紙枠設定', action: 'page-setup' }
+                ]
+            },
+            {
+                label: '仮身操作',
+                submenu: [
+                    { label: '開く', action: 'open-virtual' },
+                    { label: '閉じる', action: 'close-virtual' },
+                    { separator: true },
+                    { label: '属性変更', action: 'virtual-attributes' }
+                ]
+            }
+        ];
+
+        return menuDef;
+    }
+
+    async executeMenuAction(action, additionalData) {
+        console.log('[FIGURE EDITOR] メニューアクション実行:', action);
+
+        switch (action) {
+            // 保存
+            case 'save':
+                await this.saveFile();
+                break;
+
+            case 'save-as-new':
+                // 新たな実身に保存
+                this.saveAsNewRealObject();
+                break;
+
+            // 表示
+            case 'toggle-tool-panel':
+                this.toggleToolPanel();
+                break;
+
+            case 'toggle-real-size-panel':
+                this.toggleRealSizePanel();
+                break;
+
+            case 'edit-pattern':
+                this.editPattern();
+                break;
+
+            case 'toggle-fullscreen':
+                this.toggleFullscreen();
+                break;
+
+            case 'refresh':
+                this.refresh();
+                break;
+
+            case 'change-bg-color':
+                await this.changeBgColor();
+                break;
+
+            // 編集
+            case 'undo':
+                this.undo();
+                break;
+
+            case 'copy':
+                this.copyShapes();
+                break;
+
+            case 'paste':
+                await this.pasteShapes();
+                break;
+
+            case 'cut':
+                this.cutShapes();
+                break;
+
+            case 'paste-move':
+                await this.pasteMove();
+                break;
+
+            case 'delete-shape':
+                this.deleteSelectedShapes();
+                break;
+
+            case 'group-shapes':
+                this.groupShapes();
+                break;
+
+            case 'ungroup-shapes':
+                this.ungroupShapes();
+                break;
+
+            case 'select-all':
+                this.selectAllShapes();
+                break;
+
+            case 'bring-to-front':
+                this.bringToFront();
+                break;
+
+            case 'send-to-back':
+                this.sendToBack();
+                break;
+
+            case 'bring-forward':
+                this.bringForward();
+                break;
+
+            case 'send-backward':
+                this.sendBackward();
+                break;
+
+            case 'align-shapes':
+                this.alignShapes();
+                break;
+
+            // 図形操作
+            case 'transform-shape':
+                this.transformShape();
+                break;
+
+            case 'invert-color':
+                this.invertColor();
+                break;
+
+            case 'burn-shape':
+                this.burnShape();
+                break;
+
+            case 'flip-horizontal':
+                this.flipShapes('horizontal');
+                break;
+
+            case 'flip-vertical':
+                this.flipShapes('vertical');
+                break;
+
+            case 'rotate-left':
+                this.rotateShapes(-90);
+                break;
+
+            case 'rotate-right':
+                this.rotateShapes(90);
+                break;
+
+            // 保護
+            case 'lock-shape':
+                this.lockShape();
+                break;
+
+            case 'unlock-shape':
+                this.unlockShape();
+                break;
+
+            case 'to-background':
+                this.toBackground();
+                break;
+
+            case 'from-background':
+                this.fromBackground();
+                break;
+
+            // 書式/印刷
+            case 'toggle-paper-frame':
+                this.togglePaperFrame();
+                break;
+
+            case 'page-setup':
+                await this.showPageSetup();
+                break;
+
+            // 仮身操作
+            case 'open-virtual':
+                this.openRealObjectWithDefaultApp();
+                break;
+
+            case 'close-virtual':
+                this.closeVirtualObject();
+                break;
+
+            case 'virtual-attributes':
+                this.showVirtualAttributes();
+                break;
+
+            default:
+                console.log('[FIGURE EDITOR] 未実装のアクション:', action);
+        }
+    }
+
+    // === 表示モード ===
+    viewXMLMode() {
+        this.viewMode = 'xml';
+        this.canvas.style.display = 'none';
+        // XML表示用の要素を表示（未実装）
+        console.log('[FIGURE EDITOR] XMLモード');
+    }
+
+    viewCanvasMode() {
+        this.viewMode = 'canvas';
+        this.canvas.style.display = 'block';
+        this.redraw();
+        console.log('[FIGURE EDITOR] キャンバスモード');
+    }
+
+    refresh() {
+        this.redraw();
+        this.setStatus('再表示しました');
+    }
+
+    // === クリップボード操作 ===
+    copyShapes() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        // 画像とピクセルマップを特別に処理してコピー
+        this.clipboard = this.selectedShapes.map(shape => {
+            const copiedShape = JSON.parse(JSON.stringify(shape));
+
+            // 画像セグメントの場合
+            if (shape.type === 'image' && shape.imageElement) {
+                // imageElementは参照を保持
+                copiedShape.imageElement = shape.imageElement;
+                copiedShape.imageData = shape.imageData;
+            }
+
+            // ピクセルマップの場合
+            if (shape.type === 'pixelmap' && shape.imageData) {
+                // ImageDataは新しいインスタンスを作成
+                copiedShape.imageData = new ImageData(
+                    new Uint8ClampedArray(shape.imageData.data),
+                    shape.imageData.width,
+                    shape.imageData.height
+                );
+            }
+
+            return copiedShape;
+        });
+
+        this.setStatus(`${this.selectedShapes.length}個の図形をコピーしました`);
+    }
+
+    cutShapes() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        // 画像とピクセルマップを特別に処理してコピー
+        this.clipboard = this.selectedShapes.map(shape => {
+            const copiedShape = JSON.parse(JSON.stringify(shape));
+
+            // 画像セグメントの場合
+            if (shape.type === 'image' && shape.imageElement) {
+                copiedShape.imageElement = shape.imageElement;
+                copiedShape.imageData = shape.imageData;
+            }
+
+            // ピクセルマップの場合
+            if (shape.type === 'pixelmap' && shape.imageData) {
+                copiedShape.imageData = new ImageData(
+                    new Uint8ClampedArray(shape.imageData.data),
+                    shape.imageData.width,
+                    shape.imageData.height
+                );
+            }
+
+            return copiedShape;
+        });
+
+        this.deleteSelectedShapes();
+        this.setStatus(`${this.clipboard.length}個の図形を切り取りました`);
+    }
+
+    async pasteShapes() {
+        // まずグローバルクリップボードをチェック（仮身データ）
+        const globalClipboard = await this.getGlobalClipboard();
+        if (globalClipboard && globalClipboard.link_id) {
+            console.log('[FIGURE EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
+            // キャンバス中央に配置
+            const x = this.canvas.width / 2;
+            const y = this.canvas.height / 2;
+            this.insertVirtualObject(x, y, globalClipboard);
+            this.setStatus('仮身をクリップボードから貼り付けました');
+            return;
+        }
+
+        // ローカルクリップボードをチェック（図形データ）
+        if (!this.clipboard || this.clipboard.length === 0) {
+            this.setStatus('クリップボードが空です');
+            return;
+        }
+
+        // クリップボードの図形を複製して貼り付け（少しずらす）
+        const pastedShapes = this.clipboard.map(shape => {
+            const newShape = JSON.parse(JSON.stringify(shape));
+            newShape.startX += 20;
+            newShape.startY += 20;
+            newShape.endX += 20;
+            newShape.endY += 20;
+
+            // 画像セグメントの場合
+            if (shape.type === 'image') {
+                // imageElementを復元
+                if (shape.imageElement) {
+                    newShape.imageElement = shape.imageElement;
+                }
+                if (shape.imageData) {
+                    newShape.imageData = shape.imageData;
+                }
+                // 新しい画像番号を割り当て
+                newShape.imgNo = this.getNextImageNumber();
+                // ファイル名を更新
+                if (newShape.fileName) {
+                    const fileId = this.currentFile?.fileId || 'unknown';
+                    const recordNo = this.currentFile?.recordNo || 0;
+                    newShape.fileName = `${fileId}_${recordNo}_${newShape.imgNo}.png`;
+                }
+            }
+
+            // ピクセルマップの場合
+            if (shape.type === 'pixelmap' && shape.imageData) {
+                // ImageDataを復元
+                newShape.imageData = new ImageData(
+                    new Uint8ClampedArray(shape.imageData.data),
+                    shape.imageData.width,
+                    shape.imageData.height
+                );
+                // 新しいピクセルマップ番号を割り当て
+                newShape.pixelmapNo = this.getNextPixelmapNumber();
+                // ファイル名を更新
+                if (newShape.fileName) {
+                    const fileId = this.currentFile?.fileId || 'unknown';
+                    const recordNo = this.currentFile?.recordNo || 0;
+                    newShape.fileName = `${fileId}_${recordNo}_${newShape.pixelmapNo}.png`;
+                }
+            }
+
+            return newShape;
+        });
+
+        this.shapes.push(...pastedShapes);
+        this.selectedShapes = pastedShapes;
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`${pastedShapes.length}個の図形を貼り付けました`);
+        // スクロールバー更新を通知
+        this.resizeCanvas();
+    }
+
+    redo() {
+        if (this.redoStack && this.redoStack.length > 0) {
+            const state = this.redoStack.pop();
+            this.undoStack.push(JSON.stringify(this.shapes));
+            this.shapes = JSON.parse(state);
+            this.redraw();
+            this.isModified = true;
+            this.setStatus('やり直しました');
+            // スクロールバー更新を通知
+            this.resizeCanvas();
+        } else {
+            this.setStatus('やり直す操作がありません');
+        }
+    }
+
+    selectAllShapes() {
+        this.selectedShapes = [...this.shapes];
+        this.redraw();
+        this.setStatus(`${this.selectedShapes.length}個の図形を選択しました`);
+    }
+
+    // === 図形操作 ===
+    duplicateShape() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        const duplicated = this.selectedShapes.map(shape => {
+            const newShape = JSON.parse(JSON.stringify(shape));
+            newShape.startX += 20;
+            newShape.startY += 20;
+            newShape.endX += 20;
+            newShape.endY += 20;
+
+            // 画像セグメントの場合
+            if (shape.type === 'image') {
+                if (shape.imageElement) {
+                    newShape.imageElement = shape.imageElement;
+                }
+                if (shape.imageData) {
+                    newShape.imageData = shape.imageData;
+                }
+                newShape.imgNo = this.getNextImageNumber();
+                if (newShape.fileName) {
+                    const fileId = this.currentFile?.fileId || 'unknown';
+                    const recordNo = this.currentFile?.recordNo || 0;
+                    newShape.fileName = `${fileId}_${recordNo}_${newShape.imgNo}.png`;
+                }
+            }
+
+            // ピクセルマップの場合
+            if (shape.type === 'pixelmap' && shape.imageData) {
+                newShape.imageData = new ImageData(
+                    new Uint8ClampedArray(shape.imageData.data),
+                    shape.imageData.width,
+                    shape.imageData.height
+                );
+                newShape.pixelmapNo = this.getNextPixelmapNumber();
+                if (newShape.fileName) {
+                    const fileId = this.currentFile?.fileId || 'unknown';
+                    const recordNo = this.currentFile?.recordNo || 0;
+                    newShape.fileName = `${fileId}_${recordNo}_${newShape.pixelmapNo}.png`;
+                }
+            }
+
+            return newShape;
+        });
+
+        this.shapes.push(...duplicated);
+        this.selectedShapes = duplicated;
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`${duplicated.length}個の図形を複写しました`);
+    }
+
+    groupShapes() {
+        if (this.selectedShapes.length < 2) {
+            this.setStatus('2つ以上の図形を選択してください');
+            return;
+        }
+
+        // グループ化処理
+        const group = {
+            type: 'group',
+            shapes: [...this.selectedShapes],
+            strokeColor: '#000000',
+            fillColor: 'transparent',
+            lineWidth: 1
+        };
+
+        // グループの境界ボックスを計算
+        this.updateGroupBounds(group);
+
+        // 選択された図形を削除
+        this.selectedShapes.forEach(shape => {
+            const index = this.shapes.indexOf(shape);
+            if (index > -1) {
+                this.shapes.splice(index, 1);
+            }
+        });
+
+        this.shapes.push(group);
+        this.selectedShapes = [group];
+        this.redraw();
+        this.isModified = true;
+        this.setStatus('図形をグループ化しました');
+    }
+
+    updateGroupBounds(group) {
+        // グループ内の全図形の境界ボックスを計算
+        if (!group.shapes || group.shapes.length === 0) return;
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+
+        group.shapes.forEach(shape => {
+            // グループの場合は再帰的に境界ボックスを更新
+            if (shape.type === 'group') {
+                this.updateGroupBounds(shape);
+            }
+
+            const shapeMinX = Math.min(shape.startX || 0, shape.endX || 0);
+            const shapeMaxX = Math.max(shape.startX || 0, shape.endX || 0);
+            const shapeMinY = Math.min(shape.startY || 0, shape.endY || 0);
+            const shapeMaxY = Math.max(shape.startY || 0, shape.endY || 0);
+
+            minX = Math.min(minX, shapeMinX);
+            minY = Math.min(minY, shapeMinY);
+            maxX = Math.max(maxX, shapeMaxX);
+            maxY = Math.max(maxY, shapeMaxY);
+        });
+
+        group.startX = minX;
+        group.startY = minY;
+        group.endX = maxX;
+        group.endY = maxY;
+    }
+
+    moveGroupShapes(group, deltaX, deltaY) {
+        // グループ内のすべての図形を移動
+        if (!group.shapes) return;
+
+        group.shapes.forEach(shape => {
+            // 座標を移動
+            if (shape.startX !== undefined) shape.startX += deltaX;
+            if (shape.startY !== undefined) shape.startY += deltaY;
+            if (shape.endX !== undefined) shape.endX += deltaX;
+            if (shape.endY !== undefined) shape.endY += deltaY;
+
+            // パスを持つ図形の場合
+            if (shape.path) {
+                shape.path = shape.path.map(p => ({
+                    x: p.x + deltaX,
+                    y: p.y + deltaY
+                }));
+            }
+
+            // ポイントを持つ図形の場合
+            if (shape.points) {
+                shape.points = shape.points.map(p => ({
+                    x: p.x + deltaX,
+                    y: p.y + deltaY
+                }));
+            }
+
+            // ネストされたグループの場合は再帰的に移動
+            if (shape.type === 'group' && shape.shapes) {
+                this.moveGroupShapes(shape, deltaX, deltaY);
+            }
+        });
+    }
+
+    ungroupShapes() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        let ungrouped = false;
+        this.selectedShapes.forEach(shape => {
+            if (shape.type === 'group' && shape.shapes) {
+                const index = this.shapes.indexOf(shape);
+                if (index > -1) {
+                    this.shapes.splice(index, 1);
+                    this.shapes.push(...shape.shapes);
+                    ungrouped = true;
+                }
+            }
+        });
+
+        if (ungrouped) {
+            this.selectedShapes = [];
+            this.redraw();
+            this.isModified = true;
+            this.setStatus('グループを解除しました');
+        } else {
+            this.setStatus('選択された図形にグループがありません');
+        }
+    }
+
+    // === 重なり順序 ===
+    bringToFront() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.selectedShapes.forEach(shape => {
+            const index = this.shapes.indexOf(shape);
+            if (index > -1) {
+                this.shapes.splice(index, 1);
+                this.shapes.push(shape);
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus('最前面へ移動しました');
+    }
+
+    bringForward() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.selectedShapes.forEach(shape => {
+            const index = this.shapes.indexOf(shape);
+            if (index > -1 && index < this.shapes.length - 1) {
+                this.shapes.splice(index, 1);
+                this.shapes.splice(index + 1, 0, shape);
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus('前面へ移動しました');
+    }
+
+    sendBackward() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.selectedShapes.forEach(shape => {
+            const index = this.shapes.indexOf(shape);
+            if (index > 0) {
+                this.shapes.splice(index, 1);
+                this.shapes.splice(index - 1, 0, shape);
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus('背面へ移動しました');
+    }
+
+    sendToBack() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.selectedShapes.forEach(shape => {
+            const index = this.shapes.indexOf(shape);
+            if (index > -1) {
+                this.shapes.splice(index, 1);
+                this.shapes.unshift(shape);
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus('最背面へ移動しました');
+    }
+
+    // === 回転・反転 ===
+    rotateShapes(angle) {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.selectedShapes.forEach(shape => {
+            // 画像の場合は回転角度を記録
+            if (shape.type === 'image' || shape.type === 'pixelmap') {
+                shape.rotation = (shape.rotation || 0) + angle;
+                // -360から360の範囲に正規化
+                while (shape.rotation > 360) shape.rotation -= 360;
+                while (shape.rotation < -360) shape.rotation += 360;
+                return;
+            }
+
+            // 弧の場合は角度を調整
+            if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') {
+                shape.angle = (shape.angle || 0) + angle * Math.PI / 180;
+                return;
+            }
+
+            // その他の図形は座標を回転
+            const centerX = (shape.startX + shape.endX) / 2;
+            const centerY = (shape.startY + shape.endY) / 2;
+
+            const rad = angle * Math.PI / 180;
+            const cos = Math.cos(rad);
+            const sin = Math.sin(rad);
+
+            // 始点を回転
+            const sx = shape.startX - centerX;
+            const sy = shape.startY - centerY;
+            shape.startX = centerX + sx * cos - sy * sin;
+            shape.startY = centerY + sx * sin + sy * cos;
+
+            // 終点を回転
+            const ex = shape.endX - centerX;
+            const ey = shape.endY - centerY;
+            shape.endX = centerX + ex * cos - ey * sin;
+            shape.endY = centerY + ex * sin + ey * cos;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`${angle}度回転しました`);
+    }
+
+    flipShapes(direction) {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.selectedShapes.forEach(shape => {
+            // 画像の場合は反転フラグを記録
+            if (shape.type === 'image' || shape.type === 'pixelmap') {
+                if (direction === 'horizontal') {
+                    shape.flipH = !shape.flipH;
+                } else {
+                    shape.flipV = !shape.flipV;
+                }
+                return;
+            }
+
+            // 弧の場合は角度を反転
+            if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') {
+                if (direction === 'horizontal') {
+                    // 左右反転：開始角度と終了角度を水平軸で反転
+                    const startAngle = shape.startAngle || 0;
+                    const endAngle = shape.endAngle || 0;
+                    shape.startAngle = Math.PI - endAngle;
+                    shape.endAngle = Math.PI - startAngle;
+                } else {
+                    // 上下反転：開始角度と終了角度を垂直軸で反転
+                    const startAngle = shape.startAngle || 0;
+                    const endAngle = shape.endAngle || 0;
+                    shape.startAngle = -endAngle;
+                    shape.endAngle = -startAngle;
+                }
+                return;
+            }
+
+            // その他の図形は座標を反転
+            if (direction === 'horizontal') {
+                // 左右反転：startXとendXを入れ替え
+                const tempX = shape.startX;
+                shape.startX = shape.endX;
+                shape.endX = tempX;
+            } else {
+                // 上下反転：startYとendYを入れ替え
+                const tempY = shape.startY;
+                shape.startY = shape.endY;
+                shape.endY = tempY;
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`${direction === 'horizontal' ? '左右' : '上下'}反転しました`);
+    }
+
+    // === 選択図形への属性適用 ===
+    applyFillColorToSelected(color) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            shape.fillColor = color;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`塗りつぶし色を変更しました: ${color}`);
+    }
+
+    applyFillEnabledToSelected(enabled) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            shape.fillEnabled = enabled;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`塗りつぶしを${enabled ? '有効' : '無効'}にしました`);
+    }
+
+    applyStrokeColorToSelected(color) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            shape.strokeColor = color;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`線色を変更しました: ${color}`);
+    }
+
+    applyLineWidthToSelected(width) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            shape.lineWidth = width;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`線の太さを変更しました: ${width}px`);
+    }
+
+    applyLinePatternToSelected(pattern) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            shape.linePattern = pattern;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        const patternName = pattern === 'solid' ? '実線' : pattern === 'dotted' ? '点線' : '破線';
+        this.setStatus(`線種を変更しました: ${patternName}`);
+    }
+
+    applyCornerRadiusToSelected(radius) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            if (shape.type === 'rect' || shape.type === 'roundRect') {
+                shape.cornerRadius = radius;
+                shape.type = radius > 0 ? 'roundRect' : 'rect';
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`角丸半径を変更しました: ${radius}px`);
+    }
+
+    applyFontSizeToSelected(fontSize) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            if (shape.type === 'textbox') {
+                shape.fontSize = fontSize;
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`フォントサイズを変更しました: ${fontSize}px`);
+    }
+
+    applyFontFamilyToSelected(fontFamily) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            if (shape.type === 'textbox') {
+                shape.fontFamily = fontFamily;
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`フォントを変更しました`);
+    }
+
+    applyTextColorToSelected(textColor) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            if (shape.type === 'textbox') {
+                shape.textColor = textColor;
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`文字色を変更しました: ${textColor}`);
+    }
+
+    applyTextDecorationToSelected(decoration, enabled) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            if (shape.type === 'textbox' && shape.decorations) {
+                shape.decorations[decoration] = enabled;
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        const statusText = enabled ? `${decoration}を有効にしました` : `${decoration}を無効にしました`;
+        this.setStatus(statusText);
+    }
+
+    sendCurrentFontSettings() {
+        // 選択中の文字枠がある場合はその設定、なければデフォルト設定を返す
+        let settings = {
+            fontSize: this.defaultFontSize,
+            fontFamily: this.defaultFontFamily,
+            textColor: this.defaultTextColor,
+            decorations: {
+                bold: false,
+                italic: false,
+                underline: false,
+                strikethrough: false
+            }
+        };
+
+        // 選択中の文字枠があればその設定を使用
+        const selectedTextbox = this.selectedShapes.find(shape => shape.type === 'textbox');
+        if (selectedTextbox) {
+            settings = {
+                fontSize: selectedTextbox.fontSize,
+                fontFamily: selectedTextbox.fontFamily,
+                textColor: selectedTextbox.textColor,
+                decorations: { ...selectedTextbox.decorations }
+            };
+        }
+
+        console.log('[FIGURE EDITOR] フォント設定を送信:', settings);
+
+        // 親ウィンドウ経由で道具パネルに設定を送信
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'current-font-settings',
+                settings: settings,
+                fromEditor: true
+            }, '*');
+        }
+    }
+
+    // === 保護 ===
+    async showProtectSettings() {
+        const result = await this.showMessageDialog(
+            '図形を保護しますか？\n保護すると編集できなくなります。',
+            [
+                { label: '保護する', value: 'protect' },
+                { label: 'キャンセル', value: 'cancel' }
+            ]
+        );
+
+        if (result.value === 'protect') {
+            this.isProtected = true;
+            this.setStatus('保護を設定しました');
+        }
+    }
+
+    unprotect() {
+        this.isProtected = false;
+        this.setStatus('保護を解除しました');
+    }
+
+    // === 印刷 ===
+    async showPageSetup() {
+        const result = await this.showInputDialog('用紙サイズを入力してください（幅x高さmm）', '210x297');
+
+        if (result && result.value) {
+            const [width, height] = result.value.split('x').map(v => parseFloat(v.trim()));
+            if (width && height) {
+                this.paperWidth = width;
+                this.paperHeight = height;
+                this.setStatus(`用紙サイズを${width}x${height}mmに設定しました`);
+            }
+        }
+    }
+
+    showPrintPreview() {
+        this.setStatus('印刷プレビュー（未実装）');
+        console.log('[FIGURE EDITOR] 印刷プレビュー');
+    }
+
+    print() {
+        window.print();
+        this.setStatus('印刷を実行しました');
+    }
+
+    // === 表示パネル ===
+    toggleRealSizePanel() {
+        this.realSizePanelVisible = !this.realSizePanelVisible;
+        this.setStatus(`実寸パネル: ${this.realSizePanelVisible ? '表示' : '非表示'}`);
+        console.log('[FIGURE EDITOR] 実寸パネル切り替え');
+    }
+
+    editPattern() {
+        this.setStatus('パターン編集（未実装）');
+        console.log('[FIGURE EDITOR] パターン編集');
+    }
+
+    // === 編集（追加） ===
+    async pasteMove() {
+        // グローバルクリップボードをチェック
+        const globalClipboard = await this.getGlobalClipboard();
+        if (globalClipboard && globalClipboard.link_id) {
+            // グローバルクリップボードからの場合は通常のペーストと同じ
+            await this.pasteShapes();
+            return;
+        }
+
+        // ローカルクリップボードをチェック
+        if (!this.clipboard || this.clipboard.length === 0) {
+            this.setStatus('クリップボードが空です');
+            return;
+        }
+
+        // クリップボードから移動（貼り付け後、クリップボードをクリア）
+        await this.pasteShapes();
+        this.clipboard = [];
+        this.setStatus('クリップボードから移動しました');
+    }
+
+    alignShapes() {
+        if (this.selectedShapes.length < 2) {
+            this.setStatus('2つ以上の図形を選択してください');
+            return;
+        }
+
+        // 簡易的な左揃え
+        const minX = Math.min(...this.selectedShapes.map(s => Math.min(s.startX, s.endX)));
+        this.selectedShapes.forEach(shape => {
+            const currentMinX = Math.min(shape.startX, shape.endX);
+            const offset = minX - currentMinX;
+            shape.startX += offset;
+            shape.endX += offset;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus('図形を位置合わせしました');
+    }
+
+    // === 図形操作（追加） ===
+    transformShape() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+        this.setStatus('変形（未実装）');
+        console.log('[FIGURE EDITOR] 変形');
+    }
+
+    invertColor() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.selectedShapes.forEach(shape => {
+            // RGB色を反転
+            const invertHex = (hex) => {
+                const r = 255 - parseInt(hex.substr(1, 2), 16);
+                const g = 255 - parseInt(hex.substr(3, 2), 16);
+                const b = 255 - parseInt(hex.substr(5, 2), 16);
+                return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+            };
+
+            shape.strokeColor = invertHex(shape.strokeColor);
+            if (shape.fillColor && shape.fillColor !== 'transparent') {
+                shape.fillColor = invertHex(shape.fillColor);
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus('色を反転しました');
+    }
+
+    burnShape() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+        this.setStatus('焼き付け（未実装）');
+        console.log('[FIGURE EDITOR] 焼き付け');
+    }
+
+    // === 保護（追加） ===
+    lockShape() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.saveStateForUndo();
+
+        this.selectedShapes.forEach(shape => {
+            shape.locked = true;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`${this.selectedShapes.length}個の図形を固定化しました`);
+        console.log('[FIGURE EDITOR] 図形を固定化:', this.selectedShapes.map(s => s.type));
+    }
+
+    unlockShape() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.saveStateForUndo();
+
+        this.selectedShapes.forEach(shape => {
+            shape.locked = false;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`${this.selectedShapes.length}個の図形の固定を解除しました`);
+        console.log('[FIGURE EDITOR] 図形の固定を解除:', this.selectedShapes.map(s => s.type));
+    }
+
+    toBackground() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.saveStateForUndo();
+
+        this.selectedShapes.forEach(shape => {
+            shape.isBackground = true;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`${this.selectedShapes.length}個の図形を背景化しました`);
+        console.log('[FIGURE EDITOR] 図形を背景化:', this.selectedShapes.map(s => s.type));
+    }
+
+    fromBackground() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
+            return;
+        }
+
+        this.saveStateForUndo();
+
+        this.selectedShapes.forEach(shape => {
+            shape.isBackground = false;
+        });
+
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`${this.selectedShapes.length}個の図形の背景化を解除しました`);
+        console.log('[FIGURE EDITOR] 図形の背景化を解除:', this.selectedShapes.map(s => s.type));
+    }
+
+    // === 書式/印刷（追加） ===
+    togglePaperFrame() {
+        this.paperFrameVisible = !this.paperFrameVisible;
+        this.redraw();
+        this.setStatus(`用紙枠: ${this.paperFrameVisible ? '表示' : '非表示'}`);
+    }
+
+    // === 仮身操作 ===
+    /**
+     * 選択中の仮身を閉じる
+     */
+    closeVirtualObject() {
+        // 選択された図形の中から仮身を探す
+        const virtualObjectShape = this.selectedShapes.find(shape => shape.type === 'virtual-object');
+
+        if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
+            this.setStatus('仮身が選択されていません');
+            console.warn('[FIGURE EDITOR] 選択中の仮身がありません');
+            return;
+        }
+
+        const vobj = virtualObjectShape.virtualObject;
+        const realId = vobj.link_id;
+
+        // 開いているかチェック
+        if (!this.openedRealObjects.has(realId)) {
+            this.setStatus('実身は開いていません');
+            console.log('[FIGURE EDITOR] 実身は開いていません:', realId);
+            return;
+        }
+
+        const windowId = this.openedRealObjects.get(realId);
+        console.log('[FIGURE EDITOR] 実身ウィンドウを閉じます:', windowId, 'realId:', realId);
+
+        // 親ウィンドウにウィンドウクローズを要求
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'close-window',
+                windowId: windowId
+            }, '*');
+        }
+
+        // 追跡から削除（window-closedイベントでも削除されるが、ここでも削除）
+        this.openedRealObjects.delete(realId);
+        this.setStatus('実身を閉じました');
+    }
+
+    /**
+     * 選択された仮身の実身を指定されたプラグインで開く
+     * 仮身一覧プラグインから完全コピー
+     * @param {string} pluginId - 開くプラグインのID
+     */
+    executeVirtualObjectWithPlugin(pluginId) {
+        // 選択中の仮身図形を取得
+        const virtualObjectShape = this.selectedShapes.find(s => s.type === 'virtual-object');
+        if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
+            console.warn('[FIGURE EDITOR] 仮身が選択されていません');
+            return;
+        }
+
+        const selectedVirtualObject = virtualObjectShape.virtualObject;
+        const realId = selectedVirtualObject.link_id;
+        console.log('[FIGURE EDITOR] 仮身の実身を開く:', realId, 'プラグイン:', pluginId);
+
+        // ウィンドウが開いた通知を受け取るハンドラー
+        const messageId = `open-${realId}-${Date.now()}`;
+        const handleWindowOpened = (e) => {
+            if (e.data && e.data.type === 'window-opened' && e.data.messageId === messageId) {
+                window.removeEventListener('message', handleWindowOpened);
+
+                if (e.data.success && e.data.windowId) {
+                    // 開いたウィンドウを追跡
+                    this.openedRealObjects.set(realId, e.data.windowId);
+                    console.log('[FIGURE EDITOR] ウィンドウが開きました:', e.data.windowId, 'realId:', realId);
+
+                    // ウィンドウのアイコンを設定
+                    // realIdから_0.xtadなどのサフィックスを除去して基本実身IDを取得
+                    let baseRealId = realId.replace(/\.(xtad|json)$/, '').replace(/_\d+$/, '');
+                    const iconPath = `${baseRealId}.ico`;
+                    if (window.parent && window.parent !== window) {
+                        window.parent.postMessage({
+                            type: 'set-window-icon',
+                            windowId: e.data.windowId,
+                            iconPath: iconPath
+                        }, '*');
+                        console.log('[FIGURE EDITOR] ウィンドウアイコン設定要求:', e.data.windowId, iconPath);
+                    }
+                }
+            }
+        };
+
+        window.addEventListener('message', handleWindowOpened);
+
+        // 親ウィンドウ(tadjs-desktop.js)に実身を開くよう要求
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'open-virtual-object-real',
+                virtualObj: selectedVirtualObject,
+                pluginId: pluginId,
+                messageId: messageId
+            }, '*');
+        }
+    }
+
+    /**
+     * 選択中の仮身が指し示す実身をデフォルトアプリで開く
+     * 仮身一覧プラグインから完全コピー
+     */
+    openRealObjectWithDefaultApp() {
+        // 選択中の仮身図形を取得
+        const virtualObjectShape = this.selectedShapes.find(s => s.type === 'virtual-object');
+        if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
+            console.warn('[FIGURE EDITOR] 選択中の仮身がありません');
+            return;
+        }
+
+        const selectedVirtualObject = virtualObjectShape.virtualObject;
+
+        const applist = selectedVirtualObject.applist;
+        if (!applist || typeof applist !== 'object') {
+            console.warn('[FIGURE EDITOR] applistが存在しません');
+            return;
+        }
+
+        // defaultOpen=trueのプラグインを探す
+        let defaultPluginId = null;
+        for (const [pluginId, config] of Object.entries(applist)) {
+            if (config.defaultOpen === true) {
+                defaultPluginId = pluginId;
+                break;
+            }
+        }
+
+        if (!defaultPluginId) {
+            // defaultOpen=trueがない場合は最初のプラグインを使用
+            defaultPluginId = Object.keys(applist)[0];
+        }
+
+        if (!defaultPluginId) {
+            console.warn('[FIGURE EDITOR] 開くためのプラグインが見つかりません');
+            return;
+        }
+
+        // 実身を開く
+        this.executeVirtualObjectWithPlugin(defaultPluginId);
+
+        // 開いた実身を追跡
+        const realId = selectedVirtualObject.link_id;
+        // windowIdは親ウィンドウから通知される想定
+        console.log('[FIGURE EDITOR] 実身を開く:', realId, 'with', defaultPluginId);
+    }
+
+    async showVirtualAttributes() {
+        // 選択された図形の中から仮身を探す
+        const virtualObjectShape = this.selectedShapes.find(shape => shape.type === 'virtual-object');
+
+        if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
+            this.setStatus('仮身が選択されていません');
+            console.warn('[FIGURE EDITOR] 選択中の仮身がありません');
+            return;
+        }
+
+        const vobj = virtualObjectShape.virtualObject;
+
+        // 現在の属性値を取得
+        const currentAttrs = {
+            pictdisp: vobj.pictdisp !== 'false',
+            namedisp: vobj.namedisp !== 'false',
+            roledisp: vobj.roledisp !== 'false',
+            typedisp: vobj.typedisp !== 'false',
+            updatedisp: vobj.updatedisp !== 'false',
+            framedisp: vobj.framedisp !== 'false',
+            frcol: vobj.frcol || '#000000',
+            chcol: vobj.chcol || '#000000',
+            tbcol: vobj.tbcol || '#ffffff',
+            bgcol: vobj.bgcol || '#ffffff',
+            autoopen: vobj.autoopen === 'true',
+            chsz: parseFloat(vobj.chsz) || 9.6
+        };
+
+        // 文字サイズの倍率を計算
+        const baseFontSize = 9.6;
+        const ratio = currentAttrs.chsz / baseFontSize;
+        let selectedRatio = '標準';
+        const ratioMap = {
+            '1/2倍': 0.5,
+            '3/4倍': 0.75,
+            '標準': 1.0,
+            '3/2倍': 1.5,
+            '2倍': 2.0,
+            '3倍': 3.0,
+            '4倍': 4.0
+        };
+
+        for (const [label, value] of Object.entries(ratioMap)) {
+            if (Math.abs(ratio - value) < 0.01) {
+                selectedRatio = label;
+                break;
+            }
+        }
+
+        // 親ウィンドウにダイアログ表示を要求
+        if (window.parent && window.parent !== window) {
+            const messageId = `change-vobj-attrs-${Date.now()}-${Math.random()}`;
+
+            const handleMessage = (e) => {
+                if (e.data && e.data.type === 'virtual-object-attributes-changed' && e.data.messageId === messageId) {
+                    window.removeEventListener('message', handleMessage);
+
+                    if (e.data.success && e.data.attributes) {
+                        this.applyVirtualObjectAttributes(virtualObjectShape, e.data.attributes);
+                    }
+                }
+            };
+
+            window.addEventListener('message', handleMessage);
+
+            window.parent.postMessage({
+                type: 'change-virtual-object-attributes',
+                virtualObject: vobj,
+                currentAttributes: currentAttrs,
+                selectedRatio: selectedRatio,
+                messageId: messageId
+            }, '*');
+
+            console.log('[FIGURE EDITOR] 仮身属性変更ダイアログ要求');
+        }
+    }
+
+    /**
+     * 仮身に属性を適用
+     */
+    applyVirtualObjectAttributes(shape, attrs) {
+        if (!shape || !shape.virtualObject) {
+            console.warn('[FIGURE EDITOR] 仮身が見つかりません');
+            return;
+        }
+
+        const vobj = shape.virtualObject;
+
+        // 表示項目の設定
+        if (attrs.pictdisp !== undefined) vobj.pictdisp = attrs.pictdisp ? 'true' : 'false';
+        if (attrs.namedisp !== undefined) vobj.namedisp = attrs.namedisp ? 'true' : 'false';
+        if (attrs.roledisp !== undefined) vobj.roledisp = attrs.roledisp ? 'true' : 'false';
+        if (attrs.typedisp !== undefined) vobj.typedisp = attrs.typedisp ? 'true' : 'false';
+        if (attrs.updatedisp !== undefined) vobj.updatedisp = attrs.updatedisp ? 'true' : 'false';
+        if (attrs.framedisp !== undefined) vobj.framedisp = attrs.framedisp ? 'true' : 'false';
+
+        // 色の設定（#ffffff形式のみ）
+        const colorRegex = /^#[0-9A-Fa-f]{6}$/;
+        if (attrs.frcol && colorRegex.test(attrs.frcol)) vobj.frcol = attrs.frcol;
+        if (attrs.chcol && colorRegex.test(attrs.chcol)) vobj.chcol = attrs.chcol;
+        if (attrs.tbcol && colorRegex.test(attrs.tbcol)) vobj.tbcol = attrs.tbcol;
+        if (attrs.bgcol && colorRegex.test(attrs.bgcol)) vobj.bgcol = attrs.bgcol;
+
+        // 文字サイズの設定
+        if (attrs.chsz !== undefined) vobj.chsz = attrs.chsz.toString();
+
+        // 自動起動の設定
+        if (attrs.autoopen !== undefined) vobj.autoopen = attrs.autoopen ? 'true' : 'false';
+
+        // 修正フラグを立てる
+        this.isModified = true;
+
+        // 再描画
+        this.redraw();
+
+        console.log('[FIGURE EDITOR] 仮身属性を適用:', attrs);
+        this.setStatus('仮身属性を変更しました');
+    }
+
+    toggleFullscreen() {
+        // 親ウィンドウ（tadjs-desktop.js）にメッセージを送信してウィンドウを最大化/元に戻す
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'toggle-maximize'
+            }, '*');
+
+            this.isFullscreen = !this.isFullscreen;
+            this.setStatus(this.isFullscreen ? '全画面表示ON' : '全画面表示OFF');
+        } else {
+            // 親ウィンドウがない場合は従来のフルスクリーンAPIを使用
+            const container = document.querySelector('.plugin-content');
+            if (!this.isFullscreen) {
+                if (container.requestFullscreen) {
+                    container.requestFullscreen();
+                } else if (container.webkitRequestFullscreen) {
+                    container.webkitRequestFullscreen();
+                }
+                this.isFullscreen = true;
+                this.setStatus('全画面表示ON');
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                }
+                this.isFullscreen = false;
+                this.setStatus('全画面表示OFF');
+            }
+        }
+    }
+
+    toggleToolPanel() {
+        // 道具パネルウィンドウの表示/非表示を切り替え
+        if (this.toolPanelWindowId) {
+            // 道具パネルが開いている場合は閉じる
+            console.log('[FIGURE EDITOR] 道具パネルウィンドウを閉じます:', this.toolPanelWindowId);
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'close-window',
+                    windowId: this.toolPanelWindowId
+                }, '*');
+            }
+            this.toolPanelWindowId = null;
+            this.setStatus('道具パネルを閉じました');
+        } else {
+            // 道具パネルが閉じている場合は開く
+            console.log('[FIGURE EDITOR] 道具パネルウィンドウを開きます');
+            this.openToolPanelWindow();
+            this.setStatus('道具パネルを開きました');
+        }
+    }
+
+    async changeBgColor() {
+        const result = await this.showInputDialog('背景色を入力してください（16進数カラーコード）', this.bgColor);
+
+        if (result && result.value) {
+            this.bgColor = result.value;
+            this.redraw();
+            this.isModified = true;
+
+            // 親ウィンドウに背景色更新を通知（管理用セグメントに保存）
+            if (window.parent && window.parent !== window && this.realId) {
+                window.parent.postMessage({
+                    type: 'update-background-color',
+                    fileId: this.realId,
+                    backgroundColor: this.bgColor
+                }, '*');
+                console.log('[FIGURE EDITOR] 背景色更新を親ウィンドウに通知:', this.realId, this.bgColor);
+            }
+
+            // this.currentFileを更新（再表示時に正しい色を適用するため）
+            if (this.currentFile) {
+                if (!this.currentFile.windowConfig) {
+                    this.currentFile.windowConfig = {};
+                }
+                this.currentFile.windowConfig.backgroundColor = this.bgColor;
+            }
+        }
+    }
+
+    async handleCloseRequest(windowId) {
+        console.log('[FIGURE EDITOR] クローズ要求受信, isModified:', this.isModified);
+
+        if (this.isModified) {
+            // 編集中の場合、保存確認ダイアログを表示
+            const result = await this.showSaveConfirmDialog();
+            console.log('[FIGURE EDITOR] 保存確認ダイアログ結果:', result);
+
+            if (result === 'cancel') {
+                // 取消: クローズをキャンセル
+                this.respondCloseRequest(windowId, false);
+            } else if (result === 'no') {
+                // 保存しない: そのままクローズ
+                this.respondCloseRequest(windowId, true);
+            } else if (result === 'yes') {
+                // 保存: 保存してからクローズ
+                await this.saveFile();
+                this.isModified = false;
+                this.respondCloseRequest(windowId, true);
+            }
+        } else {
+            // 未編集の場合、そのままクローズ
+            this.respondCloseRequest(windowId, true);
+        }
+    }
+
+    /**
+     * クローズ要求に応答
+     * @param {string} windowId - ウィンドウID
+     * @param {boolean} allowClose - クローズを許可するか
+     */
+    respondCloseRequest(windowId, allowClose) {
+        console.log('[FIGURE EDITOR] クローズ応答送信, windowId:', windowId, ', allowClose:', allowClose);
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'window-close-response',
+                windowId: windowId,
+                allowClose: allowClose
+            }, '*');
+        }
+    }
+
+    /**
+     * ウィンドウを閉じるリクエストを送信
+     */
+    requestCloseWindow() {
+        if (window.parent && window.parent !== window) {
+            // 親ウィンドウのiframe要素からwindowIdを取得
+            const windowElement = window.frameElement ? window.frameElement.closest('.window') : null;
+            const windowId = windowElement ? windowElement.id : null;
+
+            if (windowId) {
+                window.parent.postMessage({
+                    type: 'close-window',
+                    windowId: windowId
+                }, '*');
+            }
+        }
+    }
+
+    /**
+     * 保存確認ダイアログを表示
+     * @returns {Promise<string>} 'yes', 'no', 'cancel'
+     */
+    async showSaveConfirmDialog() {
+        return new Promise((resolve) => {
+            const messageId = `save-confirm-${++this.dialogMessageId}`;
+
+            // コールバックを登録
+            this.dialogCallbacks[messageId] = (result) => {
+                resolve(result);
+            };
+
+            // 親ウィンドウにダイアログ表示を要求
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'show-save-confirm-dialog',
+                    messageId: messageId,
+                    message: '保存してから閉じますか？',
+                    buttons: [
+                        { label: '取消', value: 'cancel' },
+                        { label: '保存しない', value: 'no' },
+                        { label: '保存', value: 'yes' }
+                    ]
+                }, '*');
+            }
+        });
+    }
+
+    setStatus(message) {
+        console.log('[FIGURE EDITOR]', message);
+        // ステータスバーがある場合はそこに表示
+    }
+
+    showInputDialog(message, defaultValue = '') {
+        return new Promise((resolve) => {
+            const messageId = ++this.dialogMessageId;
+            this.dialogCallbacks[messageId] = resolve;
+
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'show-input-dialog',
+                    messageId: messageId,
+                    message: message,
+                    defaultValue: defaultValue
+                }, '*');
+            }
+        });
+    }
+
+    showMessageDialog(message, buttons = [{ label: 'OK', value: 'ok' }]) {
+        return new Promise((resolve) => {
+            const messageId = ++this.dialogMessageId;
+            this.dialogCallbacks[messageId] = resolve;
+
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'show-message-dialog',
+                    messageId: messageId,
+                    message: message,
+                    buttons: buttons
+                }, '*');
+            }
+        });
+    }
+
+    // ピクセルマップモードに入る
+    enterPixelmapMode(pixelmapShape) {
+        // 枠のサイズをチェック（最小10x10ピクセル）
+        const width = Math.abs(pixelmapShape.endX - pixelmapShape.startX);
+        const height = Math.abs(pixelmapShape.endY - pixelmapShape.startY);
+
+        console.log('[FIGURE EDITOR] enterPixelmapMode 呼び出し - サイズ:', width, 'x', height, 'pixelmapShape:', pixelmapShape);
+
+        if (width < 10 || height < 10) {
+            console.log('[FIGURE EDITOR] ピクセルマップ枠が小さすぎます。最小サイズ: 10x10ピクセル');
+            // 小さすぎる枠は削除
+            const index = this.shapes.indexOf(pixelmapShape);
+            if (index > -1) {
+                this.shapes.splice(index, 1);
+                this.redraw();
+            }
+            return;
+        }
+
+        this.isPixelmapMode = true;
+        this.editingPixelmap = pixelmapShape;
+
+        // ピクセルマップ枠に対応するImageDataを初期化（まだない場合）
+        if (!pixelmapShape.imageData) {
+            // オフスクリーンCanvasを作成してImageDataを初期化
+            const offscreen = document.createElement('canvas');
+            offscreen.width = width;
+            offscreen.height = height;
+            const offscreenCtx = offscreen.getContext('2d');
+
+            // 背景色で塗りつぶし
+            offscreenCtx.fillStyle = pixelmapShape.backgroundColor || '#ffffff';
+            offscreenCtx.fillRect(0, 0, width, height);
+
+            pixelmapShape.imageData = offscreenCtx.getImageData(0, 0, width, height);
+        }
+
+        // 道具パネルに画材ツールを表示するメッセージを送る
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'enter-pixelmap-mode'
+            }, '*');
+        }
+
+        // 画材ツールパレットを表示
+        this.showPixelmapToolPalette();
+
+        this.redraw();
+        console.log('[FIGURE EDITOR] ピクセルマップモードに入りました - 編集対象:', this.editingPixelmap);
+    }
+
+    // ピクセルマップモードを抜ける
+    exitPixelmapMode() {
+        this.isPixelmapMode = false;
+        this.editingPixelmap = null;
+
+        // 画材ツールパレットを非表示
+        this.hidePixelmapToolPalette();
+
+        // 道具パネルに通常モードに戻るメッセージを送る
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'exit-pixelmap-mode'
+            }, '*');
+        }
+
+        // 選択ツールに戻す
+        this.currentTool = 'select';
+        this.redraw();
+        console.log('[FIGURE EDITOR] ピクセルマップモードを抜けました');
+    }
+
+    // ピクセルマップ枠内でピクセル描画を行う
+    handlePixelmapDraw(x, y) {
+        console.log('[FIGURE EDITOR] handlePixelmapDraw 呼び出し - 座標:', x, y, 'editingPixelmap:', this.editingPixelmap, 'pixelmapTool:', this.pixelmapTool);
+
+        if (!this.editingPixelmap || !this.editingPixelmap.imageData) {
+            console.log('[FIGURE EDITOR] handlePixelmapDraw: editingPixelmapまたはimageDataが無効');
+            return;
+        }
+
+        const pixelmap = this.editingPixelmap;
+        const minX = Math.min(pixelmap.startX, pixelmap.endX);
+        const minY = Math.min(pixelmap.startY, pixelmap.endY);
+
+        // ピクセルマップ内の座標に変換
+        const localX = Math.floor(x - minX);
+        const localY = Math.floor(y - minY);
+
+        console.log('[FIGURE EDITOR] ローカル座標:', localX, localY, 'ImageDataサイズ:', pixelmap.imageData.width, 'x', pixelmap.imageData.height);
+
+        // 範囲外チェック
+        if (localX < 0 || localY < 0 ||
+            localX >= pixelmap.imageData.width ||
+            localY >= pixelmap.imageData.height) {
+            console.log('[FIGURE EDITOR] 座標が範囲外');
+            return;
+        }
+
+        console.log('[FIGURE EDITOR] 描画ツール実行:', this.pixelmapTool);
+
+        // 画材ツールに応じた描画処理
+        switch (this.pixelmapTool) {
+            case 'pencil':
+                this.drawPixel(pixelmap, localX, localY, this.strokeColor, 1);
+                break;
+            case 'eraser':
+                this.drawPixel(pixelmap, localX, localY, pixelmap.backgroundColor, this.pixelmapBrushSize);
+                break;
+            case 'brush':
+                this.drawPixel(pixelmap, localX, localY, this.strokeColor, this.pixelmapBrushSize);
+                break;
+            case 'airbrush':
+                this.drawAirbrush(pixelmap, localX, localY, this.strokeColor, this.pixelmapBrushSize);
+                break;
+            case 'paint':
+                this.floodFill(pixelmap, localX, localY, this.strokeColor);
+                break;
+            case 'cutter':
+                // アートカッター（選択範囲指定）は別途実装が必要
+                break;
+        }
+
+        this.redraw();
+        this.isModified = true;
+        console.log('[FIGURE EDITOR] 描画完了');
+    }
+
+    // 単一ピクセルまたはブラシサイズでピクセルを描画
+    drawPixel(pixelmap, x, y, color, size = 1) {
+        const imageData = pixelmap.imageData;
+        const rgb = this.hexToRgb(color);
+
+        const halfSize = Math.floor(size / 2);
+        for (let dy = -halfSize; dy <= halfSize; dy++) {
+            for (let dx = -halfSize; dx <= halfSize; dx++) {
+                const px = x + dx;
+                const py = y + dy;
+
+                if (px >= 0 && py >= 0 && px < imageData.width && py < imageData.height) {
+                    const index = (py * imageData.width + px) * 4;
+                    imageData.data[index] = rgb.r;
+                    imageData.data[index + 1] = rgb.g;
+                    imageData.data[index + 2] = rgb.b;
+                    imageData.data[index + 3] = 255;
+                }
+            }
+        }
+    }
+
+    // エアブラシ効果（ランダムに周辺のピクセルを描画）
+    drawAirbrush(pixelmap, x, y, color, size) {
+        const imageData = pixelmap.imageData;
+        const rgb = this.hexToRgb(color);
+        const radius = size * 2;
+
+        // エアブラシ効果：ランダムに周辺ピクセルを描画
+        for (let i = 0; i < size * 10; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const distance = Math.random() * radius;
+            const px = Math.floor(x + Math.cos(angle) * distance);
+            const py = Math.floor(y + Math.sin(angle) * distance);
+
+            if (px >= 0 && py >= 0 && px < imageData.width && py < imageData.height) {
+                const index = (py * imageData.width + px) * 4;
+                imageData.data[index] = rgb.r;
+                imageData.data[index + 1] = rgb.g;
+                imageData.data[index + 2] = rgb.b;
+                imageData.data[index + 3] = 255;
+            }
+        }
+    }
+
+    // 塗りつぶし（フラッドフィル）
+    floodFill(pixelmap, startX, startY, fillColor) {
+        const imageData = pixelmap.imageData;
+        const width = imageData.width;
+        const height = imageData.height;
+        const data = imageData.data;
+
+        const startIndex = (startY * width + startX) * 4;
+        const targetColor = {
+            r: data[startIndex],
+            g: data[startIndex + 1],
+            b: data[startIndex + 2],
+            a: data[startIndex + 3]
+        };
+
+        const fillRgb = this.hexToRgb(fillColor);
+
+        // 既に同じ色の場合は何もしない
+        if (targetColor.r === fillRgb.r &&
+            targetColor.g === fillRgb.g &&
+            targetColor.b === fillRgb.b) {
+            return;
+        }
+
+        const stack = [{x: startX, y: startY}];
+        const visited = new Set();
+
+        while (stack.length > 0) {
+            const {x, y} = stack.pop();
+            const key = `${x},${y}`;
+
+            if (visited.has(key)) continue;
+            if (x < 0 || y < 0 || x >= width || y >= height) continue;
+
+            const index = (y * width + x) * 4;
+
+            // 色が一致するかチェック
+            if (data[index] === targetColor.r &&
+                data[index + 1] === targetColor.g &&
+                data[index + 2] === targetColor.b &&
+                data[index + 3] === targetColor.a) {
+
+                // 色を塗る
+                data[index] = fillRgb.r;
+                data[index + 1] = fillRgb.g;
+                data[index + 2] = fillRgb.b;
+                data[index + 3] = 255;
+
+                visited.add(key);
+
+                // 4方向に展開
+                stack.push({x: x + 1, y: y});
+                stack.push({x: x - 1, y: y});
+                stack.push({x: x, y: y + 1});
+                stack.push({x: x, y: y - 1});
+            }
+        }
+    }
+
+    // HEX色をRGBに変換
+    hexToRgb(hex) {
+        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result ? {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16)
+        } : {r: 0, g: 0, b: 0};
+    }
+
+    // 画像ファイルの絶対パスを取得（非同期）
+    getImageFilePath(fileName) {
+        return new Promise((resolve, reject) => {
+            const requestId = `img_${this.imagePathRequestId++}`;
+
+            // コールバックを登録
+            this.imagePathCallbacks[requestId] = (filePath) => {
+                resolve(filePath);
+            };
+
+            // タイムアウト設定（5秒）
+            setTimeout(() => {
+                if (this.imagePathCallbacks[requestId]) {
+                    delete this.imagePathCallbacks[requestId];
+                    reject(new Error('画像パス取得タイムアウト'));
+                }
+            }, 5000);
+
+            // 最上位ウィンドウ(tadjs-desktop.js)に画像パス要求を送信
+            if (window.top && window.top !== window) {
+                window.top.postMessage({
+                    type: 'get-image-file-path',
+                    requestId: requestId,
+                    fileName: fileName
+                }, '*');
+            } else {
+                // 親ウィンドウがない場合は相対パスを返す
+                resolve(fileName);
+            }
+        });
+    }
+
+    // 画材ツールパレットを表示
+    showPixelmapToolPalette() {
+        // 既に存在する場合は削除
+        this.hidePixelmapToolPalette();
+
+        if (!this.editingPixelmap) {
+            console.log('[FIGURE EDITOR] editingPixelmapが無効なため、パレットを表示できません');
+            return;
+        }
+
+        // パレット要素を作成
+        const palette = document.createElement('div');
+        palette.id = 'pixelmap-tool-palette';
+        palette.className = 'pixelmap-tool-palette';
+
+        // ツールボタンの定義
+        const tools = [
+            { id: 'pencil', icon: '✎', title: '鉛筆' },
+            { id: 'eraser', icon: '⌫', title: '消しゴム' },
+            { id: 'brush', icon: '🖌', title: '絵筆' },
+            { id: 'airbrush', icon: '💨', title: 'エアブラシ' },
+            { id: 'paint', icon: '🎨', title: '絵の具' },
+            { id: 'cutter', icon: '✂', title: 'アートカッター' }
+        ];
+
+        // ツールボタンを作成
+        tools.forEach(tool => {
+            const button = document.createElement('button');
+            button.className = 'pixelmap-tool-btn';
+            button.dataset.tool = tool.id;
+            button.title = tool.title;
+            button.textContent = tool.icon;
+
+            // 現在のツールをアクティブ表示
+            if (this.pixelmapTool === tool.id) {
+                button.classList.add('active');
+            }
+
+            // クリックイベント
+            button.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.selectPixelmapTool(tool.id);
+            });
+
+            palette.appendChild(button);
+        });
+
+        // ブラシサイズコントロールを追加
+        const sizeControl = document.createElement('div');
+        sizeControl.className = 'brush-size-control';
+
+        const sizeLabel = document.createElement('label');
+        sizeLabel.textContent = 'サイズ:';
+        sizeLabel.style.fontSize = '10px';
+        sizeLabel.style.color = '#000';
+        sizeLabel.style.display = 'block';
+        sizeLabel.style.marginTop = '4px';
+
+        const sizeInput = document.createElement('input');
+        sizeInput.type = 'range';
+        sizeInput.min = '1';
+        sizeInput.max = '20';
+        sizeInput.value = this.pixelmapBrushSize || '1';
+        sizeInput.style.width = '100%';
+
+        const sizeValue = document.createElement('span');
+        sizeValue.textContent = sizeInput.value + 'px';
+        sizeValue.style.fontSize = '10px';
+        sizeValue.style.color = '#000';
+
+        sizeInput.addEventListener('input', (e) => {
+            this.pixelmapBrushSize = parseInt(e.target.value);
+            sizeValue.textContent = e.target.value + 'px';
+        });
+
+        sizeControl.appendChild(sizeLabel);
+        sizeControl.appendChild(sizeInput);
+        sizeControl.appendChild(sizeValue);
+        palette.appendChild(sizeControl);
+
+        // 色選択コントロールを追加
+        const colorControl = document.createElement('div');
+        colorControl.className = 'color-picker-control';
+
+        const colorLabel = document.createElement('label');
+        colorLabel.textContent = '描画色:';
+        colorLabel.style.fontSize = '10px';
+        colorLabel.style.color = '#000';
+        colorLabel.style.display = 'block';
+        colorLabel.style.marginTop = '4px';
+
+        const colorPickerWrapper = document.createElement('div');
+        colorPickerWrapper.style.display = 'flex';
+        colorPickerWrapper.style.alignItems = 'center';
+        colorPickerWrapper.style.gap = '4px';
+        colorPickerWrapper.style.marginTop = '2px';
+
+        const colorInput = document.createElement('input');
+        colorInput.type = 'color';
+        colorInput.value = this.strokeColor || '#000000';
+        colorInput.style.width = '40px';
+        colorInput.style.height = '24px';
+        colorInput.style.border = '1px solid #808080';
+        colorInput.style.cursor = 'pointer';
+
+        const colorValue = document.createElement('span');
+        colorValue.textContent = colorInput.value;
+        colorValue.style.fontSize = '10px';
+        colorValue.style.color = '#000';
+
+        colorInput.addEventListener('input', (e) => {
+            this.strokeColor = e.target.value;
+            colorValue.textContent = e.target.value;
+        });
+
+        colorPickerWrapper.appendChild(colorInput);
+        colorPickerWrapper.appendChild(colorValue);
+
+        colorControl.appendChild(colorLabel);
+        colorControl.appendChild(colorPickerWrapper);
+        palette.appendChild(colorControl);
+
+        // CSSスタイルを追加
+        const style = document.createElement('style');
+        style.textContent = `
+            .pixelmap-tool-palette {
+                position: absolute;
+                background: #c0c0c0;
+                border: 2px outset #ffffff;
+                box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+                padding: 4px;
+                z-index: 10000;
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+            }
+            .pixelmap-tool-btn {
+                width: 32px;
+                height: 32px;
+                border: 1px outset #ffffff;
+                background: #c0c0c0;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0;
+                font-size: 16px;
+                -webkit-app-region: no-drag;
+            }
+            .pixelmap-tool-btn:hover {
+                background: #d0d0d0;
+            }
+            .pixelmap-tool-btn:active {
+                border-style: inset;
+                background: #a0a0a0;
+            }
+            .pixelmap-tool-btn.active {
+                border-style: inset;
+                background: #8080ff;
+                box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.5);
+            }
+            .brush-size-control {
+                padding: 4px;
+                background: #c0c0c0;
+                border-top: 1px solid #808080;
+                margin-top: 2px;
+            }
+            .color-picker-control {
+                padding: 4px;
+                background: #c0c0c0;
+                border-top: 1px solid #808080;
+                margin-top: 2px;
+            }
+        `;
+        document.head.appendChild(style);
+
+        // パレットをキャンバスの親要素に追加
+        const canvasContainer = this.canvas.parentElement;
+        canvasContainer.appendChild(palette);
+
+        // パレットの位置を計算
+        const pixelmap = this.editingPixelmap;
+        const minY = Math.min(pixelmap.startY, pixelmap.endY);
+        const maxX = Math.max(pixelmap.startX, pixelmap.endX);
+
+        // パレットをピクセルマップ枠の右側に配置（キャンバス座標系）
+        palette.style.left = `${maxX + 10}px`;
+        palette.style.top = `${minY}px`;
+
+        console.log('[FIGURE EDITOR] 画材ツールパレットを表示しました');
+    }
+
+    // 画材ツールパレットを非表示
+    hidePixelmapToolPalette() {
+        const palette = document.getElementById('pixelmap-tool-palette');
+        if (palette) {
+            palette.remove();
+            console.log('[FIGURE EDITOR] 画材ツールパレットを非表示にしました');
+        }
+    }
+
+    // 画材ツールを選択
+    selectPixelmapTool(toolId) {
+        this.pixelmapTool = toolId;
+        console.log('[FIGURE EDITOR] 画材ツール選択:', toolId);
+
+        // アクティブ状態を更新
+        const buttons = document.querySelectorAll('.pixelmap-tool-btn');
+        buttons.forEach(btn => {
+            if (btn.dataset.tool === toolId) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+    }
+
+    // 特定のタイプの図形を座標から探す
+    findShapeAt(x, y, type) {
+        for (let i = this.shapes.length - 1; i >= 0; i--) {
+            const shape = this.shapes[i];
+            if (shape.type === type && this.isPointInShape(x, y, shape)) {
+                return shape;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 実身のappList情報を取得
+     */
+    async getAppListData(realId) {
+        try {
+            console.log('[FIGURE EDITOR] getAppListData開始 realId:', realId);
+            const jsonFileName = `${realId}.json`;
+
+            return new Promise((resolve) => {
+                const messageId = `load-json-${Date.now()}-${Math.random()}`;
+                let timeoutId = null;
+
+                const messageHandler = async (event) => {
+                    const matchesId = event.data.messageId === messageId || event.data.requestId === messageId;
+
+                    if (event.data && event.data.type === 'load-data-file-response' && matchesId) {
+                        if (timeoutId) {
+                            clearTimeout(timeoutId);
+                            timeoutId = null;
+                        }
+                        window.removeEventListener('message', messageHandler);
+
+                        if (event.data.success) {
+                            try {
+                                let jsonText;
+                                if (event.data.data && event.data.data instanceof File) {
+                                    jsonText = await event.data.data.text();
+                                } else if (event.data.content) {
+                                    jsonText = event.data.content;
+                                } else {
+                                    resolve(null);
+                                    return;
+                                }
+
+                                const jsonData = JSON.parse(jsonText);
+                                resolve(jsonData.applist || null);
+                            } catch (error) {
+                                console.error('[FIGURE EDITOR] JSONパースエラー:', error);
+                                resolve(null);
+                            }
+                        } else {
+                            resolve(null);
+                        }
+                    }
+                };
+
+                window.addEventListener('message', messageHandler);
+
+                window.top.postMessage({
+                    type: 'load-data-file-request',
+                    fileName: jsonFileName,
+                    messageId: messageId,
+                    requestId: messageId
+                }, '*');
+
+                timeoutId = setTimeout(() => {
+                    window.removeEventListener('message', messageHandler);
+                    console.error('[FIGURE EDITOR] JSONファイル読み込みタイムアウト');
+                    resolve(null);
+                }, 10000);
+            });
+        } catch (error) {
+            console.error('[FIGURE EDITOR] appList取得エラー:', error);
+            return null;
+        }
+    }
+
+    /**
+     * appListからdefaultOpenのプラグインIDを取得
+     */
+    getDefaultOpenFromAppList(appListData) {
+        for (const [pluginId, appInfo] of Object.entries(appListData)) {
+            if (appInfo.defaultOpen === true) {
+                return pluginId;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 実身データを読み込む
+     */
+    async loadRealObjectData(realId) {
+        return new Promise((resolve, reject) => {
+            const messageId = `load-real-${Date.now()}-${Math.random()}`;
+
+            const messageHandler = (e) => {
+                if (e.data && e.data.messageId === messageId) {
+                    window.removeEventListener('message', messageHandler);
+                    if (e.data.type === 'real-object-loaded') {
+                        resolve(e.data.realObject);
+                    } else if (e.data.type === 'real-object-error') {
+                        reject(new Error(e.data.error));
+                    }
+                }
+            };
+
+            window.addEventListener('message', messageHandler);
+
+            setTimeout(() => {
+                window.removeEventListener('message', messageHandler);
+                reject(new Error('実身データ読み込みタイムアウト'));
+            }, 5000);
+
+            window.top.postMessage({
+                type: 'load-real-object',
+                realId: realId,
+                messageId: messageId
+            }, '*');
+        });
+    }
+
+    /**
+     * 親ウィンドウからファイルデータを読み込む
+     * @param {string} fileName - ファイル名
+     * @returns {Promise<Blob>} ファイルデータ
+     */
+    async loadDataFileFromParent(fileName) {
+        return new Promise((resolve, reject) => {
+            const requestId = `load-${Date.now()}-${Math.random()}`;
+
+            const messageHandler = (event) => {
+                if (event.data && event.data.type === 'load-data-file-response' && event.data.requestId === requestId) {
+                    window.removeEventListener('message', messageHandler);
+                    if (event.data.success) {
+                        resolve(event.data.data);
+                    } else {
+                        reject(new Error(event.data.error || 'ファイル読み込み失敗'));
+                    }
+                }
+            };
+
+            window.addEventListener('message', messageHandler);
+
+            window.parent.postMessage({
+                type: 'load-data-file-request',
+                requestId: requestId,
+                fileName: fileName
+            }, '*');
+
+            // 5秒でタイムアウト
+            setTimeout(() => {
+                window.removeEventListener('message', messageHandler);
+                reject(new Error('タイムアウト'));
+            }, 5000);
+        });
+    }
+
+    /**
+     * 仮身のメタデータ（applist等）をJSONファイルから読み込む
+     * @param {Object} virtualObj - 仮身オブジェクト
+     */
+    async loadVirtualObjectMetadata(virtualObj) {
+        try {
+            // _[recordno].xtad パターンを取り除いてベースファイルIDを取得
+            const baseFileId = virtualObj.link_id.replace(/_\d+\.xtad$/i, '');
+            const jsonFileName = `${baseFileId}.json`;
+            console.log('[FIGURE EDITOR] メタデータ読み込み試行:', virtualObj.link_id, 'JSONファイル:', jsonFileName);
+
+            // 親ウィンドウのfileObjectsからJSONファイルを取得
+            if (window.parent && window.parent.tadjsDesktop && window.parent.tadjsDesktop.fileObjects) {
+                const jsonFile = window.parent.tadjsDesktop.fileObjects[jsonFileName];
+                console.log('[FIGURE EDITOR] fileObjectsから検索:', jsonFileName, 'found:', !!jsonFile);
+
+                if (jsonFile) {
+                    const jsonText = await jsonFile.text();
+                    const jsonData = JSON.parse(jsonText);
+
+                    // applistはオブジェクト形式 { "plugin-id": { "name": "プラグイン名" }, ... }
+                    virtualObj.applist = jsonData.applist || {};
+                    virtualObj.metadata = jsonData;
+                    virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                    console.log('[FIGURE EDITOR] メタデータ読み込み成功:', virtualObj.link_id, virtualObj.applist);
+                } else {
+                    // JSONファイルが見つからない場合、Electron環境なら親ウィンドウ経由で読み込み
+                    console.log('[FIGURE EDITOR] fileObjectsに見つからない、親ウィンドウ経由で試行:', jsonFileName);
+
+                    try {
+                        const jsonFile = await this.loadDataFileFromParent(jsonFileName);
+                        const jsonText = await jsonFile.text();
+                        const jsonData = JSON.parse(jsonText);
+                        virtualObj.applist = jsonData.applist || {};
+                        virtualObj.metadata = jsonData;
+                        virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                        console.log('[FIGURE EDITOR] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
+                    } catch (parentError) {
+                        console.log('[FIGURE EDITOR] 親ウィンドウ経由で失敗、HTTP fetchにフォールバック:', parentError.message);
+
+                        // HTTP fetchにフォールバック
+                        const urlsToTry = [
+                            `../../${jsonFileName}`,  // resources/app/
+                            `../basic-text-editor/${jsonFileName}`,
+                            `../unpack-file/${jsonFileName}`,
+                            `../virtual-object-list/${jsonFileName}`,
+                            `../base-file-manager/${jsonFileName}`,
+                            `../system-config/${jsonFileName}`,
+                            `../user-config/${jsonFileName}`,
+                            `../tadjs-view/${jsonFileName}`
+                        ];
+
+                        let found = false;
+                        for (const jsonUrl of urlsToTry) {
+                            console.log('[FIGURE EDITOR] Fetch URL試行:', jsonUrl);
+                            const response = await fetch(jsonUrl);
+
+                            if (response.ok) {
+                                const jsonData = await response.json();
+                                virtualObj.applist = jsonData.applist || {};
+                                virtualObj.metadata = jsonData;
+                                virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                                console.log('[FIGURE EDITOR] メタデータ読み込み成功（HTTP）:', jsonUrl, virtualObj.applist);
+                                found = true;
+                                break;
+                            }
+                        }
+
+                        if (!found) {
+                            console.log('[FIGURE EDITOR] JSONファイルなし（すべてのパスで404）:', virtualObj.link_id);
+                            virtualObj.applist = {};
+                        }
+                    }
+                }
+            } else {
+                // 親ウィンドウのfileObjectsにアクセスできない場合（親ウィンドウ経由で読み込み）
+                console.log('[FIGURE EDITOR] 親ウィンドウのfileObjectsにアクセスできない、親ウィンドウ経由で読み込み');
+
+                try {
+                    const jsonFile = await this.loadDataFileFromParent(jsonFileName);
+                    const jsonText = await jsonFile.text();
+                    const jsonData = JSON.parse(jsonText);
+                    virtualObj.applist = jsonData.applist || {};
+                    virtualObj.metadata = jsonData;
+                    virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                    console.log('[FIGURE EDITOR] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
+                } catch (error) {
+                    console.log('[FIGURE EDITOR] メタデータ読み込み失敗:', virtualObj.link_id, error.message);
+                    virtualObj.applist = {};
+                }
+            }
+        } catch (error) {
+            console.log('[FIGURE EDITOR] メタデータ読み込みエラー:', virtualObj.link_id, error);
+            virtualObj.applist = {};
+        }
+    }
+
+    /**
+     * 開いた仮身に実身の内容を表示
+     * @param {HTMLElement} vobjElement - 仮身のDOM要素
+     * @param {Object} shape - 仮身のshapeオブジェクト
+     * @param {Object} options - オプション
+     * @returns {Promise<HTMLIFrameElement>} コンテンツiframe
+     */
+    async expandVirtualObject(vobjElement, shape, options = {}) {
+        const virtualObject = shape.virtualObject;
+        console.log('[FIGURE EDITOR] 開いた仮身の展開開始:', virtualObject.link_name);
+
+        // 展開フラグを設定（renderVirtualObjectsAsElementsによる中断を防ぐ）
+        this.isExpandingVirtualObject = true;
+
+        try {
+            // 1. defaultOpenプラグインを取得
+            const defaultOpenPlugin = this.getDefaultOpenPlugin(virtualObject);
+            if (!defaultOpenPlugin) {
+                console.warn('[FIGURE EDITOR] defaultOpenプラグインが見つかりません');
+                return null;
+            }
+            console.log('[FIGURE EDITOR] defaultOpenプラグイン:', defaultOpenPlugin);
+
+            // 2. XTADファイルを読み込む（親ウィンドウ経由）
+            const xtadFile = await this.loadDataFileFromParent(virtualObject.link_id);
+            const xmlData = await xtadFile.text();
+            console.log('[FIGURE EDITOR] XTADデータ読み込み完了:', xmlData.length, '文字');
+
+            // 3. コンテンツ領域を取得
+            const contentArea = vobjElement.querySelector('.virtual-object-content-area');
+            if (!contentArea) {
+                console.error('[FIGURE EDITOR] コンテンツ領域が見つかりません');
+                return null;
+            }
+
+            // コンテンツ領域のスクロールバーを非表示（noScrollbarオプション対応）
+            if (options.noScrollbar !== false) {
+                contentArea.style.overflow = 'hidden';
+            }
+
+            // 4. プラグインをiframeで読み込む（プラグインが描画する）
+            const iframe = this.createPluginIframe(defaultOpenPlugin, virtualObject, xmlData, options);
+            contentArea.appendChild(iframe);
+            console.log('[FIGURE EDITOR] iframe追加完了');
+
+            // shapeにiframeへの参照を保存
+            shape.expandedElement = iframe;
+
+            return iframe;
+        } catch (error) {
+            console.error('[FIGURE EDITOR] expandVirtualObject エラー:', error);
+            return null;
+        } finally {
+            // 展開フラグをリセット
+            this.isExpandingVirtualObject = false;
+        }
+    }
+
+    /**
+     * defaultOpenプラグインを取得
+     * @param {Object} virtualObject - 仮身オブジェクト
+     * @returns {string|null} プラグインID
+     */
+    getDefaultOpenPlugin(virtualObject) {
+        const applist = virtualObject.applist || {};
+        for (const [pluginId, config] of Object.entries(applist)) {
+            if (config && config.defaultOpen === true) {
+                return pluginId;
+            }
+        }
+        // デフォルトは基本文章編集
+        return 'basic-text-editor';
+    }
+
+    /**
+     * プラグインをiframeで読み込み、描画を依頼
+     * @param {string} pluginId - プラグインID
+     * @param {Object} virtualObject - 仮身オブジェクト
+     * @param {string} xmlData - XTADファイルの内容
+     * @param {Object} options - オプション
+     * @returns {HTMLIFrameElement} iframe要素
+     */
+    createPluginIframe(pluginId, virtualObject, xmlData, options = {}) {
+        const iframe = document.createElement('iframe');
+        iframe.className = 'virtual-object-content';
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.border = 'none';
+        iframe.style.overflow = 'hidden';
+        iframe.style.padding = '0';
+        iframe.style.backgroundColor = options.bgcol || virtualObject.bgcol || '#ffffff';
+        iframe.style.userSelect = 'none';
+        iframe.style.pointerEvents = 'none'; // 開いた仮身内の操作を無効化（図形編集上では表示のみ）
+
+        // プラグインのパスを取得
+        const pluginPath = `../../plugins/${pluginId}/index.html`;
+        iframe.src = pluginPath;
+
+        // iframeロード後にデータを送信（load-dataメッセージ形式）
+        iframe.addEventListener('load', () => {
+            console.log('[FIGURE EDITOR] iframe読み込み完了、プラグインにload-dataメッセージ送信');
+            iframe.contentWindow.postMessage({
+                type: 'load-data',
+                realId: virtualObject.link_id,
+                realObject: {
+                    records: [{
+                        xtad: xmlData,
+                        data: xmlData
+                    }]
+                },
+                readonly: options.readonly !== false,
+                noScrollbar: options.noScrollbar !== false,
+                bgcol: options.bgcol || virtualObject.bgcol
+            }, '*');
+        });
+
+        return iframe;
+    }
+
+    /**
+     * 開いた仮身のサイズを更新
+     */
+    updateExpandedVirtualObjectSize(shape, width, height) {
+        if (!shape.expanded || !shape.vobjElement) {
+            return;
+        }
+
+        // DOM要素全体のサイズを更新
+        shape.vobjElement.style.width = `${width}px`;
+        shape.vobjElement.style.height = `${height}px`;
+
+        // 内部のiframeもVirtualObjectRendererによって自動的にリサイズされる
+    }
+
+    /**
+     * 仮身を通常表示に戻す
+     */
+    collapseVirtualObject(shape) {
+        if (!shape.expanded) {
+            return;
+        }
+
+        shape.expanded = false;
+        console.log('[FIGURE EDITOR] 仮身を通常表示に戻す:', shape.virtualObject.link_name);
+
+        // コンテンツ領域内のiframeを削除
+        if (shape.vobjElement) {
+            const contentArea = shape.vobjElement.querySelector('.virtual-object-content-area');
+            if (contentArea) {
+                contentArea.innerHTML = ''; // すべての子要素（iframe）を削除
+            }
+        }
+
+        delete shape.expandedElement;
+    }
+
+    /**
+     * リサイズプレビュー枠を作成
+     */
+    createResizePreviewBox(shape) {
+        // 既存のプレビュー枠がある場合は削除
+        this.removeResizePreviewBox();
+
+        // Canvas の座標を画面座標に変換
+        const rect = this.canvas.getBoundingClientRect();
+        const canvasX = shape.startX;
+        const canvasY = shape.startY;
+        const canvasWidth = shape.endX - shape.startX;
+        const canvasHeight = shape.endY - shape.startY;
+
+        const screenX = rect.left + canvasX;
+        const screenY = rect.top + canvasY;
+
+        // プレビュー枠を作成
+        const previewBox = document.createElement('div');
+        previewBox.style.position = 'fixed'; // キャンバス外でも表示されるようにfixedを使用
+        previewBox.style.left = `${screenX}px`;
+        previewBox.style.top = `${screenY}px`;
+        previewBox.style.width = `${canvasWidth}px`;
+        previewBox.style.height = `${canvasHeight}px`;
+        previewBox.style.border = '2px dashed rgba(0, 123, 255, 0.8)';
+        previewBox.style.backgroundColor = 'rgba(0, 123, 255, 0.1)';
+        previewBox.style.pointerEvents = 'none';
+        previewBox.style.zIndex = '2147483647'; // 最大のz-index値（32bit整数の最大値）
+        previewBox.style.boxSizing = 'border-box';
+
+        // document.body に直接追加
+        document.body.appendChild(previewBox);
+
+        this.resizePreviewBox = previewBox;
+
+        console.log('[FIGURE EDITOR] リサイズプレビュー枠を作成しました');
+    }
+
+    /**
+     * リサイズプレビュー枠を更新
+     */
+    updateResizePreviewBox(shape) {
+        if (!this.resizePreviewBox) {
+            console.warn('[FIGURE EDITOR] リサイズプレビュー枠が存在しません');
+            return;
+        }
+
+        // Canvas の座標を画面座標に変換
+        const rect = this.canvas.getBoundingClientRect();
+        const canvasX = shape.startX;
+        const canvasY = shape.startY;
+        const canvasWidth = shape.endX - shape.startX;
+        const canvasHeight = shape.endY - shape.startY;
+
+        const screenX = rect.left + canvasX;
+        const screenY = rect.top + canvasY;
+
+        // プレビュー枠のサイズと位置を更新
+        this.resizePreviewBox.style.left = `${screenX}px`;
+        this.resizePreviewBox.style.top = `${screenY}px`;
+        this.resizePreviewBox.style.width = `${canvasWidth}px`;
+        this.resizePreviewBox.style.height = `${canvasHeight}px`;
+    }
+
+    /**
+     * リサイズプレビュー枠を削除
+     */
+    removeResizePreviewBox() {
+        if (this.resizePreviewBox && this.resizePreviewBox.parentNode) {
+            this.resizePreviewBox.parentNode.removeChild(this.resizePreviewBox);
+            this.resizePreviewBox = null;
+            console.log('[FIGURE EDITOR] リサイズプレビュー枠を削除しました');
+        }
+    }
+
+    /**
+     * すべての仮身のアイコンを事前読み込み
+     */
+    async preloadVirtualObjectIcons() {
+        if (!this.virtualObjectRenderer) {
+            console.log('[FIGURE EDITOR] VirtualObjectRendererが利用できないため、アイコン事前読み込みをスキップ');
+            return;
+        }
+
+        const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'virtual-object' && shape.virtualObject && shape.virtualObject.link_id);
+        console.log('[FIGURE EDITOR] 仮身のアイコンを事前読み込み開始:', virtualObjectShapes.length, '個');
+
+        const iconLoadPromises = virtualObjectShapes.map(async (shape) => {
+            const realId = shape.virtualObject.link_id.replace(/_\d+\.xtad$/i, '');
+            try {
+                const iconData = await this.loadIconFromParent(realId);
+                if (iconData) {
+                    await this.virtualObjectRenderer.loadIconToCache(realId, iconData);
+                    console.log('[FIGURE EDITOR] アイコンをキャッシュに読み込み:', realId);
+                }
+            } catch (error) {
+                console.error('[FIGURE EDITOR] アイコン読み込みエラー:', realId, error);
+            }
+        });
+
+        await Promise.all(iconLoadPromises);
+        console.log('[FIGURE EDITOR] 仮身のアイコン事前読み込み完了');
+    }
+
+    /**
+     * アイコンファイルを親ウィンドウ経由で読み込む
+     * @param {string} realId - 実身ID
+     * @returns {Promise<string|null>} Base64エンコードされたアイコンデータ、またはnull
+     */
+    async loadIconFromParent(realId) {
+        // キャッシュをチェック
+        if (this.iconCache.has(realId)) {
+            const cachedData = this.iconCache.get(realId);
+            console.log('[FIGURE EDITOR] アイコンキャッシュヒット:', realId, 'データあり:', !!cachedData);
+            return cachedData;
+        }
+
+        console.log('[FIGURE EDITOR] アイコンキャッシュミス、親ウィンドウに要求:', realId);
+        return new Promise((resolve) => {
+            let resolved = false; // resolveされたかどうかのフラグ
+
+            const messageHandler = (event) => {
+                if (event.data && event.data.type === 'icon-file-loaded' && event.data.realId === realId) {
+                    if (resolved) return; // 既にresolveされていたら何もしない
+                    resolved = true;
+                    window.removeEventListener('message', messageHandler);
+
+                    if (event.data.success) {
+                        // キャッシュに保存
+                        this.iconCache.set(realId, event.data.data);
+                        console.log('[FIGURE EDITOR] アイコン読み込み成功（親から）:', realId, 'データ長:', event.data.data.length);
+                        resolve(event.data.data);
+                    } else {
+                        // アイコンが存在しない場合はnullを返す
+                        this.iconCache.set(realId, null);
+                        console.log('[FIGURE EDITOR] アイコン読み込み失敗（親から）:', realId);
+                        resolve(null);
+                    }
+                }
+            };
+
+            window.addEventListener('message', messageHandler);
+
+            window.parent.postMessage({
+                type: 'read-icon-file',
+                realId: realId
+            }, '*');
+
+            // 3秒でタイムアウト（アイコンがない場合も多いのでnullを返す）
+            setTimeout(() => {
+                if (resolved) return; // 既にresolveされていたら何もしない
+                resolved = true;
+                window.removeEventListener('message', messageHandler);
+                // キャッシュにまだ入っていない場合のみnullをセット
+                if (!this.iconCache.has(realId)) {
+                    this.iconCache.set(realId, null);
+                }
+                console.log('[FIGURE EDITOR] アイコン読み込みタイムアウト:', realId);
+                resolve(null);
+            }, 3000);
+        });
+    }
+
+    /**
+     * 仮身をDOM要素として描画
+     */
+    renderVirtualObjectsAsElements() {
+        // リサイズ中は何もしない（DOM要素の削除・再作成を避ける）
+        if (this.isResizingVirtualObject) {
+            return;
+        }
+
+        // 再作成中は何もしない（タイマーベースの再作成を中断しない）
+        if (this.isRecreatingVirtualObject) {
+            return;
+        }
+
+        // 展開中は何もしない（展開操作を中断しない）
+        if (this.isExpandingVirtualObject) {
+            return;
+        }
+
+        // 既存の仮身DOM要素をすべて削除
+        const existingElements = document.querySelectorAll('.virtual-object-element');
+        existingElements.forEach(el => el.remove());
+
+        // 仮身図形をフィルタ
+        const virtualObjectShapes = this.shapes.filter(shape =>
+            shape.type === 'virtual-object' && shape.virtualObject
+        );
+
+        // 各仮身図形をDOM要素として作成
+        virtualObjectShapes.forEach(shape => {
+            this.renderVirtualObjectElement(shape);
+        });
+    }
+
+    /**
+     * 個別の仮身をDOM要素として描画
+     */
+    renderVirtualObjectElement(shape) {
+        if (!this.virtualObjectRenderer) {
+            console.warn('[FIGURE EDITOR] VirtualObjectRenderer not available');
+            return;
+        }
+
+        const virtualObject = shape.virtualObject;
+        const width = shape.endX - shape.startX;
+        const height = shape.endY - shape.startY;
+
+        // VirtualObjectRendererが判定できるように座標情報を設定
+        const virtualObjectWithPos = {
+            ...virtualObject,
+            vobjtop: shape.startY,
+            vobjbottom: shape.endY,
+            vobjleft: shape.startX,
+            vobjright: shape.endX,
+            width: width
+        };
+
+        // 開いた仮身と閉じた仮身を判定
+        const isOpenVirtualObj = this.virtualObjectRenderer.isOpenedVirtualObject(virtualObjectWithPos);
+
+        console.log('[FIGURE EDITOR] 仮身判定:', virtualObject.link_name, '高さ:', height, '開いた仮身:', isOpenVirtualObj);
+
+        // VirtualObjectRendererを使用してDOM要素を作成
+        // アイコンは親ウィンドウ経由で読み込む
+        const vobjElement = this.virtualObjectRenderer.createBlockElement(virtualObjectWithPos, {
+            loadIconCallback: (realId) => this.loadIconFromParent(realId)
+        });
+
+        if (!vobjElement) {
+            console.warn('[FIGURE EDITOR] Failed to create virtual object element');
+            return;
+        }
+
+        // クラスを追加
+        vobjElement.classList.add('virtual-object-element');
+
+        // 位置とサイズを設定
+        vobjElement.style.position = 'absolute';
+        vobjElement.style.left = shape.startX + 'px';
+        vobjElement.style.top = shape.startY + 'px';
+        vobjElement.style.width = width + 'px';
+        vobjElement.style.height = height + 'px';
+        vobjElement.style.cursor = 'move';
+        vobjElement.style.zIndex = '100';
+
+        // draggable属性をtrueに設定（クロスウィンドウドラッグ用）
+        vobjElement.setAttribute('draggable', 'true');
+
+        // データ属性を設定（shape特定用）
+        vobjElement.dataset.shapeId = this.shapes.indexOf(shape);
+        vobjElement.dataset.linkId = virtualObject.link_id;
+
+        // 既に展開済みの仮身の場合は、DOM要素を再利用（位置とサイズのみ更新）
+        if (shape.expanded && shape.vobjElement && shape.vobjElement.parentNode) {
+            console.log('[FIGURE EDITOR] 展開済み仮身のDOM要素を再利用:', virtualObject.link_name);
+
+            // 既存の要素の位置とサイズのみ更新
+            shape.vobjElement.style.left = shape.startX + 'px';
+            shape.vobjElement.style.top = shape.startY + 'px';
+            shape.vobjElement.style.width = width + 'px';
+            shape.vobjElement.style.height = height + 'px';
+
+            // 新しく作成したvobjElementは破棄
+            vobjElement.remove();
+
+            // 既存の開いた仮身のiframeサイズも更新
+            if (shape.expandedElement) {
+                const iframe = shape.expandedElement.querySelector('iframe');
+                if (iframe) {
+                    const chsz = Math.round(virtualObject.chsz || 14);
+                    const lineHeight = 1.2;
+                    const chszPx = window.convertPtToPx(chsz);
+                    const textHeight = Math.ceil(chszPx * lineHeight);
+                    const contentHeight = height - textHeight - 8 - 2; // タイトルバー - 区切り線
+                    iframe.style.height = contentHeight + 'px';
+                    iframe.style.width = width + 'px';
+                }
+            }
+
+            return; // 既存要素を再利用したので、以降の処理をスキップ
+        }
+
+        // 既存のvobjElementがあれば削除（展開済みでない場合）
+        if (shape.vobjElement && shape.vobjElement.parentNode) {
+            shape.vobjElement.parentNode.removeChild(shape.vobjElement);
+        }
+
+        // 展開状態をリセット（新しく作成する場合のみ）
+        shape.expanded = false;
+        shape.expandedElement = null;
+
+        // shapeにDOM要素への参照を保存
+        shape.vobjElement = vobjElement;
+
+        // mousedownイベント（ドラッグの準備）
+        vobjElement.addEventListener('mousedown', (e) => {
+            // ダブルクリック検出ロジック（読み取り専用モードでも実行）
+            const now = Date.now();
+            const timeSinceLastClick = now - this.dblClickDragState.lastClickTime;
+            const isSameShape = this.dblClickDragState.lastClickedShape === shape;
+
+            // 前回のクリックから300ms以内かつ同じ仮身の場合、ダブルクリック候補（左クリックのみ）
+            if (timeSinceLastClick < 300 && isSameShape && e.button === 0) {
+                console.log('[FIGURE EDITOR] ダブルクリック候補を検出:', virtualObject.link_name);
+                this.dblClickDragState.isDblClickDragCandidate = true;
+                this.dblClickDragState.dblClickedShape = shape;
+                this.dblClickDragState.dblClickedElement = vobjElement;
+                this.dblClickDragState.startX = e.clientX;
+                this.dblClickDragState.startY = e.clientY;
+
+                // 一時的にdraggableをfalseにして、ブラウザの自動ドラッグを防ぐ
+                // これにより、mouseupイベントが確実に発火する
+                vobjElement.setAttribute('draggable', 'false');
+            } else {
+                // 通常のクリック：時刻と図形を記録（全てのボタンで記録）
+                this.dblClickDragState.lastClickTime = now;
+                this.dblClickDragState.lastClickedShape = shape;
+                this.dblClickDragState.isDblClickDragCandidate = false;
+            }
+
+            // 読み取り専用モードの場合は、ドラッグとリサイズを無効化（ダブルクリックは許可）
+            if (this.readonly) {
+                // ダブルクリック検出は上で実行済みなので、ここではreturnのみ
+                return;
+            }
+
+            // イベントの伝播を止めて、canvas のイベントと競合しないようにする
+            e.stopPropagation();
+            // e.preventDefault() を削除（dblclickイベントを許可するため）
+
+            // 仮身図形を選択（selectツールの場合のみ）
+            if (this.currentTool === 'select') {
+                const isAlreadySelected = this.selectedShapes.includes(shape);
+
+                // 左クリックの場合のみ選択処理を実行
+                if (e.button === 0) {
+                    if (e.shiftKey) {
+                        // Shiftキー: トグル選択
+                        if (isAlreadySelected) {
+                            // 選択解除
+                            const index = this.selectedShapes.indexOf(shape);
+                            this.selectedShapes.splice(index, 1);
+                        } else {
+                            // 追加選択
+                            this.selectedShapes.push(shape);
+                        }
+                    } else {
+                        // 通常クリック: 他の選択を解除してこの図形のみ選択
+                        this.selectedShapes = [shape];
+                    }
+                    this.redraw();
+                    console.log('[FIGURE EDITOR] 仮身を選択:', virtualObject.link_name, '選択数:', this.selectedShapes.length);
+                } else if (e.button === 2) {
+                    // 右クリックの場合、未選択の仮身のみ選択（複数選択を維持するため）
+                    if (!isAlreadySelected) {
+                        this.selectedShapes = [shape];
+                        this.redraw();
+                        console.log('[FIGURE EDITOR] 右クリックで未選択の仮身を選択:', virtualObject.link_name);
+                    }
+                }
+            }
+
+            // 左クリックのみドラッグ処理、右クリックと中クリックはここで終了（コンテキストメニュー用）
+            if (e.button !== 0) {
+                return;
+            }
+
+            // 左クリック → 移動モード
+            this.dragState.dragMode = 'move';
+
+            // リサイズエリアのチェック（リサイズエリア内ではドラッグしない）
+            const rect = vobjElement.getBoundingClientRect();
+            const isRightEdge = e.clientX > rect.right - 10 && e.clientX <= rect.right + 10;
+            const isBottomEdge = e.clientY > rect.bottom - 10 && e.clientY <= rect.bottom + 10;
+            if (isRightEdge || isBottomEdge) {
+                // リサイズエリア内なので、ドラッグ処理はスキップ
+                return;
+            }
+
+            // 仮身内の相対位置を記録（offsetX/Yは要素内の相対位置）
+            const offsetX = e.clientX - rect.left;
+            const offsetY = e.clientY - rect.top;
+
+            // ドラッグの準備（マウス移動検出用）
+            this.isDraggingVirtualObjectShape = false;
+            this.draggingVirtualObjectShape = shape;
+            this.draggingVirtualObjectElement = vobjElement;
+            this.draggingVirtualObjectOffsetX = offsetX;
+            this.draggingVirtualObjectOffsetY = offsetY;
+            vobjElement._dragStartX = e.clientX;
+            vobjElement._dragStartY = e.clientY;
+            vobjElement._dragStarted = false;
+
+            // マウス移動を監視してドラッグを開始
+            const mousemoveHandler = (moveEvent) => {
+                // ダブルクリック+ドラッグ中は通常のドラッグ処理をスキップ（グローバルハンドラーで処理）
+                if (this.dblClickDragState.isDblClickDragCandidate || this.dblClickDragState.isDblClickDrag) {
+                    return;
+                }
+
+                const dx = Math.abs(moveEvent.clientX - vobjElement._dragStartX);
+                const dy = Math.abs(moveEvent.clientY - vobjElement._dragStartY);
+
+                // 5px以上動いたらドラッグ開始マーク
+                if (!vobjElement._dragStarted && (dx > 5 || dy > 5)) {
+                    vobjElement._dragStarted = true;
+                    this.dragState.hasMoved = true; // 移動フラグを立てる
+                }
+            };
+
+            const mouseupHandler = (upEvent) => {
+                // BTRONの仕様: 左右両方押してドラッグ中に、左ボタンを先に離した場合はコピーモード
+                if (this.dragState.hasMoved && upEvent.button === 0 && vobjElement._dragStarted) {
+                    // 左ボタンが離された
+                    // ドラッグ中であれば、dragModeをcopyに変更
+                    this.dragState.dragMode = 'copy';
+                    console.log('[FIGURE EDITOR] 左ボタンをドラッグ中に離した → コピーモードに変更');
+                    return; // 右ボタンのmouseupを待つ
+                }
+
+                document.removeEventListener('mousemove', mousemoveHandler);
+                document.removeEventListener('mouseup', mouseupHandler);
+                vobjElement._dragStarted = false;
+
+                // ドラッグ状態をリセット
+                this.dragState.hasMoved = false;
+
+                // ダブルクリック検出とドラッグ処理はdocument-levelのmouseupハンドラで処理される
+            };
+
+            document.addEventListener('mousemove', mousemoveHandler);
+            document.addEventListener('mouseup', mouseupHandler);
+        });
+
+        // dragstartイベント
+        vobjElement.addEventListener('dragstart', (e) => {
+            // ダブルクリック+ドラッグ候補またはダブルクリック+ドラッグ中の場合は通常のドラッグを抑制
+            if (this.dblClickDragState.isDblClickDragCandidate || this.dblClickDragState.isDblClickDrag) {
+                e.preventDefault();
+                return;
+            }
+
+            // mousedownで準備ができているかチェック
+            if (!this.draggingVirtualObjectShape || this.draggingVirtualObjectShape !== shape) {
+                e.preventDefault();
+                return;
+            }
+
+            // 選択中の仮身を取得（複数選択ドラッグのサポート）
+            const selectedVirtualObjectShapes = this.selectedShapes.filter(s => s.type === 'vobj');
+
+            // ドラッグ中の仮身が選択されていない場合は、その仮身のみをドラッグ
+            const shapesToDrag = selectedVirtualObjectShapes.includes(shape)
+                ? selectedVirtualObjectShapes
+                : [shape];
+
+            console.log('[FIGURE EDITOR] ドラッグ開始: ', shapesToDrag.length, '個の仮身');
+
+            // 各仮身のドラッグデータを準備
+            const virtualObjects = shapesToDrag.map(s => {
+                const vo = s.virtualObject;
+                return {
+                    link_id: vo.link_id,
+                    link_name: vo.link_name,
+                    width: vo.width || s.width,
+                    heightPx: vo.heightPx || s.height,
+                    chsz: vo.chsz || 14,
+                    frcol: vo.frcol || '#000000',
+                    chcol: vo.chcol || '#000000',
+                    tbcol: vo.tbcol || '#ffffff',
+                    bgcol: vo.bgcol || '#ffffff',
+                    dlen: vo.dlen || 0,
+                    applist: vo.applist || {},
+                    offsetX: (s === shape) ? (this.draggingVirtualObjectOffsetX || 0) : 0,
+                    offsetY: (s === shape) ? (this.draggingVirtualObjectOffsetY || 0) : 0
+                };
+            });
+
+            const dragData = {
+                type: 'virtual-object-drag',
+                source: 'basic-figure-editor',
+                sourceWindowId: this.windowId,
+                mode: this.dragState.dragMode, // 'move' または 'copy'
+                virtualObjects: virtualObjects,
+                virtualObject: virtualObjects[0] // 後方互換性のため
+            };
+
+            e.dataTransfer.setData('text/plain', JSON.stringify(dragData));
+            e.dataTransfer.effectAllowed = this.dragState.dragMode === 'copy' ? 'copy' : 'move';
+
+            // フラグを設定
+            this.isDraggingVirtualObjectShape = true;
+            this.draggingVirtualObjectShape = shape;
+            this.dragState.isDragging = true;
+
+            // 半透明にする
+            vobjElement.style.opacity = '0.5';
+        });
+
+        // mouseupイベント（ドラッグキャンセル、draggableを無効化）
+        vobjElement.addEventListener('mouseup', (_e) => {
+            // タイムアウトをクリア（draggable有効化をキャンセル）
+            if (vobjElement._draggableTimeout) {
+                clearTimeout(vobjElement._draggableTimeout);
+                vobjElement._draggableTimeout = null;
+            }
+
+            // draggableを無効化（次のクリックに備える）
+            vobjElement.setAttribute('draggable', 'false');
+            // ドラッグフラグをリセット
+            this.draggingVirtualObjectShape = null;
+        });
+
+        // dragendイベント
+        vobjElement.addEventListener('dragend', () => {
+            // 透明度を戻す
+            vobjElement.style.opacity = '1.0';
+
+            // draggableを無効化
+            vobjElement.setAttribute('draggable', 'false');
+
+            // pointer-eventsを無効化
+            vobjElement.style.pointerEvents = 'none';
+
+            // タイムアウトを設定（1秒以内にcross-window-drop-successが来なければリセット）
+            if (this.virtualObjectDragTimeout) {
+                clearTimeout(this.virtualObjectDragTimeout);
+            }
+
+            this.virtualObjectDragTimeout = setTimeout(() => {
+                this.isDraggingVirtualObjectShape = false;
+                this.draggingVirtualObjectShape = null;
+                this.virtualObjectDragTimeout = null;
+            }, 1000);
+        });
+
+        // 右クリックで仮身を選択してコンテキストメニューを表示
+        vobjElement.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            // ダブルクリック+ドラッグ状態をクリア（コンテキストメニュー表示時は通常操作を優先）
+            if (this.dblClickDragState.dblClickedElement) {
+                this.dblClickDragState.dblClickedElement.setAttribute('draggable', 'true');
+            }
+            this.dblClickDragState.isDblClickDragCandidate = false;
+            this.dblClickDragState.isDblClickDrag = false;
+            this.dblClickDragState.dblClickedShape = null;
+            this.dblClickDragState.dblClickedElement = null;
+            this.dblClickDragState.lastClickTime = 0; // ダブルクリック検出をリセット
+            this.dblClickDragState.lastClickedShape = null;
+            // プレビュー要素を削除
+            if (this.dblClickDragState.previewElement) {
+                this.dblClickDragState.previewElement.remove();
+                this.dblClickDragState.previewElement = null;
+            }
+
+            // 仮身図形を選択（まだ選択されていない場合）
+            if (this.currentTool === 'select') {
+                if (!this.selectedShapes.includes(shape)) {
+                    this.selectedShapes = [shape];
+                    this.redraw();
+                    console.log('[FIGURE EDITOR] 右クリックで仮身を選択:', virtualObject.link_name);
+                }
+
+                // 親ウィンドウにコンテキストメニュー要求を送信
+                if (window.parent && window.parent !== window) {
+                    const rect = window.frameElement.getBoundingClientRect();
+                    window.parent.postMessage({
+                        type: 'context-menu-request',
+                        x: rect.left + e.clientX,
+                        y: rect.top + e.clientY
+                    }, '*');
+                }
+            }
+        });
+
+        // リサイズ機能を追加
+        this.makeVirtualObjectResizable(vobjElement, shape);
+
+        // エディタコンテナに追加
+        const container = document.querySelector('.editor-container');
+        if (container) {
+            container.appendChild(vobjElement);
+        } else {
+            document.body.appendChild(vobjElement);
+        }
+
+        // 開いた仮身の場合、展開処理を実行（まだ展開されていない場合のみ）
+        if (isOpenVirtualObj && !shape.expanded) {
+            console.log('[FIGURE EDITOR] 開いた仮身を展開:', virtualObject.link_name);
+            // 無限ループを防ぐため、先にフラグを設定
+            shape.expanded = true;
+            // DOMに追加された後に非同期で展開
+            setTimeout(() => {
+                this.expandVirtualObject(vobjElement, shape, {
+                    readonly: true,
+                    noScrollbar: true,
+                    bgcol: virtualObject.bgcol
+                }).catch(err => {
+                    console.error('[FIGURE EDITOR] 仮身展開エラー:', err);
+                    // エラー時はフラグをリセット
+                    shape.expanded = false;
+                });
+            }, 0);
+        }
+    }
+
+    /**
+     * 仮身要素をリサイズ可能にする
+     * @param {HTMLElement} vobjElement - 仮身のDOM要素
+     * @param {Object} shape - 仮身のshapeオブジェクト
+     */
+    makeVirtualObjectResizable(vobjElement, shape) {
+        const obj = shape.virtualObject;
+
+        // マウス移動でカーソルを変更（リサイズエリアの表示）
+        vobjElement.addEventListener('mousemove', (e) => {
+            // リサイズ中は何もしない
+            if (this.isResizingVirtualObject) {
+                return;
+            }
+
+            const rect = vobjElement.getBoundingClientRect();
+            // リサイズエリア：枠の内側10pxから外側10pxまで
+            const isRightEdge = e.clientX > rect.right - 10 && e.clientX <= rect.right + 10;
+            const isBottomEdge = e.clientY > rect.bottom - 10 && e.clientY <= rect.bottom + 10;
+
+            // カーソルの形状を変更
+            if (isRightEdge && isBottomEdge) {
+                vobjElement.style.cursor = 'nwse-resize'; // 右下: 斜めリサイズ
+            } else if (isRightEdge) {
+                vobjElement.style.cursor = 'ew-resize'; // 右: 横リサイズ
+            } else if (isBottomEdge) {
+                vobjElement.style.cursor = 'ns-resize'; // 下: 縦リサイズ
+            } else {
+                vobjElement.style.cursor = 'move'; // 通常: 移動カーソル
+            }
+        });
+
+        // マウスが仮身から離れたらカーソルを元に戻す
+        vobjElement.addEventListener('mouseleave', () => {
+            if (!this.isResizingVirtualObject) {
+                vobjElement.style.cursor = 'move';
+            }
+        });
+
+        // マウスダウンでリサイズ開始
+        vobjElement.addEventListener('mousedown', (e) => {
+            // 読み取り専用モードの場合はリサイズを無効化
+            if (this.readonly) {
+                return;
+            }
+
+            const rect = vobjElement.getBoundingClientRect();
+            // リサイズエリア：枠の内側10pxから外側10pxまで
+            const isRightEdge = e.clientX > rect.right - 10 && e.clientX <= rect.right + 10;
+            const isBottomEdge = e.clientY > rect.bottom - 10 && e.clientY <= rect.bottom + 10;
+
+            // リサイズエリア（枠の内側10pxから外側10pxまで）のクリックのみ処理
+            if (!isRightEdge && !isBottomEdge) {
+                return;
+            }
+
+            // 左クリックのみ処理
+            if (e.button !== 0) {
+                return;
+            }
+
+            // リサイズ中は新しいリサイズを開始しない
+            if (this.isResizingVirtualObject) {
+                console.log('[FIGURE EDITOR] リサイズ中のため、新しいリサイズを無視');
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            // draggableタイムアウトをクリア（ドラッグとリサイズの競合を防ぐ）
+            if (vobjElement._draggableTimeout) {
+                clearTimeout(vobjElement._draggableTimeout);
+                vobjElement._draggableTimeout = null;
+            }
+
+            // draggableを無効化
+            vobjElement.setAttribute('draggable', 'false');
+
+            // リサイズ開始フラグを設定
+            this.isResizingVirtualObject = true;
+
+            // リサイズモード開始
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startWidth = rect.width;
+            const startHeight = rect.height;
+            const minWidth = 50;
+
+            // chszベースの最小高さを計算
+            const chsz = Math.round(obj.chsz || 14); // 浮動小数点誤差を防ぐ
+            const lineHeight = 1.2;
+            const chszPx = window.convertPtToPx(chsz);
+            const textHeight = Math.ceil(chszPx * lineHeight);
+            const minClosedHeight = textHeight + 8; // 閉じた仮身の最小高さ = タイトルエリアの高さ
+            const minOpenHeight = textHeight + 30; // 開いた仮身の最小高さ（閾値）= タイトルバー(textHeight+8) + 区切り線(2) + コンテンツ最小(20)
+
+            // DOMから実際のコンテンツエリアの有無で開閉状態を判定
+            const hasContentArea = vobjElement.querySelector('.virtual-object-content-area') !== null ||
+                                  vobjElement.querySelector('.virtual-object-content-iframe') !== null;
+
+            // リサイズ中は閉じた仮身の最小高さまで小さくできるようにする
+            const minHeight = minClosedHeight;
+
+            // 初期高さを閾値に基づいて設定
+            let currentWidth = startWidth;
+            let currentHeight;
+            if (startHeight < minOpenHeight) {
+                // 閾値未満の場合は、閉じた仮身の高さ
+                currentHeight = minClosedHeight;
+            } else {
+                // 閾値以上の場合は、現在の高さ
+                currentHeight = startHeight;
+            }
+
+            console.log('[FIGURE EDITOR] 仮身リサイズ開始:', obj.link_name, 'startWidth:', startWidth, 'startHeight:', startHeight, 'currentHeight:', currentHeight, 'hasContentArea:', hasContentArea, 'chsz:', chsz, 'minClosedHeight:', minClosedHeight, 'minOpenHeight:', minOpenHeight);
+
+            // リサイズプレビュー枠を作成
+            const previewBox = document.createElement('div');
+            previewBox.style.position = 'fixed'; // キャンバス外でも表示されるようにfixedを使用
+            previewBox.style.left = `${rect.left}px`;
+            previewBox.style.top = `${rect.top}px`;
+            previewBox.style.width = `${currentWidth}px`;
+            previewBox.style.height = `${currentHeight}px`;
+            previewBox.style.border = '2px dashed rgba(0, 123, 255, 0.8)';
+            previewBox.style.backgroundColor = 'rgba(0, 123, 255, 0.1)';
+            previewBox.style.pointerEvents = 'none';
+            previewBox.style.zIndex = '999999'; // さらに高いz-indexを使用
+            previewBox.style.boxSizing = 'border-box';
+
+            // document.bodyに直接追加（iframe上でも表示される）
+            document.body.appendChild(previewBox);
+
+            // 開いた仮身内のiframeのpointer-eventsを無効化（リサイズ中にマウスイベントを親に伝播させる）
+            const iframe = vobjElement.querySelector('iframe');
+            if (iframe) {
+                iframe.style.pointerEvents = 'none';
+            }
+
+            const onMouseMove = (moveEvent) => {
+                if (isRightEdge) {
+                    const deltaX = moveEvent.clientX - startX;
+                    currentWidth = Math.max(minWidth, startWidth + deltaX);
+                    previewBox.style.width = `${currentWidth}px`;
+                }
+
+                if (isBottomEdge) {
+                    const deltaY = moveEvent.clientY - startY;
+                    let newHeight = Math.max(minHeight, startHeight + deltaY);
+
+                    // 閾値に基づいて高さをスナップ
+                    if (newHeight < minOpenHeight) {
+                        // 閾値未満の場合は、閉じた仮身の高さに固定
+                        currentHeight = minClosedHeight;
+                    } else {
+                        // 閾値以上の場合は、開いた仮身の高さとして自由に変更可能
+                        currentHeight = newHeight;
+                    }
+
+                    previewBox.style.height = `${currentHeight}px`;
+                }
+            };
+
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+
+                // プレビュー枠を削除
+                if (previewBox && previewBox.parentNode) {
+                    previewBox.parentNode.removeChild(previewBox);
+                }
+
+                // iframeのpointer-eventsを元に戻す
+                if (iframe) {
+                    iframe.style.pointerEvents = 'auto';
+                }
+
+                // カーソルを元に戻す
+                vobjElement.style.cursor = 'move';
+
+                // 最終的なサイズを取得（プレビュー枠のサイズを使用）
+                const finalWidth = Math.round(currentWidth);
+                const finalHeight = Math.round(currentHeight);
+
+                // shapeのサイズを更新
+                shape.endX = shape.startX + finalWidth;
+                shape.endY = shape.startY + finalHeight;
+
+                // 仮身オブジェクトのサイズを更新
+                obj.width = finalWidth;
+                obj.heightPx = finalHeight;
+
+                console.log('[FIGURE EDITOR] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
+
+                // 開いた仮身と閉じた仮身の判定が変わったかチェック
+                const chsz_resize = Math.round(obj.chsz || 14);
+                const lineHeight_resize = 1.2;
+                const chszPx_resize = window.convertPtToPx(chsz_resize);
+                const textHeight_resize = Math.ceil(chszPx_resize * lineHeight_resize);
+                const minOpenHeight_resize = textHeight_resize + 30;
+                const wasOpen = hasContentArea; // DOMベースの判定を使用
+                const isNowOpen = finalHeight >= minOpenHeight_resize;
+
+                if (wasOpen !== isNowOpen) {
+                    // 判定が変わった場合は、少し待ってから仮身要素を再作成
+                    console.log('[FIGURE EDITOR] 開いた仮身/閉じた仮身の判定が変わりました。少し待ってから再作成します。');
+
+                    // 既存のタイマーをクリア（連続したリサイズで最後の一回だけ実行）
+                    if (this.recreateVirtualObjectTimer) {
+                        clearTimeout(this.recreateVirtualObjectTimer);
+                    }
+
+                    // 展開状態をリセット
+                    shape.expanded = false;
+                    shape.expandedElement = null;
+
+                    // 再作成フラグを設定（renderVirtualObjectsAsElementsによる中断を防ぐ）
+                    this.isRecreatingVirtualObject = true;
+
+                    // 遅延して再作成（150ms後）
+                    this.recreateVirtualObjectTimer = setTimeout(() => {
+                        console.log('[FIGURE EDITOR] 仮身を再作成します。');
+
+                        // 要素がまだDOMに存在するかチェック
+                        if (!vobjElement.parentNode) {
+                            console.warn('[FIGURE EDITOR] 再作成対象の仮身要素がDOMから削除されています');
+                            this.recreateVirtualObjectTimer = null;
+                            this.isRecreatingVirtualObject = false;
+                            return;
+                        }
+
+                        // 仮身要素を再描画
+                        this.renderVirtualObjectElement(shape);
+
+                        this.recreateVirtualObjectTimer = null;
+                        this.isRecreatingVirtualObject = false;
+                    }, 150);
+                } else {
+                    // 判定が変わらない場合は、DOM要素のサイズだけ更新
+                    vobjElement.style.width = `${finalWidth}px`;
+                    vobjElement.style.height = `${finalHeight}px`;
+                }
+
+                // リサイズ終了フラグをリセット
+                this.isResizingVirtualObject = false;
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
+    }
+
+    /**
+     * 仮身を開く（defaultOpenプラグインで開く）
+     */
+    openVirtualObject(shape) {
+        const virtualObject = shape.virtualObject;
+        console.log('[FIGURE EDITOR] Opening virtual object:', virtualObject.link_name);
+
+        // 親ウィンドウにメッセージを送信して開く
+        // link_idとlink_nameを個別に送る（仮身一覧形式）
+        window.parent.postMessage({
+            type: 'open-virtual-object',
+            linkId: virtualObject.link_id,
+            linkName: virtualObject.link_name
+        }, '*');
+    }
+
+    /**
+     * ダブルクリック+ドラッグによる実身複製処理
+     */
+    handleDoubleClickDragDuplicate(shape) {
+        const virtualObject = shape.virtualObject;
+        if (!virtualObject || !virtualObject.link_id) {
+            console.error('[FIGURE EDITOR] 複製対象の仮身が不正です');
+            return;
+        }
+
+        const realId = virtualObject.link_id;
+        console.log('[FIGURE EDITOR] ダブルクリック+ドラッグによる実身複製:', realId);
+
+        // 元の仮身のサイズと属性を保存
+        const width = virtualObject.width || shape.width || 100;
+        const height = virtualObject.heightPx || shape.height || 32;
+        const chsz = virtualObject.chsz || 14;
+        const frcol = virtualObject.frcol || '#000000';
+        const chcol = virtualObject.chcol || '#000000';
+        const tbcol = virtualObject.tbcol || '#ffffff';
+        const bgcol = virtualObject.bgcol || '#ffffff';
+        const dlen = virtualObject.dlen || 0;
+        const applist = virtualObject.applist || {};
+
+        // メッセージIDを生成
+        const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
+
+        // 応答を待つハンドラ
+        const handleMessage = (e) => {
+            if (e.data && e.data.type === 'real-object-duplicated' && e.data.messageId === messageId) {
+                window.removeEventListener('message', handleMessage);
+
+                if (e.data.cancelled) {
+                    console.log('[FIGURE EDITOR] 実身複製がキャンセルされました');
+                } else if (e.data.success) {
+                    // 複製成功: 新しい実身IDで仮身を作成
+                    const newRealId = e.data.newRealId;
+                    const newName = e.data.newName;
+                    console.log('[FIGURE EDITOR] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
+
+                    // 新しい仮身図形を作成（元の位置から少しずらして配置）
+                    const newShape = {
+                        type: 'vobj',
+                        x: shape.x + 20,  // 20px右にずらす
+                        y: shape.y + 20,  // 20px下にずらす
+                        width: width,
+                        height: height,
+                        virtualObject: {
+                            link_id: newRealId,
+                            link_name: newName,
+                            width: width,
+                            heightPx: height,
+                            chsz: chsz,
+                            frcol: frcol,
+                            chcol: chcol,
+                            tbcol: tbcol,
+                            bgcol: bgcol,
+                            dlen: dlen,
+                            applist: applist
+                        }
+                    };
+
+                    // 図形リストに追加
+                    this.shapes.push(newShape);
+
+                    // 新しい仮身を選択状態にする
+                    this.selectedShapes = [newShape];
+
+                    // 再描画
+                    this.redraw();
+
+                    // 変更フラグを立てる
+                    this.hasUnsavedChanges = true;
+
+                    console.log('[FIGURE EDITOR] 新しい仮身を配置:', newName, '位置:', newShape.x, newShape.y);
+                } else {
+                    console.error('[FIGURE EDITOR] 実身複製失敗:', e.data.error);
+                }
+            }
+        };
+
+        window.addEventListener('message', handleMessage);
+
+        window.parent.postMessage({
+            type: 'duplicate-real-object',
+            realId: realId,
+            messageId: messageId
+        }, '*');
+    }
+
+}
+
+
+// DOMContentLoadedで初期化
+document.addEventListener('DOMContentLoaded', () => {
+    window.editor = new BasicFigureEditor();
+});

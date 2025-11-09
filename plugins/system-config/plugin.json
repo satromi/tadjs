@@ -1,0 +1,24 @@
+{
+  "id": "system-config",
+  "name": "システム環境設定",
+  "version": "1.0.0",
+  "type": "accessory",
+  "basefile": {
+    "json": "019a0035-8901-7bcd-9000-2222ccccdddd.json",
+    "xmltad": "019a0035-8901-7bcd-9000-2222ccccdddd_0.xtad",
+    "ico": "019a0035-8901-7bcd-9000-2222ccccdddd.ico"
+  },
+  "description": "システム全体の環境設定を行います",
+  "icon": "⚙️",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 500,
+    "height": 380,
+    "resizable": false,
+    "scrollable": false,
+    "singleInstance": true,
+    "openable": true
+  }
+}

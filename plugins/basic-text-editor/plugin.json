@@ -1,0 +1,34 @@
+{
+  "id": "basic-text-editor",
+  "name": "基本文章編集",
+  "version": "1.0.0",
+  "type": "base",
+  "basefile": {
+    "json": "019a1132-762b-7b02-ba2a-a918a9b37c39.json",
+    "xmltad": "019a1132-762b-7b02-ba2a-a918a9b37c39_0.xtad",
+    "ico": "019a1132-762b-7b02-ba2a-a918a9b37c39.ico"
+  },
+  "description": "TADファイル用リッチテキストエディタ",
+  "icon": "📋",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": true,
+  "window": {
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "scrollable": true,
+    "openable": true
+  },
+  "contextMenu": [
+    {
+      "label": "基本文章編集",
+      "fileTypes": ["tad", "TAD", "bpk", "BPK", "xtad", "XTAD"],
+      "action": "open-editor"
+    }
+  ],
+  "permissions": [
+    "file-read",
+    "file-write"
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "name": "既存データ起動",
+  "relationship": [],
+  "linktype": false,
+  "makeDate": "2025-11-02T00:00:00Z",
+  "updateDate": "2025-11-02T00:00:00Z",
+  "accessDate": "2025-11-02T00:00:00Z",
+  "periodDate": null,
+  "refCount": 1,
+  "editable": false,
+  "readable": true,
+  "maker": "satromi",
+  "window": {
+    "pos": {
+      "x": 100,
+      "y": 100
+    },
+    "width": 400,
+    "height": 200,
+    "minWidth": 200,
+    "minHeight": 100,
+    "resizable": false,
+    "scrollable": false,
+    "maximize": false,
+    "maximizable": false,
+    "minimizable": false,
+    "closable": true,
+    "alwaysOnTop": false,
+    "skipTaskbar": false,
+    "frame": true,
+    "transparent": false,
+    "backgroundColor": "#f0f0f0"
+  },
+  "applist": {
+    "existing-data-exec": {
+      "name": "既存データ起動",
+      "defaultOpen": true
+    }
+  }
+}

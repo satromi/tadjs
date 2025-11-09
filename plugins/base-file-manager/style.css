@@ -1,0 +1,75 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    font-family: 'MS Sans Serif', sans-serif;
+    font-size: 11px;
+}
+
+body {
+    background: #ffffff;
+}
+
+.manager-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 0;
+    overflow: auto;
+    box-sizing: border-box;
+}
+
+.base-file-list {
+    flex: 1;
+    padding: 10px;
+    background: #ffffff;
+    border: none;
+}
+
+/* 仮身のスタイル */
+.base-file-vobj {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #000000;
+    background-color: #ffffff;
+    padding: 6px 12px;
+    margin: 8px 0;
+    cursor: move;
+    min-width: 150px;
+    min-height: 30px;
+    box-sizing: border-box;
+    user-select: none;
+    transition: all 0.2s;
+}
+
+.base-file-vobj:hover {
+    background-color: #e8f4f8;
+    box-shadow: 0 0 4px rgba(0, 0, 128, 0.5);
+}
+
+.base-file-vobj:active {
+    background-color: #d0e8f0;
+    transform: scale(0.98);
+}
+
+.base-file-title {
+    font-size: 14px;
+    color: #000000;
+    text-align: center;
+    word-break: break-all;
+}
+
+/* ドラッグ中のスタイル */
+.base-file-vobj.dragging {
+    opacity: 0.5;
+    border-style: dashed;
+}
+
+/* 空メッセージ */
+.empty-message {
+    text-align: center;
+    color: #808080;
+    padding: 40px 20px;
+    font-size: 14px;
+}

@@ -1,0 +1,296 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+}
+
+body {
+    font-family: 'MS Sans Serif', sans-serif;
+    font-size: 11px;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #f0f0f0;
+}
+
+.plugin-content {
+    overflow: auto;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* カスタムスクロールバーを使用するためブラウザ標準のスクロールバーを非表示 */
+.plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.plugin-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE, Edge */
+}
+
+.editor-container {
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+    height: 100%;
+    position: relative;
+}
+
+/* 図形キャンバス */
+.figure-canvas {
+    width: 100%;
+    height: 100%;
+    background: #ffffff;
+    cursor: crosshair;
+}
+
+/* 道具パネル（BTRONスタイル） */
+.tool-panel {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    background: #c0c0c0;
+    border: 2px outset #ffffff;
+    box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px;
+}
+
+/* 道具パネルの行 */
+.tool-row {
+    display: flex;
+    gap: 2px;
+    background: #c0c0c0;
+}
+
+/* パレット行（1行目） */
+.palette-row {
+    padding: 2px;
+}
+
+/* テンプレート行（2行目） */
+.template-row {
+    padding: 2px;
+}
+
+/* パレットボタン */
+.palette-btn {
+    width: 32px;
+    height: 32px;
+    border: 1px outset #ffffff;
+    background: #c0c0c0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    position: relative;
+}
+
+.palette-btn:hover {
+    background: #d0d0d0;
+}
+
+.palette-btn:active {
+    border-style: inset;
+    background: #a0a0a0;
+}
+
+.palette-btn.active {
+    border-style: inset;
+    background: #b0b0b0;
+}
+
+/* パレットアイコン */
+.palette-icon {
+    width: 24px;
+    height: 24px;
+    display: block;
+    position: relative;
+}
+
+/* 描画パレットアイコン（塗りつぶし色） */
+.fill-icon {
+    background: linear-gradient(135deg,
+        #ff0000 0%, #ff0000 25%,
+        #00ff00 25%, #00ff00 50%,
+        #0000ff 50%, #0000ff 75%,
+        #ffff00 75%, #ffff00 100%);
+    border: 1px solid #000;
+}
+
+/* 線パレットアイコン（線色） */
+.stroke-icon {
+    background: #fff;
+    border: 1px solid #000;
+}
+
+.stroke-icon::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 10%;
+    right: 10%;
+    height: 3px;
+    background: #000;
+    transform: translateY(-50%);
+}
+
+/* 線種パレットアイコン */
+.linestyle-icon {
+    background: #fff;
+    border: 1px solid #000;
+}
+
+.linestyle-icon::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 10%;
+    right: 10%;
+    height: 2px;
+    background: #000;
+}
+
+.linestyle-icon::after {
+    content: '';
+    position: absolute;
+    bottom: 8px;
+    left: 10%;
+    right: 10%;
+    height: 3px;
+    background: #000;
+}
+
+/* 角属性パレットアイコン */
+.corner-icon {
+    background: #fff;
+    border: 1px solid #000;
+}
+
+.corner-icon::before {
+    content: '';
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    right: 4px;
+    bottom: 4px;
+    border: 2px solid #000;
+    border-radius: 4px;
+}
+
+/* 画材パレットアイコン */
+.material-icon {
+    background: #fff;
+    border: 1px solid #000;
+}
+
+.material-icon::before {
+    content: '✎';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 16px;
+}
+
+/* 図形描画ツールボタン */
+.tool-btn {
+    width: 32px;
+    height: 32px;
+    border: 1px outset #ffffff;
+    background: #c0c0c0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-size: 16px;
+}
+
+.tool-btn:hover {
+    background: #d0d0d0;
+}
+
+.tool-btn:active {
+    border-style: inset;
+    background: #a0a0a0;
+}
+
+.tool-btn.active {
+    border-style: inset;
+    background: #8080ff;
+    box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.tool-icon {
+    display: block;
+    line-height: 1;
+}
+
+/* パレットポップアップ */
+.palette-popup {
+    position: fixed;
+    background: #c0c0c0;
+    border: 2px outset #ffffff;
+    box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+    padding: 8px;
+    z-index: 1001;
+    min-width: 150px;
+}
+
+.palette-popup-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* 仮身（Virtual Object）スタイル */
+.virtual-object {
+    /* 基本スタイルはインラインで設定されるため、ここでは共通の動作のみ定義 */
+    transition: all 0.2s;
+    user-select: none;
+}
+
+.virtual-object:hover {
+    filter: brightness(0.95);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.virtual-object:active {
+    transform: translateY(1px);
+    filter: brightness(0.9);
+}
+
+/* 仮身の選択状態 */
+.virtual-object.selected {
+    box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.5);
+    outline: 2px solid #ff8f00;
+}
+
+.virtual-object.selected:hover {
+    box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.7);
+}
+
+/* 読み取り専用モード（開いた仮身内のiframe）ではホバー表示を無効化 */
+body.readonly-mode .virtual-object:hover {
+    filter: none;
+    box-shadow: none;
+}
+
+body.readonly-mode .virtual-object.selected:hover {
+    box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.5);
+}

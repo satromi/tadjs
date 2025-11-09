@@ -1,0 +1,279 @@
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 11px;
+    background: #dedede;
+}
+
+.system-config-dialog {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+.tab-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.tab-header {
+    display: flex;
+    border-bottom: 1px solid #808080;
+    background: #e0e0e0;
+}
+
+.tab {
+    padding: 6px 12px;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+    font-size: 11px;
+    user-select: none;
+    border-bottom: none;
+}
+
+.tab.active {
+    background: #dedede;
+    border-style: inset;
+}
+
+.tab-content {
+    flex: 1;
+    overflow-y: auto;
+    background: #dedede;
+    padding: 0;
+}
+
+.tab-panel {
+    display: none;
+    padding: 12px;
+    background: #dedede;
+    height: 100%;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+/* サブタブ（画面タブ内） */
+.display-sub-tabs {
+    display: flex;
+    border-bottom: 1px solid #808080;
+    background: #e0e0e0;
+    margin: -12px -12px 12px -12px;
+    padding: 0;
+}
+
+.sub-tab {
+    padding: 4px 10px;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+    font-size: 11px;
+    user-select: none;
+    border-bottom: none;
+}
+
+.sub-tab.active {
+    background: #dedede;
+    border-style: inset;
+}
+
+.sub-tab-content {
+    position: relative;
+    background: #dedede;
+}
+
+.sub-tab-panel {
+    display: none;
+    background: #dedede;
+}
+
+.sub-tab-panel.active {
+    display: block;
+}
+
+.config-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.config-section h4 {
+    margin: 0 0 8px 0;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.config-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.config-item label {
+    min-width: 80px;
+    font-size: 11px;
+    font-weight: normal;
+}
+
+.config-button {
+    border: 1px outset #c0c0c0;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-family: 'Noto Sans JP', sans-serif;
+    background: #c0c0c0;
+    cursor: pointer;
+}
+
+.config-button:active {
+    border-style: inset;
+}
+
+.background-list {
+    border: 1px inset #c0c0c0;
+    padding: 4px;
+    background: white;
+    margin-top: 8px;
+}
+
+.background-option {
+    display: flex;
+    align-items: center;
+    padding: 4px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    gap: 8px;
+}
+
+.background-option:hover {
+    background: #e0e0ff;
+}
+
+.background-option.selected {
+    background: #0060ff;
+    color: white;
+    border-color: #004080;
+}
+
+.bg-preview {
+    width: 32px;
+    height: 24px;
+    border: 1px inset #c0c0c0;
+    background-size: cover;
+    background-position: center;
+    flex-shrink: 0;
+}
+
+.bg-none {
+    background: linear-gradient(45deg, #dedede 25%, transparent 25%, transparent 75%, #dedede 75%),
+                linear-gradient(45deg, #dedede 25%, transparent 25%, transparent 75%, #dedede 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+}
+
+.background-option span {
+    font-size: 12px;
+    flex: 1;
+}
+
+.dialog-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 8px;
+    border-top: 1px solid #808080;
+    background: #e0e0e0;
+}
+
+.dialog-button {
+    border: 1px outset #c0c0c0;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: #c0c0c0;
+    cursor: pointer;
+    min-width: 60px;
+}
+
+.dialog-button:active {
+    border-style: inset;
+}
+
+/* 削除ボタン */
+.bg-delete {
+    margin-left: auto;
+    width: 16px;
+    height: 16px;
+    background: #ff4040;
+    color: white;
+    border: 1px outset #ff6060;
+    font-size: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.bg-delete:hover {
+    background: #ff6060;
+}
+
+.bg-delete:active {
+    border-style: inset;
+}
+
+/* バージョン情報 */
+.version-section {
+    background: white;
+    border: 2px inset #808080;
+    padding: 0;
+}
+
+.version-header {
+    display: flex;
+    align-items: center;
+    padding: 8px;
+    border-bottom: 2px solid #000000;
+    background: white;
+}
+
+.version-label {
+    font-size: 12px;
+    font-weight: normal;
+}
+
+.version-value {
+    margin-left: 8px;
+    font-size: 12px;
+}
+
+.version-list {
+    background: white;
+    padding: 0;
+}
+
+.version-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 8px;
+    border-bottom: 1px solid #c0c0c0;
+    font-size: 12px;
+}
+
+.version-item:last-child {
+    border-bottom: none;
+}
+
+.version-item-name {
+    flex: 1;
+}
+
+.version-item-version {
+    min-width: 80px;
+    text-align: right;
+}

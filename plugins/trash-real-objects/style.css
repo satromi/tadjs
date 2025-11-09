@@ -1,0 +1,123 @@
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'MS Sans Serif', sans-serif;
+    font-size: 11px;
+    background: #f0f0f0;
+    overflow: hidden; /* 基本文章編集と同じ設定 */
+}
+
+.viewer-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh; /* min-height → height に戻す */
+}
+
+.toolbar {
+    background: #e0e0e0;
+    border-bottom: 1px solid #808080;
+    padding: 6px 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.file-name {
+    font-weight: bold;
+    color: #000080;
+}
+
+.virtual-count {
+    color: #404040;
+    font-size: 10px;
+}
+
+.virtual-list {
+    flex: 1;
+    overflow: hidden; /* 基本文章編集と同じ設定 */
+    padding: 0;
+    background: #f0f0f0;
+}
+
+.virtual-canvas {
+    position: relative;
+    min-height: 600px;
+    background: white;
+    border: 1px solid #808080;
+    margin: 8px;
+}
+
+/* 閉じた仮身のスタイル */
+.virtual-object-closed {
+    position: absolute;
+    box-sizing: border-box;
+    cursor: pointer;
+    overflow: hidden;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+}
+
+.virtual-object-closed:hover {
+    box-shadow: 0 0 4px rgba(0, 0, 128, 0.5);
+}
+
+/* 開いた仮身のスタイル */
+.virtual-object-opened {
+    position: absolute;
+    box-sizing: border-box;
+    cursor: pointer;
+}
+
+.virtual-object-opened:hover {
+    box-shadow: 0 0 6px rgba(0, 0, 128, 0.7);
+}
+
+/* 仮身タイトルテキスト */
+.virtual-object-title {
+    text-decoration: none;
+    word-break: break-all;
+    overflow: hidden;
+    line-height: 1.2;
+}
+
+.virtual-object-title:hover {
+    text-decoration: underline;
+}
+
+/* 開いた仮身の内容エリア */
+.virtual-object-content {
+    position: absolute;
+    overflow: auto;
+    padding: 5px;
+}
+
+.virtual-object-content p {
+    margin: 0.5em 0;
+}
+
+/* 開いた仮身の内容エリアのスクロールバー */
+.virtual-object-content::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.virtual-object-content::-webkit-scrollbar-track {
+    background: #f0f0f0;
+}
+
+.virtual-object-content::-webkit-scrollbar-thumb {
+    background: #c0c0c0;
+    border: 1px solid #808080;
+}
+
+.virtual-object-content::-webkit-scrollbar-thumb:hover {
+    background: #a0a0a0;
+}
+
+.empty-message {
+    text-align: center;
+    color: #808080;
+    padding: 20px;
+}

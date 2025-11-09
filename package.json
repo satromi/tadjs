@@ -1,0 +1,78 @@
+{
+  "name": "tadjs-desktop",
+  "version": "1.0.0",
+  "description": "TADjs Desktop Environment with Plugin System",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "build:win": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win --x64",
+    "package": "electron-packager . \"TADjs Desktop\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=tadjs.ico --executable-name=tadjs_desktop --ignore=\"^/(dist|node_modules|\\.git|\\.vscode|\\.serena|\\.claude)$\"",
+    "postpackage": "cp -v encoding.js encoding.min.js tad.js \"dist/TADjs Desktop-win32-x64/\" && cp -v xtaddata/*.json xtaddata/*.xtad xtaddata/*.ico \"dist/TADjs Desktop-win32-x64/\""
+  },
+  "keywords": [
+    "tadjs",
+    "desktop",
+    "tad",
+    "electron"
+  ],
+  "author": "satromi",
+  "license": "MIT",
+  "homepage": "https://github.com/satromi/tadjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/satromi/tadjs.git"
+  },
+  "devDependencies": {
+    "electron": "^25.9.8",
+    "electron-builder": "^24.9.1",
+    "electron-packager": "^17.1.2"
+  },
+  "build": {
+    "appId": "com.tadjs.desktop",
+    "productName": "TADjs Desktop",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "tadjs-desktop.html",
+      "tadjs-desktop.css",
+      "tadjs-desktop.js",
+      "tad.js",
+      "lh5.js",
+      "encoding.js",
+      "encoding.min.js",
+      "pages15.js",
+      "favicon.svg",
+      "JIS0208.txt",
+      "plugins/**/*",
+      "tad_data/**/*",
+      "js/**/*",
+      "data/**/*",
+      "!node_modules/**/*",
+      "!**/node_modules/**/*",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signingHashAlgorithms": [],
+      "verifyUpdateCodeSignature": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "forceCodeSigning": false
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "tadjs-view",
+  "name": "TADjs表示",
+  "version": "1.0.0",
+  "type": "genko",
+  "description": "TADファイルとBPKファイルを表示します",
+  "icon": "📄",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "contextMenu": [
+    {
+      "label": "TADjs表示",
+      "fileTypes": ["tad", "TAD", "bpk", "BPK", "xtad", "XTAD"],
+      "action": "open-editor"
+    }
+  ],
+  "window": {
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "scrollable": true,
+    "openable": true
+  },
+  "permissions": [
+    "file-read"
+  ]
+}

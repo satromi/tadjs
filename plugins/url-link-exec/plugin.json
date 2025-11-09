@@ -1,0 +1,27 @@
+{
+  "id": "url-link-exec",
+  "name": "URL仮身",
+  "version": "1.0.0",
+  "type": "base",
+  "description": "実身に記載されたURLをブラウザで開くプラグイン",
+  "icon": "🔗",
+  "author": "BTRON Desktop",
+  "main": "index.html",
+  "basefile": {
+    "json": "019a4a5c-8888-4b8a-9d3c-1f6e8a9b2c4d.json",
+    "xmltad": "019a4a5c-8888-4b8a-9d3c-1f6e8a9b2c4d_0.xtad",
+    "ico": "019a4a5c-8888-4b8a-9d3c-1f6e8a9b2c4d.ico"
+  },
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 400,
+    "height": 200,
+    "resizable": false,
+    "scrollable": false,
+    "openable": false
+  },
+  "contextMenu": [],
+  "permissions": [
+    "file-read"
+  ]
+}

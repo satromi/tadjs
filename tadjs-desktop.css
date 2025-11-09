@@ -1,0 +1,1380 @@
+/* BTRON Desktop Environment Styles */
+
+/* BTRON指型カーソル（02.jpgの画像を正確に再現） */
+:root {
+    /* 03.svgの黒い図形のみを保持し外側を透明にしたBTRONカーソル */
+    --btron-cursor: url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAxNDAwIDk4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPCEtLSDnmb3jgYTog4zmma/jga/nmaHjgYTjgZfjgIHpu5Hjgajnm7Tjgavnqbrnmb3jgYTpg6jliIbjgobkv53mjIEgLS0+CjxnIHRyYW5zZm9ybT0ibWF0cml4KDEuMTg3ODc4NzEzODk2NzgwMywgMCwgMCwgMS4xODc4Nzg3MTM4OTY3ODAzLCAxNTkuNTE1MTk2NzMyMDA0MTQsIC0wLjAwMDAwMTE5MjA5Mjc4MTgyMDk3NDgpIj4KPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMC4wMDAwMDAsODI1LjAwMDAwMCkgc2NhbGUoMC4xMDAwMDAsLTAuMTAwMDAwKSIgZmlsbD0iIzAwMDAwMCIgc3Ryb2tlPSJub25lIj4KPHBhdGggZD0iTTU5MCA3Mzc1IGwwIC01NjUgMTkwIDAgMTkwIDAgMCAtMTkwIDAgLTE5MCAxOTAgMCAxOTAgMCAwIC0xODUgMAotMTg1IDE4NSAwIDE4NSAwIDAgLTE5MCAwIC0xOTAgMTkwIDAgMTkwIDAgMCAtMTg1IDAgLTE4NSAxODUgMCAxODUgMCAwIC01NjAKMCAtNTYwIC0xODUgMCAtMTg1IDAgMCAtNzU1IDAgLTc1NSAxODUgMCAxODUgMCAwIC0xOTAgMCAtMTkwIDE5MCAwIDE5MCAwIDAtMTkwIDAgLTE5MCAxNTAwIDAgMTUwMCAwIDAgLTE4MCAwIC0xODAgLTE4NSAwIC0xODUgMCAwIC0zODAgMCAtMzgwIDE4NSAwCjE4NSAwIDAgLTE5MCAwIC0xOTAgMzg1IDAgMzg1IDAgMCAxOTAgMCAxOTAgMTg1IDAgMTg1IDAgMCAxODUgMCAxODUgMTkwIDAKMTkwIDAgMCAxOTAgMCAxOTAgMTg1IDAgMTg1IDAgMCAxODUgMCAxODUgMTkwIDAgMTkwIDAgMCAxOTAgMCAxOTAgMTg1IDAgMTg1CjAgMCAxOTAgMCAxOTAgMTkwIDAgMTkwIDAgMCAxODUgMCAxODUgMTE1IDAgMTE1IDAgMCAzODAgMCAzODAgLTExNSAwIC0xMTUgMAowIDE5MCAwIDE5MCAtMzgwIDAgLTM4MCAwIDAgLTE5MCAwIC0xOTAgLTE4NSAwIC0xODUgMCAwIDExMzAgMCAxMTMwIC0xODUgMAotMTg1IDAgMCAzNzUgMCAzNzUgLTE5MCAwIC0xOTAgMCAwIDE4NSAwIDE4NSAtMTg1IDAgLTE4NSAwIDAgMTkwIDAgMTkwIC0zODUKMCAtMzg1IDAgMCAtMTkwIDAgLTE5MCAtNTYwIDAgLTU2MCAwIDAgLTE4NSAwIC0xODUgLTU2NSAwIC01NjUgMCAwIC0xOTAgMAotMTkwIC0zNzAgMCAtMzcwIDAgMCAxOTAgMCAxOTAgLTE5MCAwIC0xOTAgMCAwIDE4NSAwIDE4NSAtMTg1IDAgLTE4NSAwIDAKMTkwIDAgMTkwIC0xOTAgMCAtMTkwIDAgMCAxODUgMCAxODUgLTU3MCAwIC01NzAgMCAwIC01NjV6IG0xMTMwIC01IGwwIC0xOTAKMTkwIDAgMTkwIDAgMCAtMTg1IDAgLTE4NSAxODUgMCAxODUgMCAwIC0xOTAgMCAtMTkwIDE5MCAwIDE5MCAwIDAgLTE4NSAwCi0xODUgMTg1IDAgMTg1IDAgMCAtMTkwIDAgLTE5MCAxOTAgMCAxOTAgMCAwIC0xODUgMCAtMTg1IDE5NSAwIDE5NSAwIDAgMTkwCjAgMTkwIC0xOTAgMCAtMTkwIDAgMCAzNzAgMCAzNzAgMzcwIDAgMzcwIDAgMCAtMTg1IDAgLTE4NSAxOTUgMCAxOTUgMCAwIDM3NQowIDM3NSAzNzAgMCAzNzAgMCAwIC0xOTAgMCAtMTkwIDE5MCAwIDE5MCAwIDAgMzc1IDAgMzc1IDM3NSAwIDM3NSAwIDAgLTE4NQowIC0xODUgMTg1IDAgMTg1IDAgMCAtMzc1IDAgLTM3NSAxOTAgMCAxOTAgMCAwIC0xMTMwIDAgLTExMzAgMTg1IDAgMTg1IDAgMAotMTgwIDAgLTE4MCAtMTg1IDAgLTE4NSAwIDAgLTE5MCAwIC0xOTAgLTE5MCAwIC0xOTAgMCAwIC0xODUgMCAtMTg1IC0xODUgMAotMTg1IDAgMCAtMTkwIDAgLTE5MCAtMTkwIDAgLTE5MCAwIDAgLTE5MCAwIC0xOTAgLTE4NSAwIC0xODUgMCAwIDE5MCAwIDE5MAotMTUwMCAwIC0xNTAwIDAgMCAxOTAgMCAxOTAgLTE5MCAwIC0xOTAgMCAwIDc0NSAwIDc0NSAzNzAgMCAzNzAgMCAwIC0xOTAgMAotMTkwIDE5NSAwIDE5NSAwIDAgMTk1IDAgMTk1IC0xOTAgMCAtMTkwIDAgMCAxODUgMCAxODUgLTE4NSAwIC0xODUgMCAwIDM4MAowIDM4MCAtMTkwIDAgLTE5MCAwIDAgMTg1IDAgMTg1IC0xODUgMCAtMTg1IDAgMCAxOTAgMCAxOTAgLTE5MCAwIC0xOTAgMCAwCjE4NSAwIDE4NSAtMTg1IDAgLTE4NSAwIDAgMTkwIDAgMTkwIC0xOTAgMCAtMTkwIDAgMCAzNzAgMCAzNzAgMzcwIDAgMzcwIDAgMAotMTkweiIvPgo8L2c+CjwvZz4KPC9zdmc+') 0 0, pointer;
+    
+    /* テキスト選択用カーソル */
+    --btron-text-cursor: url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGcgZmlsbD0iIzAwMDAwMCIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjAuNSI+CjxyZWN0IHg9IjciIHk9IjIiIHdpZHRoPSIyIiBoZWlnaHQ9IjEyIi8+CjxyZWN0IHg9IjUiIHk9IjEiIHdpZHRoPSI2IiBoZWlnaHQ9IjIiLz4KPHJlY3QgeD0iNSIgeT0iMTMiIHdpZHRoPSI2IiBoZWlnaHQ9IjIiLz4KPC9nPgo8L3N2Zz4='), text;
+    
+    /* 待機中カーソル */
+    --btron-wait-cursor: url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGcgZmlsbD0iIzAwMDAwMCIgc3Ryb2tlPSIjZmZmZmZmIiBzdHJva2Utd2lkdGg9IjAuNSI+CjxyZWN0IHg9IjIiIHk9IjIiIHdpZHRoPSIxMiIgaGVpZ2h0PSIxMiIgcng9IjEiLz4KPHBhdGggZD0iTTYgNiBMIDggNiBMIDggOCBMIDEwIDEwIEwgMTAgOCBMIDEwIDYgTCA2IDYgWiIvPgo8L2c+Cjwvc3ZnPg=='), wait;
+    
+    --window-border-color: #808080;
+    --window-shadow-color: #404040;
+    --window-titlebar-active: #c0c0c0;
+    --window-titlebar-inactive: #e0e0e0;
+    --window-background: #f0f0f0;
+    --menu-border-color: #a0a0a0;
+    --status-bar-color: #dedede;
+    --scrollbar-width: 16px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Noto Sans JP', 'MS Sans Serif', sans-serif;
+    font-size: 11px;
+    background: #cdeeff; /* BTRONのデスクトップ色 */
+    overflow: hidden;
+    cursor: var(--btron-cursor);
+}
+
+/* 異なる状況での指型カーソル */
+.window-titlebar {
+    cursor: move;
+}
+
+.window-close-button, .menu-item, .file-icon, .scroll-arrow, .scroll-box {
+    cursor: var(--btron-cursor);
+}
+
+/* テキスト入力フィールド用カーソル */
+input[type="text"], input[type="password"], textarea, .config-input {
+    cursor: var(--btron-text-cursor);
+}
+
+/* 待機中カーソル（ファイル読み込み時など） */
+.loading {
+    cursor: var(--btron-wait-cursor);
+}
+
+/* リサイズ時は矢印カーソル */
+.resize-handle.nw { cursor: nw-resize; }
+.resize-handle.ne { cursor: ne-resize; }
+.resize-handle.sw { cursor: sw-resize; }
+.resize-handle.se { cursor: se-resize; }
+.resize-handle.n { cursor: n-resize; }
+.resize-handle.s { cursor: s-resize; }
+.resize-handle.w { cursor: w-resize; }
+.resize-handle.e { cursor: e-resize; }
+
+/* デスクトップ環境 */
+.desktop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 20px; /* ステータスバー分 */
+    background: #cdeeff;
+    overflow: hidden;
+    cursor: var(--btron-cursor);
+}
+
+/* ウインドウ基本スタイル */
+.window {
+    position: absolute;
+    background: var(--window-background);
+    box-shadow: 2px 2px 4px var(--window-shadow-color);
+    min-width: 200px;
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    transition: all 0.2s ease-in-out; /* 全画面表示ON/OFF時のアニメーション */
+}
+
+/* 道具パネルウィンドウは最小高さ制約を解除 */
+.window.tool-panel-window {
+    min-height: 0;
+}
+
+/* 最大化されたウィンドウのスタイル */
+.window.maximized {
+    z-index: 1000;
+    box-shadow: none; /* 最大化時は影を消す */
+}
+
+/* 最大化時はウィンドウのタイトルバーとコンテンツエリアのボーダーを非表示 */
+.window.maximized .window-titlebar {
+    border: none;
+    border-bottom: 1px solid var(--window-border-color);
+}
+
+.window.maximized .window-content-area {
+    border: none;
+}
+
+/* 最大化時もスクロールバーは表示する */
+
+/* ウインドウタイトルバー */
+.window-titlebar {
+    height: 20px;
+    background: var(--window-titlebar-active);
+    border: 2px outset #c0c0c0;
+    border-bottom: 1px solid var(--window-border-color);
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    cursor: move;
+    font-weight: bold;
+    flex-shrink: 0;
+}
+
+/* タイトルバーアイコン（BTRON文書アイコン） */
+.window-icon {
+    width: 16px;
+    height: 16px;
+    background: white;
+    border: 1px inset #c0c0c0;
+    margin-right: 4px;
+    flex-shrink: 0;
+    position: relative;
+}
+
+/* 文書アイコンの内容を表現（3本の横線） */
+.window-icon::before {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 2px;
+    right: 2px;
+    height: 1px;
+    background: #000000;
+    box-shadow: 
+        0 3px 0 #000000,
+        0 6px 0 #000000;
+}
+
+/* 文書アイコンの折り目を表現 */
+.window-icon::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 0;
+    height: 0;
+    border-left: 5px solid white;
+    border-top: 5px solid #c0c0c0;
+    border-bottom: 0px solid transparent;
+    border-right: 0px solid transparent;
+}
+
+/* カスタムアイコンを使用する場合は擬似要素を非表示 */
+.window-icon.custom-icon {
+    /* backgroundショートハンドは使わない（backgroundImageを上書きしないため） */
+    border: none !important;
+}
+
+.window-icon.custom-icon::before,
+.window-icon.custom-icon::after {
+    display: none !important;
+}
+
+.window.inactive .window-titlebar {
+    background: var(--window-titlebar-inactive);
+    color: #808080;
+}
+
+.window-title {
+    flex: 1;
+    font-size: 11px;
+    line-height: 1;
+}
+
+.window-close-button {
+    width: 16px;
+    height: 16px;
+    background: var(--window-titlebar-active);
+    border: 1px outset var(--window-border-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    line-height: 1;
+    margin-left: 4px;
+}
+
+.window-close-button:hover {
+    background: #ff4444;
+    color: white;
+}
+
+.window-close-button:active {
+    border-style: inset;
+}
+
+/* ウインドウフレーム（グリッドレイアウト） */
+.window-frame {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 18px;
+    grid-template-rows: 1fr 18px;
+    grid-template-areas: 
+        "content vscroll"
+        "hscroll corner";
+}
+
+/* コンテンツエリア */
+.window-content-area {
+    grid-area: content;
+    position: relative;
+    overflow: hidden;
+    border-left: 2px outset #c0c0c0;
+    border-top: 2px outset #c0c0c0;
+}
+
+/* メインコンテンツ */
+.window-content {
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    overflow: hidden;
+    position: relative;
+}
+
+/* iframe を100%にする */
+.window-content iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+    margin: 0;
+    padding: 0;
+}
+
+/* TADコンテンツ専用（パディング無し） */
+.tad-window .window-content {
+    padding: 0;
+    overflow: hidden; /* カスタムスクロールバーを使うため */
+}
+
+.tad-content {
+    padding: 0;
+    background: white;
+    overflow: auto;
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+/* TADウィンドウのカスタムスクロールバー用設定 */
+.tad-window:has(.custom-scroll-container) .tad-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
+}
+
+.tad-window:has(.custom-scroll-container) .tad-content::-webkit-scrollbar {
+    display: none; /* Chrome/Safari/Opera */
+}
+
+    
+
+/* 右下コーナー（サイズボックス） */
+.window-corner {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 18px;
+    height: 18px;
+    background: #c0c0c0;
+    border-right: 2px outset #c0c0c0;
+    border-bottom: 2px outset #c0c0c0;
+    cursor: se-resize;
+    z-index: 50;
+}
+
+/* 左上頂点のダブルクリックでの全画面表示を示すホバー効果 */
+.window-corner:hover {
+    background: #dedede;
+}
+
+/* 左上頂点（最大化用） */
+.window-maximize-corner {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 16px;
+    height: 16px;
+    background: transparent;
+    cursor: nw-resize;  /* 左上リサイズカーソル */
+    z-index: 100; /* リサイズハンドルより上に配置 */
+}
+
+.window-maximize-corner:hover {
+    background: rgba(0, 0, 255, 0.1);
+}
+
+/* サイズボックスの模様（3つの斜線） */
+.window-corner::after {
+    content: '';
+    position: absolute;
+    bottom: 3px;
+    right: 3px;
+    width: 10px;
+    height: 10px;
+    background-image: 
+        linear-gradient(45deg, transparent 30%, #808080 30%, #808080 40%, transparent 40%),
+        linear-gradient(45deg, transparent 50%, #808080 50%, #808080 60%, transparent 60%),
+        linear-gradient(45deg, transparent 70%, #808080 70%, #808080 80%, transparent 80%);
+}
+
+/* ファイル一覧エリア（JavaScript側で動的生成） */
+
+.drop-message {
+    text-align: center;
+    color: #666;
+    margin: 20px 0;
+    font-size: 10px;
+    padding: 10px;
+    background: #f8f8f8;
+    border: 1px dashed #ccc;
+    border-radius: 4px;
+}
+
+/* ファイルアイコン */
+.file-icons {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+}
+
+.file-icon {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    background: white;
+    border: 1px inset var(--window-border-color);
+    cursor: var(--btron-cursor);
+    user-select: none;
+    margin-bottom: 4px;
+    margin-right: 8px;
+    width: fit-content;
+}
+
+.file-icon:hover {
+    background: #e0e0ff;
+}
+
+.file-icon.selected {
+    background: #0000ff;
+    color: white;
+}
+
+.file-icon-image {
+    width: 16px;
+    height: 16px;
+    background: white;
+    border: 1px inset #c0c0c0;
+    margin-right: 8px;
+    flex-shrink: 0;
+    position: relative;
+}
+
+/* ファイルアイコンの内容を表現（3本の横線） - ウインドウアイコンと同じ */
+.file-icon-image::before {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 2px;
+    right: 2px;
+    height: 1px;
+    background: #000000;
+    box-shadow: 
+        0 3px 0 #000000,
+        0 6px 0 #000000;
+}
+
+/* ファイルアイコンの折り目を表現 - ウインドウアイコンと同じ */
+.file-icon-image::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 0;
+    height: 0;
+    border-left: 5px solid white;
+    border-top: 5px solid #c0c0c0;
+    border-bottom: 0px solid transparent;
+    border-right: 0px solid transparent;
+}
+
+.file-icon-text {
+    font-size: 10px;
+    line-height: 1.2;
+}
+
+/* ウインドウコンテナ */
+.window-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+}
+
+/* TADウインドウ */
+.tad-window {
+    width: 600px;
+    height: 400px;
+}
+
+.tad-content {
+    padding: 0;
+    background: white;
+    overflow: auto;
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+.tad-canvas {
+    display: block;
+    background: white;
+    /* canvasのサイズは実際のサイズを保持 */
+    /* width/heightはJavaScriptで設定 */
+}
+
+/* コンテキストメニュー */
+.context-menu {
+    position: absolute;
+    background: var(--window-background);
+    border: 2px outset var(--menu-border-color);
+    box-shadow: 2px 2px 4px var(--window-shadow-color);
+    z-index: 1000;
+    min-width: 120px;
+    font-size: var(--menu-font-size, 11px);
+}
+
+.menu-item {
+    padding: 4px 12px;
+    cursor: var(--btron-cursor);
+    user-select: none;
+}
+
+.menu-item:hover {
+    background: #0000ff;
+    color: white;
+}
+
+.menu-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.menu-text {
+    flex: 1;
+}
+
+.menu-shortcut {
+    font-size: 9px;
+    color: #666;
+    margin-left: 20px;
+}
+
+.menu-item:hover .menu-shortcut {
+    color: #ccc;
+}
+
+.menu-separator {
+    height: 1px;
+    background: var(--window-border-color);
+    margin: 2px 4px;
+}
+
+/* サブメニュー */
+.menu-item.has-submenu {
+    position: relative;
+}
+
+.menu-arrow {
+    margin-left: 10px;
+    font-size: 9px;
+}
+
+.context-submenu {
+    display: none;
+    position: absolute;
+    left: 100%;
+    top: -2px;
+    background: var(--window-background);
+    border: 2px outset var(--menu-border-color);
+    box-shadow: 2px 2px 4px var(--window-shadow-color);
+    min-width: 150px;
+    z-index: 1001;
+}
+
+.menu-item.has-submenu:hover > .context-submenu {
+    display: block;
+}
+
+/* サブメニュー内のメニューアイテムのデフォルト色を黒に */
+.context-submenu .menu-item {
+    color: black;
+}
+
+.context-submenu .menu-item:hover {
+    background: #0000ff;
+    color: white;
+}
+
+.context-submenu .menu-shortcut {
+    color: #666;
+}
+
+.context-submenu .menu-item:hover .menu-shortcut {
+    color: #ccc;
+}
+
+/* ステータスバー */
+.status-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 20px;
+    background: var(--status-bar-color);
+    border-top: 1px solid var(--window-border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 8px;
+    font-size: 10px;
+    z-index: 2000;
+}
+
+.status-message {
+    flex: 1;
+}
+
+.status-time {
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    color: #000080;
+}
+
+/* ウインドウの前後関係 */
+.window.front-window {
+    z-index: 900;
+}
+
+.window.panel-window {
+    z-index: 800;
+}
+
+.window.normal-window {
+    z-index: 100;
+}
+
+.window.inactive-window {
+    z-index: 50;
+}
+
+/* ドラッグ&ドロップエフェクト */
+.drop-zone-active {
+    background: rgba(0, 255, 0, 0.1) !important;
+    border: 2px dashed #00aa00 !important;
+}
+
+.drop-zone-hover {
+    background: rgba(0, 255, 0, 0.2) !important;
+}
+
+/* デフォルトのスクロールバーは非表示（カスタムスクロールバーを使用） */
+
+/* ウインドウリサイズハンドル */
+.resize-handle {
+    position: absolute;
+    background: transparent;
+    z-index: 100;
+}
+
+.resize-handle.nw {
+    top: 0;
+    left: 0;
+    width: 8px;
+    height: 8px;
+    cursor: nw-resize;
+}
+
+.resize-handle.ne {
+    top: 0;
+    right: 0;
+    width: 8px;
+    height: 8px;
+    cursor: ne-resize;
+}
+
+.resize-handle.sw {
+    bottom: 0;
+    left: 0;
+    width: 8px;
+    height: 8px;
+    cursor: sw-resize;
+}
+
+.resize-handle.se {
+    bottom: 0;
+    right: 0;
+    width: 20px;  /* スクロールバーサイズ(16px)+ 余裕 */
+    height: 20px; /* スクロールバーサイズ(16px)+ 余裕 */
+    cursor: se-resize;
+    /* 三本斜線の表示 */
+    background: linear-gradient(135deg,
+        transparent 0%, transparent 42%,
+        #808080 42%, #808080 44%,
+        transparent 44%, transparent 52%,
+        #808080 52%, #808080 54%,
+        transparent 54%, transparent 62%,
+        #808080 62%, #808080 64%,
+        transparent 64%);
+    background-repeat: no-repeat;
+    background-position: bottom 4px right 4px;
+    background-size: 10px 10px;
+}
+
+.resize-handle.n {
+    top: 0;
+    left: 8px;
+    right: 8px;
+    height: 4px;
+    cursor: n-resize;
+}
+
+.resize-handle.s {
+    bottom: 0;
+    left: 8px;
+    right: 8px;
+    height: 4px;
+    cursor: s-resize;
+}
+
+.resize-handle.w {
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 4px;
+    cursor: w-resize;
+}
+
+.resize-handle.e {
+    right: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 4px;
+    cursor: e-resize;
+}
+
+/* アニメーション効果 */
+.window.opening {
+    animation: windowOpen 0.2s ease-out;
+}
+
+@keyframes windowOpen {
+    from {
+        transform: scale(0.8);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.window.closing {
+    animation: windowClose 0.15s ease-in forwards;
+}
+
+@keyframes windowClose {
+    to {
+        transform: scale(0.8);
+        opacity: 0;
+    }
+}
+
+/* ユーザ環境設定ダイアログ */
+.user-config-dialog {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.tab-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.tab-header {
+    display: flex;
+    border-bottom: 1px solid #808080;
+    background: #e0e0e0;
+}
+
+.tab {
+    padding: 6px 12px;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+    font-size: 11px;
+    user-select: none;
+    border-bottom: none;
+}
+
+.tab.active {
+    background: #f0f0f0;
+    border-style: inset;
+}
+
+.tab-content {
+    flex: 1;
+    overflow-y: auto;
+    background: #f0f0f0;
+    padding: 0;
+}
+
+.tab-panel {
+    display: none;
+    padding: 12px;
+    height: 100%;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+.config-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.config-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.config-item label {
+    font-size: 11px;
+    min-width: 80px;
+    font-weight: normal;
+}
+
+.config-input {
+    border: 1px inset #c0c0c0;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: white;
+    flex: 1;
+    max-width: 200px;
+}
+
+.config-select {
+    border: 1px inset #c0c0c0;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: white;
+    flex: 1;
+    max-width: 200px;
+}
+
+.config-button {
+    border: 1px outset #c0c0c0;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: #c0c0c0;
+    cursor: pointer;
+}
+
+.config-button:active {
+    border-style: inset;
+}
+
+.config-value {
+    font-size: 11px;
+    color: #000080;
+    font-family: 'Courier New', monospace;
+}
+
+.dialog-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 8px;
+    border-top: 1px solid #808080;
+    background: #e0e0e0;
+}
+
+.dialog-button {
+    border: 1px outset #c0c0c0;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: #c0c0c0;
+    cursor: pointer;
+    min-width: 60px;
+}
+
+.dialog-button:active {
+    border-style: inset;
+}
+
+/* システム環境設定ダイアログスタイル */
+.system-config-dialog {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.system-config-dialog .tab-container {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+.system-config-dialog .tab-header {
+    display: flex;
+    border-bottom: 1px solid #808080;
+    background: #e0e0e0;
+}
+
+.system-config-dialog .tab {
+    padding: 6px 12px;
+    border: 1px outset #c0c0c0;
+    border-bottom: none;
+    background: #c0c0c0;
+    cursor: pointer;
+    font-size: 11px;
+    margin-right: -1px;
+}
+
+.system-config-dialog .tab.active {
+    background: #f0f0f0;
+    border-style: inset;
+}
+
+.system-config-dialog .tab-content {
+    flex: 1;
+    background: #f0f0f0;
+}
+
+.system-config-dialog .tab-panel {
+    display: none;
+    padding: 8px;
+    height: 100%;
+}
+
+.system-config-dialog .tab-panel.active {
+    display: block;
+}
+
+/* 画面タブのサブタブスタイル */
+.display-sub-tabs {
+    display: flex;
+    border-bottom: 1px solid #808080;
+    background: #e0e0e0;
+    margin-bottom: 8px;
+}
+
+.sub-tab {
+    padding: 4px 8px;
+    border: 1px outset #c0c0c0;
+    border-bottom: none;
+    background: #c0c0c0;
+    cursor: pointer;
+    font-size: 10px;
+    margin-right: -1px;
+}
+
+.sub-tab.active {
+    background: #f0f0f0;
+    border-style: inset;
+}
+
+.sub-tab-content {
+    flex: 1;
+}
+
+.sub-tab-panel {
+    display: none;
+}
+
+.sub-tab-panel.active {
+    display: block;
+}
+
+/* 背景設定スタイル */
+.background-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px inset #c0c0c0;
+    padding: 4px;
+    background: white;
+}
+
+.background-option {
+    display: flex;
+    align-items: center;
+    padding: 4px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    gap: 8px;
+}
+
+.background-option:hover {
+    background: #e0e0ff;
+}
+
+.background-option.selected {
+    background: #0060ff;
+    color: white;
+    border-color: #004080;
+}
+
+.bg-preview {
+    width: 32px;
+    height: 24px;
+    border: 1px inset #c0c0c0;
+    background-size: cover;
+    background-position: center;
+    flex-shrink: 0;
+}
+
+.bg-none {
+    background: linear-gradient(45deg, #f0f0f0 25%, transparent 25%, transparent 75%, #f0f0f0 75%),
+                linear-gradient(45deg, #f0f0f0 25%, transparent 25%, transparent 75%, #f0f0f0 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+}
+
+.bg-delete {
+    margin-left: auto;
+    width: 16px;
+    height: 16px;
+    background: #ff4040;
+    color: white;
+    border: 1px outset #ff6060;
+    font-size: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.bg-delete:hover {
+    background: #ff6060;
+}
+
+.bg-delete:active {
+    border-style: inset;
+}
+
+/* 設定項目のスタイル統一 */
+.system-config-dialog .config-section h4 {
+    margin: 0 0 8px 0;
+    font-weight: bold;
+}
+
+/* カスタムスクロールバー */
+.custom-scroll-container {
+    position: absolute;
+    top: 22px; /* タイトルバーの高さ + ボーダー */
+    right: 0px;
+    bottom: 0px;
+    left: 0px;
+    pointer-events: none;
+}
+
+.custom-scrollbar {
+    position: absolute;
+    background: transparent;
+    pointer-events: auto;
+    z-index: 100;
+}
+
+.custom-scrollbar.vertical {
+    right: 0;
+    top: 0;
+    bottom: var(--scrollbar-width);
+    width: var(--scrollbar-width);
+}
+
+.custom-scrollbar.horizontal {
+    bottom: 0;
+    left: 0;
+    right: var(--scrollbar-width);
+    height: var(--scrollbar-width);
+}
+
+.scroll-track {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: #e0e0e0;
+    z-index: 5;
+    pointer-events: auto;
+}
+
+.scroll-thumb {
+    position: absolute;
+    background: var(--window-titlebar-active);
+    border: 1px outset var(--window-border-color);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    pointer-events: auto;
+}
+
+.custom-scrollbar.vertical .scroll-thumb {
+    left: 2px;
+    right: 2px;
+    min-height: 20px;
+}
+
+.custom-scrollbar.horizontal .scroll-thumb {
+    top: 2px;
+    bottom: 2px;
+    min-width: 20px;
+}
+
+/* 黄色のインジケーター（thumb内の中央に配置） */
+.scroll-thumb-indicator {
+    background: #ffff00;
+    pointer-events: none;
+}
+
+.custom-scrollbar.vertical .scroll-thumb-indicator {
+    width: 14px;
+    height: 2px;
+}
+
+.custom-scrollbar.horizontal .scroll-thumb-indicator {
+    width: 2px;
+    height: 14px;
+}
+
+.scroll-thumb:hover {
+    background: #a0a0a0;
+}
+
+.scroll-thumb.dragging {
+    background: #808080;
+}
+
+/* スクロールコーナー（右下の交点） */
+.scroll-corner {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: var(--scrollbar-width);
+    height: var(--scrollbar-width);
+    background: var(--window-titlebar-active);
+}
+
+/* カスタムスクロールバーが有効な場合、デフォルトのスクロールバーを非表示 */
+.window:has(.custom-scroll-container) .window-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
+    overflow: auto; /* スクロールは有効にする */
+}
+
+.window:has(.custom-scroll-container) .window-content::-webkit-scrollbar {
+    display: none; /* Chrome/Safari/Opera */
+}
+
+/* iframe内のスクロールバーも非表示にする */
+.window:has(.custom-scroll-container) .window-content iframe {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
+}
+
+.window:has(.custom-scroll-container) .window-content iframe::-webkit-scrollbar {
+    display: none; /* Chrome/Safari/Opera */
+}
+
+/* ダイアログオーバーレイ */
+.dialog-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 9998;
+}
+
+/* BTRONダイアログ共通スタイル */
+.btron-dialog {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: #dedede;
+    border: 3px solid #808080;
+    padding: 16px;
+    min-width: 300px;
+    box-shadow: inset 0 0 0 3px #6ac950;
+    z-index: 9999;
+    font-family: 'MS Sans Serif', sans-serif;
+    font-size: 11px;
+}
+
+/* ダイアログメッセージ */
+.dialog-message {
+    margin-bottom: 16px;
+    padding: 8px;
+    background: white;
+    border: 2px inset #808080;
+    white-space: pre-wrap;
+    line-height: 1.5;
+}
+
+/* ダイアログ入力フィールド */
+.dialog-input {
+    width: 100%;
+    margin-bottom: 16px;
+    padding: 4px;
+    border: 2px inset #808080;
+    font-family: 'MS Sans Serif', sans-serif;
+    font-size: 11px;
+    background: white;
+    box-sizing: border-box;
+}
+
+/* ダイアログボタンコンテナ */
+.dialog-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 60px;
+}
+
+/* ダイアログボタン */
+.dialog-button {
+    border: 1px outset #c0c0c0;
+    border-radius: 0;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: #c0c0c0;
+    cursor: pointer;
+    min-width: 60px;
+    box-shadow: none;
+    outline: none;
+}
+
+.dialog-button:active {
+    border-style: inset;
+}
+
+.dialog-button.default {
+    font-weight: bold;
+}
+
+/* 仮身属性変更ダイアログ */
+#input-dialog-message .vobj-attr-dialog {
+    padding: 2px;
+    width: 600px;
+}
+
+/* dialog-messageのデフォルトスタイルを上書き */
+#input-dialog-message:has(.vobj-attr-dialog) {
+    margin-bottom: 4px;
+    padding: 3px;
+    line-height: 1.1;
+}
+
+/* 仮身属性変更時はダイアログのパディングを減らす */
+#input-dialog:has(.vobj-attr-dialog) {
+    padding: 6px;
+}
+
+/* 仮身属性変更時はボタンコンテナのパディングも減らす */
+#input-dialog:has(.vobj-attr-dialog) .dialog-buttons {
+    padding: 3px;
+    margin-top: 2px;
+}
+
+/* 仮身属性変更時はテキスト入力欄を非表示 */
+#input-dialog:has(.vobj-attr-dialog) .dialog-input {
+    display: none;
+}
+
+.vobj-attr-dialog {
+    padding: 2px;
+    width: 600px;
+}
+
+/* 整頓ダイアログ */
+.arrange-dialog {
+    padding: 0;
+    width: 500px;
+    font-size: 9px;
+    line-height: 0.8;
+}
+
+/* 整頓ダイアログ内のすべての要素のリセット */
+.arrange-dialog div,
+.arrange-dialog label,
+.arrange-dialog input,
+.arrange-dialog span {
+    line-height: 0.8;
+}
+
+/* 整頓ダイアログ内のラジオボタン */
+.arrange-dialog input[type="radio"] {
+    margin: 0;
+    padding: 0;
+    vertical-align: middle;
+}
+
+/* 整頓ダイアログのメッセージエリア */
+#input-dialog-message:has(.arrange-dialog) {
+    margin-bottom: 1px;
+    padding: 1px;
+    line-height: 0.8;
+}
+
+/* 整頓ダイアログのパディング */
+#input-dialog:has(.arrange-dialog) {
+    padding: 2px;
+}
+
+/* 整頓ダイアログのボタンコンテナ */
+#input-dialog:has(.arrange-dialog) .dialog-buttons {
+    padding: 1px;
+    margin-top: 0px;
+}
+
+/* 整頓ダイアログのテキスト入力欄を非表示 */
+#input-dialog:has(.arrange-dialog) .dialog-input {
+    display: none;
+}
+
+.vobj-attr-title {
+    margin-bottom: 1px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.vobj-attr-grid {
+    display: grid;
+    grid-template-columns: 175px 225px 175px;
+    gap: 3px;
+}
+
+.vobj-attr-section-title {
+    margin-bottom: 0px;
+    font-weight: bold;
+    font-size: 11px;
+    line-height: 1.1;
+}
+
+.vobj-attr-checkbox-label {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0px;
+    margin-top: 0px;
+    font-size: 11px;
+    line-height: 1.1;
+}
+
+.vobj-attr-checkbox-label input[type="checkbox"] {
+    margin: 0;
+    vertical-align: middle;
+}
+
+.vobj-attr-checkbox-label span {
+    margin-left: 2px;
+}
+
+.vobj-attr-color-label {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0px;
+    margin-top: 0px;
+    font-size: 11px;
+    line-height: 1.1;
+}
+
+.vobj-attr-color-label span {
+    width: 80px;
+}
+
+.vobj-attr-color-label.last {
+    margin-bottom: 2px;
+}
+
+.vobj-attr-color-input {
+    width: 90px;
+    padding: 1px;
+    font-size: 11px;
+}
+
+.vobj-attr-size-label {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0px;
+    font-size: 11px;
+    line-height: 1.1;
+}
+
+.vobj-attr-size-label .vobj-attr-section-title {
+    margin-right: 3px;
+}
+
+.vobj-attr-select {
+    width: 90px;
+    padding: 1px;
+    margin-bottom: 0px;
+    font-size: 11px;
+    line-height: 1.1;
+}
+
+.vobj-attr-custom-label {
+    display: flex;
+    align-items: center;
+    margin-top: 12px;
+    font-size: 11px;
+    line-height: 1.1;
+}
+
+.vobj-attr-custom-label span {
+    width: 50px;
+}
+
+.vobj-attr-custom-input {
+    width: 90px;
+    padding: 1px;
+    font-size: 11px;
+}
+
+/* レスポンシブ対応 */
+@media (max-width: 800px) {
+    .file-list-area {
+        width: 250px;
+        height: 300px;
+    }
+
+    .tad-window {
+        width: 90vw;
+        height: 60vh;
+        max-width: none;
+    }
+}

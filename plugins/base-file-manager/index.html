@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>原紙管理</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="plugin-content manager-container">
+        <div class="base-file-list" id="baseFileList">
+            <!-- 原紙ファイルが仮身形式で一覧表示される -->
+        </div>
+    </div>
+
+    <!-- VirtualObjectRendererをグローバル変数として読み込み -->
+    <script type="module">
+        import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
+        window.VirtualObjectRenderer = VirtualObjectRenderer;
+    </script>
+    <!-- 共通ユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import { convertPtToPx } from '../../js/util.js';
+        window.convertPtToPx = convertPtToPx;
+    </script>
+    <script defer src="app.js"></script>
+</body>
+</html>

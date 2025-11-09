@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ユーザ環境設定</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="user-config-dialog">
+        <div class="tab-container">
+            <div class="tab-header">
+                <div class="tab active" data-tab="personal">個人属性</div>
+                <div class="tab" data-tab="pd">PD属性</div>
+                <div class="tab" data-tab="key">キー属性</div>
+                <div class="tab" data-tab="display">表示属性</div>
+                <div class="tab" data-tab="sound">音属性</div>
+                <div class="tab" data-tab="keyop">キー操作</div>
+            </div>
+            <div class="tab-content">
+                <div class="tab-panel active" id="personal-panel">
+                    <div class="config-section">
+                        <div class="config-item">
+                            <label>使用者：</label>
+                            <input type="text" class="config-input" id="username" value="TRON User" />
+                        </div>
+                        <div class="config-item">
+                            <label>入力方式：</label>
+                            <select class="config-select" id="input-method">
+                                <option value="kana">かな入力</option>
+                                <option value="romaji" selected>ローマ字入力</option>
+                            </select>
+                        </div>
+                        <div class="config-item">
+                            <label>漢字変換：</label>
+                            <button class="config-button" id="kana-kanji-button">かな漢字変換設定</button>
+                        </div>
+                        <div class="config-item">
+                            <label>現在時刻：</label>
+                            <span class="config-value" id="current-time"></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="tab-panel" id="pd-panel">
+                    <div class="config-section">
+                        <p>PD属性の設定項目は未実装です。</p>
+                    </div>
+                </div>
+                <div class="tab-panel" id="key-panel">
+                    <div class="config-section">
+                        <p>キー属性の設定項目は未実装です。</p>
+                    </div>
+                </div>
+                <div class="tab-panel" id="display-panel">
+                    <div class="config-section">
+                        <!-- スライドバー設定項目 -->
+                        <div class="config-item-slider">
+                            <label>タイトル文字サイズ：</label>
+                            <span class="slider-label">小</span>
+                            <input type="range" class="config-slider" id="title-font-size" min="10" max="24" value="14" step="1">
+                            <span class="slider-label">大</span>
+                            <input type="number" class="config-number" id="title-font-size-num" min="10" max="24" value="14">
+                        </div>
+                        <div class="config-item-slider">
+                            <label>スクロールバー幅：</label>
+                            <span class="slider-label">小</span>
+                            <input type="range" class="config-slider" id="scrollbar-width" min="8" max="20" value="12" step="1">
+                            <span class="slider-label">大</span>
+                            <input type="number" class="config-number" id="scrollbar-width-num" min="8" max="20" value="12">
+                        </div>
+                        <div class="config-item-slider">
+                            <label>メニュー文字サイズ：</label>
+                            <span class="slider-label">小</span>
+                            <input type="range" class="config-slider" id="menu-font-size" min="10" max="20" value="14" step="1">
+                            <span class="slider-label">大</span>
+                            <input type="number" class="config-number" id="menu-font-size-num" min="10" max="20" value="14">
+                        </div>
+                        <div class="config-item-slider">
+                            <label>カーソル点滅間隔：</label>
+                            <span class="slider-label">短</span>
+                            <input type="range" class="config-slider" id="cursor-blink" min="300" max="1500" value="800" step="100">
+                            <span class="slider-label">長</span>
+                            <input type="number" class="config-number" id="cursor-blink-num" min="300" max="1500" value="800" step="100">
+                        </div>
+                        <div class="config-item-slider">
+                            <label>選択枠チラつき間隔：</label>
+                            <span class="slider-label">短</span>
+                            <input type="range" class="config-slider" id="selection-blink" min="300" max="1500" value="600" step="100">
+                            <span class="slider-label">長</span>
+                            <input type="number" class="config-number" id="selection-blink-num" min="300" max="1500" value="600" step="100">
+                        </div>
+                        <div class="config-item-slider">
+                            <label>メニュー反応時間：</label>
+                            <span class="slider-label">短</span>
+                            <input type="range" class="config-slider" id="menu-delay" min="0" max="1000" value="200" step="50">
+                            <span class="slider-label">長</span>
+                            <input type="number" class="config-number" id="menu-delay-num" min="0" max="1000" value="200" step="50">
+                        </div>
+
+                        <!-- ボタン選択項目 -->
+                        <div class="config-item-buttons">
+                            <label>カーソル太さ：</label>
+                            <div class="button-group">
+                                <button class="size-button active" data-setting="cursor-width" data-value="1">細</button>
+                                <button class="size-button" data-setting="cursor-width" data-value="2">中</button>
+                                <button class="size-button" data-setting="cursor-width" data-value="3">太</button>
+                            </div>
+                        </div>
+                        <div class="config-item-buttons">
+                            <label>ポインタ表示サイズ：</label>
+                            <div class="button-group">
+                                <button class="size-button active" data-setting="pointer-size" data-value="small">小</button>
+                                <button class="size-button" data-setting="pointer-size" data-value="medium">中</button>
+                                <button class="size-button" data-setting="pointer-size" data-value="large">大</button>
+                            </div>
+                        </div>
+                        <div class="config-item-buttons">
+                            <label>選択枠太さ：</label>
+                            <div class="button-group">
+                                <button class="size-button active" data-setting="selection-width" data-value="1">細</button>
+                                <button class="size-button" data-setting="selection-width" data-value="2">中</button>
+                                <button class="size-button" data-setting="selection-width" data-value="3">太</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="tab-panel" id="sound-panel">
+                    <div class="config-section">
+                        <p>音属性の設定項目は未実装です。</p>
+                    </div>
+                </div>
+                <div class="tab-panel" id="keyop-panel">
+                    <div class="config-section">
+                        <p>キー操作の設定項目は未実装です。</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="dialog-buttons">
+            <button class="dialog-button" id="apply-button">適用</button>
+            <button class="dialog-button" id="cancel-button">キャンセル</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

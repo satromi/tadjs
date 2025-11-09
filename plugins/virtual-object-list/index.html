@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>仮身一覧</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body tabindex="0">
+    <div class="plugin-content">
+        <div class="viewer-container">
+            <div class="virtual-list" id="virtualList">
+            </div>
+        </div>
+    </div>
+
+    <!-- VirtualObjectRendererをグローバル変数として読み込み -->
+    <script type="module">
+        import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
+        window.VirtualObjectRenderer = VirtualObjectRenderer;
+    </script>
+    <!-- 共通ユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import { convertPtToPx } from '../../js/util.js';
+        window.convertPtToPx = convertPtToPx;
+    </script>
+    <!-- パフォーマンス最適化ユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import { debounce, throttle, throttleRAF } from '../../js/performance-utils.js';
+        window.debounce = debounce;
+        window.throttle = throttle;
+        window.throttleRAF = throttleRAF;
+    </script>
+    <script defer src="app.js"></script>
+</body>
+</html>

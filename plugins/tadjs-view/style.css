@@ -1,0 +1,49 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+}
+
+body {
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 11px;
+    background: white;
+    overflow: hidden;
+}
+
+.plugin-content {
+    overflow: auto; /* スクロール可能 */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: white;
+}
+
+/* カスタムスクロールバーを使用するためブラウザ標準のスクロールバーを非表示 */
+.plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.plugin-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE, Edge */
+}
+
+.canvas-container {
+    display: block;
+    min-height: 100%;
+}
+
+#tadCanvas {
+    display: block;
+    background: white;
+    /* canvasのサイズは実際の描画サイズを保持（CSSで拡大縮小しない） */
+}

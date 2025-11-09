@@ -1,0 +1,411 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+}
+
+body {
+    font-family: 'Noto Sans JP', 'Yu Gothic', 'Meiryo', sans-serif;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.plugin-content {
+    overflow: auto; /* スクロール可能 */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* カスタムスクロールバーを使用するためブラウザ標準のスクロールバーを非表示 */
+.plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.plugin-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE, Edge */
+}
+
+.editor-container {
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+    height: 100%;
+}
+
+/* ツールバー */
+.toolbar {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    background: #ffffff;
+    border-bottom: 1px solid #e0e0e0;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.toolbar-group {
+    display: flex;
+    gap: 4px;
+}
+
+.toolbar-btn {
+    padding: 6px 12px;
+    border: 1px solid #d0d0d0;
+    background: #ffffff;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 14px;
+    transition: all 0.2s;
+}
+
+.toolbar-btn:hover {
+    background: #f0f0f0;
+    border-color: #b0b0b0;
+}
+
+.toolbar-btn:active,
+.toolbar-btn.active {
+    background: #e0e0e0;
+    border-color: #a0a0a0;
+}
+
+.toolbar-select {
+    padding: 6px 8px;
+    border: 1px solid #d0d0d0;
+    background: #ffffff;
+    border-radius: 3px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.toolbar-separator {
+    width: 1px;
+    height: 24px;
+    background: #d0d0d0;
+}
+
+/* エディタ */
+.editor {
+    padding: 20px;
+    background: #ffffff;
+    overflow: visible;
+    outline: none;
+    font-family: 'Noto Sans JP', 'Noto Serif JP', 'Yu Mincho', 'MS Mincho', serif;
+    font-size: 14pt;
+    line-height: 1.8;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    flex: 1;
+    min-height: 100%;
+    /* カーソル設定（ブラウザの制限により部分的な対応） */
+    caret-color: #000000;
+}
+
+.editor:focus {
+    border-color: #4a90e2;
+}
+
+.editor p {
+    margin-bottom: 1em;
+}
+
+.editor p:last-child {
+    margin-bottom: 0;
+}
+
+/* ステータスバー */
+.statusbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 12px;
+    background: #ffffff;
+    border-top: 1px solid #e0e0e0;
+    font-size: 12px;
+    color: #666;
+    flex-shrink: 0;
+}
+
+/* 書式スタイル */
+.editor b,
+.editor strong {
+    font-weight: bold;
+}
+
+.editor i,
+.editor em {
+    font-style: italic;
+}
+
+.editor u {
+    text-decoration: underline;
+}
+
+/* テキスト配置 */
+.editor .align-left {
+    text-align: left;
+}
+
+.editor .align-center {
+    text-align: center;
+}
+
+.editor .align-right {
+    text-align: right;
+}
+
+/* TAD XML カスタムタグのスタイル */
+.editor underline {
+    text-decoration: underline;
+}
+
+.editor overline {
+    text-decoration: overline;
+}
+
+.editor strikethrough {
+    text-decoration: line-through;
+}
+
+.editor bagchar {
+    -webkit-text-stroke: 1px currentColor;
+    paint-order: stroke fill;
+}
+
+.editor box {
+    border: 1px solid currentColor;
+    padding: 0 2px;
+    display: inline-block;
+}
+
+.editor invert {
+    background-color: currentColor;
+    color: white;
+    padding: 0 2px;
+}
+
+.editor mesh {
+    background-image: repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(0,0,0,0.1) 2px, rgba(0,0,0,0.1) 4px);
+}
+
+.editor noprint {
+    opacity: 0.3;
+}
+
+.editor ruby {
+    display: inline-flex;
+    flex-direction: column-reverse;
+    align-items: center;
+    vertical-align: baseline;
+}
+
+.editor ruby[position="0"] {
+    flex-direction: column-reverse;
+}
+
+.editor ruby[position="1"] {
+    flex-direction: column;
+}
+
+.editor ruby rt {
+    font-size: 0.5em;
+}
+
+.editor ruby rtc {
+    ruby-position: under;
+    font-size: 0.5em;
+}
+
+
+/* 右クリックメニュー */
+.context-menu {
+    position: fixed;
+    background: #ffffff;
+    border: 1px solid #ccc;
+    box-shadow: 2px 2px 8px rgba(0, 0, 0, 0.2);
+    z-index: 10000;
+    min-width: 200px;
+    padding: 4px 0;
+    font-size: 14px;
+    display: none;
+}
+
+.context-menu.show {
+    display: block;
+}
+
+.context-menu-item {
+    padding: 8px 24px 8px 16px;
+    cursor: pointer;
+    position: relative;
+    white-space: nowrap;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.context-menu-item:hover {
+    background: #e3f2fd;
+}
+
+.context-menu-item.disabled {
+    color: #999;
+    cursor: not-allowed;
+}
+
+.context-menu-item.disabled:hover {
+    background: transparent;
+}
+
+.context-menu-separator {
+    height: 1px;
+    background: #e0e0e0;
+    margin: 4px 0;
+}
+
+.context-menu-item .shortcut {
+    margin-left: 20px;
+    color: #666;
+    font-size: 12px;
+}
+
+.context-menu-item .arrow {
+    margin-left: 20px;
+    color: #666;
+}
+
+.context-submenu {
+    position: absolute;
+    left: 100%;
+    top: -4px;
+    background: #ffffff;
+    border: 1px solid #ccc;
+    box-shadow: 2px 2px 8px rgba(0, 0, 0, 0.2);
+    min-width: 180px;
+    padding: 4px 0;
+    display: none;
+}
+
+.context-menu-item:hover > .context-submenu {
+    display: block;
+}
+
+/* 仮身（Virtual Object）スタイル */
+.virtual-object {
+    /* 基本スタイルはインラインで設定されるため、ここでは共通の動作のみ定義 */
+    transition: all 0.2s;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    white-space: nowrap; /* テキストを折り返さない */
+    overflow: hidden; /* 溢れたテキストを隠す */
+    text-overflow: ellipsis; /* 省略記号(...)を表示 */
+}
+
+.virtual-object:hover {
+    filter: brightness(0.95);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.virtual-object:active {
+    transform: translateY(1px);
+    filter: brightness(0.9);
+}
+
+/* 仮身の選択状態 */
+.virtual-object.selected {
+    box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.5);
+    outline: 2px solid #ff8f00;
+}
+
+.virtual-object.selected:hover {
+    box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.7);
+}
+
+/* 読み取り専用モード（開いた仮身内のiframe）ではホバー表示を無効化 */
+body.readonly-mode .virtual-object:hover {
+    filter: none;
+    box-shadow: none;
+}
+
+body.readonly-mode .virtual-object.selected:hover {
+    box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.5);
+}
+
+/* 仮身のリサイズハンドル */
+.virtual-object {
+    position: relative;
+    display: inline-block;
+    vertical-align: top;
+}
+
+/* 右端のリサイズハンドル */
+.virtual-object::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: ew-resize;
+    z-index: 1;
+}
+
+/* 下端のリサイズハンドル */
+.virtual-object::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 8px;
+    cursor: ns-resize;
+    z-index: 1;
+}
+
+/* 右下隅のリサイズハンドル */
+.virtual-object .resize-handle-corner {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 8px;
+    height: 8px;
+    cursor: nwse-resize;
+    z-index: 2;
+}
+
+.virtual-object.resizing {
+    pointer-events: none;
+}
+
+.virtual-object.resizing::after,
+.virtual-object.resizing::before {
+    pointer-events: all;
+}
+
+/* 開いた仮身表示 */
+.virtual-object.expanded {
+    display: block;
+    overflow: hidden;
+}
+
+.virtual-object.expanded .virtual-object-content {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+}

@@ -1,0 +1,23 @@
+{
+  "id": "trash-real-objects",
+  "name": "屑実身操作",
+  "version": "1.0.0",
+  "type": "utility",
+  "description": "refCount=0の屑実身を一覧表示・管理します",
+  "icon": "🗑️",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 600,
+    "height": 500,
+    "resizable": true,
+    "scrollable": true,
+    "openable": true
+  },
+  "permissions": [
+    "file-read",
+    "file-write",
+    "file-delete"
+  ]
+}

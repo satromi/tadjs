@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TADjs Desktop</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="stylesheet" href="tadjs-desktop.css">
+</head>
+<body>
+    <!-- メインデスクトップ環境 -->
+    <div id="desktop" class="desktop">
+        <!-- 初期表示の仮身一覧ウインドウ（windowContainerに移動） -->
+
+        <!-- ウインドウコンテナ -->
+        <div id="window-container" class="window-container">
+            <!-- 動的に生成されるウインドウがここに表示される -->
+        </div>
+
+        <!-- コンテキストメニュー -->
+        <div id="context-menu" class="context-menu" style="display: none;">
+            <div class="menu-item" data-action="open">開く</div>
+            <div class="menu-separator"></div>
+            <div class="menu-item" data-action="properties">プロパティ</div>
+        </div>
+
+        <!-- ダイアログオーバーレイ -->
+        <div id="dialog-overlay" class="dialog-overlay" style="display: none;"></div>
+
+        <!-- メッセージダイアログ -->
+        <div id="message-dialog" class="btron-dialog" style="display: none;">
+            <div class="dialog-message" id="dialog-message-text"></div>
+            <div class="dialog-buttons" id="dialog-message-buttons"></div>
+        </div>
+
+        <!-- 入力ダイアログ -->
+        <div id="input-dialog" class="btron-dialog" style="display: none;">
+            <div class="dialog-message" id="input-dialog-message"></div>
+            <input type="text" class="dialog-input" id="dialog-input-field" />
+            <div class="dialog-buttons" id="input-dialog-buttons"></div>
+        </div>
+    </div>
+
+    <!-- ステータスバー -->
+    <div id="status-bar" class="status-bar">
+        <div class="status-message" id="status-message">システム準備完了</div>
+        <div class="status-time" id="status-time"></div>
+    </div>
+
+    <!-- スクリプト -->
+    <script src="encoding.min.js?v=20251024"></script>
+    <script src="lh5.js"></script>
+    <script src="tad.js?v=20251024"></script>
+    <script src="electron/plugin-manager.js"></script>
+    <script src="tadjs-desktop.js"></script>
+    <script>
+        // プラグインマネージャーとTADjsDesktopを順番に初期化
+        document.addEventListener('DOMContentLoaded', async () => {
+            // まずプラグインマネージャーを初期化
+            window.pluginManager = new PluginManager();
+            await window.pluginManager.initialize();
+            console.log('プラグインマネージャーを初期化しました');
+
+            // 次にTADjsDesktopを初期化（プラグインマネージャーの後）
+            window.tadjsDesktop = new TADjsDesktop();
+            console.log('TADjs Desktopを初期化しました');
+
+            // メニューバーの自動表示/非表示処理
+            if (window.require) {
+                const { ipcRenderer } = window.require('electron');
+                let menuVisible = false;
+
+                // マウス移動イベント
+                document.addEventListener('mousemove', (e) => {
+                    // ウィンドウ上部10px以内にマウスがある場合
+                    if (e.clientY <= 10) {
+                        if (!menuVisible) {
+                            menuVisible = true;
+                            ipcRenderer.send('set-menu-bar-visibility', true);
+                        }
+                    } else if (e.clientY > 10 && menuVisible) {
+                        // マウスが上部10pxから離れたらすぐに非表示
+                        menuVisible = false;
+                        ipcRenderer.send('set-menu-bar-visibility', false);
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>

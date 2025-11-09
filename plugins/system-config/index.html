@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>システム環境設定</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="system-config-dialog">
+        <div class="tab-container">
+            <div class="tab-header">
+                <div class="tab active" data-tab="device">機器</div>
+                <div class="tab" data-tab="display">画面</div>
+                <div class="tab" data-tab="font">書体</div>
+                <div class="tab" data-tab="version">バージョン</div>
+            </div>
+            <div class="tab-content">
+                <div class="tab-panel active" id="device-panel">
+                    <div class="config-section">
+                        <p>機器設定の項目は未実装です。</p>
+                    </div>
+                </div>
+                <div class="tab-panel" id="display-panel">
+                    <div class="display-sub-tabs">
+                        <div class="sub-tab active" data-subtab="background">背景</div>
+                        <div class="sub-tab" data-subtab="screensaver">スクリーンセーバー</div>
+                        <div class="sub-tab" data-subtab="color">配色</div>
+                        <div class="sub-tab" data-subtab="display-font">書体</div>
+                    </div>
+                    <div class="sub-tab-content">
+                        <div class="sub-tab-panel active" id="background-panel">
+                            <div class="config-section">
+                                <h4>背景画像の設定</h4>
+                                <div class="config-item">
+                                    <label>画像ファイル：</label>
+                                    <input type="file" id="background-upload" accept="image/*" />
+                                    <button class="config-button" id="upload-button">画像を追加</button>
+                                </div>
+                                <div class="config-item">
+                                    <label>選択可能な背景：</label>
+                                    <div class="background-list" id="background-list">
+                                        <div class="background-option" data-bg="none">
+                                            <div class="bg-preview bg-none"></div>
+                                            <span>なし</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="sub-tab-panel" id="screensaver-panel">
+                            <div class="config-section">
+                                <p>スクリーンセーバーの設定項目は未実装です。</p>
+                            </div>
+                        </div>
+                        <div class="sub-tab-panel" id="color-panel">
+                            <div class="config-section">
+                                <p>配色の設定項目は未実装です。</p>
+                            </div>
+                        </div>
+                        <div class="sub-tab-panel" id="display-font-panel">
+                            <div class="config-section">
+                                <p>書体の設定項目は未実装です。</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="tab-panel" id="font-panel">
+                    <div class="config-section">
+                        <p>書体設定の項目は未実装です。</p>
+                    </div>
+                </div>
+                <div class="tab-panel" id="version-panel">
+                    <div class="version-section">
+                        <div class="version-header">
+                            <div class="version-label">システムバージョン：</div>
+                            <div class="version-value" id="system-version">R 4.540</div>
+                        </div>
+                        <div class="version-list" id="version-list">
+                            <!-- プラグインのバージョン一覧がここに表示される -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="dialog-buttons">
+            <button class="dialog-button" id="apply-button">適用</button>
+            <button class="dialog-button" id="cancel-button">キャンセル</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

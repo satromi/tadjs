@@ -1,0 +1,34 @@
+{
+  "id": "base-file-manager",
+  "name": "原紙箱",
+  "version": "1.0.0",
+  "type": "base",
+  "basefile":{
+    "json": "d4797740-5936-4eb2-8ea6-f424870c2f14.json",
+    "xmltad": "d4797740-5936-4eb2-8ea6-f424870c2f14_0.xtad",
+    "ico": "d4797740-5936-4eb2-8ea6-f424870c2f14.ico"
+  },
+  "description": "原紙ファイルを管理し、仮身形式で一覧表示します",
+  "icon": "📑",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 700,
+    "height": 500,
+    "resizable": true,
+    "scrollable": true,
+    "openable": true
+  },
+  "contextMenu": [
+    {
+      "label": "原紙箱",
+      "fileTypes": ["xtad", "XTAD"],
+      "action": "open-base-manager"
+    }
+  ],
+  "permissions": [
+    "file-read",
+    "file-write"
+  ]
+}
