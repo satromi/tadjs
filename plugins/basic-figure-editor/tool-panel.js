@@ -13,6 +13,7 @@ class ToolPanel {
         this.strokeColor = '#000000';
         this.lineWidth = 2;
         this.linePattern = 'solid';
+        this.lineConnectionType = 'straight'; // 'straight', 'elbow', 'curve'
         this.cornerRadius = 0;
 
         // 格子点設定
@@ -40,6 +41,7 @@ class ToolPanel {
                     this.strokeColor = event.data.settings.strokeColor || '#000000';
                     this.lineWidth = event.data.settings.lineWidth || 2;
                     this.linePattern = event.data.settings.linePattern || 'solid';
+                    this.lineConnectionType = event.data.settings.lineConnectionType || 'straight';
                     this.cornerRadius = event.data.settings.cornerRadius || 0;
                 }
                 this.updatePaletteIcons();
@@ -104,8 +106,10 @@ class ToolPanel {
                 });
             } else if (event.data && event.data.type === 'popup-stroke-color-change') {
                 // 線色変更
+                console.log('[TOOL PANEL] 線色変更:', event.data.strokeColor);
                 this.strokeColor = event.data.strokeColor;
                 this.updatePaletteIcons();
+                console.log('[TOOL PANEL] update-stroke-colorをエディタに送信:', this.strokeColor);
                 this.sendToEditor({
                     type: 'update-stroke-color',
                     strokeColor: this.strokeColor
@@ -123,6 +127,13 @@ class ToolPanel {
                 this.sendToEditor({
                     type: 'update-line-pattern',
                     linePattern: this.linePattern
+                });
+            } else if (event.data && event.data.type === 'popup-line-connection-type-change') {
+                // 接続形状変更
+                this.lineConnectionType = event.data.lineConnectionType;
+                this.sendToEditor({
+                    type: 'update-line-connection-type',
+                    lineConnectionType: this.lineConnectionType
                 });
             } else if (event.data && event.data.type === 'popup-corner-radius-change') {
                 // 角丸半径変更
@@ -533,6 +544,14 @@ class ToolPanel {
                     <option value="solid" ${this.linePattern === 'solid' ? 'selected' : ''}>実線</option>
                     <option value="dotted" ${this.linePattern === 'dotted' ? 'selected' : ''}>点線</option>
                     <option value="dashed" ${this.linePattern === 'dashed' ? 'selected' : ''}>破線</option>
+                </select>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px;">
+                <span>接続形状:</span>
+                <select id="lineConnectionTypeSelect" style="padding: 4px;">
+                    <option value="straight" ${this.lineConnectionType === 'straight' ? 'selected' : ''}>直線</option>
+                    <option value="elbow" ${this.lineConnectionType === 'elbow' ? 'selected' : ''}>カギ線</option>
+                    <option value="curve" ${this.lineConnectionType === 'curve' ? 'selected' : ''}>曲線</option>
                 </select>
             </label>
         `;

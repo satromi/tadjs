@@ -8,10 +8,24 @@ class BaseFileManager {
         this.pluginConfig = null;
         this.realId = null; // 実身ID
         this.fileData = null; // ファイルデータ
-        this.dialogCallbacks = {}; // ダイアログコールバック
         this.isFullscreen = false; // 全画面表示フラグ
         this.virtualObjectRenderer = null; // VirtualObjectRenderer
         this.iconCache = new Map(); // アイコンキャッシュ (realId -> base64)
+        this.debug = window.TADjsConfig?.debug || false; // デバッグモード（config.jsで管理）
+
+        // MessageBusの初期化（即座に開始）
+        this.messageBus = null;
+        if (window.MessageBus) {
+            this.messageBus = new window.MessageBus({
+                debug: this.debug,
+                pluginName: 'BaseFileManager'
+            });
+            this.messageBus.start();
+            console.log('[BaseFileManager] MessageBus initialized');
+        } else {
+            console.warn('[BaseFileManager] MessageBus not available');
+        }
+
         this.init();
     }
 
@@ -38,76 +52,99 @@ class BaseFileManager {
     }
 
     setupMessageHandler() {
-        window.addEventListener('message', (event) => {
-            console.log('[BaseFileManager] メッセージ受信:', event.data?.type, event.data);
+        // MessageBusのハンドラを登録（Phase 2: MessageBusのみ使用）
+        if (this.messageBus) {
+            this.setupMessageBusHandlers();
+        } else {
+            console.error('[BaseFileManager] MessageBus not available - cannot setup message handlers');
+        }
+    }
 
-            if (event.data && event.data.type === 'init') {
-                console.log('[BaseFileManager] init受信', event.data);
+    /**
+     * MessageBusのハンドラを登録
+     * Phase 2: MessageBusのみで動作
+     */
+    setupMessageBusHandlers() {
+        // init メッセージ
+        this.messageBus.on('init', async (data) => {
+            console.log('[BaseFileManager] [MessageBus] init受信', data);
 
-                // fileDataを保存
-                if (event.data.fileData) {
-                    this.fileData = event.data.fileData;
-                    console.log('[BaseFileManager] fileData保存完了:', this.fileData);
+            // fileDataを保存
+            if (data.fileData) {
+                this.fileData = data.fileData;
+                let rawId = data.fileData.realId || data.fileData.fileId;
+                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                console.log('[BaseFileManager] [MessageBus] fileData設定完了:', this.realId);
+            }
 
-                    let rawId = event.data.fileData.realId || event.data.fileData.fileId;
-                    // _0.xtadなどの拡張子を除去
-                    this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
-                    console.log('[BaseFileManager] realId設定:', this.realId, '(元:', rawId, ')');
-                } else {
-                    console.warn('[BaseFileManager] fileDataが存在しません:', event.data);
-                }
+            // 背景色を適用してファイルを読み込む
+            this.applyBackgroundColor();
+            await this.loadBaseFiles();
+        });
 
-                // 背景色を適用
-                this.applyBackgroundColor();
-
-                // 原紙ファイルを読み込み
-                this.loadBaseFiles();
-            } else if (event.data && event.data.type === 'window-moved') {
-                // ウィンドウ移動終了時にwindowConfigを更新
+        // window-moved メッセージ
+        this.messageBus.on('window-moved', (data) => {
+            console.log('[BaseFileManager] [MessageBus] window-moved受信');
+            if (data.pos && data.width !== undefined && data.height !== undefined) {
                 this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height
+                    pos: data.pos,
+                    width: data.width,
+                    height: data.height
                 });
-            } else if (event.data && event.data.type === 'window-resized-end') {
-                // ウィンドウリサイズ終了時にwindowConfigを更新
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height
-                });
-            } else if (event.data && event.data.type === 'window-maximize-toggled') {
-                // 全画面表示切り替え時にwindowConfigを更新
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height,
-                    maximize: event.data.maximize
-                });
-            } else if (event.data && event.data.type === 'get-menu-definition') {
-                // メニュー定義を返す
-                const menuDefinition = this.getMenuDefinition();
-                window.parent.postMessage({
-                    type: 'menu-definition-response',
-                    messageId: event.data.messageId,
-                    menuDefinition: menuDefinition
-                }, '*');
-            } else if (event.data && event.data.type === 'menu-action') {
-                console.log('[BaseFileManager] menu-action受信:', event.data.action);
-                this.handleMenuAction(event.data.action);
-            } else if (event.data && (event.data.type === 'custom-dialog-response' || event.data.type === 'input-dialog-response')) {
-                // カスタムダイアログのレスポンス
-                console.log('[BaseFileManager] ダイアログレスポンス受信:', event.data.type, event.data);
-                const callback = this.dialogCallbacks[event.data.messageId];
-                if (callback) {
-                    console.log('[BaseFileManager] コールバック実行:', event.data.messageId);
-                    callback(event.data.result);
-                    delete this.dialogCallbacks[event.data.messageId];
-                } else {
-                    console.warn('[BaseFileManager] コールバックが見つかりません:', event.data.messageId);
-                }
             }
         });
+
+        // window-resized-end メッセージ
+        this.messageBus.on('window-resized-end', (data) => {
+            console.log('[BaseFileManager] [MessageBus] window-resized-end受信');
+            if (data.width !== undefined && data.height !== undefined) {
+                this.updateWindowConfig({
+                    width: data.width,
+                    height: data.height
+                });
+            }
+        });
+
+        // window-maximize-toggled メッセージ
+        this.messageBus.on('window-maximize-toggled', (data) => {
+            console.log('[BaseFileManager] [MessageBus] window-maximize-toggled受信');
+            if (data.width !== undefined && data.height !== undefined) {
+                this.updateWindowConfig({
+                    width: data.width,
+                    height: data.height
+                });
+            }
+        });
+
+        // get-menu-definition メッセージ
+        this.messageBus.on('get-menu-definition', (data) => {
+            console.log('[BaseFileManager] [MessageBus] get-menu-definition受信');
+            const menuDefinition = this.getMenuDefinition();
+            this.messageBus.send('menu-definition-response', {
+                messageId: data.messageId,
+                menuDefinition: menuDefinition
+            });
+        });
+
+        // menu-action メッセージ
+        this.messageBus.on('menu-action', (data) => {
+            console.log('[BaseFileManager] [MessageBus] menu-action受信:', data.action);
+            this.handleMenuAction(data.action);
+        });
+
+        // custom-dialog-response メッセージ (MessageBusが自動処理)
+        this.messageBus.on('custom-dialog-response', (data) => {
+            console.log('[BaseFileManager] [MessageBus] custom-dialog-response受信:', data.messageId);
+            // sendWithCallback使用時は自動的にコールバックが実行される
+        });
+
+        // input-dialog-response メッセージ (MessageBusが自動処理)
+        this.messageBus.on('input-dialog-response', (data) => {
+            console.log('[BaseFileManager] [MessageBus] input-dialog-response受信:', data.messageId);
+            // sendWithCallback使用時は自動的にコールバックが実行される
+        });
+
+        console.log('[BaseFileManager] MessageBusハンドラ登録完了');
     }
 
     getMenuDefinition() {
@@ -128,12 +165,12 @@ class BaseFileManager {
         ];
     }
 
-    handleMenuAction(action) {
+    async handleMenuAction(action) {
         console.log('[BaseFileManager] handleMenuAction呼び出し:', action);
         switch (action) {
             case 'reload':
                 console.log('[BaseFileManager] リロード実行');
-                this.loadBaseFiles();
+                await this.loadBaseFiles();
                 break;
             case 'close':
                 console.log('[BaseFileManager] ウィンドウを閉じる');
@@ -141,7 +178,7 @@ class BaseFileManager {
                 break;
             case 'change-bg-color':
                 console.log('[BaseFileManager] 背景色変更開始');
-                this.changeBgColor();
+                await this.changeBgColor();
                 break;
             case 'toggle-fullscreen':
                 console.log('[BaseFileManager] 全画面表示切り替え');
@@ -156,33 +193,25 @@ class BaseFileManager {
         document.addEventListener('contextmenu', (e) => {
             e.preventDefault();
 
-            if (window.parent && window.parent !== window) {
-                const rect = window.frameElement.getBoundingClientRect();
+            const rect = window.frameElement.getBoundingClientRect();
 
-                window.parent.postMessage({
-                    type: 'context-menu-request',
-                    x: rect.left + e.clientX,
-                    y: rect.top + e.clientY
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('context-menu-request', {
+                x: rect.left + e.clientX,
+                y: rect.top + e.clientY
+            });
         });
 
         document.addEventListener('click', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'close-context-menu'
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('close-context-menu');
         });
     }
 
     setupWindowActivation() {
         document.addEventListener('mousedown', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'activate-window'
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('activate-window');
         });
     }
 
@@ -198,11 +227,10 @@ class BaseFileManager {
     }
 
     requestCloseWindow() {
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'request-close-window'
-            }, '*');
-        }
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('close-window', {
+            windowId: this.windowId
+        });
     }
 
     /**
@@ -216,14 +244,14 @@ class BaseFileManager {
             // 親ウィンドウにプラグイン一覧を要求
             console.log('[BaseFileManager] request-base-plugins送信中...');
             console.log('[BaseFileManager] window.parent:', window.parent);
-            window.parent.postMessage({
-                type: 'request-base-plugins'
-            }, '*');
+
+            // MessageBus使用
+            this.messageBus.send('request-base-plugins');
             console.log('[BaseFileManager] request-base-plugins送信完了');
 
             // レスポンスを待つ
             console.log('[BaseFileManager] レスポンス待機中...');
-            const response = await this.waitForMessage('base-plugins-response', 5000);
+            const response = await this.messageBus.waitFor('base-plugins-response', 5000);
             console.log('[BaseFileManager] レスポンス受信:', response);
 
             if (response && response.plugins) {
@@ -240,27 +268,6 @@ class BaseFileManager {
         }
     }
 
-    /**
-     * メッセージを待つヘルパー関数
-     */
-    waitForMessage(messageType, timeout = 5000) {
-        return new Promise((resolve, reject) => {
-            const handler = (event) => {
-                if (event.data && event.data.type === messageType) {
-                    window.removeEventListener('message', handler);
-                    clearTimeout(timer);
-                    resolve(event.data);
-                }
-            };
-
-            const timer = setTimeout(() => {
-                window.removeEventListener('message', handler);
-                reject(new Error(`Timeout waiting for ${messageType}`));
-            }, timeout);
-
-            window.addEventListener('message', handler);
-        });
-    }
 
     /**
      * 原紙ファイルを読み込んで表示
@@ -586,15 +593,12 @@ class BaseFileManager {
     openBaseFile(baseFile) {
         console.log('[BaseFileManager] 原紙ファイルを開く:', baseFile.displayName);
 
-        // 親ウィンドウに原紙ファイルを開くよう要求
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'open-base-file',
-                pluginId: baseFile.pluginId,
-                basefile: baseFile.basefile,
-                displayName: baseFile.displayName
-            }, '*');
-        }
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('open-base-file', {
+            pluginId: baseFile.pluginId,
+            basefile: baseFile.basefile,
+            displayName: baseFile.displayName
+        });
     }
 
     /**
@@ -602,12 +606,12 @@ class BaseFileManager {
      * @param {Object} windowConfig - { pos: {x, y}, width, height, maximize }
      */
     updateWindowConfig(windowConfig) {
-        if (window.parent && window.parent !== window && this.realId) {
-            window.parent.postMessage({
-                type: 'update-window-config',
+        if (this.realId) {
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('update-window-config', {
                 fileId: this.realId,
                 windowConfig: windowConfig
-            }, '*');
+            });
 
             console.log('[BaseFileManager] ウィンドウ設定を更新:', windowConfig);
         }
@@ -645,8 +649,6 @@ class BaseFileManager {
     async changeBgColor() {
         console.log('[BaseFileManager] changeBgColor開始 fileData:', this.fileData);
         return new Promise((resolve) => {
-            const messageId = `bg_color_${Date.now()}_${Math.random()}`;
-
             // 現在の背景色を取得
             const currentBgColor = (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor)
                 ? this.fileData.windowConfig.backgroundColor
@@ -663,7 +665,7 @@ class BaseFileManager {
                 </div>
             `;
 
-            this.dialogCallbacks[messageId] = (result) => {
+            const handleResponse = (result) => {
                 console.log('[BaseFileManager] ダイアログコールバック呼び出し:', result);
                 if (result.button === 'ok') {
                     const inputColor = result.input;
@@ -688,12 +690,12 @@ class BaseFileManager {
                         }
 
                         // 実身管理用セグメントのbackgroundColorを更新
-                        if (this.realId && window.parent && window.parent !== window) {
-                            window.parent.postMessage({
-                                type: 'update-background-color',
+                        if (this.realId) {
+                            // MessageBus Phase 2: messageBus.send()を使用
+                            this.messageBus.send('update-background-color', {
                                 fileId: this.realId,
                                 backgroundColor: newBgColor
-                            }, '*');
+                            });
                             console.log('[BaseFileManager] 背景色更新を親ウィンドウに通知:', this.realId, newBgColor);
                         }
 
@@ -716,26 +718,20 @@ class BaseFileManager {
                 resolve(result);
             };
 
-            // 親ウィンドウにカスタムダイアログ表示を要求
-            if (window.parent && window.parent !== window) {
-                console.log('[BaseFileManager] ダイアログ表示要求送信:', messageId);
-                window.parent.postMessage({
-                    type: 'show-custom-dialog',
-                    messageId: messageId,
-                    dialogHtml: dialogHtml,
-                    buttons: [
-                        { label: '取消', value: 'cancel' },
-                        { label: '設定', value: 'ok' }
-                    ],
-                    defaultButton: 1,
-                    inputs: {
-                        text: 'bgColorInput'
-                    }
-                }, '*');
-                console.log('[BaseFileManager] ダイアログ表示要求送信完了');
-            } else {
-                console.error('[BaseFileManager] 親ウィンドウが存在しません');
-            }
+            // MessageBus使用
+            console.log('[BaseFileManager] [MessageBus] ダイアログ表示要求送信');
+            this.messageBus.sendWithCallback('show-custom-dialog', {
+                dialogHtml: dialogHtml,
+                buttons: [
+                    { label: '取消', value: 'cancel' },
+                    { label: '設定', value: 'ok' }
+                ],
+                defaultButton: 1,
+                inputs: {
+                    text: 'bgColorInput'
+                }
+            }, handleResponse);
+            console.log('[BaseFileManager] [MessageBus] ダイアログ表示要求送信完了');
         });
     }
 
@@ -743,25 +739,44 @@ class BaseFileManager {
      * 全画面表示を切り替え
      */
     toggleFullscreen() {
-        // 親ウィンドウにメッセージを送信してウィンドウを最大化/元に戻す
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'toggle-maximize'
-            }, '*');
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('toggle-maximize');
 
-            this.isFullscreen = !this.isFullscreen;
-            console.log('[BaseFileManager] 全画面表示:', this.isFullscreen ? 'ON' : 'OFF');
+        this.isFullscreen = !this.isFullscreen;
+        console.log('[BaseFileManager] 全画面表示:', this.isFullscreen ? 'ON' : 'OFF');
 
-            // 実身管理用セグメントのfullscreenフラグを更新
-            if (this.realId && window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'update-fullscreen-state',
-                    fileId: this.realId,
-                    isFullscreen: this.isFullscreen
-                }, '*');
-                console.log('[BaseFileManager] 全画面表示状態更新を親ウィンドウに通知:', this.realId, this.isFullscreen);
-            }
+        // 実身管理用セグメントのfullscreenフラグを更新
+        if (this.realId) {
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('update-fullscreen-state', {
+                fileId: this.realId,
+                isFullscreen: this.isFullscreen
+            });
+            console.log('[BaseFileManager] 全画面表示状態更新を親ウィンドウに通知:', this.realId, this.isFullscreen);
         }
+    }
+
+    /**
+     * デバッグログ出力（デバッグモード時のみ）
+     */
+    log(...args) {
+        if (this.debug) {
+            console.log('[BaseFileManager]', ...args);
+        }
+    }
+
+    /**
+     * エラーログ出力（常に出力）
+     */
+    error(...args) {
+        console.error('[BaseFileManager]', ...args);
+    }
+
+    /**
+     * 警告ログ出力（常に出力）
+     */
+    warn(...args) {
+        console.warn('[BaseFileManager]', ...args);
     }
 }
 

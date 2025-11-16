@@ -9,14 +9,27 @@ class UnpackFileManager {
         this.rawData = null;
         this.fileName = null; // BPKファイル名を保存
         this.realId = null; // 実身ID
+
+        // MessageBus Phase 2: MessageBusのみを使用
+        this.messageBus = null;
+        if (window.MessageBus) {
+            this.messageBus = new window.MessageBus({
+                debug: false,
+                pluginName: 'UnpackFile'
+            });
+            this.messageBus.start();
+        }
+
         this.init();
     }
 
     init() {
         console.log('[UnpackFile] 初期化開始');
 
-        // 親ウィンドウからのメッセージを受信
-        this.setupMessageHandler();
+        // MessageBus Phase 2: MessageBusのハンドラを設定
+        if (this.messageBus) {
+            this.setupMessageBusHandlers();
+        }
 
         // ウィンドウアクティベーション
         this.setupWindowActivation();
@@ -25,79 +38,95 @@ class UnpackFileManager {
         this.setupContextMenu();
     }
 
-    setupMessageHandler() {
-        window.addEventListener('message', async (event) => {
-            if (event.data && event.data.type === 'init') {
-                console.log('[UnpackFile] init受信', event.data);
-                console.log('[UnpackFile] event.data.fileData:', event.data.fileData);
-                console.log('[UnpackFile] event.data.fileData keys:', event.data.fileData ? Object.keys(event.data.fileData) : 'null');
+    /**
+     * MessageBus Phase 2: MessageBusのハンドラを設定
+     */
+    setupMessageBusHandlers() {
+        // 初期化メッセージ
+        this.messageBus.on('init', async (data) => {
+            console.log('[UnpackFile] init受信', data);
+            console.log('[UnpackFile] data.fileData:', data.fileData);
+            console.log('[UnpackFile] data.fileData keys:', data.fileData ? Object.keys(data.fileData) : 'null');
 
-                // ウィンドウIDを保存
-                this.windowId = event.data.windowId;
-                console.log('[UnpackFile] windowId:', this.windowId);
+            // ウィンドウIDを保存
+            this.windowId = data.windowId;
+            console.log('[UnpackFile] windowId:', this.windowId);
 
-                if (event.data.fileData) {
-                    this.rawData = event.data.fileData.rawData;
-                    this.fileName = event.data.fileData.fileName || event.data.fileData.displayName || 'archive';
+            if (data.fileData) {
+                this.rawData = data.fileData.rawData;
+                this.fileName = data.fileData.fileName || data.fileData.displayName || 'archive';
 
-                    // realIdを保存（拡張子を除去）
-                    let rawId = event.data.fileData.realId || event.data.fileData.fileId;
-                    this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                // realIdを保存（拡張子を除去）
+                let rawId = data.fileData.realId || data.fileData.fileId;
+                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
 
-                    console.log('[UnpackFile] this.rawData設定:', this.rawData ? `存在（長さ: ${this.rawData.length}）` : 'null');
-                    console.log('[UnpackFile] fileName設定:', this.fileName);
-                    console.log('[UnpackFile] realId設定:', this.realId, '(元:', rawId, ')');
+                console.log('[UnpackFile] this.rawData設定:', this.rawData ? `存在（長さ: ${this.rawData.length}）` : 'null');
+                console.log('[UnpackFile] fileName設定:', this.fileName);
+                console.log('[UnpackFile] realId設定:', this.realId, '(元:', rawId, ')');
 
-                    // BPKファイルのヘッダーのみ読み込み（解凍は行わない）
-                    this.loadArchiveHeader(this.rawData, this.fileName);
-                }
-            } else if (event.data && event.data.type === 'window-moved') {
-                // ウィンドウ移動終了時にwindowConfigを更新
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height
-                });
-            } else if (event.data && event.data.type === 'window-resized-end') {
-                // ウィンドウリサイズ終了時にwindowConfigを更新
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height
-                });
-            } else if (event.data && event.data.type === 'window-maximize-toggled') {
-                // 全画面表示切り替え時にwindowConfigを更新
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height,
-                    maximize: event.data.maximize
-                });
-            } else if (event.data && event.data.type === 'get-menu-definition') {
-                // メニュー定義を返す
-                window.parent.postMessage({
-                    type: 'menu-definition-response',
-                    messageId: event.data.messageId,
-                    menuDefinition: [
-                        {
-                            text: '編集',
-                            submenu: [
-                                { text: '再読込', action: 'reload' }
-                            ]
-                        }
-                    ]
-                }, '*');
-            } else if (event.data && event.data.type === 'menu-action') {
-                this.handleMenuAction(event.data.action);
-            } else if (event.data && event.data.type === 'archive-drop-detected') {
-                // virtual-object-listからドロップ検出通知を受信
-                console.log('[UnpackFile] ドロップ検出通知受信');
-                await this.handleArchiveDrop(event.data.dropPosition, event.data.dragData);
-            } else if (event.data && event.data.type === 'root-virtual-object-inserted') {
-                // virtual-object-listからルート実身配置完了通知を受信
-                console.log('[UnpackFile] ルート実身配置完了通知受信');
-                await this.handleRootInsertionComplete();
+                // BPKファイルのヘッダーのみ読み込み（解凍は行わない）
+                this.loadArchiveHeader(this.rawData, this.fileName);
             }
+        });
+
+        // ウィンドウ移動
+        this.messageBus.on('window-moved', (data) => {
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height
+            });
+        });
+
+        // ウィンドウリサイズ
+        this.messageBus.on('window-resized-end', (data) => {
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height
+            });
+        });
+
+        // 全画面表示切り替え
+        this.messageBus.on('window-maximize-toggled', (data) => {
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height,
+                maximize: data.maximize
+            });
+        });
+
+        // メニュー定義要求
+        this.messageBus.on('get-menu-definition', (data) => {
+            this.messageBus.send('menu-definition-response', {
+                messageId: data.messageId,
+                menuDefinition: [
+                    {
+                        text: '編集',
+                        submenu: [
+                            { text: '再読込', action: 'reload' }
+                        ]
+                    }
+                ]
+            });
+        });
+
+        // メニューアクション
+        this.messageBus.on('menu-action', (data) => {
+            this.handleMenuAction(data.action);
+        });
+
+        // アーカイブドロップ検出
+        this.messageBus.on('archive-drop-detected', async (data) => {
+            console.log('[UnpackFile] ドロップ検出通知受信');
+            await this.handleArchiveDrop(data.dropPosition, data.dragData);
+        });
+
+        // ルート実身配置完了
+        this.messageBus.on('root-virtual-object-inserted', async (data) => {
+            console.log('[UnpackFile] ルート実身配置完了通知受信');
+            await this.handleRootInsertionComplete();
         });
     }
 
@@ -115,33 +144,25 @@ class UnpackFileManager {
         document.addEventListener('contextmenu', (e) => {
             e.preventDefault();
 
-            if (window.parent && window.parent !== window) {
-                const rect = window.frameElement.getBoundingClientRect();
+            const rect = window.frameElement.getBoundingClientRect();
 
-                window.parent.postMessage({
-                    type: 'context-menu-request',
-                    x: rect.left + e.clientX,
-                    y: rect.top + e.clientY
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('context-menu-request', {
+                x: rect.left + e.clientX,
+                y: rect.top + e.clientY
+            });
         });
 
         document.addEventListener('click', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'close-context-menu'
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('close-context-menu');
         });
     }
 
     setupWindowActivation() {
         document.addEventListener('mousedown', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'activate-window'
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('activate-window');
         });
     }
 
@@ -381,19 +402,17 @@ class UnpackFileManager {
                 // 画像は最後のチャンクでのみ送信
                 const imagesToSend = isLastChunk ? generatedImages : [];
 
-                if (window.parent && window.parent !== window) {
-                    window.parent.postMessage({
-                        type: 'archive-files-generated',
-                        files: chunk,
-                        images: imagesToSend,
-                        chunkInfo: {
-                            index: i / CHUNK_SIZE,
-                            total: Math.ceil(generatedFiles.length / CHUNK_SIZE),
-                            isLast: isLastChunk
-                        }
-                    }, '*');
-                    console.log(`[UnpackFile] チャンク ${i / CHUNK_SIZE + 1}/${Math.ceil(generatedFiles.length / CHUNK_SIZE)} を送信（${chunk.length}個のファイル、${imagesToSend.length}個の画像）`);
-                }
+                // MessageBus Phase 2: messageBus.send()を使用
+                this.messageBus.send('archive-files-generated', {
+                    files: chunk,
+                    images: imagesToSend,
+                    chunkInfo: {
+                        index: i / CHUNK_SIZE,
+                        total: Math.ceil(generatedFiles.length / CHUNK_SIZE),
+                        isLast: isLastChunk
+                    }
+                });
+                console.log(`[UnpackFile] チャンク ${i / CHUNK_SIZE + 1}/${Math.ceil(generatedFiles.length / CHUNK_SIZE)} を送信（${chunk.length}個のファイル、${imagesToSend.length}個の画像）`);
 
                 // 次のチャンクを送る前に少し待機（処理の負荷を軽減）
                 if (!isLastChunk) {
@@ -419,13 +438,11 @@ class UnpackFileManager {
         this.pendingDropPosition = dropPosition;
         this.pendingDragData = dragData;
 
+        // MessageBus Phase 2: messageBus.send()を使用
         // 元のvirtual-object-listウィンドウに「このドラッグはunpack-fileで処理された」ことを通知
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'archive-drop-handled',
-                sourceWindowId: dragData.sourceWindowId
-            }, '*');
-        }
+        this.messageBus.send('archive-drop-handled', {
+            sourceWindowId: dragData.sourceWindowId
+        });
 
         // 確認ダイアログのメッセージを構築
         const fileName = dragData.file.name || 'アーカイブ';
@@ -467,31 +484,23 @@ class UnpackFileManager {
     }
 
     /**
-     * メッセージダイアログを表示（親ウィンドウのshowMessageDialogを利用）
+     * MessageBus Phase 2: メッセージダイアログを表示
+     * MessageBus.sendWithCallback()を使用
      */
     async showMessageDialog(message, buttons, defaultButton = 0) {
         return new Promise((resolve) => {
-            const messageId = `msg_${Date.now()}_${Math.random()}`;
-
-            const handler = (event) => {
-                if (event.data && event.data.type === 'message-dialog-response' && event.data.messageId === messageId) {
-                    window.removeEventListener('message', handler);
-                    resolve(event.data.result);
+            this.messageBus.sendWithCallback('show-message-dialog', {
+                message: message,
+                buttons: buttons,
+                defaultButton: defaultButton
+            }, (result) => {
+                if (result.error) {
+                    console.warn('[UnpackFile] Message dialog error:', result.error);
+                    resolve(null);
+                    return;
                 }
-            };
-
-            window.addEventListener('message', handler);
-
-            // 親ウィンドウにメッセージダイアログ表示を要求
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'show-message-dialog',
-                    messageId: messageId,
-                    message: message,
-                    buttons: buttons,
-                    defaultButton: defaultButton
-                }, '*');
-            }
+                resolve(result.result);
+            });
         });
     }
 
@@ -521,21 +530,19 @@ class UnpackFileManager {
             }
         };
 
+        // MessageBus Phase 2: messageBus.send()を使用
         // virtual-object-listにルート実身配置を要求
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'insert-root-virtual-object',
-                rootFileData: {
-                    fileId: rootFile.fileId,
-                    name: rootFile.name,
-                    applist: applist  // applist情報を追加
-                },
-                x: this.pendingDropPosition.x,
-                y: this.pendingDropPosition.y,
-                targetWindowId: this.pendingDragData.sourceWindowId,  // ドロップ元のvirtual-object-listウィンドウID
-                sourceWindowId: this.windowId  // 送信元（unpack-file）のウィンドウID
-            }, '*');
-        }
+        this.messageBus.send('insert-root-virtual-object', {
+            rootFileData: {
+                fileId: rootFile.fileId,
+                name: rootFile.name,
+                applist: applist  // applist情報を追加
+            },
+            x: this.pendingDropPosition.x,
+            y: this.pendingDropPosition.y,
+            targetWindowId: this.pendingDragData.sourceWindowId,  // ドロップ元のvirtual-object-listウィンドウID
+            sourceWindowId: this.windowId  // 送信元（unpack-file）のウィンドウID
+        });
     }
 
     /**
@@ -691,12 +698,12 @@ class UnpackFileManager {
      * @param {Object} windowConfig - { pos: {x, y}, width, height, maximize }
      */
     updateWindowConfig(windowConfig) {
-        if (window.parent && window.parent !== window && this.realId) {
-            window.parent.postMessage({
-                type: 'update-window-config',
+        if (this.realId) {
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('update-window-config', {
                 fileId: this.realId,
                 windowConfig: windowConfig
-            }, '*');
+            });
 
             console.log('[UnpackFile] ウィンドウ設定を更新:', windowConfig);
         }

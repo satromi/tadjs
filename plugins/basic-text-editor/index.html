@@ -16,6 +16,8 @@
         </div>
     </div>
 
+    <!-- グローバル設定 -->
+    <script src="../../js/config.js"></script>
     <script src="../../encoding.js?v=20251024"></script>
     <script src="../../tad.js?v=20251024"></script>
     <!-- VirtualObjectRendererをグローバル変数として読み込み -->
@@ -25,8 +27,11 @@
     </script>
     <!-- 共通ユーティリティをグローバル変数として読み込み -->
     <script type="module">
-        import { convertPtToPx } from '../../js/util.js';
+        import { convertPtToPx, rgbToHex, hexToRgb, invertColor } from '../../js/util.js';
         window.convertPtToPx = convertPtToPx;
+        window.rgbToHex = rgbToHex;
+        window.hexToRgb = hexToRgb;
+        window.invertColor = invertColor;
     </script>
     <!-- パフォーマンス最適化ユーティリティをグローバル変数として読み込み -->
     <script type="module">
@@ -35,6 +40,11 @@
         window.throttle = throttle;
         window.throttleRAF = throttleRAF;
     </script>
-    <script defer src="editor.js?v=20251024"></script>
+    <!-- メッセージバスをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <script defer src="editor.js?v=202511130203"></script>
 </body>
 </html>

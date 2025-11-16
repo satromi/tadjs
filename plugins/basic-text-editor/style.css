@@ -112,6 +112,9 @@ body {
     min-height: 100%;
     /* カーソル設定（ブラウザの制限により部分的な対応） */
     caret-color: #000000;
+    /* タブサイズを4文字分に設定 */
+    tab-size: 4;
+    -moz-tab-size: 4;
 }
 
 .editor:focus {

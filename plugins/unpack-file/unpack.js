@@ -85,7 +85,7 @@ let colorPattern = []; // 配列として初期化
 let groupList = [];
 
 // フォント設定
-const defaultFontSize = 9.6; // デフォルトフォントサイズ
+const defaultFontSize = 14; // デフォルトフォントサイズ
 let textFontSize = defaultFontSize;
 let textFontSet = textFontSize + 'px serif';
 

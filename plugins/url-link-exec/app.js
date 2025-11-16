@@ -15,31 +15,46 @@ class UrlLinkExec {
         this.urls = [];
         this.currentIndex = 0;
 
-        // メッセージリスナーを設定
-        this.setupMessageListener();
+        // MessageBus Phase 2: MessageBusのみを使用
+        this.messageBus = null;
+        if (window.MessageBus) {
+            this.messageBus = new window.MessageBus({
+                debug: false,
+                pluginName: 'UrlLinkExec'
+            });
+            this.messageBus.start();
+            this.setupMessageBusHandlers();
+        }
 
         console.log('[UrlLinkExec] 初期化完了');
     }
 
-    setupMessageListener() {
-        window.addEventListener('message', async (event) => {
-            if (!event.data || !event.data.type) {
-                return;
-            }
+    /**
+     * MessageBus Phase 2: MessageBusのハンドラを設定
+     */
+    setupMessageBusHandlers() {
+        // 初期化メッセージ
+        this.messageBus.on('init', async (data) => {
+            console.log('[UrlLinkExec] init受信', data);
+            await this.handleInit(data);
+        });
 
-            console.log('[UrlLinkExec] メッセージ受信:', event.data.type, event.data);
+        // load-dataメッセージ
+        this.messageBus.on('load-data', async (data) => {
+            console.log('[UrlLinkExec] load-data受信', data);
+            await this.handleLoadData(data);
+        });
 
-            if (event.data.type === 'init') {
-                await this.handleInit(event.data);
-            } else if (event.data.type === 'load-data') {
-                await this.handleLoadData(event.data);
-            } else if (event.data.type === 'xtad-text-loaded') {
-                // xtadファイルのテキストを受信
-                await this.handleXtadTextLoaded(event.data);
-            } else if (event.data.type === 'url-opened') {
-                // URLが開かれた通知を受け取る
-                await this.handleUrlOpened(event.data);
-            }
+        // xtadテキストが読み込まれた
+        this.messageBus.on('xtad-text-loaded', async (data) => {
+            console.log('[UrlLinkExec] xtad-text-loaded受信', data);
+            await this.handleXtadTextLoaded(data);
+        });
+
+        // URLが開かれた
+        this.messageBus.on('url-opened', async (data) => {
+            console.log('[UrlLinkExec] url-opened受信', data);
+            await this.handleUrlOpened(data);
         });
     }
 
@@ -79,17 +94,11 @@ class UrlLinkExec {
 
         console.log('[UrlLinkExec] xtadテキストを読み込みます:', this.realId);
 
-        // 親ウィンドウにxtadテキストを読み込むリクエストを送信
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'read-xtad-text',
-                realId: this.realId,
-                windowId: this.windowId
-            }, '*');
-        } else {
-            console.error('[UrlLinkExec] 親ウィンドウが見つかりません');
-            this.closeWindow();
-        }
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('read-xtad-text', {
+            realId: this.realId,
+            windowId: this.windowId
+        });
     }
 
     async handleXtadTextLoaded(data) {
@@ -143,17 +152,11 @@ class UrlLinkExec {
         const url = this.urls[this.currentIndex];
         console.log('[UrlLinkExec] URLを開きます:', url, `(${this.currentIndex + 1}/${this.urls.length})`);
 
-        // 親ウィンドウにURLを開くリクエストを送信
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'open-url-external',
-                url: url,
-                windowId: this.windowId
-            }, '*');
-        } else {
-            console.error('[UrlLinkExec] 親ウィンドウが見つかりません');
-            this.closeWindow();
-        }
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('open-url-external', {
+            url: url,
+            windowId: this.windowId
+        });
     }
 
     async handleUrlOpened(data) {
@@ -167,8 +170,8 @@ class UrlLinkExec {
         this.currentIndex++;
 
         // 少し待ってから次のURLを開く（ブラウザの起動が重ならないように）
-        setTimeout(() => {
-            this.openNextUrl();
+        setTimeout(async () => {
+            await this.openNextUrl();
         }, 500);
     }
 
@@ -176,13 +179,10 @@ class UrlLinkExec {
         console.log('[UrlLinkExec] ウィンドウを閉じます');
 
         if (this.windowId) {
-            // ウィンドウがある場合は閉じる
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'close-window',
-                    windowId: this.windowId
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('close-window', {
+                windowId: this.windowId
+            });
         } else {
             // openable: falseの場合は、iframeを削除
             console.log('[UrlLinkExec] 非表示iframeを削除します');

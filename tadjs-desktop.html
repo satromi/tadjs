@@ -52,6 +52,11 @@
     <script src="lh5.js"></script>
     <script src="tad.js?v=20251024"></script>
     <script src="electron/plugin-manager.js"></script>
+    <!-- MessageBus Phase 2: 親モード用にMessageBusをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from './js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
     <script src="tadjs-desktop.js"></script>
     <script>
         // プラグインマネージャーとTADjsDesktopを順番に初期化

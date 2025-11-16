@@ -12,6 +12,20 @@ class TADjsViewPlugin {
         this.realId = null; // 実身ID
         this.linkRecordList = null; // BPKのlinkRecordList（tad.jsから取得）
         this.tadRecordDataArray = null; // BPKのtadRecordDataArray（tad.jsから取得）
+        this.debug = window.TADjsConfig?.debug || false; // デバッグモード（config.jsで管理）
+
+        // MessageBusの初期化（即座に開始）
+        this.messageBus = null;
+        if (window.MessageBus) {
+            this.messageBus = new window.MessageBus({
+                debug: this.debug,
+                pluginName: 'TADjsView'
+            });
+            this.messageBus.start();
+            console.log('[TADjsView] MessageBus initialized');
+        } else {
+            console.warn('[TADjsView] MessageBus not available');
+        }
 
         // 初期化
         this.init();
@@ -34,8 +48,10 @@ class TADjsViewPlugin {
         this.canvas.width = 1200;
         this.canvas.height = 1000;
 
-        // 親ウィンドウからのメッセージを受信
-        this.setupMessageHandler();
+        // MessageBusのハンドラを登録
+        if (this.messageBus) {
+            this.setupMessageBusHandlers();
+        }
 
         // ウィンドウアクティベーション
         this.setupWindowActivation();
@@ -43,102 +59,108 @@ class TADjsViewPlugin {
         // Canvasに右クリックメニューイベントを設定
         this.setupContextMenu();
 
-        // 親ウィンドウに準備完了を通知
-        window.parent.postMessage({
-            type: 'plugin-ready',
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('plugin-ready', {
             pluginId: 'tadjs-view'
-        }, '*');
+        });
 
         console.log('[TADjsView] Plugin initialized');
     }
 
     /**
-     * メッセージハンドラーを設定
+     * MessageBusのハンドラを登録
+     * Phase 2: MessageBusのみで動作
      */
-    setupMessageHandler() {
-        window.addEventListener('message', (event) => {
-            console.log('[TADjsView] Received message:', event.data?.type);
+    setupMessageBusHandlers() {
+        // init メッセージ
+        this.messageBus.on('init', (data) => {
+            console.log('[TADjsView] [MessageBus] init受信:', data);
+            this.fileData = data.fileData;
 
-            if (event.data && event.data.type === 'init') {
-                console.log('[TADjsView] Plugin initialized with data:', event.data);
-                this.fileData = event.data.fileData;
+            // realIdを保存（拡張子を除去）
+            if (data.fileData) {
+                let rawId = data.fileData.realId || data.fileData.fileId;
+                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '').replace(/\.(bpk|BPK)$/, '') : null;
+                console.log('[TADjsView] [MessageBus] realId設定:', this.realId);
 
-                // realIdを保存（拡張子を除去）
-                if (event.data.fileData) {
-                    let rawId = event.data.fileData.realId || event.data.fileData.fileId;
-                    this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '').replace(/\.(bpk|BPK)$/, '') : null;
-                    console.log('[TADjsView] realId設定:', this.realId, '(元:', rawId, ')');
-
-                    // createTADWindowと同様にoriginalLinkIdを保存
-                    if (event.data.fileData.originalLinkId !== undefined) {
-                        window.originalLinkId = event.data.fileData.originalLinkId;
-                        console.log('[TADjsView] originalLinkId設定:', window.originalLinkId);
-                    }
-
-                    // 親ウィンドウから受け取ったlinkRecordListを保存
-                    if (event.data.fileData.linkRecordList) {
-                        this.linkRecordList = event.data.fileData.linkRecordList;
-                        window.linkRecordList = event.data.fileData.linkRecordList;
-                        console.log('[TADjsView] linkRecordList設定:', this.linkRecordList.length, 'files');
-                        console.log('[TADjsView] Received linkRecordList[0]:', this.linkRecordList[0]);
-                        console.log('[TADjsView] Received linkRecordList[4]:', this.linkRecordList[4]);
-                    } else {
-                        console.warn('[TADjsView] No linkRecordList in fileData');
-                    }
-
-                    // tadRecordDataArrayも受け取る
-                    if (event.data.fileData.tadRecordDataArray) {
-                        this.tadRecordDataArray = event.data.fileData.tadRecordDataArray;
-                        console.log('[TADjsView] tadRecordDataArray設定:', this.tadRecordDataArray.length, 'records');
-                    }
+                // createTADWindowと同様にoriginalLinkIdを保存
+                if (data.fileData.originalLinkId !== undefined) {
+                    window.originalLinkId = data.fileData.originalLinkId;
+                    console.log('[TADjsView] [MessageBus] originalLinkId設定:', window.originalLinkId);
                 }
 
-                // fileData.fileまたはfileData.fileNameからファイル情報を取得
-                const fileName = this.fileData?.fileName || this.fileData?.file?.name;
-                const rawData = this.fileData?.rawData;
-                console.log('[TADjsView] File name:', fileName);
-                console.log('[TADjsView] Raw data:', rawData ? `${rawData.length} bytes` : 'not found');
-
-                if (fileName && rawData) {
-                    // プラグイン内でTAD描画を実行
-                    const uint8Array = rawData instanceof Uint8Array ? rawData : new Uint8Array(rawData);
-                    this.renderTAD(fileName, uint8Array);
+                // 親ウィンドウから受け取ったlinkRecordListを保存
+                if (data.fileData.linkRecordList) {
+                    this.linkRecordList = data.fileData.linkRecordList;
+                    window.linkRecordList = data.fileData.linkRecordList;
+                    console.log('[TADjsView] [MessageBus] linkRecordList設定:', this.linkRecordList.length, 'files');
                 } else {
-                    console.error('[TADjsView] No file information or raw data found in fileData');
+                    console.warn('[TADjsView] [MessageBus] No linkRecordList in fileData');
                 }
-            } else if (event.data && event.data.type === 'window-moved') {
-                // ウィンドウ移動終了時にwindowConfigを更新
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height
-                });
-            } else if (event.data && event.data.type === 'window-resized-end') {
-                // ウィンドウリサイズ終了時にwindowConfigを更新
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height
-                });
-            } else if (event.data && event.data.type === 'window-maximize-toggled') {
-                // 全画面表示切り替え時にwindowConfigを更新
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height,
-                    maximize: event.data.maximize
-                });
-            } else if (event.data && event.data.type === 'get-menu-definition') {
-                console.log('[TADjsView] Menu definition request received, messageId:', event.data.messageId);
-                // 右クリックメニュー定義要求に応答（表示専用プラグインなので空メニュー）
-                window.parent.postMessage({
-                    type: 'menu-definition-response',
-                    messageId: event.data.messageId,
-                    menuDefinition: []
-                }, '*');
-                console.log('[TADjsView] Menu definition response sent');
+
+                // tadRecordDataArrayも受け取る
+                if (data.fileData.tadRecordDataArray) {
+                    this.tadRecordDataArray = data.fileData.tadRecordDataArray;
+                    console.log('[TADjsView] [MessageBus] tadRecordDataArray設定:', this.tadRecordDataArray.length, 'records');
+                }
+            }
+
+            // fileData.fileまたはfileData.fileNameからファイル情報を取得
+            const fileName = this.fileData?.fileName || this.fileData?.file?.name;
+            const rawData = this.fileData?.rawData;
+            console.log('[TADjsView] [MessageBus] File name:', fileName);
+
+            if (fileName && rawData) {
+                // プラグイン内でTAD描画を実行
+                const uint8Array = rawData instanceof Uint8Array ? rawData : new Uint8Array(rawData);
+                this.renderTAD(fileName, uint8Array);
+            } else {
+                console.error('[TADjsView] [MessageBus] No file information or raw data found');
             }
         });
+
+        // window-moved メッセージ
+        this.messageBus.on('window-moved', (data) => {
+            console.log('[TADjsView] [MessageBus] window-moved受信');
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height
+            });
+        });
+
+        // window-resized-end メッセージ
+        this.messageBus.on('window-resized-end', (data) => {
+            console.log('[TADjsView] [MessageBus] window-resized-end受信');
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height
+            });
+        });
+
+        // window-maximize-toggled メッセージ
+        this.messageBus.on('window-maximize-toggled', (data) => {
+            console.log('[TADjsView] [MessageBus] window-maximize-toggled受信');
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height,
+                maximize: data.maximize
+            });
+        });
+
+        // get-menu-definition メッセージ
+        this.messageBus.on('get-menu-definition', (data) => {
+            console.log('[TADjsView] [MessageBus] get-menu-definition受信');
+            // 右クリックメニュー定義要求に応答（表示専用プラグインなので空メニュー）
+            this.messageBus.send('menu-definition-response', {
+                messageId: data.messageId,
+                menuDefinition: []
+            });
+        });
+
+        console.log('[TADjsView] MessageBusハンドラ登録完了');
     }
 
     /**
@@ -146,11 +168,8 @@ class TADjsViewPlugin {
      */
     setupWindowActivation() {
         document.addEventListener('mousedown', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'activate-window'
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('activate-window');
         });
     }
 
@@ -324,11 +343,11 @@ class TADjsViewPlugin {
 
             console.log('[TADjsView] Sending context menu request to parent at:', parentX, parentY);
 
-            window.parent.postMessage({
-                type: 'context-menu-request',
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('context-menu-request', {
                 x: parentX,
                 y: parentY
-            }, '*');
+            });
         };
 
         // 右クリックメニューのイベントリスナーを追加
@@ -340,12 +359,12 @@ class TADjsViewPlugin {
      * @param {Object} windowConfig - ウィンドウ設定
      */
     updateWindowConfig(windowConfig) {
-        if (window.parent && window.parent !== window && this.realId) {
-            window.parent.postMessage({
-                type: 'update-window-config',
+        if (this.realId) {
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('update-window-config', {
                 fileId: this.realId,
                 windowConfig: windowConfig
-            }, '*');
+            });
 
             console.log('[TADjsView] ウィンドウ設定を更新:', windowConfig);
         }
@@ -401,11 +420,11 @@ class TADjsViewPlugin {
         if (linkData) {
             // 親ウィンドウに通知（linkRecordListも一緒に送る）
             console.log('[TADjsView] Sending linkRecordList:', this.linkRecordList ? this.linkRecordList.length : 'null', 'files');
-            window.parent.postMessage({
-                type: 'open-tad-link',
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('open-tad-link', {
                 linkData: linkData,
                 linkRecordList: this.linkRecordList  // BPK全体のlinkRecordListを渡す
-            }, '*');
+            });
 
             console.log('[TADjsView] Link click notified to parent:', linkData.title);
         }
@@ -508,12 +527,12 @@ class TADjsViewPlugin {
                             };
 
                             console.log('[TADjsView] Opening link with raw data:', linkData.title);
-                            window.parent.postMessage({
-                                type: 'open-tad-link',
+                            // MessageBus Phase 2: messageBus.send()を使用
+                            this.messageBus.send('open-tad-link', {
                                 linkData: linkData,
                                 linkRecordList: this.linkRecordList,
                                 tadRecordDataArray: this.tadRecordDataArray
-                            }, '*');
+                            });
                         } else if (link.link_id !== undefined) {
                             // BPK内の別ファイルへのリンクの場合
                             const linkedIndex = parseInt(link.link_id) - 1;  // link_idは1始まり、配列は0始まり
@@ -531,12 +550,12 @@ class TADjsViewPlugin {
                                 };
 
                                 console.log('[TADjsView] Opening linked entry:', linkData.title);
-                                window.parent.postMessage({
-                                    type: 'open-tad-link',
+                                // MessageBus Phase 2: messageBus.send()を使用
+                                this.messageBus.send('open-tad-link', {
                                     linkData: linkData,
                                     linkRecordList: this.linkRecordList,
                                     tadRecordDataArray: this.tadRecordDataArray
-                                }, '*');
+                                });
                             } else {
                                 console.warn('[TADjsView] Link target not found:', linkedIndex);
                             }
@@ -550,6 +569,29 @@ class TADjsViewPlugin {
         // イベントリスナーを追加
         this.canvas.addEventListener('dblclick', this.canvas._virtualObjectHandler);
         console.log('[TADjsView] Virtual object events setup complete');
+    }
+
+    /**
+     * デバッグログ出力（デバッグモード時のみ）
+     */
+    log(...args) {
+        if (this.debug) {
+            console.log('[TADjsView]', ...args);
+        }
+    }
+
+    /**
+     * エラーログ出力（常に出力）
+     */
+    error(...args) {
+        console.error('[TADjsView]', ...args);
+    }
+
+    /**
+     * 警告ログ出力（常に出力）
+     */
+    warn(...args) {
+        console.warn('[TADjsView]', ...args);
     }
 }
 

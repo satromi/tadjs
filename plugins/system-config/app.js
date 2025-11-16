@@ -4,14 +4,25 @@
 class SystemConfigApp {
     constructor() {
         this.selectedBackground = null;
-        this.dialogMessageId = 0; // ダイアログメッセージID
-        this.dialogCallbacks = {}; // ダイアログコールバック管理
         this.realId = null; // 実身ID
+        this.messageBus = null;
+        if (window.MessageBus) {
+            this.messageBus = new window.MessageBus({
+                debug: false,
+                pluginName: 'SystemConfig'
+            });
+            this.messageBus.start();
+        }
         this.init();
     }
 
     init() {
         console.log('[SystemConfig] 初期化開始');
+
+        // MessageBusのハンドラを登録
+        if (this.messageBus) {
+            this.setupMessageBusHandlers();
+        }
 
         // タブ切り替えイベント
         this.setupTabs();
@@ -31,9 +42,6 @@ class SystemConfigApp {
         // 現在の選択を読み込み
         this.loadCurrentSelection();
 
-        // 親ウィンドウからのメッセージを受信
-        this.setupMessageHandler();
-
         // 右クリックメニュー
         this.setupContextMenu();
 
@@ -41,50 +49,51 @@ class SystemConfigApp {
         this.setupWindowActivation();
     }
 
-    setupMessageHandler() {
-        window.addEventListener('message', (event) => {
-            if (event.data && event.data.type === 'init') {
-                // fileIdを保存（拡張子を除去）
-                if (event.data.fileData) {
-                    let rawId = event.data.fileData.realId || event.data.fileData.fileId;
-                    this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
-                    console.log('[SystemConfig] fileId設定:', this.realId, '(元:', rawId, ')');
-                }
-            } else if (event.data && event.data.type === 'get-menu-definition') {
-                // 編集メニューを返す
-                window.parent.postMessage({
-                    type: 'menu-definition-response',
-                    messageId: event.data.messageId,
-                    menuDefinition: [
-                        {
-                            text: '編集',
-                            submenu: [
-                                { text: '取消', action: 'undo' },
-                                { text: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
-                                { text: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
-                                { text: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
-                                { text: 'クリップボードから移動', action: 'redo', shortcut: 'Ctrl+Z' }
-                            ]
-                        }
-                    ]
-                }, '*');
-            } else if (event.data && event.data.type === 'message-dialog-response') {
-                // メッセージダイアログレスポンスを処理
-                if (this.dialogCallbacks && this.dialogCallbacks[event.data.messageId]) {
-                    this.dialogCallbacks[event.data.messageId](event.data.result);
-                    delete this.dialogCallbacks[event.data.messageId];
-                }
-            } else if (event.data && event.data.type === 'menu-action') {
-                // メニューアクションを処理
-                this.handleMenuAction(event.data.action);
-            } else if (event.data && event.data.type === 'window-moved') {
-                // ウィンドウ移動終了時
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height
-                });
+    setupMessageBusHandlers() {
+        // init メッセージ
+        this.messageBus.on('init', (data) => {
+            // fileIdを保存（拡張子を除去）
+            if (data.fileData) {
+                let rawId = data.fileData.realId || data.fileData.fileId;
+                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                console.log('[SystemConfig] fileId設定:', this.realId, '(元:', rawId, ')');
             }
+        });
+
+        // get-menu-definition メッセージ
+        this.messageBus.on('get-menu-definition', async (data) => {
+            // 編集メニューを返す
+            return [
+                {
+                    text: '編集',
+                    submenu: [
+                        { text: '取消', action: 'undo' },
+                        { text: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
+                        { text: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
+                        { text: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
+                        { text: 'クリップボードから移動', action: 'redo', shortcut: 'Ctrl+Z' }
+                    ]
+                }
+            ];
+        });
+
+        // menu-action メッセージ
+        this.messageBus.on('menu-action', (data) => {
+            this.handleMenuAction(data.action);
+        });
+
+        // window-moved メッセージ
+        this.messageBus.on('window-moved', (data) => {
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height
+            });
+        });
+
+        // plugin-list-response メッセージ
+        this.messageBus.on('plugin-list-response', (data) => {
+            this.renderVersionList(data.plugins);
         });
     }
 
@@ -127,34 +136,29 @@ class SystemConfigApp {
             e.preventDefault();
 
             // 親ウィンドウに座標を送信
-            if (window.parent && window.parent !== window) {
+            if (this.messageBus) {
                 // iframeの位置を取得して座標を変換
                 const rect = window.frameElement.getBoundingClientRect();
 
-                window.parent.postMessage({
-                    type: 'context-menu-request',
+                this.messageBus.send('context-menu-request', {
                     x: rect.left + e.clientX,
                     y: rect.top + e.clientY
-                }, '*');
+                });
             }
         });
 
         // 左クリックでメニューを閉じる
         document.addEventListener('click', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'close-context-menu'
-                }, '*');
+            if (this.messageBus) {
+                this.messageBus.send('close-context-menu', {});
             }
         });
     }
 
     setupWindowActivation() {
         document.addEventListener('mousedown', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'activate-window'
-                }, '*');
+            if (this.messageBus) {
+                this.messageBus.send('activate-window', {});
             }
         });
     }
@@ -299,14 +303,14 @@ class SystemConfigApp {
     }
 
     async deleteBackground(id) {
-        const result = await this.showMessageDialog(
-            'この背景画像を削除しますか？',
-            [
+        const result = await this.messageBus.sendWithCallback('show-message-dialog', {
+            message: 'この背景画像を削除しますか？',
+            buttons: [
                 { label: '取り消し', value: 'cancel' },
                 { label: '削　除', value: 'delete' }
             ],
-            0  // デフォルトは取り消し
-        );
+            defaultButton: 0
+        });
 
         if (result !== 'delete') {
             return;
@@ -350,32 +354,6 @@ class SystemConfigApp {
         this.selectBackground(currentBg);
     }
 
-    /**
-     * メッセージダイアログを表示
-     * @param {string} message - 表示するメッセージ
-     * @param {Array} buttons - ボタン定義配列
-     * @param {number} defaultButton - デフォルトボタンのインデックス
-     * @returns {Promise<any>} - 選択されたボタンの値
-     */
-    showMessageDialog(message, buttons, defaultButton = 0) {
-        return new Promise((resolve) => {
-            const messageId = ++this.dialogMessageId;
-
-            // コールバックを登録
-            this.dialogCallbacks[messageId] = (result) => {
-                resolve(result);
-            };
-
-            // 親ウィンドウにダイアログ表示を要求
-            window.parent.postMessage({
-                type: 'show-message-dialog',
-                messageId: messageId,
-                message: message,
-                buttons: buttons,
-                defaultButton: defaultButton
-            }, '*');
-        });
-    }
 
     setupButtons() {
         const applyButton = document.getElementById('apply-button');
@@ -396,11 +374,10 @@ class SystemConfigApp {
             localStorage.setItem('selectedBackground', this.selectedBackground);
 
             // 親ウィンドウに背景適用を通知
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'apply-background',
+            if (this.messageBus) {
+                this.messageBus.send('apply-background', {
                     backgroundId: this.selectedBackground
-                }, '*');
+                });
             }
 
             console.log('[SystemConfig] 設定を適用しました');
@@ -417,10 +394,8 @@ class SystemConfigApp {
 
     close() {
         // 親ウィンドウにウィンドウを閉じるよう通知
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'close-window'
-            }, '*');
+        if (this.messageBus) {
+            this.messageBus.send('close-window', {});
         }
     }
 
@@ -428,18 +403,7 @@ class SystemConfigApp {
         console.log('[SystemConfig] バージョンリスト読み込み');
 
         // 親ウィンドウからプラグイン情報を取得
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'get-plugin-list'
-            }, '*');
-
-            // レスポンスを待つ
-            window.addEventListener('message', (event) => {
-                if (event.data && event.data.type === 'plugin-list-response') {
-                    this.renderVersionList(event.data.plugins);
-                }
-            });
-        }
+        this.messageBus.send('get-plugin-list', {});
     }
 
     renderVersionList(plugins) {
@@ -472,12 +436,11 @@ class SystemConfigApp {
      * @param {Object} windowConfig - ウィンドウ設定
      */
     updateWindowConfig(windowConfig) {
-        if (window.parent && window.parent !== window && this.realId) {
-            window.parent.postMessage({
-                type: 'update-window-config',
+        if (this.messageBus && this.realId) {
+            this.messageBus.send('update-window-config', {
                 fileId: this.realId,
                 windowConfig: windowConfig
-            }, '*');
+            });
 
             console.log('[SystemConfig] ウィンドウ設定を更新:', windowConfig);
         }

@@ -13,6 +13,9 @@
         </div>
     </div>
 
+    <!-- グローバル設定 -->
+    <script src="../../js/config.js"></script>
+
     <!-- VirtualObjectRendererをグローバル変数として読み込み -->
     <script type="module">
         import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
@@ -22,6 +25,11 @@
     <script type="module">
         import { convertPtToPx } from '../../js/util.js';
         window.convertPtToPx = convertPtToPx;
+    </script>
+    <!-- メッセージバスをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
     </script>
     <script defer src="app.js"></script>
 </body>

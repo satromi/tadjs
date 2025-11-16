@@ -4,14 +4,25 @@
 class UserConfigApp {
     constructor() {
         this.timeUpdateInterval = null;
-        this.dialogMessageId = 0; // ダイアログメッセージID
-        this.dialogCallbacks = {}; // ダイアログコールバック管理
         this.realId = null; // 実身ID
+        this.messageBus = null;
+        if (window.MessageBus) {
+            this.messageBus = new window.MessageBus({
+                debug: false,
+                pluginName: 'UserConfig'
+            });
+            this.messageBus.start();
+        }
         this.init();
     }
 
     init() {
         console.log('[UserConfig] 初期化開始');
+
+        // MessageBusのハンドラを登録
+        if (this.messageBus) {
+            this.setupMessageBusHandlers();
+        }
 
         // タブ切り替えイベント
         this.setupTabs();
@@ -21,9 +32,6 @@ class UserConfigApp {
 
         // 時刻更新
         this.startTimeUpdater();
-
-        // 親ウィンドウからのメッセージを受信
-        this.setupMessageHandler();
 
         // 右クリックメニュー
         this.setupContextMenu();
@@ -35,50 +43,46 @@ class UserConfigApp {
         this.loadConfig();
     }
 
-    setupMessageHandler() {
-        window.addEventListener('message', (event) => {
-            if (event.data && event.data.type === 'init') {
-                // fileIdを保存（拡張子を除去）
-                if (event.data.fileData) {
-                    let rawId = event.data.fileData.realId || event.data.fileData.fileId;
-                    this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
-                    console.log('[UserConfig] fileId設定:', this.realId, '(元:', rawId, ')');
-                }
-            } else if (event.data && event.data.type === 'get-menu-definition') {
-                // 編集メニューを返す
-                window.parent.postMessage({
-                    type: 'menu-definition-response',
-                    messageId: event.data.messageId,
-                    menuDefinition: [
-                        {
-                            text: '編集',
-                            submenu: [
-                                { text: '取消', action: 'undo' },
-                                { text: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
-                                { text: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
-                                { text: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
-                                { text: 'クリップボードから移動', action: 'redo', shortcut: 'Ctrl+Z' }
-                            ]
-                        }
-                    ]
-                }, '*');
-            } else if (event.data && event.data.type === 'message-dialog-response') {
-                // メッセージダイアログレスポンスを処理
-                if (this.dialogCallbacks && this.dialogCallbacks[event.data.messageId]) {
-                    this.dialogCallbacks[event.data.messageId](event.data.result);
-                    delete this.dialogCallbacks[event.data.messageId];
-                }
-            } else if (event.data && event.data.type === 'menu-action') {
-                // メニューアクションを処理
-                this.handleMenuAction(event.data.action);
-            } else if (event.data && event.data.type === 'window-moved') {
-                // ウィンドウ移動終了時
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height
-                });
+    setupMessageBusHandlers() {
+        // init メッセージ
+        this.messageBus.on('init', (data) => {
+            // fileIdを保存（拡張子を除去）
+            if (data.fileData) {
+                let rawId = data.fileData.realId || data.fileData.fileId;
+                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                console.log('[UserConfig] fileId設定:', this.realId, '(元:', rawId, ')');
             }
+        });
+
+        // get-menu-definition メッセージ
+        this.messageBus.on('get-menu-definition', async (data) => {
+            // 編集メニューを返す
+            return [
+                {
+                    text: '編集',
+                    submenu: [
+                        { text: '取消', action: 'undo' },
+                        { text: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
+                        { text: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
+                        { text: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
+                        { text: 'クリップボードから移動', action: 'redo', shortcut: 'Ctrl+Z' }
+                    ]
+                }
+            ];
+        });
+
+        // menu-action メッセージ
+        this.messageBus.on('menu-action', (data) => {
+            this.handleMenuAction(data.action);
+        });
+
+        // window-moved メッセージ
+        this.messageBus.on('window-moved', (data) => {
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height
+            });
         });
     }
 
@@ -121,34 +125,29 @@ class UserConfigApp {
             e.preventDefault();
 
             // 親ウィンドウに座標を送信
-            if (window.parent && window.parent !== window) {
+            if (this.messageBus) {
                 // iframeの位置を取得して座標を変換
                 const rect = window.frameElement.getBoundingClientRect();
 
-                window.parent.postMessage({
-                    type: 'context-menu-request',
+                this.messageBus.send('context-menu-request', {
                     x: rect.left + e.clientX,
                     y: rect.top + e.clientY
-                }, '*');
+                });
             }
         });
 
         // 左クリックでメニューを閉じる
         document.addEventListener('click', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'close-context-menu'
-                }, '*');
+            if (this.messageBus) {
+                this.messageBus.send('close-context-menu', {});
             }
         });
     }
 
     setupWindowActivation() {
         document.addEventListener('mousedown', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'activate-window'
-                }, '*');
+            if (this.messageBus) {
+                this.messageBus.send('activate-window', {});
             }
         });
     }
@@ -189,14 +188,19 @@ class UserConfigApp {
             this.cancel();
         });
 
-        kanaKanjiButton.addEventListener('click', async () => {
-            await this.showMessageDialog(
-                'かな漢字変換設定は未実装です',
-                [
+        kanaKanjiButton.addEventListener('click', () => {
+            this.messageBus.sendWithCallback('show-message-dialog', {
+                message: 'かな漢字変換設定は未実装です',
+                buttons: [
                     { label: '了　解', value: 'ok' }
                 ],
-                0
-            );
+                defaultButton: 0
+            }, (result) => {
+                if (result.error) {
+                    console.warn('[UserConfig] Message dialog error:', result.error);
+                }
+                // 結果は特に使用しない
+            });
         });
 
         // 表示属性のスライダーと数値入力の連動
@@ -335,33 +339,6 @@ class UserConfigApp {
         });
     }
 
-    /**
-     * メッセージダイアログを表示
-     * @param {string} message - 表示するメッセージ
-     * @param {Array} buttons - ボタン定義配列
-     * @param {number} defaultButton - デフォルトボタンのインデックス
-     * @returns {Promise<any>} - 選択されたボタンの値
-     */
-    showMessageDialog(message, buttons, defaultButton = 0) {
-        return new Promise((resolve) => {
-            const messageId = ++this.dialogMessageId;
-
-            // コールバックを登録
-            this.dialogCallbacks[messageId] = (result) => {
-                resolve(result);
-            };
-
-            // 親ウィンドウにダイアログ表示を要求
-            window.parent.postMessage({
-                type: 'show-message-dialog',
-                messageId: messageId,
-                message: message,
-                buttons: buttons,
-                defaultButton: defaultButton
-            }, '*');
-        });
-    }
-
     apply() {
         const usernameInput = document.getElementById('username');
         const inputMethodSelect = document.getElementById('input-method');
@@ -379,10 +356,8 @@ class UserConfigApp {
         console.log('[UserConfig] 設定を適用しました:', { username, inputMethod });
 
         // 親ウィンドウに設定適用を通知
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'apply-user-config'
-            }, '*');
+        if (this.messageBus) {
+            this.messageBus.send('apply-user-config', {});
         }
 
         // ウィンドウを閉じる
@@ -430,10 +405,8 @@ class UserConfigApp {
         }
 
         // 親ウィンドウにウィンドウを閉じるよう通知
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'close-window'
-            }, '*');
+        if (this.messageBus) {
+            this.messageBus.send('close-window', {});
         }
     }
 
@@ -442,12 +415,11 @@ class UserConfigApp {
      * @param {Object} windowConfig - ウィンドウ設定
      */
     updateWindowConfig(windowConfig) {
-        if (window.parent && window.parent !== window && this.realId) {
-            window.parent.postMessage({
-                type: 'update-window-config',
+        if (this.messageBus && this.realId) {
+            this.messageBus.send('update-window-config', {
                 fileId: this.realId,
                 windowConfig: windowConfig
-            }, '*');
+            });
 
             console.log('[UserConfig] ウィンドウ設定を更新:', windowConfig);
         }

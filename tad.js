@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.12
+ * TADjs Ver0.14
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -3350,8 +3350,9 @@ function tsRulerLineMoveSetFusen(segLen, tadSeg) {
 
     // XML出力（文章セグメント内の場合のみ）
     if (isXmlDumpEnabled()) {
-        // HTML5のtab要素として出力
-        xmlBuffer.push(`<text tab="${textColumn}"/>`);
+        // indent要素として出力（行頭移動指定付箋）
+        // タグの直後の文字位置に基づいてインデントを自動計算
+        xmlBuffer.push(`<indent/>`);
     }
 }
 

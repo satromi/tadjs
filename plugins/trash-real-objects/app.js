@@ -9,14 +9,26 @@ class TrashRealObjectsApp {
         this.copyMode = false; // コピーモード
         this.clipboard = null; // クリップボードに保存された屑実身データ
 
+        // MessageBus Phase 2: MessageBusのみを使用
+        this.messageBus = null;
+        if (window.MessageBus) {
+            this.messageBus = new window.MessageBus({
+                debug: false,
+                pluginName: 'TrashRealObjects'
+            });
+            this.messageBus.start();
+        }
+
         this.init();
     }
 
     async init() {
         console.log('[TrashRealObjects] 屑実身操作プラグイン初期化');
 
-        // メッセージハンドラーを設定
-        this.setupMessageHandler();
+        // MessageBus Phase 2: MessageBusのハンドラを設定
+        if (this.messageBus) {
+            this.setupMessageBusHandlers();
+        }
 
         // 右クリックメニューを設定
         this.setupContextMenu();
@@ -28,36 +40,47 @@ class TrashRealObjectsApp {
         this.setupKeyboardShortcuts();
     }
 
-    setupMessageHandler() {
-        window.addEventListener('message', async (event) => {
-            if (event.data && event.data.type === 'init') {
-                console.log('[TrashRealObjects] init受信');
+    /**
+     * MessageBus Phase 2: MessageBusのハンドラを設定
+     */
+    setupMessageBusHandlers() {
+        // 初期化メッセージ
+        this.messageBus.on('init', async (data) => {
+            console.log('[TrashRealObjects] init受信');
 
-                // refCount=0の実身を読み込む
-                await this.loadTrashRealObjects();
+            // refCount=0の実身を読み込む
+            await this.loadTrashRealObjects();
 
-                // 表示
-                this.renderTrashObjects();
-            } else if (event.data && event.data.type === 'menu-action') {
-                this.handleMenuAction(event.data.action);
-            } else if (event.data && event.data.type === 'get-menu-definition') {
-                console.log('[TrashRealObjects] get-menu-definition受信, messageId:', event.data.messageId);
-                const menuDefinition = this.getMenuDefinition();
-                console.log('[TrashRealObjects] メニュー定義を生成:', menuDefinition);
-                if (window.parent && window.parent !== window) {
-                    window.parent.postMessage({
-                        type: 'menu-definition-response',
-                        messageId: event.data.messageId,
-                        menuDefinition: menuDefinition
-                    }, '*');
-                    console.log('[TrashRealObjects] menu-definition-response送信');
-                }
-            } else if (event.data && event.data.type === 'copy-mode-changed') {
-                this.copyMode = event.data.copyMode;
-                console.log('[TrashRealObjects] コピーモード設定:', this.copyMode);
-            } else if (event.data && event.data.type === 'unreferenced-real-objects-response') {
-                this.handleUnreferencedRealObjectsResponse(event.data);
-            }
+            // 表示
+            this.renderTrashObjects();
+        });
+
+        // メニューアクション
+        this.messageBus.on('menu-action', (data) => {
+            this.handleMenuAction(data.action);
+        });
+
+        // メニュー定義要求
+        this.messageBus.on('get-menu-definition', (data) => {
+            console.log('[TrashRealObjects] get-menu-definition受信, messageId:', data.messageId);
+            const menuDefinition = this.getMenuDefinition();
+            console.log('[TrashRealObjects] メニュー定義を生成:', menuDefinition);
+            this.messageBus.send('menu-definition-response', {
+                messageId: data.messageId,
+                menuDefinition: menuDefinition
+            });
+            console.log('[TrashRealObjects] menu-definition-response送信');
+        });
+
+        // コピーモード変更
+        this.messageBus.on('copy-mode-changed', (data) => {
+            this.copyMode = data.copyMode;
+            console.log('[TrashRealObjects] コピーモード設定:', this.copyMode);
+        });
+
+        // 未参照実身リスト受信
+        this.messageBus.on('unreferenced-real-objects-response', (data) => {
+            this.handleUnreferencedRealObjectsResponse(data);
         });
     }
 
@@ -113,47 +136,45 @@ class TrashRealObjectsApp {
         return menuDefinition;
     }
 
-    handleMenuAction(action) {
+    async handleMenuAction(action) {
         switch (action) {
             case 'toggle-fullscreen':
                 this.toggleFullscreen();
                 break;
             case 'refresh':
-                this.refresh();
+                await this.refresh();
                 break;
             case 'copy':
                 this.copyToClipboard();
                 break;
             case 'paste':
-                this.pasteFromClipboard();
+                await this.pasteFromClipboard();
                 break;
             case 'cut':
                 this.cutToClipboard();
                 break;
             case 'redo':
-                this.moveFromClipboard();
+                await this.moveFromClipboard();
                 break;
             case 'delete':
-                this.deleteRealObject();
+                await this.deleteRealObject();
                 break;
             case 'rescan':
-                this.rescanFilesystem();
+                await this.rescanFilesystem();
                 break;
         }
     }
 
     async loadTrashRealObjects() {
-        if (window.parent && window.parent !== window) {
-            const messageId = `load-trash-${Date.now()}-${Math.random()}`;
-            this.currentLoadMessageId = messageId;
+        const messageId = `load-trash-${Date.now()}-${Math.random()}`;
+        this.currentLoadMessageId = messageId;
 
-            window.parent.postMessage({
-                type: 'get-unreferenced-real-objects',
-                messageId: messageId
-            }, '*');
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('get-unreferenced-real-objects', {
+            messageId: messageId
+        });
 
-            console.log('[TrashRealObjects] 屑実身読み込み要求送信:', messageId);
-        }
+        console.log('[TrashRealObjects] 屑実身読み込み要求送信:', messageId);
     }
 
     renderTrashObjects() {
@@ -291,13 +312,10 @@ class TrashRealObjectsApp {
         this.clipboard = { ...this.selectedObject };
         this.copyMode = true;
 
-        // 親ウィンドウにコピーモードを通知
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'set-copy-mode',
-                copyMode: true
-            }, '*');
-        }
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('set-copy-mode', {
+            copyMode: true
+        });
 
         console.log('[TrashRealObjects] クリップボードへコピー:', this.selectedObject.realId);
     }
@@ -321,13 +339,10 @@ class TrashRealObjectsApp {
         this.clipboard = { ...this.selectedObject };
         this.copyMode = false;
 
-        // 親ウィンドウにコピーモードを通知
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'set-copy-mode',
-                copyMode: false
-            }, '*');
-        }
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('set-copy-mode', {
+            copyMode: false
+        });
 
         console.log('[TrashRealObjects] クリップボードへ移動:', this.selectedObject.realId);
     }
@@ -346,139 +361,109 @@ class TrashRealObjectsApp {
         console.log('[TrashRealObjects] クリップボードから移動完了');
     }
 
+    /**
+     * MessageBus Phase 2: 実身削除（sendWithCallback使用）
+     */
     async deleteRealObject() {
         if (!this.selectedObject) return;
 
         const realId = this.selectedObject.realId;
         const realName = this.selectedObject.realName || '無題';
 
-        // 標準メッセージダイアログで確認
-        const dialogMessageId = `confirm-delete-${Date.now()}-${Math.random()}`;
-
-        const handleDialogResponse = async (e) => {
-            if (e.data && e.data.type === 'message-dialog-response' && e.data.messageId === dialogMessageId) {
-                window.removeEventListener('message', handleDialogResponse);
-
-                // 「はい」が選択された場合のみ削除
-                if (e.data.result === 'yes') {
-                    // 親ウィンドウに削除要求
-                    const deleteMessageId = `delete-real-${Date.now()}-${Math.random()}`;
-
-                    const handleDeleteResponse = (e) => {
-                        if (e.data && e.data.type === 'delete-real-object-response' && e.data.messageId === deleteMessageId) {
-                            window.removeEventListener('message', handleDeleteResponse);
-
-                            if (e.data.success) {
-                                console.log('[TrashRealObjects] 実身削除成功:', realId);
-                                this.selectedObject = null;
-                                this.refresh();
-                            } else {
-                                console.error('[TrashRealObjects] 実身削除失敗:', e.data.error);
-                                // エラーメッセージも標準ダイアログで表示
-                                const errorMessageId = `error-delete-${Date.now()}-${Math.random()}`;
-                                window.parent.postMessage({
-                                    type: 'show-message-dialog',
-                                    messageId: errorMessageId,
-                                    message: `実身の削除に失敗しました: ${e.data.error}`,
-                                    buttons: [
-                                        { label: 'OK', value: 'ok' }
-                                    ],
-                                    defaultButton: 0
-                                }, '*');
-                            }
-                        }
-                    };
-
-                    window.addEventListener('message', handleDeleteResponse);
-
-                    window.parent.postMessage({
-                        type: 'physical-delete-real-object',
-                        realId: realId,
-                        messageId: deleteMessageId
-                    }, '*');
-                }
-            }
-        };
-
-        window.addEventListener('message', handleDialogResponse);
-
         // 確認ダイアログを表示
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'show-message-dialog',
-                messageId: dialogMessageId,
-                message: `実身「${realName}」を完全に削除しますか？\nこの操作は取り消せません。`,
-                buttons: [
-                    { label: 'はい', value: 'yes' },
-                    { label: 'いいえ', value: 'no' }
-                ],
-                defaultButton: 1  // 「いいえ」をデフォルトに
-            }, '*');
-        }
+        this.messageBus.sendWithCallback('show-message-dialog', {
+            message: `実身「${realName}」を完全に削除しますか？\nこの操作は取り消せません。`,
+            buttons: [
+                { label: 'はい', value: 'yes' },
+                { label: 'いいえ', value: 'no' }
+            ],
+            defaultButton: 1  // 「いいえ」をデフォルトに
+        }, async (confirmResult) => {
+            if (confirmResult.error) {
+                console.warn('[TrashRealObjects] Confirm dialog error:', confirmResult.error);
+                return;
+            }
+
+            // 「はい」が選択された場合のみ削除
+            if (confirmResult.result === 'yes') {
+                // 親ウィンドウに削除要求
+                this.messageBus.sendWithCallback('physical-delete-real-object', {
+                    realId: realId
+                }, async (deleteResult) => {
+                    if (deleteResult.error) {
+                        console.error('[TrashRealObjects] Delete request error:', deleteResult.error);
+                        return;
+                    }
+
+                    if (deleteResult.success) {
+                        console.log('[TrashRealObjects] 実身削除成功:', realId);
+                        this.selectedObject = null;
+                        await this.refresh();
+                    } else {
+                        console.error('[TrashRealObjects] 実身削除失敗:', deleteResult.error);
+                        // エラーメッセージも標準ダイアログで表示
+                        this.messageBus.sendWithCallback('show-message-dialog', {
+                            message: `実身の削除に失敗しました: ${deleteResult.error}`,
+                            buttons: [
+                                { label: 'OK', value: 'ok' }
+                            ],
+                            defaultButton: 0
+                        }, (errorResult) => {
+                            if (errorResult.error) {
+                                console.warn('[TrashRealObjects] Error dialog error:', errorResult.error);
+                            }
+                        });
+                    }
+                });
+            }
+        });
     }
 
+    /**
+     * MessageBus Phase 2: refCount更新（sendWithCallback使用）
+     */
     async updateRefCount(realId, newRefCount) {
-        if (window.parent && window.parent !== window) {
-            const messageId = `update-refcount-${Date.now()}-${Math.random()}`;
-
-            const handleMessage = (e) => {
-                if (e.data && e.data.type === 'update-refcount-response' && e.data.messageId === messageId) {
-                    window.removeEventListener('message', handleMessage);
-                    console.log('[TrashRealObjects] refCount更新完了:', realId, newRefCount);
-                }
-            };
-
-            window.addEventListener('message', handleMessage);
-
-            window.parent.postMessage({
-                type: 'update-real-object-refcount',
-                realId: realId,
-                refCount: newRefCount,
-                messageId: messageId
-            }, '*');
-        }
+        this.messageBus.sendWithCallback('update-real-object-refcount', {
+            realId: realId,
+            refCount: newRefCount
+        }, (result) => {
+            if (result.error) {
+                console.warn('[TrashRealObjects] UpdateRefCount error:', result.error);
+                return;
+            }
+            console.log('[TrashRealObjects] refCount更新完了:', realId, newRefCount);
+        });
     }
 
     async refresh() {
         await this.loadTrashRealObjects();
     }
 
+    /**
+     * MessageBus Phase 2: ファイルシステム再探索（sendWithCallback使用）
+     */
     async rescanFilesystem() {
         console.log('[TrashRealObjects] ファイルシステム再探索開始');
 
-        // 親ウィンドウに再探索要求を送信
-        if (window.parent && window.parent !== window) {
-            const messageId = `rescan-${Date.now()}-${Math.random()}`;
+        this.messageBus.sendWithCallback('rescan-filesystem', {}, async (result) => {
+            if (result.error) {
+                console.error('[TrashRealObjects] Rescan error:', result.error);
+                return;
+            }
 
-            const handleResponse = async (e) => {
-                if (e.data && e.data.type === 'rescan-filesystem-response' && e.data.messageId === messageId) {
-                    window.removeEventListener('message', handleResponse);
-
-                    if (e.data.success) {
-                        console.log('[TrashRealObjects] 再探索完了:', e.data.syncCount, '件');
-                        // 再探索後にリストを再読み込み
-                        await this.loadTrashRealObjects();
-                    } else {
-                        console.error('[TrashRealObjects] 再探索エラー:', e.data.error);
-                    }
-                }
-            };
-
-            window.addEventListener('message', handleResponse);
-
-            window.parent.postMessage({
-                type: 'rescan-filesystem',
-                messageId: messageId
-            }, '*');
-        }
+            if (result.success) {
+                console.log('[TrashRealObjects] 再探索完了:', result.syncCount, '件');
+                // 再探索後にリストを再読み込み
+                await this.loadTrashRealObjects();
+            } else {
+                console.error('[TrashRealObjects] 再探索エラー:', result.error);
+            }
+        });
     }
 
     toggleFullscreen() {
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'toggle-fullscreen'
-            }, '*');
-        }
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('toggle-fullscreen');
     }
 
     setupContextMenu() {
@@ -513,33 +498,25 @@ class TrashRealObjectsApp {
                 console.log('[TrashRealObjects] 仮身以外の場所を右クリック');
             }
 
-            if (window.parent && window.parent !== window) {
-                const rect = window.frameElement.getBoundingClientRect();
+            const rect = window.frameElement.getBoundingClientRect();
 
-                window.parent.postMessage({
-                    type: 'context-menu-request',
-                    x: rect.left + e.clientX,
-                    y: rect.top + e.clientY
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('context-menu-request', {
+                x: rect.left + e.clientX,
+                y: rect.top + e.clientY
+            });
         });
 
         document.addEventListener('click', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'close-context-menu'
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('close-context-menu');
         });
     }
 
     setupWindowActivation() {
         document.addEventListener('mousedown', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'activate-window'
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('activate-window');
         });
     }
 

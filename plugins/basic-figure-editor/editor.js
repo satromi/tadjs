@@ -15,9 +15,10 @@ class BasicFigureEditor {
         this.realId = null; // 実身ID
         this.isModified = false; // 編集状態フラグ
         this.originalContent = ''; // 保存時の内容
-        this.imagePathCallbacks = {}; // 画像パス取得コールバック
-        this.imagePathRequestId = 0; // 画像パス要求ID
+        this.imagePathCallbacks = {}; // 画像パス取得コールバック（messageId -> callback）
+        this.imagePathMessageId = 0; // 画像パスメッセージID
         this.iconCache = new Map(); // アイコンキャッシュ
+        this.debug = window.TADjsConfig?.debug || false; // デバッグモード（config.jsで管理）
 
         // 図形編集用のプロパティ
         this.currentTool = 'select'; // 現在選択中のツール
@@ -29,6 +30,16 @@ class BasicFigureEditor {
         this.currentShape = null;
         this.currentPath = []; // フリーハンド描画用のパス
         this.isFirstPolygonLine = false; // 多角形の最初の線を描画中かどうか
+
+        // コネクタ機能用のプロパティ
+        this.connectorRadius = 3; // コネクタの表示半径(px)
+        this.connectorSnapDistance = 5; // スナップ距離(px)
+        this.connectorShowDistance = 15; // コネクタ表示距離(px)
+        this.visibleConnectors = []; // 現在表示中のコネクタ情報 {shapeId, points: [{x, y, index}]}
+        this.isDraggingLineEndpoint = false; // 線の端点をドラッグ中か
+        this.draggedLineEndpoint = null; // ドラッグ中の線端点情報 {shape, endpoint: 'start'|'end'}
+        this.lastMouseX = 0; // 最後のマウスX座標（コネクタ表示用）
+        this.lastMouseY = 0; // 最後のマウスY座標（コネクタ表示用）
 
         // 図形移動用のプロパティ
         this.isDraggingShape = false;
@@ -47,6 +58,7 @@ class BasicFigureEditor {
         this.fillEnabled = true;
         this.lineWidth = 2;
         this.linePattern = 'solid'; // 'solid', 'dotted', 'dashed'
+        this.lineConnectionType = 'straight'; // 'straight', 'elbow', 'curve'
         this.cornerRadius = 0; // 角丸半径
         this.bgColor = '#ffffff';
 
@@ -75,6 +87,9 @@ class BasicFigureEditor {
         // 道具パネルウィンドウ
         this.toolPanelWindow = null;
         this.toolPanelWindowId = null;
+
+        // 道具パネルポップアップ状態
+        this.toolPanelPopupOpen = false;
 
         // 格子点設定
         this.gridMode = 'none'; // 'none', 'show', 'snap'
@@ -127,249 +142,296 @@ class BasicFigureEditor {
         this.lastBlinkTime = 0; // 最後の点滅切り替え時刻
         this.animationFrameId = null; // アニメーションフレームID
 
+        // MessageBusの初期化（即座に開始）
+        this.messageBus = null;
+        if (window.MessageBus) {
+            this.messageBus = new window.MessageBus({
+                debug: this.debug,
+                pluginName: 'BasicFigureEditor'
+            });
+            this.messageBus.start();
+            console.log('[BasicFigureEditor] MessageBus initialized');
+        } else {
+            console.warn('[BasicFigureEditor] MessageBus not available');
+        }
+
         this.init();
     }
 
-    init() {
-        // VirtualObjectRendererの初期化
-        if (window.VirtualObjectRenderer) {
-            this.virtualObjectRenderer = new window.VirtualObjectRenderer();
-            console.log('[FIGURE EDITOR] VirtualObjectRenderer initialized');
-        }
+    /**
+     * MessageBusのハンドラを登録
+     * Phase 2: MessageBusのみで動作
+     */
+    setupMessageBusHandlers() {
+        // init メッセージ
+        this.messageBus.on('init', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] init受信');
 
-        // パフォーマンス最適化関数の初期化
-        if (window.throttleRAF && window.debounce) {
-            // redrawのスロットル版（60FPS制限）
-            this.throttledRedraw = window.throttleRAF(() => {
-                this.redrawImmediate();
+            // fileIdを保存（拡張子を除去）
+            if (data.fileData) {
+                let rawId = data.fileData.realId || data.fileData.fileId;
+                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                console.log('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId);
+
+                // 背景色の設定
+                if (data.fileData.windowConfig && data.fileData.windowConfig.backgroundColor) {
+                    this.bgColor = data.fileData.windowConfig.backgroundColor;
+                    console.log('[FIGURE EDITOR] [MessageBus] ウィンドウ背景色を適用:', this.bgColor);
+                }
+            }
+
+            // 全画面表示状態を復元
+            if (data.fileData && data.fileData.realObject && data.fileData.realObject.window) {
+                this.isFullscreen = data.fileData.realObject.window.maximize || false;
+                console.log('[FIGURE EDITOR] [MessageBus] 全画面表示状態を復元:', this.isFullscreen);
+            }
+
+            this.loadFile(data.fileData);
+
+            // ファイル読み込み後に道具パネルを開く
+            setTimeout(() => {
+                this.openToolPanelWindow();
+            }, 500);
+        });
+
+        // window-moved メッセージ
+        this.messageBus.on('window-moved', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] window-moved受信');
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height
             });
+        });
 
-            // handleMouseMoveのスロットル版（60FPS制限）
-            this.throttledHandleMouseMove = window.throttleRAF((e) => {
-                this.handleMouseMove(e);
+        // window-resized-end メッセージ
+        this.messageBus.on('window-resized-end', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] window-resized-end受信');
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height
             });
+            this.resizeCanvas();
+        });
 
-            // スクロールバー更新のデバウンス版
-            this.debouncedNotifyScrollbarUpdate = window.debounce(() => {
-                this.notifyScrollbarUpdateImmediate();
-            }, 300);
+        // window-maximize-toggled メッセージ
+        this.messageBus.on('window-maximize-toggled', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] window-maximize-toggled受信');
+            this.updateWindowConfig({
+                pos: data.pos,
+                width: data.width,
+                height: data.height,
+                maximize: data.maximize
+            });
+            // 全画面表示状態を同期
+            this.isFullscreen = data.maximize;
+            console.log('[FIGURE EDITOR] [MessageBus] 全画面表示状態を同期:', this.isFullscreen);
+            this.resizeCanvas();
+        });
 
-            console.log('[FIGURE EDITOR] Performance optimization initialized');
-        }
+        // scroll メッセージ
+        this.messageBus.on('scroll', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] scroll受信:', data);
+            this.handleScroll(data.scrollLeft, data.scrollTop);
+        });
 
-        // ユーザ環境設定を読み込み
-        this.loadUserConfig();
+        // menu-action メッセージ
+        this.messageBus.on('menu-action', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] menu-action受信:', data.action);
+            this.executeMenuAction(data.action, data.additionalData);
+        });
 
-        this.setupCanvas();
-        this.setupEventListeners();
-        this.setupContextMenu();
-        this.setupWindowActivation();
-        this.setupGlobalMouseHandlers();
+        // get-menu-definition メッセージ
+        this.messageBus.on('get-menu-definition', async (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] get-menu-definition受信');
+            const menuDefinition = await this.getMenuDefinition();
+            this.messageBus.send('menu-definition-response', {
+                messageId: data.messageId,
+                menuDefinition: menuDefinition
+            });
+        });
 
-        // 選択枠点滅アニメーション開始
-        this.startSelectionBlinkAnimation();
+        // input-dialog-response メッセージ（MessageBusが自動処理）
+        this.messageBus.on('input-dialog-response', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] input-dialog-response受信:', data.messageId);
+            // sendWithCallback使用時は自動的にコールバックが実行される
+        });
 
-        // 親ウィンドウからのメッセージを受信
-        window.addEventListener('message', (event) => {
-            console.log('[FIGURE EDITOR] メッセージ受信:', event.data);
+        // message-dialog-response メッセージ（MessageBusが自動処理）
+        this.messageBus.on('message-dialog-response', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] message-dialog-response受信:', data.messageId);
+            // sendWithCallback使用時は自動的にコールバックが実行される
+        });
 
-            if (event.data && event.data.type === 'init') {
-                console.log('[FIGURE EDITOR] init受信');
+        // window-close-request メッセージ
+        this.messageBus.on('window-close-request', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] window-close-request受信');
+            this.handleCloseRequest(data.windowId);
+        });
 
-                // fileIdを保存（拡張子を除去）
-                if (event.data.fileData) {
-                    let rawId = event.data.fileData.realId || event.data.fileData.fileId;
-                    this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
-                    this.realId = this.realId; // 他のプラグインとの互換性のため
-                    console.log('[FIGURE EDITOR] fileId設定:', this.realId);
+        // ===== 道具パネル関連メッセージ =====
 
-                    // 背景色の設定（window.backgroundColor）
-                    if (event.data.fileData.windowConfig && event.data.fileData.windowConfig.backgroundColor) {
-                        this.bgColor = event.data.fileData.windowConfig.backgroundColor;
-                        console.log('[FIGURE EDITOR] ウィンドウ背景色を適用:', this.bgColor);
-                    }
+        // tool-panel-window-created メッセージ
+        this.messageBus.on('tool-panel-window-created', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] 道具パネルウィンドウ作成完了:', data.windowId);
+            this.toolPanelWindowId = data.windowId;
+        });
+
+        // select-tool メッセージ
+        this.messageBus.on('select-tool', (data) => {
+            this.selectTool(data.tool);
+            this.currentTool = data.tool;
+        });
+
+        // update-fill-color メッセージ
+        this.messageBus.on('update-fill-color', (data) => {
+            this.fillColor = data.fillColor;
+            this.applyFillColorToSelected(data.fillColor);
+        });
+
+        // update-fill-enabled メッセージ
+        this.messageBus.on('update-fill-enabled', (data) => {
+            this.fillEnabled = data.fillEnabled;
+            this.applyFillEnabledToSelected(data.fillEnabled);
+        });
+
+        // update-stroke-color メッセージ
+        this.messageBus.on('update-stroke-color', (data) => {
+            console.log('[FIGURE EDITOR] update-stroke-color受信:', data.strokeColor, '選択図形数:', this.selectedShapes.length);
+            this.strokeColor = data.strokeColor;
+            this.applyStrokeColorToSelected(data.strokeColor);
+        });
+
+        // update-line-width メッセージ
+        this.messageBus.on('update-line-width', (data) => {
+            this.lineWidth = data.lineWidth;
+            this.applyLineWidthToSelected(data.lineWidth);
+        });
+
+        // update-line-pattern メッセージ
+        this.messageBus.on('update-line-pattern', (data) => {
+            this.linePattern = data.linePattern;
+            this.applyLinePatternToSelected(data.linePattern);
+        });
+
+        // update-line-connection-type メッセージ
+        this.messageBus.on('update-line-connection-type', (data) => {
+            this.lineConnectionType = data.lineConnectionType;
+            this.applyLineConnectionTypeToSelected(data.lineConnectionType);
+        });
+
+        // update-corner-radius メッセージ
+        this.messageBus.on('update-corner-radius', (data) => {
+            this.cornerRadius = data.cornerRadius;
+            this.applyCornerRadiusToSelected(data.cornerRadius);
+        });
+
+        // update-grid-mode メッセージ
+        this.messageBus.on('update-grid-mode', (data) => {
+            this.gridMode = data.gridMode;
+            this.redraw();
+        });
+
+        // update-grid-interval メッセージ
+        this.messageBus.on('update-grid-interval', (data) => {
+            this.gridInterval = data.gridInterval;
+            this.redraw();
+        });
+
+        // update-pixelmap-tool メッセージ
+        this.messageBus.on('update-pixelmap-tool', (data) => {
+            this.pixelmapTool = data.pixelmapTool;
+            console.log('[FIGURE EDITOR] [MessageBus] ピクセルマップツール変更:', this.pixelmapTool);
+        });
+
+        // update-pixelmap-brush-size メッセージ
+        this.messageBus.on('update-pixelmap-brush-size', (data) => {
+            this.pixelmapBrushSize = data.pixelmapBrushSize;
+            console.log('[FIGURE EDITOR] [MessageBus] ブラシサイズ変更:', this.pixelmapBrushSize);
+        });
+
+        // update-font-size メッセージ
+        this.messageBus.on('update-font-size', (data) => {
+            this.defaultFontSize = data.fontSize;
+            if (this.textEditorElement) {
+                this.applyFormatToSelection('fontSize', data.fontSize + 'px');
+            } else {
+                this.applyFontSizeToSelected(data.fontSize);
+            }
+        });
+
+        // update-font-family メッセージ
+        this.messageBus.on('update-font-family', (data) => {
+            this.defaultFontFamily = data.fontFamily;
+            if (this.textEditorElement) {
+                this.applyFormatToSelection('fontFamily', data.fontFamily);
+            } else {
+                this.applyFontFamilyToSelected(data.fontFamily);
+            }
+        });
+
+        // update-text-color メッセージ
+        this.messageBus.on('update-text-color', (data) => {
+            this.defaultTextColor = data.textColor;
+            if (this.textEditorElement) {
+                this.applyFormatToSelection('color', data.textColor);
+            } else {
+                this.applyTextColorToSelected(data.textColor);
+            }
+        });
+
+        // update-text-decoration メッセージ
+        this.messageBus.on('update-text-decoration', (data) => {
+            if (this.textEditorElement) {
+                this.applyTextDecorationToSelection(data.decoration, data.enabled);
+            } else {
+                this.applyTextDecorationToSelected(data.decoration, data.enabled);
+            }
+        });
+
+        // get-current-font-settings メッセージ
+        this.messageBus.on('get-current-font-settings', () => {
+            this.sendCurrentFontSettings();
+        });
+
+        // ===== ウィンドウ管理関連メッセージ =====
+
+        // window-opened メッセージ
+        this.messageBus.on('window-opened', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] window-opened受信, windowId:', data.windowId);
+            // このイベントは各メッセージハンドラーで個別に処理されます
+        });
+
+        // window-closed メッセージ
+        this.messageBus.on('window-closed', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] window-closed受信, windowId:', data.windowId);
+            // openedRealObjectsから削除
+            for (const [realId, windowId] of this.openedRealObjects.entries()) {
+                if (windowId === data.windowId) {
+                    this.openedRealObjects.delete(realId);
+                    console.log('[FIGURE EDITOR] [MessageBus] 実身ウィンドウを追跡から削除:', realId);
+                    break;
                 }
+            }
+            // 道具パネルウィンドウが閉じられた場合
+            if (data.windowId === this.toolPanelWindowId) {
+                this.toolPanelWindowId = null;
+                console.log('[FIGURE EDITOR] [MessageBus] 道具パネルウィンドウIDをクリア');
+            }
+        });
 
-                // 全画面表示状態を復元
-                if (event.data.fileData && event.data.fileData.realObject && event.data.fileData.realObject.window) {
-                    this.isFullscreen = event.data.fileData.realObject.window.maximize || false;
-                    console.log('[FIGURE EDITOR] 全画面表示状態を復元:', this.isFullscreen);
-                }
+        // ===== ドラッグ＆ドロップ関連メッセージ =====
 
-                this.loadFile(event.data.fileData);
-
-                // ファイル読み込み後に道具パネルを開く
-                setTimeout(() => {
-                    this.openToolPanelWindow();
-                }, 500);
-            } else if (event.data && event.data.type === 'tool-panel-window-created') {
-                // 道具パネルウィンドウが作成された
-                console.log('[FIGURE EDITOR] 道具パネルウィンドウ作成完了:', event.data.windowId);
-                this.toolPanelWindowId = event.data.windowId;
-            } else if (event.data && event.data.type === 'select-tool') {
-                // 道具パネルからツール選択
-                this.selectTool(event.data.tool);
-                this.currentTool = event.data.tool;
-            } else if (event.data && event.data.type === 'update-fill-color') {
-                this.fillColor = event.data.fillColor;
-                // 選択中の図形にも適用
-                this.applyFillColorToSelected(event.data.fillColor);
-            } else if (event.data && event.data.type === 'update-fill-enabled') {
-                this.fillEnabled = event.data.fillEnabled;
-                // 選択中の図形にも適用
-                this.applyFillEnabledToSelected(event.data.fillEnabled);
-            } else if (event.data && event.data.type === 'update-stroke-color') {
-                this.strokeColor = event.data.strokeColor;
-                // 選択中の図形にも適用
-                this.applyStrokeColorToSelected(event.data.strokeColor);
-            } else if (event.data && event.data.type === 'update-line-width') {
-                this.lineWidth = event.data.lineWidth;
-                // 選択中の図形にも適用
-                this.applyLineWidthToSelected(event.data.lineWidth);
-            } else if (event.data && event.data.type === 'update-line-pattern') {
-                this.linePattern = event.data.linePattern;
-                // 選択中の図形にも適用
-                this.applyLinePatternToSelected(event.data.linePattern);
-            } else if (event.data && event.data.type === 'update-corner-radius') {
-                this.cornerRadius = event.data.cornerRadius;
-                // 選択中の図形にも適用
-                this.applyCornerRadiusToSelected(event.data.cornerRadius);
-            } else if (event.data && event.data.type === 'update-grid-mode') {
-                this.gridMode = event.data.gridMode;
-                this.redraw();
-            } else if (event.data && event.data.type === 'update-grid-interval') {
-                this.gridInterval = event.data.gridInterval;
-                this.redraw();
-            } else if (event.data && event.data.type === 'update-pixelmap-tool') {
-                this.pixelmapTool = event.data.pixelmapTool;
-                console.log('[FIGURE EDITOR] ピクセルマップツール変更:', this.pixelmapTool);
-            } else if (event.data && event.data.type === 'update-pixelmap-brush-size') {
-                this.pixelmapBrushSize = event.data.pixelmapBrushSize;
-                console.log('[FIGURE EDITOR] ブラシサイズ変更:', this.pixelmapBrushSize);
-            } else if (event.data && event.data.type === 'window-moved') {
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height
-                });
-            } else if (event.data && event.data.type === 'window-resized-end') {
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height
-                });
-                this.resizeCanvas();
-            } else if (event.data && event.data.type === 'window-maximize-toggled') {
-                this.updateWindowConfig({
-                    pos: event.data.pos,
-                    width: event.data.width,
-                    height: event.data.height,
-                    maximize: event.data.maximize
-                });
-                // 全画面表示状態を同期
-                this.isFullscreen = event.data.maximize;
-                console.log('[FIGURE EDITOR] 全画面表示状態を同期:', this.isFullscreen);
-                this.resizeCanvas();
-            } else if (event.data && event.data.type === 'scroll') {
-                // スクロールイベントを受信
-                console.log('[FIGURE EDITOR] scroll受信:', event.data);
-                this.handleScroll(event.data.scrollLeft, event.data.scrollTop);
-            } else if (event.data && event.data.type === 'menu-action') {
-                console.log('[FIGURE EDITOR] menu-action受信:', event.data.action);
-                this.executeMenuAction(event.data.action, event.data.additionalData);
-            } else if (event.data && event.data.type === 'get-menu-definition') {
-                console.log('[FIGURE EDITOR] get-menu-definition受信');
-                this.getMenuDefinition().then(menuDefinition => {
-                    window.parent.postMessage({
-                        type: 'menu-definition-response',
-                        messageId: event.data.messageId,
-                        menuDefinition: menuDefinition
-                    }, '*');
-                });
-            } else if (event.data && event.data.type === 'image-file-path-response') {
-                // 画像ファイルパスの応答を処理
-                if (this.imagePathCallbacks && this.imagePathCallbacks[event.data.requestId]) {
-                    this.imagePathCallbacks[event.data.requestId](event.data.filePath);
-                    delete this.imagePathCallbacks[event.data.requestId];
-                }
-            } else if (event.data && event.data.type === 'input-dialog-response') {
-                if (this.dialogCallbacks && this.dialogCallbacks[event.data.messageId]) {
-                    this.dialogCallbacks[event.data.messageId](event.data.result);
-                    delete this.dialogCallbacks[event.data.messageId];
-                }
-            } else if (event.data && event.data.type === 'message-dialog-response') {
-                if (this.dialogCallbacks && this.dialogCallbacks[event.data.messageId]) {
-                    this.dialogCallbacks[event.data.messageId](event.data.result);
-                    delete this.dialogCallbacks[event.data.messageId];
-                }
-            } else if (event.data && event.data.type === 'window-close-request') {
-                console.log('[FIGURE EDITOR] window-close-request受信, windowId:', event.data.windowId);
-                this.handleCloseRequest(event.data.windowId);
-            } else if (event.data && event.data.type === 'check-window-id') {
-                // 親ウィンドウからwindowIdチェック要求
-                if (event.data.targetWindowId === this.windowId) {
-                    console.log('[FIGURE EDITOR] check-window-id一致、ドロップ成功として処理');
-                    // 自分宛のメッセージなので、cross-window-drop-successとして処理
-                    if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
-                        const shape = this.draggingVirtualObjectShape;
-                        const dragMode = this.dragState.dragMode;
-
-                        console.log(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
-
-                        // タイムアウトをキャンセル
-                        if (this.virtualObjectDragTimeout) {
-                            clearTimeout(this.virtualObjectDragTimeout);
-                            this.virtualObjectDragTimeout = null;
-                        }
-
-                        // 移動モードの場合のみ元の仮身を削除
-                        if (dragMode === 'move') {
-                            // 選択中の仮身を取得
-                            const selectedVirtualObjectShapes = this.selectedShapes.filter(s => s.type === 'vobj');
-                            const shapesToDelete = selectedVirtualObjectShapes.includes(shape)
-                                ? selectedVirtualObjectShapes
-                                : [shape];
-
-                            console.log('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
-
-                            // 各仮身を削除
-                            shapesToDelete.forEach(s => {
-                                // 図形を削除
-                                const index = this.shapes.indexOf(s);
-                                if (index > -1) {
-                                    this.shapes.splice(index, 1);
-                                }
-
-                                // 選択状態をクリア
-                                const selectedIndex = this.selectedShapes.indexOf(s);
-                                if (selectedIndex > -1) {
-                                    this.selectedShapes.splice(selectedIndex, 1);
-                                }
-
-                                // 展開されたiframeがあれば削除
-                                if (s.expandedElement && s.expandedElement.parentNode) {
-                                    s.expandedElement.parentNode.removeChild(s.expandedElement);
-                                }
-                            });
-
-                            // 再描画
-                            this.redraw();
-                            this.isModified = true;
-                        } else {
-                            console.log('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
-                        }
-
-                        // フラグをリセット
-                        this.isDraggingVirtualObjectShape = false;
-                        this.draggingVirtualObjectShape = null;
-                    }
-                }
-            } else if (event.data && event.data.type === 'cross-window-drop-success') {
-                // 他のウィンドウへのドロップが成功した通知（直接受信した場合）
-                console.log('[FIGURE EDITOR] cross-window-drop-success受信:', event.data);
+        // check-window-id メッセージ
+        this.messageBus.on('check-window-id', (data) => {
+            // 親ウィンドウからwindowIdチェック要求
+            if (data.targetWindowId === this.windowId) {
+                console.log('[FIGURE EDITOR] [MessageBus] check-window-id一致、ドロップ成功として処理');
+                // 自分宛のメッセージなので、cross-window-drop-successとして処理
                 if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
                     const shape = this.draggingVirtualObjectShape;
-                    const dragMode = event.data.mode || this.dragState.dragMode;
+                    const dragMode = this.dragState.dragMode;
 
                     console.log(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
 
@@ -420,157 +482,247 @@ class BasicFigureEditor {
                     this.isDraggingVirtualObjectShape = false;
                     this.draggingVirtualObjectShape = null;
                 }
-            } else if (event.data && event.data.type === 'window-opened') {
-                // ウィンドウが開いた通知を受け取る
-                console.log('[FIGURE EDITOR] window-opened受信, windowId:', event.data.windowId);
-                // このイベントは各メッセージハンドラーで個別に処理されます
-            } else if (event.data && event.data.type === 'window-closed') {
-                // ウィンドウが閉じられた通知
-                console.log('[FIGURE EDITOR] window-closed受信, windowId:', event.data.windowId);
-                // openedRealObjectsから削除
-                for (const [realId, windowId] of this.openedRealObjects.entries()) {
-                    if (windowId === event.data.windowId) {
-                        this.openedRealObjects.delete(realId);
-                        console.log('[FIGURE EDITOR] 実身ウィンドウを追跡から削除:', realId);
-                        break;
-                    }
-                }
-                // 道具パネルウィンドウが閉じられた場合
-                if (event.data.windowId === this.toolPanelWindowId) {
-                    this.toolPanelWindowId = null;
-                    console.log('[FIGURE EDITOR] 道具パネルウィンドウIDをクリア');
-                }
-            } else if (event.data && event.data.type === 'update-font-size') {
-                // フォントサイズ更新
-                this.defaultFontSize = event.data.fontSize;
-                if (this.textEditorElement) {
-                    // 編集中の選択範囲に適用
-                    this.applyFormatToSelection('fontSize', event.data.fontSize + 'px');
-                } else {
-                    // 選択中の文字枠に適用
-                    this.applyFontSizeToSelected(event.data.fontSize);
-                }
-            } else if (event.data && event.data.type === 'update-font-family') {
-                // フォント更新
-                this.defaultFontFamily = event.data.fontFamily;
-                if (this.textEditorElement) {
-                    this.applyFormatToSelection('fontFamily', event.data.fontFamily);
-                } else {
-                    this.applyFontFamilyToSelected(event.data.fontFamily);
-                }
-            } else if (event.data && event.data.type === 'update-text-color') {
-                // 文字色更新
-                this.defaultTextColor = event.data.textColor;
-                if (this.textEditorElement) {
-                    this.applyFormatToSelection('color', event.data.textColor);
-                } else {
-                    this.applyTextColorToSelected(event.data.textColor);
-                }
-            } else if (event.data && event.data.type === 'update-text-decoration') {
-                // 文字修飾更新
-                if (this.textEditorElement) {
-                    this.applyTextDecorationToSelection(event.data.decoration, event.data.enabled);
-                } else {
-                    this.applyTextDecorationToSelected(event.data.decoration, event.data.enabled);
-                }
-            } else if (event.data && event.data.type === 'get-current-font-settings') {
-                // 現在のフォント設定を道具パネルに返す
-                this.sendCurrentFontSettings();
-            } else if (event.data && event.data.type === 'load-data') {
-                // 開いた仮身表示用のデータ受信
-                console.log('[FIGURE EDITOR] load-data受信:', event.data);
+            }
+        });
 
-                // readonlyモードの設定
-                if (event.data.readonly) {
-                    this.readonly = true;
-                    document.body.classList.add('readonly-mode');
-                    console.log('[FIGURE EDITOR] 読み取り専用モードを適用');
+        // cross-window-drop-success メッセージ
+        this.messageBus.on('cross-window-drop-success', (data) => {
+            // 他のウィンドウへのドロップが成功した通知（直接受信した場合）
+            console.log('[FIGURE EDITOR] [MessageBus] cross-window-drop-success受信:', data);
+            if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
+                const shape = this.draggingVirtualObjectShape;
+                const dragMode = data.mode || this.dragState.dragMode;
+
+                console.log(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
+
+                // タイムアウトをキャンセル
+                if (this.virtualObjectDragTimeout) {
+                    clearTimeout(this.virtualObjectDragTimeout);
+                    this.virtualObjectDragTimeout = null;
                 }
 
-                // noScrollbarモードの設定
-                if (event.data.noScrollbar) {
-                    document.body.style.overflow = 'hidden';
-                    console.log('[FIGURE EDITOR] スクロールバー非表示モードを適用');
-                }
+                // 移動モードの場合のみ元の仮身を削除
+                if (dragMode === 'move') {
+                    // 選択中の仮身を取得
+                    const selectedVirtualObjectShapes = this.selectedShapes.filter(s => s.type === 'vobj');
+                    const shapesToDelete = selectedVirtualObjectShapes.includes(shape)
+                        ? selectedVirtualObjectShapes
+                        : [shape];
 
-                // 実身データを読み込む
-                const realObject = event.data.realObject;
-                if (realObject) {
-                    // fileIdを保存（_数字.xtad の形式を除去して実身IDのみを取得）
-                    let rawId = event.data.realId;
-                    this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
-                    this.realId = this.realId; // 他のプラグインとの互換性のため
-                    console.log('[FIGURE EDITOR] fileId設定:', this.realId, '(元:', rawId, ')');
+                    console.log('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
 
-                    // データを読み込む
-                    this.loadFile({
-                        realId: event.data.realId,
-                        xmlData: realObject.xtad || realObject.records?.[0]?.xtad || realObject.xmlData
+                    // 各仮身を削除
+                    shapesToDelete.forEach(s => {
+                        // 図形を削除
+                        const index = this.shapes.indexOf(s);
+                        if (index > -1) {
+                            this.shapes.splice(index, 1);
+                        }
+
+                        // 選択状態をクリア
+                        const selectedIndex = this.selectedShapes.indexOf(s);
+                        if (selectedIndex > -1) {
+                            this.selectedShapes.splice(selectedIndex, 1);
+                        }
+
+                        // 展開されたiframeがあれば削除
+                        if (s.expandedElement && s.expandedElement.parentNode) {
+                            s.expandedElement.parentNode.removeChild(s.expandedElement);
+                        }
                     });
-                }
-            } else if (event.data && event.data.type === 'load-virtual-object') {
-                // 基本文章編集プラグインから開いた仮身表示用のデータ受信
-                console.log('[FIGURE EDITOR] load-virtual-object受信:', event.data);
 
-                // readonlyモードの設定
-                if (event.data.readonly) {
-                    this.readonly = true;
-                    document.body.classList.add('readonly-mode');
-                    console.log('[FIGURE EDITOR] 読み取り専用モードを適用');
+                    // 再描画
+                    this.redraw();
+                    this.isModified = true;
+                } else {
+                    console.log('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
                 }
 
-                // noScrollbarモードの設定
-                if (event.data.noScrollbar) {
-                    document.body.style.overflow = 'hidden';
-                    console.log('[FIGURE EDITOR] スクロールバー非表示モードを適用');
-                }
+                // フラグをリセット
+                this.isDraggingVirtualObjectShape = false;
+                this.draggingVirtualObjectShape = null;
+            }
+        });
 
-                // 実身データを読み込む
-                const realObject = event.data.realObject;
-                if (realObject) {
-                    // virtualObjからrealIdを取得
-                    const virtualObj = event.data.virtualObj;
-                    let rawId = virtualObj?.link_id;
-                    if (rawId) {
-                        // _数字.xtad の形式を除去して実身IDのみを取得
-                        this.realId = rawId.replace(/_\d+\.xtad$/i, '');
-                        console.log('[FIGURE EDITOR] fileId設定:', this.realId, '(元:', rawId, ')');
-                    }
+        // ===== データ読み込み関連メッセージ =====
 
-                    // データを読み込む
-                    this.loadFile({
-                        realId: this.realId,
-                        xmlData: realObject.xtad || realObject.records?.[0]?.xtad || realObject.xmlData
-                    });
-                }
-            } else if (event.data && event.data.type === 'add-virtual-object-from-base') {
-                console.log('[FIGURE EDITOR] 原紙箱から仮身追加:', event.data.realId, event.data.name);
-                this.addVirtualObjectFromRealId(event.data.realId, event.data.name, event.data.dropPosition, event.data.applist);
-            } else if (event.data && event.data.type === 'user-config-updated') {
-                // ユーザ環境設定が更新された
-                console.log('[FIGURE EDITOR] ユーザ環境設定更新通知を受信');
-                this.loadUserConfig();
-            } else if (event.data && event.data.type === 'load-data-file-request') {
-                // 開いた仮身内のプラグインからのファイル読み込み要求を親ウィンドウに転送
-                console.log('[FIGURE EDITOR] load-data-file-request受信、親ウィンドウに転送:', event.data.fileName);
-                if (window.parent && window.parent !== window) {
-                    window.parent.postMessage(event.data, '*');
-                }
-            } else if (event.data && event.data.type === 'load-data-file-response') {
-                // 親ウィンドウからのファイル読み込みレスポンスを開いた仮身内のプラグインに転送
-                console.log('[FIGURE EDITOR] load-data-file-response受信、子iframeに転送:', event.data.fileName);
-                // すべての子iframeに転送（requestIdで識別されるので問題ない）
-                const iframes = document.querySelectorAll('iframe');
-                iframes.forEach(iframe => {
-                    if (iframe.contentWindow) {
-                        iframe.contentWindow.postMessage(event.data, '*');
-                    }
+        // load-data メッセージ
+        this.messageBus.on('load-data', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] load-data受信:', data);
+
+            // readonlyモードの設定
+            if (data.readonly) {
+                this.readonly = true;
+                document.body.classList.add('readonly-mode');
+                console.log('[FIGURE EDITOR] [MessageBus] 読み取り専用モードを適用');
+            }
+
+            // noScrollbarモードの設定
+            if (data.noScrollbar) {
+                document.body.style.overflow = 'hidden';
+                console.log('[FIGURE EDITOR] [MessageBus] スクロールバー非表示モードを適用');
+            }
+
+            // 実身データを読み込む
+            const realObject = data.realObject;
+            if (realObject) {
+                // fileIdを保存（_数字.xtad の形式を除去して実身IDのみを取得）
+                let rawId = data.realId;
+                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
+                console.log('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId, '(元:', rawId, ')');
+
+                // データを読み込む
+                this.loadFile({
+                    realId: data.realId,
+                    xmlData: realObject.xtad || realObject.records?.[0]?.xtad || realObject.xmlData
                 });
             }
         });
 
-        // ダイアログコールバック管理
-        this.dialogCallbacks = {};
+        // load-virtual-object メッセージ
+        this.messageBus.on('load-virtual-object', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] load-virtual-object受信:', data);
+
+            // readonlyモードの設定
+            if (data.readonly) {
+                this.readonly = true;
+                document.body.classList.add('readonly-mode');
+                console.log('[FIGURE EDITOR] [MessageBus] 読み取り専用モードを適用');
+            }
+
+            // noScrollbarモードの設定
+            if (data.noScrollbar) {
+                document.body.style.overflow = 'hidden';
+                console.log('[FIGURE EDITOR] [MessageBus] スクロールバー非表示モードを適用');
+            }
+
+            // 実身データを読み込む
+            const realObject = data.realObject;
+            if (realObject) {
+                // virtualObjからrealIdを取得
+                const virtualObj = data.virtualObj;
+                let rawId = virtualObj?.link_id;
+                if (rawId) {
+                    // _数字.xtad の形式を除去して実身IDのみを取得
+                    this.realId = rawId.replace(/_\d+\.xtad$/i, '');
+                    console.log('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId, '(元:', rawId, ')');
+                }
+
+                // データを読み込む
+                this.loadFile({
+                    realId: this.realId,
+                    xmlData: realObject.xtad || realObject.records?.[0]?.xtad || realObject.xmlData
+                });
+            }
+        });
+
+        // add-virtual-object-from-base メッセージ
+        this.messageBus.on('add-virtual-object-from-base', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] 原紙箱から仮身追加:', data.realId, data.name);
+            this.addVirtualObjectFromRealId(data.realId, data.name, data.dropPosition, data.applist);
+        });
+
+        // ===== その他のメッセージ =====
+
+        // image-file-path-response メッセージ（レスポンス受信）
+        this.messageBus.on('image-file-path-response', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] image-file-path-response受信:', data.messageId);
+
+            // 自分宛のコールバックがあれば呼び出す
+            if (this.imagePathCallbacks && this.imagePathCallbacks[data.messageId]) {
+                this.imagePathCallbacks[data.messageId](data.filePath);
+                delete this.imagePathCallbacks[data.messageId];
+            }
+
+            // 開いた仮身内のプラグインにも転送
+            const iframes = document.querySelectorAll('iframe');
+            iframes.forEach(iframe => {
+                if (iframe.contentWindow) {
+                    iframe.contentWindow.postMessage(data, '*');
+                }
+            });
+        });
+
+        // user-config-updated メッセージ
+        this.messageBus.on('user-config-updated', () => {
+            console.log('[FIGURE EDITOR] [MessageBus] ユーザ環境設定更新通知を受信');
+            this.loadUserConfig();
+        });
+
+        // load-data-file-request メッセージ
+        this.messageBus.on('load-data-file-request', (data) => {
+            // 開いた仮身内のプラグインからのファイル読み込み要求を親ウィンドウに転送
+            console.log('[FIGURE EDITOR] [MessageBus] load-data-file-request受信、親ウィンドウに転送:', data.fileName);
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send(data.type, data);
+        });
+
+        // load-data-file-response メッセージ
+        this.messageBus.on('load-data-file-response', (data) => {
+            // 親ウィンドウからのファイル読み込みレスポンスを開いた仮身内のプラグインに転送
+            console.log('[FIGURE EDITOR] [MessageBus] load-data-file-response受信、子iframeに転送:', data.fileName);
+            // すべての子iframeに転送（requestIdで識別されるので問題ない）
+            const iframes = document.querySelectorAll('iframe');
+            iframes.forEach(iframe => {
+                if (iframe.contentWindow) {
+                    iframe.contentWindow.postMessage(data, '*');
+                }
+            });
+        });
+
+        // get-image-file-path メッセージ（開いた仮身内のプラグインからの画像パス取得要求を親ウィンドウに転送）
+        this.messageBus.on('get-image-file-path', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] get-image-file-path受信、親ウィンドウに転送:', data.fileName);
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send(data.type, data);
+        });
+
+        console.log('[FIGURE EDITOR] MessageBusハンドラ登録完了');
+    }
+
+    init() {
+        // VirtualObjectRendererの初期化
+        if (window.VirtualObjectRenderer) {
+            this.virtualObjectRenderer = new window.VirtualObjectRenderer();
+            this.log('VirtualObjectRenderer initialized');
+        }
+
+        // パフォーマンス最適化関数の初期化
+        if (window.throttleRAF && window.debounce) {
+            // redrawのスロットル版（60FPS制限）
+            this.throttledRedraw = window.throttleRAF(() => {
+                this.redrawImmediate();
+            });
+
+            // handleMouseMoveのスロットル版（60FPS制限）
+            this.throttledHandleMouseMove = window.throttleRAF((e) => {
+                this.handleMouseMove(e);
+            });
+
+            // スクロールバー更新のデバウンス版
+            this.debouncedNotifyScrollbarUpdate = window.debounce(() => {
+                this.notifyScrollbarUpdateImmediate();
+            }, 300);
+
+            console.log('[FIGURE EDITOR] Performance optimization initialized');
+        }
+
+        // ユーザ環境設定を読み込み
+        this.loadUserConfig();
+
+        this.setupCanvas();
+        this.setupEventListeners();
+        this.setupContextMenu();
+        this.setupWindowActivation();
+        this.setupGlobalMouseHandlers();
+
+        // 選択枠点滅アニメーション開始
+        this.startSelectionBlinkAnimation();
+
+        // MessageBusのハンドラを登録
+        if (this.messageBus) {
+            this.setupMessageBusHandlers();
+        }
 
         console.log('[基本図形編集] 準備完了');
     }
@@ -676,16 +828,22 @@ class BasicFigureEditor {
 
         // クリックイベントで親ウィンドウのコンテキストメニューを閉じる
         document.addEventListener('click', (e) => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'close-context-menu'
-                }, '*');
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('close-context-menu');
         });
 
         // ウィンドウリサイズ
         window.addEventListener('resize', () => {
             this.resizeCanvas();
+        });
+
+        // 道具パネルポップアップの開閉通知を受信
+        window.addEventListener('message', (e) => {
+            if (e.data && e.data.type === 'tool-panel-popup-opened') {
+                this.toolPanelPopupOpen = true;
+            } else if (e.data && e.data.type === 'tool-panel-popup-closed') {
+                this.toolPanelPopupOpen = false;
+            }
         });
 
         // ドラッグ&ドロップイベント
@@ -982,11 +1140,8 @@ class BasicFigureEditor {
      * スクロールバー更新通知（即座実行版）
      */
     notifyScrollbarUpdateImmediate() {
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'update-scrollbars'
-            }, '*');
-        }
+        // MessageBus Phase 2: messageBus.send()を使用
+        this.messageBus.send('update-scrollbars');
     }
 
     /**
@@ -1042,6 +1197,7 @@ class BasicFigureEditor {
                     strokeColor: this.strokeColor,
                     lineWidth: this.lineWidth,
                     linePattern: this.linePattern,
+                    lineConnectionType: this.lineConnectionType,
                     cornerRadius: this.cornerRadius
                 }
             }, '*');
@@ -1070,16 +1226,21 @@ class BasicFigureEditor {
      * 角丸長方形を描画
      */
     drawRoundedRect(x, y, width, height, radius, fillEnabled) {
+        // 角丸半径を幅と高さの半分に制限（GeometryUtilsを使用）
+        const effectiveRadius = window.GeometryUtils
+            ? window.GeometryUtils.limitCornerRadius(radius, width, height)
+            : Math.min(radius, Math.min(Math.abs(width) / 2, Math.abs(height) / 2));
+
         this.ctx.beginPath();
-        this.ctx.moveTo(x + radius, y);
-        this.ctx.lineTo(x + width - radius, y);
-        this.ctx.arcTo(x + width, y, x + width, y + radius, radius);
-        this.ctx.lineTo(x + width, y + height - radius);
-        this.ctx.arcTo(x + width, y + height, x + width - radius, y + height, radius);
-        this.ctx.lineTo(x + radius, y + height);
-        this.ctx.arcTo(x, y + height, x, y + height - radius, radius);
-        this.ctx.lineTo(x, y + radius);
-        this.ctx.arcTo(x, y, x + radius, y, radius);
+        this.ctx.moveTo(x + effectiveRadius, y);
+        this.ctx.lineTo(x + width - effectiveRadius, y);
+        this.ctx.arcTo(x + width, y, x + width, y + effectiveRadius, effectiveRadius);
+        this.ctx.lineTo(x + width, y + height - effectiveRadius);
+        this.ctx.arcTo(x + width, y + height, x + width - effectiveRadius, y + height, effectiveRadius);
+        this.ctx.lineTo(x + effectiveRadius, y + height);
+        this.ctx.arcTo(x, y + height, x, y + height - effectiveRadius, effectiveRadius);
+        this.ctx.lineTo(x, y + effectiveRadius);
+        this.ctx.arcTo(x, y, x + effectiveRadius, y, effectiveRadius);
         this.ctx.closePath();
         const shouldFill = fillEnabled !== undefined ? fillEnabled : true;
         if (shouldFill) {
@@ -1189,6 +1350,15 @@ class BasicFigureEditor {
                 return;
             }
 
+            // 線の端点をクリックしたかチェック
+            const lineEndpoint = this.getLineEndpointAt(this.startX, this.startY);
+            if (lineEndpoint) {
+                // 線の端点ドラッグ開始
+                this.isDraggingLineEndpoint = true;
+                this.draggedLineEndpoint = lineEndpoint;
+                return;
+            }
+
             // クリック位置に選択中の図形があるかチェック
             let clickedSelectedShape = false;
             for (const shape of this.selectedShapes) {
@@ -1263,7 +1433,7 @@ class BasicFigureEditor {
                     };
 
                     // Shiftキーが押されていない場合は既存の選択をクリア
-                    if (!e.shiftKey) {
+                    if (!e.shiftKey && !this.toolPanelPopupOpen) {
                         this.selectedShapes = [];
                         this.redraw();
                     }
@@ -1376,29 +1546,61 @@ class BasicFigureEditor {
             }
         } else {
             // 通常の図形描画開始
+            let startX = this.startX;
+            let startY = this.startY;
+            let startConnection = null;
+
+            // 直線描画時：開始点をコネクタにスナップ
+            if (this.currentTool === 'line') {
+                const snapConnector = this.findSnapConnector(this.startX, this.startY);
+                if (snapConnector) {
+                    startX = snapConnector.connector.x;
+                    startY = snapConnector.connector.y;
+                    startConnection = {
+                        shapeId: snapConnector.shapeId,
+                        connectorIndex: snapConnector.connector.index
+                    };
+                }
+            }
+
             this.currentShape = {
                 type: this.currentTool,
-                startX: this.startX,
-                startY: this.startY,
-                endX: this.startX,
-                endY: this.startY,
+                startX: startX,
+                startY: startY,
+                endX: startX,
+                endY: startY,
                 strokeColor: this.strokeColor,
                 fillColor: this.fillEnabled ? this.fillColor : 'transparent',
                 lineWidth: this.lineWidth,
                 linePattern: this.linePattern,
+                lineConnectionType: this.currentTool === 'line' ? this.lineConnectionType : undefined,
                 cornerRadius: this.currentTool === 'rect' || this.currentTool === 'polygon' ? this.cornerRadius : 0
             };
+
+            // 直線の場合、開始点の接続情報を保存
+            if (this.currentTool === 'line' && startConnection) {
+                this.currentShape.startConnection = startConnection;
+            }
         }
     }
 
     handleMouseMove(e) {
-        // 多角形描画中は常にプレビュー表示を更新
-        const isPolygonDrawing = this.currentTool === 'polygon' && this.currentShape;
-        if (!this.isDrawing && !isPolygonDrawing && !this.isRectangleSelecting) return;
-
         const rect = this.canvas.getBoundingClientRect();
         let currentX = e.clientX - rect.left;
         let currentY = e.clientY - rect.top;
+
+        // マウス位置を保存（コネクタ表示用）
+        this.lastMouseX = currentX;
+        this.lastMouseY = currentY;
+
+        // 直線ツール選択中は常にコネクタを表示するため、再描画
+        if (this.currentTool === 'line' && !this.isDrawing) {
+            this.redraw();
+        }
+
+        // 多角形描画中は常にプレビュー表示を更新
+        const isPolygonDrawing = this.currentTool === 'polygon' && this.currentShape;
+        if (!this.isDrawing && !isPolygonDrawing && !this.isRectangleSelecting) return;
 
         // 矩形選択中
         if (this.isRectangleSelecting) {
@@ -1483,6 +1685,77 @@ class BasicFigureEditor {
             return;
         }
 
+        // 線の端点ドラッグ中
+        if (this.isDraggingLineEndpoint) {
+            const shape = this.draggedLineEndpoint.shape;
+            const endpoint = this.draggedLineEndpoint.endpoint;
+
+            // コネクタスナップをチェック
+            let snapX = currentX;
+            let snapY = currentY;
+            let snappedConnector = null;
+
+            // 全図形をチェックして、近くにコネクタがあるかチェック
+            for (const targetShape of this.shapes) {
+                // 自分自身の線はスキップ
+                if (targetShape === shape) continue;
+
+                // コネクタ対応図形のみチェック
+                if (targetShape.type !== 'rect' && targetShape.type !== 'roundRect' &&
+                    targetShape.type !== 'ellipse' && targetShape.type !== 'polygon') {
+                    continue;
+                }
+
+                // コネクタポイントを取得
+                const connectorPoints = this.getConnectorPoints(targetShape);
+
+                // 各コネクタポイントとの距離をチェック
+                for (const point of connectorPoints) {
+                    const dist = Math.sqrt(
+                        Math.pow(currentX - point.x, 2) + Math.pow(currentY - point.y, 2)
+                    );
+
+                    if (dist <= this.connectorSnapDistance) {
+                        snapX = point.x;
+                        snapY = point.y;
+                        snappedConnector = { shapeId: this.shapes.indexOf(targetShape), connectorIndex: point.index };
+                        break;
+                    }
+                }
+
+                if (snappedConnector) break;
+            }
+
+            // 線の端点を更新
+            if (endpoint === 'start') {
+                shape.startX = snapX;
+                shape.startY = snapY;
+            } else {
+                shape.endX = snapX;
+                shape.endY = snapY;
+            }
+
+            // 接続情報を更新
+            if (snappedConnector) {
+                if (endpoint === 'start') {
+                    shape.startConnection = snappedConnector;
+                } else {
+                    shape.endConnection = snappedConnector;
+                }
+            } else {
+                // スナップしていない場合は接続を解除
+                if (endpoint === 'start') {
+                    shape.startConnection = null;
+                } else {
+                    shape.endConnection = null;
+                }
+            }
+
+            this.redraw();
+            this.isModified = true;
+            return;
+        }
+
         if (this.isDraggingShape) {
             // 図形をドラッグ移動中
             this.dragOffsets.forEach(offset => {
@@ -1556,6 +1829,29 @@ class BasicFigureEditor {
                 }
             });
 
+            // 接続されている線の端点を更新
+            this.dragOffsets.forEach(offset => {
+                const shape = offset.shape;
+                const connections = this.getConnectedLines(shape);
+
+                connections.forEach(conn => {
+                    // 移動後のコネクタポイントを取得
+                    const connectorPoints = this.getConnectorPoints(shape);
+                    const connectorPoint = connectorPoints.find(p => p.index === conn.connectorIndex);
+
+                    if (connectorPoint) {
+                        // 線の端点を更新
+                        if (conn.endpoint === 'start') {
+                            conn.line.startX = connectorPoint.x;
+                            conn.line.startY = connectorPoint.y;
+                        } else {
+                            conn.line.endX = connectorPoint.x;
+                            conn.line.endY = connectorPoint.y;
+                        }
+                    }
+                });
+            });
+
             // ドラッグ開始位置を更新
             this.startX = currentX;
             this.startY = currentY;
@@ -1585,8 +1881,24 @@ class BasicFigureEditor {
             this.drawShape(this.currentShape);
         } else if (this.currentShape) {
             // 通常の図形描画
-            // 格子点拘束を適用（フリーハンド以外）
-            if (this.gridMode === 'snap' && this.currentTool !== 'curve' && this.currentTool !== 'pencil' && this.currentTool !== 'brush') {
+            // 直線描画時：終点をコネクタにスナップ
+            if (this.currentTool === 'line') {
+                const snapConnector = this.findSnapConnector(currentX, currentY);
+                if (snapConnector) {
+                    currentX = snapConnector.connector.x;
+                    currentY = snapConnector.connector.y;
+                    // 終点の接続情報を一時保存（マウスアップ時に確定）
+                    this.currentShape.tempEndConnection = {
+                        shapeId: snapConnector.shapeId,
+                        connectorIndex: snapConnector.connector.index
+                    };
+                } else {
+                    // スナップしていない場合は接続情報をクリア
+                    this.currentShape.tempEndConnection = null;
+                }
+            }
+            // 格子点拘束を適用（フリーハンド以外、直線はコネクタスナップ優先）
+            else if (this.gridMode === 'snap' && this.currentTool !== 'curve' && this.currentTool !== 'pencil' && this.currentTool !== 'brush') {
                 const snapped = this.snapToGrid(currentX, currentY);
                 currentX = snapped.x;
                 currentY = snapped.y;
@@ -1697,6 +2009,13 @@ class BasicFigureEditor {
             this.saveStateForUndo();
             // スクロールバー更新を通知
             this.resizeCanvas();
+        } else if (this.isDraggingLineEndpoint) {
+            // 線の端点ドラッグ終了
+            this.isDraggingLineEndpoint = false;
+            this.draggedLineEndpoint = null;
+
+            // Undo用に状態を保存
+            this.saveStateForUndo();
         } else if (this.isDraggingShape) {
             // ドラッグ終了
             this.isDraggingShape = false;
@@ -1716,6 +2035,12 @@ class BasicFigureEditor {
         } else if (this.currentShape) {
             // Undo用に状態を保存
             this.saveStateForUndo();
+
+            // 直線の場合：終点の接続情報を確定
+            if (this.currentShape.type === 'line' && this.currentShape.tempEndConnection) {
+                this.currentShape.endConnection = this.currentShape.tempEndConnection;
+                delete this.currentShape.tempEndConnection;
+            }
 
             // 図形を確定
             this.shapes.push(this.currentShape);
@@ -1993,7 +2318,10 @@ class BasicFigureEditor {
                     const index = this.selectedShapes.indexOf(shape);
                     if (index >= 0 && this.selectedShapes.length === 1) {
                         // 単独で選択されている図形をクリックした場合は選択解除
-                        this.selectedShapes = [];
+                        // ただし、道具パネルポップアップが開いている場合は選択を維持
+                        if (!this.toolPanelPopupOpen) {
+                            this.selectedShapes = [];
+                        }
                     } else {
                         // 新しく選択
                         this.selectedShapes = [shape];
@@ -2005,7 +2333,8 @@ class BasicFigureEditor {
         }
 
         // 何も選択されなかった場合
-        if (!shiftKey) {
+        // ただし、道具パネルポップアップが開いている場合は選択を維持
+        if (!shiftKey && !this.toolPanelPopupOpen) {
             this.selectedShapes = [];
             this.redraw();
         }
@@ -2055,12 +2384,164 @@ class BasicFigureEditor {
                 continue;
             }
 
+            // 直線の場合はリサイズハンドルを表示しない（端点コネクタで操作）
+            if (shape.type === 'line') {
+                continue;
+            }
+
             const maxX = Math.max(shape.startX, shape.endX);
             const maxY = Math.max(shape.startY, shape.endY);
 
             // 右下のハンドル
             if (Math.abs(x - maxX) <= hitArea / 2 && Math.abs(y - maxY) <= hitArea / 2) {
                 return { shape: shape, handle: 'bottom-right' };
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 指定座標の近くの図形とコネクタを探す
+     * @param {number} x - X座標
+     * @param {number} y - Y座標
+     * @returns {Array} 近くの図形の配列 [{shape, connectors}]
+     */
+    findNearbyShapes(x, y) {
+        const nearbyShapes = [];
+
+        for (const shape of this.shapes) {
+            // コネクタ対応図形のみチェック
+            if (shape.type !== 'rect' && shape.type !== 'roundRect' &&
+                shape.type !== 'ellipse' && shape.type !== 'polygon' && shape.type !== 'vobj') {
+                continue;
+            }
+
+            // コネクタポイントを取得
+            const connectorPoints = this.getConnectorPoints(shape);
+
+            // 各コネクタポイントとの距離をチェック
+            for (const point of connectorPoints) {
+                const dist = Math.sqrt(
+                    Math.pow(x - point.x, 2) + Math.pow(y - point.y, 2)
+                );
+
+                if (dist <= this.connectorShowDistance) {
+                    nearbyShapes.push({
+                        shape: shape,
+                        connectors: connectorPoints
+                    });
+                    break; // 同じ図形は1回だけ追加
+                }
+            }
+        }
+
+        return nearbyShapes;
+    }
+
+    /**
+     * 指定座標に最も近いコネクタを探す（スナップ用）
+     * @param {number} x - X座標
+     * @param {number} y - Y座標
+     * @returns {Object|null} {shape, connector: {x, y, index}, shapeId} または null
+     */
+    findSnapConnector(x, y) {
+        let closestConnector = null;
+        let minDistance = this.connectorSnapDistance;
+
+        for (const shape of this.shapes) {
+            // コネクタ対応図形のみチェック
+            if (shape.type !== 'rect' && shape.type !== 'roundRect' &&
+                shape.type !== 'ellipse' && shape.type !== 'polygon' && shape.type !== 'vobj') {
+                continue;
+            }
+
+            // コネクタポイントを取得
+            const connectorPoints = this.getConnectorPoints(shape);
+
+            // 各コネクタポイントとの距離をチェック
+            for (const point of connectorPoints) {
+                const dist = Math.sqrt(
+                    Math.pow(x - point.x, 2) + Math.pow(y - point.y, 2)
+                );
+
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    closestConnector = {
+                        shape: shape,
+                        connector: point,
+                        shapeId: this.shapes.indexOf(shape)
+                    };
+                }
+            }
+        }
+
+        return closestConnector;
+    }
+
+    /**
+     * 指定の図形に接続されている線を取得
+     * @param {Object} shape - 図形オブジェクト
+     * @returns {Array} 接続情報の配列 [{line, endpoint: 'start'|'end', connectorIndex}]
+     */
+    getConnectedLines(shape) {
+        const shapeIndex = this.shapes.indexOf(shape);
+        if (shapeIndex === -1) return [];
+
+        const connections = [];
+
+        for (const line of this.shapes) {
+            if (line.type !== 'line') continue;
+
+            // startConnectionをチェック
+            if (line.startConnection && line.startConnection.shapeId === shapeIndex) {
+                connections.push({
+                    line: line,
+                    endpoint: 'start',
+                    connectorIndex: line.startConnection.connectorIndex
+                });
+            }
+
+            // endConnectionをチェック
+            if (line.endConnection && line.endConnection.shapeId === shapeIndex) {
+                connections.push({
+                    line: line,
+                    endpoint: 'end',
+                    connectorIndex: line.endConnection.connectorIndex
+                });
+            }
+        }
+
+        return connections;
+    }
+
+    /**
+     * 線の端点がクリックされたかチェック
+     * @param {number} x - クリック位置X
+     * @param {number} y - クリック位置Y
+     * @returns {Object|null} {shape, endpoint: 'start'|'end'} または null
+     */
+    getLineEndpointAt(x, y) {
+        const threshold = this.connectorRadius + 2; // コネクタ半径+少し余裕（3+2=5px）
+
+        // 選択中の線図形をチェック
+        for (const shape of this.selectedShapes) {
+            if (shape.type !== 'line') continue;
+
+            // 開始点をチェック
+            const distToStart = Math.sqrt(
+                Math.pow(x - shape.startX, 2) + Math.pow(y - shape.startY, 2)
+            );
+            if (distToStart <= threshold) {
+                return { shape: shape, endpoint: 'start' };
+            }
+
+            // 終了点をチェック
+            const distToEnd = Math.sqrt(
+                Math.pow(x - shape.endX, 2) + Math.pow(y - shape.endY, 2)
+            );
+            if (distToEnd <= threshold) {
+                return { shape: shape, endpoint: 'end' };
             }
         }
 
@@ -2080,10 +2561,21 @@ class BasicFigureEditor {
 
         switch (shape.type) {
             case 'line':
-                this.ctx.beginPath();
-                this.ctx.moveTo(shape.startX, shape.startY);
-                this.ctx.lineTo(shape.endX, shape.endY);
-                this.ctx.stroke();
+                // 両端が接続されているかチェック
+                const hasStartConnection = shape.startConnection && shape.startConnection.shapeId !== undefined;
+                const hasEndConnection = shape.endConnection && shape.endConnection.shapeId !== undefined;
+                const bothEndsConnected = hasStartConnection && hasEndConnection;
+
+                // 両端が接続されている場合のみ接続形状を適用
+                if (bothEndsConnected && shape.lineConnectionType && shape.lineConnectionType !== 'straight') {
+                    this.drawConnectedLine(shape);
+                } else {
+                    // 直線として描画
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(shape.startX, shape.startY);
+                    this.ctx.lineTo(shape.endX, shape.endY);
+                    this.ctx.stroke();
+                }
                 break;
 
             case 'rect':
@@ -2126,7 +2618,10 @@ class BasicFigureEditor {
 
                 this.ctx.beginPath();
                 this.ctx.moveTo(arcCenterX, arcCenterY);
-                this.ctx.ellipse(arcCenterX, arcCenterY, arcRadiusX, arcRadiusY, 0, 0, Math.PI / 2);
+                this.ctx.ellipse(arcCenterX, arcCenterY, arcRadiusX, arcRadiusY,
+                                 shape.angle ?? 0,
+                                 shape.startAngle ?? 0,
+                                 shape.endAngle ?? Math.PI / 2);
                 this.ctx.closePath();
                 const fillEnabledArc = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
                 if (fillEnabledArc) {
@@ -2143,7 +2638,10 @@ class BasicFigureEditor {
                 const chordRadiusY = Math.abs(height / 2);
 
                 this.ctx.beginPath();
-                this.ctx.ellipse(chordCenterX, chordCenterY, chordRadiusX, chordRadiusY, 0, 0, Math.PI / 2);
+                this.ctx.ellipse(chordCenterX, chordCenterY, chordRadiusX, chordRadiusY,
+                                 shape.angle ?? 0,
+                                 shape.startAngle ?? 0,
+                                 shape.endAngle ?? Math.PI / 2);
                 this.ctx.closePath();
                 const fillEnabledChord = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
                 if (fillEnabledChord) {
@@ -2160,7 +2658,10 @@ class BasicFigureEditor {
                 const ellArcRadiusY = Math.abs(height / 2);
 
                 this.ctx.beginPath();
-                this.ctx.ellipse(ellArcCenterX, ellArcCenterY, ellArcRadiusX, ellArcRadiusY, 0, 0, Math.PI / 2);
+                this.ctx.ellipse(ellArcCenterX, ellArcCenterY, ellArcRadiusX, ellArcRadiusY,
+                                 shape.angle ?? 0,
+                                 shape.startAngle ?? 0,
+                                 shape.endAngle ?? Math.PI / 2);
                 this.ctx.stroke();
                 break;
 
@@ -2365,6 +2866,320 @@ class BasicFigureEditor {
     }
 
     /**
+     * コネクタの法線方向を取得
+     * @param {Object} shape - 図形オブジェクト
+     * @param {number} connectorIndex - コネクタのインデックス
+     * @returns {Object} 法線ベクトル {x, y}（正規化済み）
+     */
+    getConnectorDirection(shape, connectorIndex) {
+        let nx = 0, ny = 0;
+
+        switch (shape.type) {
+            case 'rect':
+            case 'roundRect':
+            case 'vobj':
+                // 長方形・仮身のコネクタインデックス:
+                // 0:上辺中点, 1:右上角, 2:右辺中点, 3:右下角, 4:下辺中点, 5:左下角, 6:左辺中点, 7:左上角
+                switch (connectorIndex) {
+                    case 0: nx = 0; ny = -1; break;   // 上辺中点 → 上向き
+                    case 1: nx = 1; ny = -1; break;   // 右上角 → 右上向き
+                    case 2: nx = 1; ny = 0; break;    // 右辺中点 → 右向き
+                    case 3: nx = 1; ny = 1; break;    // 右下角 → 右下向き
+                    case 4: nx = 0; ny = 1; break;    // 下辺中点 → 下向き
+                    case 5: nx = -1; ny = 1; break;   // 左下角 → 左下向き
+                    case 6: nx = -1; ny = 0; break;   // 左辺中点 → 左向き
+                    case 7: nx = -1; ny = -1; break;  // 左上角 → 左上向き
+                }
+                break;
+
+            case 'ellipse':
+                // 楕円のコネクタは8方向（0°, 45°, 90°, ...）
+                // 法線方向 = 中心から外向きの方向
+                const angles = [0, 45, 90, 135, 180, 225, 270, 315];
+                const angle = angles[connectorIndex];
+                const rad = angle * Math.PI / 180;
+                nx = Math.cos(rad);
+                ny = Math.sin(rad);
+                break;
+
+            case 'polygon':
+                // 多角形の場合は、コネクタポイントから法線を計算
+                const points = this.getConnectorPoints(shape);
+                const numVertices = shape.points.length;
+
+                if (connectorIndex < numVertices) {
+                    // 頂点の場合：隣接する2辺の法線の平均
+                    const prevIdx = (connectorIndex - 1 + numVertices) % numVertices;
+                    const nextIdx = (connectorIndex + 1) % numVertices;
+                    const prev = shape.points[prevIdx];
+                    const curr = shape.points[connectorIndex];
+                    const next = shape.points[nextIdx];
+
+                    // 前の辺の法線
+                    const dx1 = curr.x - prev.x;
+                    const dy1 = curr.y - prev.y;
+                    const nx1 = -dy1;
+                    const ny1 = dx1;
+
+                    // 次の辺の法線
+                    const dx2 = next.x - curr.x;
+                    const dy2 = next.y - curr.y;
+                    const nx2 = -dy2;
+                    const ny2 = dx2;
+
+                    // 平均
+                    nx = (nx1 + nx2) / 2;
+                    ny = (ny1 + ny2) / 2;
+                } else {
+                    // 辺の中点の場合：その辺の法線
+                    const edgeIdx = connectorIndex - numVertices;
+                    const p1 = shape.points[edgeIdx];
+                    const p2 = shape.points[(edgeIdx + 1) % numVertices];
+                    const dx = p2.x - p1.x;
+                    const dy = p2.y - p1.y;
+                    // 法線（左回り90度回転）
+                    nx = -dy;
+                    ny = dx;
+                }
+                break;
+        }
+
+        // 正規化
+        const length = Math.sqrt(nx * nx + ny * ny);
+        if (length > 0) {
+            nx /= length;
+            ny /= length;
+        }
+
+        return { x: nx, y: ny };
+    }
+
+    /**
+     * 接続形状（カギ線・曲線）で線を描画
+     * @param {Object} shape - 線図形オブジェクト
+     */
+    drawConnectedLine(shape) {
+        const startX = shape.startX;
+        const startY = shape.startY;
+        const endX = shape.endX;
+        const endY = shape.endY;
+
+        // 接続先の図形と法線方向を取得
+        const startShape = this.shapes[shape.startConnection.shapeId];
+        const endShape = this.shapes[shape.endConnection.shapeId];
+        const startDir = this.getConnectorDirection(startShape, shape.startConnection.connectorIndex);
+        const endDir = this.getConnectorDirection(endShape, shape.endConnection.connectorIndex);
+
+        // 全体の距離を計算（曲線で使用）
+        const totalDist = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
+
+        this.ctx.beginPath();
+        this.ctx.moveTo(startX, startY);
+
+        if (shape.lineConnectionType === 'elbow') {
+            // カギ線: 図形の辺と直角に延ばし、中間点で繋ぐ
+            const midX = (startX + endX) / 2;
+            const midY = (startY + endY) / 2;
+
+            // startDirが主に垂直方向か水平方向かを判定
+            const startIsVertical = Math.abs(startDir.y) > Math.abs(startDir.x);
+
+            if (startIsVertical) {
+                // 垂直 → 水平 → 垂直
+                // 始点から垂直にmidYまで延ばす
+                this.ctx.lineTo(startX, midY);
+                // 水平に終点のX座標まで
+                this.ctx.lineTo(endX, midY);
+                // 垂直に終点まで
+                this.ctx.lineTo(endX, endY);
+            } else {
+                // 水平 → 垂直 → 水平
+                // 始点から水平にmidXまで延ばす
+                this.ctx.lineTo(midX, startY);
+                // 垂直に終点のY座標まで
+                this.ctx.lineTo(midX, endY);
+                // 水平に終点まで
+                this.ctx.lineTo(endX, endY);
+            }
+        } else if (shape.lineConnectionType === 'curve') {
+            // 曲線: ベジェ曲線で、制御点を法線方向に配置
+            const controlDist = totalDist * 0.25;
+
+            const cp1x = startX + startDir.x * controlDist;
+            const cp1y = startY + startDir.y * controlDist;
+
+            const cp2x = endX + endDir.x * controlDist;
+            const cp2y = endY + endDir.y * controlDist;
+
+            this.ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
+        }
+
+        this.ctx.stroke();
+    }
+
+    /**
+     * 図形のコネクタポイントを取得
+     * @param {Object} shape - 図形オブジェクト
+     * @returns {Array} コネクタポイントの配列 [{x, y, index}, ...]
+     */
+    getConnectorPoints(shape) {
+        const points = [];
+
+        switch (shape.type) {
+            case 'rect':
+            case 'roundRect':
+                // 四角形: 4辺の中点 + 4つの角 = 8点
+                const width = shape.endX - shape.startX;
+                const height = shape.endY - shape.startY;
+                const left = shape.startX;
+                const right = shape.endX;
+                const top = shape.startY;
+                const bottom = shape.endY;
+                const centerX = left + width / 2;
+                const centerY = top + height / 2;
+
+                points.push(
+                    { x: centerX, y: top, index: 0 },      // 上辺中点
+                    { x: right, y: top, index: 1 },        // 右上角
+                    { x: right, y: centerY, index: 2 },    // 右辺中点
+                    { x: right, y: bottom, index: 3 },     // 右下角
+                    { x: centerX, y: bottom, index: 4 },   // 下辺中点
+                    { x: left, y: bottom, index: 5 },      // 左下角
+                    { x: left, y: centerY, index: 6 },     // 左辺中点
+                    { x: left, y: top, index: 7 }          // 左上角
+                );
+                break;
+
+            case 'vobj':
+                // 仮身: 四角形と同様に4辺の中点 + 4つの角 = 8点
+                const vobjWidth = shape.width;
+                const vobjHeight = shape.height;
+                const vobjLeft = shape.x;
+                const vobjRight = shape.x + shape.width;
+                const vobjTop = shape.y;
+                const vobjBottom = shape.y + shape.height;
+                const vobjCenterX = shape.x + vobjWidth / 2;
+                const vobjCenterY = shape.y + vobjHeight / 2;
+
+                points.push(
+                    { x: vobjCenterX, y: vobjTop, index: 0 },      // 上辺中点
+                    { x: vobjRight, y: vobjTop, index: 1 },        // 右上角
+                    { x: vobjRight, y: vobjCenterY, index: 2 },    // 右辺中点
+                    { x: vobjRight, y: vobjBottom, index: 3 },     // 右下角
+                    { x: vobjCenterX, y: vobjBottom, index: 4 },   // 下辺中点
+                    { x: vobjLeft, y: vobjBottom, index: 5 },      // 左下角
+                    { x: vobjLeft, y: vobjCenterY, index: 6 },     // 左辺中点
+                    { x: vobjLeft, y: vobjTop, index: 7 }          // 左上角
+                );
+                break;
+
+            case 'ellipse':
+                // 円: 8方向（0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°）
+                const ellWidth = shape.endX - shape.startX;
+                const ellHeight = shape.endY - shape.startY;
+                const ellCenterX = shape.startX + ellWidth / 2;
+                const ellCenterY = shape.startY + ellHeight / 2;
+                const radiusX = Math.abs(ellWidth / 2);
+                const radiusY = Math.abs(ellHeight / 2);
+
+                const angles = [0, 45, 90, 135, 180, 225, 270, 315];
+                angles.forEach((angle, index) => {
+                    const rad = angle * Math.PI / 180;
+                    points.push({
+                        x: ellCenterX + radiusX * Math.cos(rad),
+                        y: ellCenterY + radiusY * Math.sin(rad),
+                        index: index
+                    });
+                });
+                break;
+
+            case 'polygon':
+                // 多角形: 全頂点 + 全辺の中点
+                if (shape.points && shape.points.length > 2) {
+                    let index = 0;
+
+                    // 全頂点
+                    shape.points.forEach((point, i) => {
+                        points.push({ x: point.x, y: point.y, index: index++ });
+                    });
+
+                    // 全辺の中点
+                    for (let i = 0; i < shape.points.length; i++) {
+                        const p1 = shape.points[i];
+                        const p2 = shape.points[(i + 1) % shape.points.length];
+                        points.push({
+                            x: (p1.x + p2.x) / 2,
+                            y: (p1.y + p2.y) / 2,
+                            index: index++
+                        });
+                    }
+                }
+                break;
+        }
+
+        return points;
+    }
+
+    /**
+     * 図形のコネクタを描画
+     * @param {Object} shape - 図形オブジェクト
+     */
+    drawConnectors(shape) {
+        const points = this.getConnectorPoints(shape);
+        if (points.length === 0) return;
+
+        this.ctx.save();
+
+        points.forEach(point => {
+            this.ctx.beginPath();
+            this.ctx.arc(point.x, point.y, this.connectorRadius, 0, 2 * Math.PI);
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.fill();
+            this.ctx.strokeStyle = '#000000';
+            this.ctx.lineWidth = 1;
+            this.ctx.stroke();
+        });
+
+        this.ctx.restore();
+    }
+
+    /**
+     * 直線の端点にコネクタを描画
+     * @param {Object} line - 直線図形オブジェクト
+     */
+    drawLineEndpointConnectors(line) {
+        if (line.type !== 'line') return;
+
+        this.ctx.save();
+
+        // 接続状態を確認
+        const hasStartConnection = line.startConnection && line.startConnection.shapeId !== undefined;
+        const hasEndConnection = line.endConnection && line.endConnection.shapeId !== undefined;
+
+        // 始点のコネクタ
+        this.ctx.beginPath();
+        this.ctx.arc(line.startX, line.startY, this.connectorRadius, 0, 2 * Math.PI);
+        // 接続されている場合は青で塗りつぶし、そうでなければ白
+        this.ctx.fillStyle = hasStartConnection ? '#0000ff' : '#ffffff';
+        this.ctx.fill();
+        this.ctx.strokeStyle = '#0000ff'; // 青色の枠線
+        this.ctx.lineWidth = 1;
+        this.ctx.stroke();
+
+        // 終点のコネクタ
+        this.ctx.beginPath();
+        this.ctx.arc(line.endX, line.endY, this.connectorRadius, 0, 2 * Math.PI);
+        // 接続されている場合は青で塗りつぶし、そうでなければ白
+        this.ctx.fillStyle = hasEndConnection ? '#0000ff' : '#ffffff';
+        this.ctx.fill();
+        this.ctx.strokeStyle = '#0000ff'; // 青色の枠線
+        this.ctx.lineWidth = 1;
+        this.ctx.stroke();
+
+        this.ctx.restore();
+    }
+
+    /**
      * キャンバス再描画（通常はスロットル版を使用）
      */
     redraw() {
@@ -2399,6 +3214,49 @@ class BasicFigureEditor {
         this.selectedShapes.forEach(shape => {
             this.drawSelectionHighlight(shape);
         });
+
+        // 選択中の図形にコネクタを表示
+        this.selectedShapes.forEach(shape => {
+            // 四角形、円、多角形のみコネクタを表示（仮身は除外）
+            if (shape.type === 'rect' || shape.type === 'roundRect' ||
+                shape.type === 'ellipse' || shape.type === 'polygon') {
+                this.drawConnectors(shape);
+            }
+            // 直線の端点にコネクタを表示
+            else if (shape.type === 'line') {
+                this.drawLineEndpointConnectors(shape);
+            }
+        });
+
+        // 直線描画中：マウス位置近くの図形のコネクタを表示
+        if (this.currentTool === 'line' && this.isDrawing && this.currentShape) {
+            // 終点位置（マウス位置）の近くの図形を探す
+            const nearbyShapes = this.findNearbyShapes(this.currentShape.endX, this.currentShape.endY);
+            nearbyShapes.forEach(item => {
+                this.drawConnectors(item.shape);
+            });
+        }
+
+        // 直線ツール選択中（まだ描画していない）：マウス位置近くの図形のコネクタを表示
+        if (this.currentTool === 'line' && !this.isDrawing && !this.currentShape) {
+            const nearbyShapes = this.findNearbyShapes(this.lastMouseX, this.lastMouseY);
+            nearbyShapes.forEach(item => {
+                this.drawConnectors(item.shape);
+            });
+        }
+
+        // 直線端点ドラッグ中：マウス位置近くの図形のコネクタを表示
+        if (this.isDraggingLineEndpoint && this.draggedLineEndpoint) {
+            const shape = this.draggedLineEndpoint.shape;
+            const endpoint = this.draggedLineEndpoint.endpoint;
+            const endpointX = endpoint === 'start' ? shape.startX : shape.endX;
+            const endpointY = endpoint === 'start' ? shape.startY : shape.endY;
+
+            const nearbyShapes = this.findNearbyShapes(endpointX, endpointY);
+            nearbyShapes.forEach(item => {
+                this.drawConnectors(item.shape);
+            });
+        }
 
         // 矩形選択のプレビューを描画
         if (this.isRectangleSelecting && this.selectionRect) {
@@ -2995,35 +3853,28 @@ class BasicFigureEditor {
      * 親ウィンドウからグローバルクリップボードを取得
      * @returns {Promise<Object|null>}
      */
-    getGlobalClipboard() {
-        return new Promise((resolve) => {
-            if (!window.parent || window.parent === window) {
-                resolve(null);
-                return;
-            }
+    async getGlobalClipboard() {
+        if (!window.parent || window.parent === window) {
+            return null;
+        }
 
-            const messageId = `get-clipboard-${Date.now()}-${Math.random()}`;
+        const messageId = `get-clipboard-${Date.now()}-${Math.random()}`;
 
-            const handleMessage = (e) => {
-                if (e.data && e.data.type === 'clipboard-data' && e.data.messageId === messageId) {
-                    window.removeEventListener('message', handleMessage);
-                    resolve(e.data.clipboardData);
-                }
-            };
-
-            window.addEventListener('message', handleMessage);
-
-            window.parent.postMessage({
-                type: 'get-clipboard',
-                messageId: messageId
-            }, '*');
-
-            // タイムアウト処理（5秒）
-            setTimeout(() => {
-                window.removeEventListener('message', handleMessage);
-                resolve(null);
-            }, 5000);
+        // MessageBusでget-clipboardを送信
+        this.messageBus.send('get-clipboard', {
+            messageId: messageId
         });
+
+        try {
+            // タイムアウト5秒でレスポンスを待つ
+            const result = await this.messageBus.waitFor('clipboard-data', 5000, (data) => {
+                return data.messageId === messageId;
+            });
+            return result.clipboardData;
+        } catch (error) {
+            console.warn('[FIGURE EDITOR] クリップボード取得タイムアウト:', error);
+            return null;
+        }
     }
 
     async insertImage(x, y, file) {
@@ -3295,7 +4146,7 @@ class BasicFigureEditor {
 
     async parseXmlTadData(xmlData) {
         // XMLから図形情報を抽出
-        console.log('[FIGURE EDITOR] XML解析:', xmlData);
+        this.log('XML解析:', xmlData);
 
         try {
             const parser = new DOMParser();
@@ -3536,6 +4387,11 @@ class BasicFigureEditor {
         }
 
         // 通常の長方形
+        // cornerRadius属性があれば使用、なければroundフラグから推定（後方互換性）
+        const cornerRadius = elem.hasAttribute('cornerRadius')
+            ? parseFloat(elem.getAttribute('cornerRadius'))
+            : (round > 0 ? 5 : 0);
+
         return {
             type: round > 0 ? 'roundRect' : 'rect',
             startX: left,
@@ -3547,7 +4403,7 @@ class BasicFigureEditor {
             lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
-            cornerRadius: round > 0 ? 5 : 0,
+            cornerRadius: cornerRadius,
             angle: angle
         };
     }
@@ -3822,6 +4678,11 @@ class BasicFigureEditor {
         const fillColor = elem.getAttribute('fillColor') || '#ffffff';
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
+        // cornerRadius属性があれば使用、なければ0（後方互換性）
+        const cornerRadius = elem.hasAttribute('cornerRadius')
+            ? parseFloat(elem.getAttribute('cornerRadius'))
+            : 0;
+
         return {
             type: 'polygon',
             points: points,
@@ -3829,7 +4690,8 @@ class BasicFigureEditor {
             fillColor: fillColor,
             lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
             linePattern: linePattern,
-            fillEnabled: fillEnabled
+            fillEnabled: fillEnabled,
+            cornerRadius: cornerRadius
         };
     }
 
@@ -4225,7 +5087,7 @@ class BasicFigureEditor {
         }
     }
 
-    saveAsNewRealObject() {
+    async saveAsNewRealObject() {
         if (!this.realId && !this.realId) {
             console.warn('[FIGURE EDITOR] 保存するデータがありません');
             this.setStatus('保存するデータがありません');
@@ -4261,91 +5123,6 @@ class BasicFigureEditor {
             // 親ウィンドウに新たな実身への保存を要求
             const messageId = 'save-as-new-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
 
-            // 応答を待つハンドラ
-            const handleMessage = (e) => {
-                if (e.data && e.data.type === 'save-as-new-real-object-completed' && e.data.messageId === messageId) {
-                    window.removeEventListener('message', handleMessage);
-
-                    if (e.data.cancelled) {
-                        this.setStatus('保存がキャンセルされました');
-                    } else if (e.data.success) {
-                        this.setStatus('新しい実身に保存しました: ' + e.data.newName);
-                        console.log('[FIGURE EDITOR] 新しい実身に保存成功:', e.data.newRealId);
-
-                        // 元の仮身の属性をコピーして新しい仮身を作成
-                        const originalVobj = selectedVobjShape.virtualObject;
-                        const newVirtualObject = {
-                            link_id: `${e.data.newRealId}_0.xtad`,
-                            link_name: e.data.newName,
-                            chsz: originalVobj.chsz || 14,
-                            frcol: originalVobj.frcol || '#000000',
-                            chcol: originalVobj.chcol || '#000000',
-                            tbcol: originalVobj.tbcol || '#ffffff',
-                            bgcol: originalVobj.bgcol || '#ffffff',
-                            pictdisp: originalVobj.pictdisp || 'true',
-                            namedisp: originalVobj.namedisp || 'true',
-                            roledisp: originalVobj.roledisp || 'false',
-                            framedisp: originalVobj.framedisp || 'true',
-                            typedisp: originalVobj.typedisp || 'false',
-                            updatedisp: originalVobj.updatedisp || 'false',
-                            dlen: originalVobj.dlen || 0,
-                            applist: originalVobj.applist || {}
-                        };
-
-                        // 元の仮身の下に配置（10px下）
-                        const chszPx = (newVirtualObject.chsz || 14) * (96 / 72);
-                        const lineHeight = 1.2;
-                        const textHeight = Math.ceil(chszPx * lineHeight);
-                        const newHeight = textHeight + 8;
-
-                        const newVobjShape = {
-                            type: 'virtual-object',
-                            startX: selectedVobjShape.startX,
-                            startY: selectedVobjShape.endY + 10,
-                            endX: selectedVobjShape.endX,
-                            endY: selectedVobjShape.endY + 10 + newHeight,
-                            virtualObject: newVirtualObject,
-                            strokeColor: newVirtualObject.frcol,
-                            textColor: newVirtualObject.chcol,
-                            fillColor: newVirtualObject.tbcol,
-                            lineWidth: 1,
-                            originalHeight: newHeight
-                        };
-
-                        // 図形に追加
-                        this.shapes.push(newVobjShape);
-
-                        // アイコンを事前読み込み
-                        const realId = e.data.newRealId.replace(/_\d+\.xtad$/i, '');
-                        this.loadIconFromParent(realId).then(iconData => {
-                            if (iconData && this.virtualObjectRenderer) {
-                                this.virtualObjectRenderer.loadIconToCache(realId, iconData);
-                            }
-                            // 再描画
-                            this.draw();
-                        });
-
-                        // XMLデータを更新
-                        const updatedXmlData = this.convertToXmlTad();
-                        if (window.parent && window.parent !== window) {
-                            window.parent.postMessage({
-                                type: 'xml-data-changed',
-                                xmlData: updatedXmlData,
-                                fileId: this.realId
-                            }, '*');
-                        }
-
-                        this.originalContent = JSON.stringify(this.shapes);
-                        this.isModified = false;
-                    } else {
-                        this.setStatus('新しい実身への保存に失敗しました');
-                        console.error('[FIGURE EDITOR] 新しい実身への保存失敗');
-                    }
-                }
-            };
-
-            window.addEventListener('message', handleMessage);
-
             // 親ウィンドウに保存を要求
             window.parent.postMessage({
                 type: 'save-as-new-real-object',
@@ -4354,6 +5131,86 @@ class BasicFigureEditor {
             }, '*');
 
             this.setStatus('新しい実身への保存を準備中...');
+
+            const result = await this.messageBus.waitFor('save-as-new-real-object-completed', 30000, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.cancelled) {
+                this.setStatus('保存がキャンセルされました');
+            } else if (result.success) {
+                this.setStatus('新しい実身に保存しました: ' + result.newName);
+                console.log('[FIGURE EDITOR] 新しい実身に保存成功:', result.newRealId);
+
+                // 元の仮身の属性をコピーして新しい仮身を作成
+                const originalVobj = selectedVobjShape.virtualObject;
+                const newVirtualObject = {
+                    link_id: `${result.newRealId}_0.xtad`,
+                    link_name: result.newName,
+                    chsz: originalVobj.chsz || 14,
+                    frcol: originalVobj.frcol || '#000000',
+                    chcol: originalVobj.chcol || '#000000',
+                    tbcol: originalVobj.tbcol || '#ffffff',
+                    bgcol: originalVobj.bgcol || '#ffffff',
+                    pictdisp: originalVobj.pictdisp || 'true',
+                    namedisp: originalVobj.namedisp || 'true',
+                    roledisp: originalVobj.roledisp || 'false',
+                    framedisp: originalVobj.framedisp || 'true',
+                    typedisp: originalVobj.typedisp || 'false',
+                    updatedisp: originalVobj.updatedisp || 'false',
+                    dlen: originalVobj.dlen || 0,
+                    applist: originalVobj.applist || {}
+                };
+
+                // 元の仮身の下に配置（10px下）
+                const chszPx = (newVirtualObject.chsz || 14) * (96 / 72);
+                const lineHeight = 1.2;
+                const textHeight = Math.ceil(chszPx * lineHeight);
+                const newHeight = textHeight + 8;
+
+                const newVobjShape = {
+                    type: 'virtual-object',
+                    startX: selectedVobjShape.startX,
+                    startY: selectedVobjShape.endY + 10,
+                    endX: selectedVobjShape.endX,
+                    endY: selectedVobjShape.endY + 10 + newHeight,
+                    virtualObject: newVirtualObject,
+                    strokeColor: newVirtualObject.frcol,
+                    textColor: newVirtualObject.chcol,
+                    fillColor: newVirtualObject.tbcol,
+                    lineWidth: 1,
+                    originalHeight: newHeight
+                };
+
+                // 図形に追加
+                this.shapes.push(newVobjShape);
+
+                // アイコンを事前読み込み
+                const realId = result.newRealId.replace(/_\d+\.xtad$/i, '');
+                this.loadIconFromParent(realId).then(iconData => {
+                    if (iconData && this.virtualObjectRenderer) {
+                        this.virtualObjectRenderer.loadIconToCache(realId, iconData);
+                    }
+                    // 再描画
+                    this.draw();
+                });
+
+                // XMLデータを更新
+                const updatedXmlData = this.convertToXmlTad();
+                if (window.parent && window.parent !== window) {
+                    window.parent.postMessage({
+                        type: 'xml-data-changed',
+                        xmlData: updatedXmlData,
+                        fileId: this.realId
+                    }, '*');
+                }
+
+                this.originalContent = JSON.stringify(this.shapes);
+                this.isModified = false;
+            } else {
+                this.setStatus('新しい実身への保存に失敗しました');
+                console.error('[FIGURE EDITOR] 新しい実身への保存失敗');
+            }
 
         } catch (error) {
             console.error('[FIGURE EDITOR] 新しい実身への保存エラー:', error);
@@ -4406,9 +5263,10 @@ class BasicFigureEditor {
 
             case 'rect':
             case 'roundRect':
-                // tad.js形式: <rect round="0/1" l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." left="..." top="..." right="..." bottom="..." />
+                // tad.js形式: <rect round="0/1" cornerRadius="..." l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." left="..." top="..." right="..." bottom="..." />
                 const round = shape.cornerRadius && shape.cornerRadius > 0 ? 1 : 0;
-                xmlParts.push(`<rect round="${round}" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" />\r\n`);
+                const cornerRadius = shape.cornerRadius || 0;
+                xmlParts.push(`<rect round="${round}" cornerRadius="${cornerRadius}" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" />\r\n`);
                 break;
 
             case 'ellipse':
@@ -4443,10 +5301,11 @@ class BasicFigureEditor {
                 break;
 
             case 'polygon':
-                // tad.js形式: <polygon l_atr="..." l_pat="..." f_pat="..." fillColor="..." strokeColor="..." points="x1,y1 x2,y2 ..." />
+                // tad.js形式: <polygon l_atr="..." l_pat="..." f_pat="..." cornerRadius="..." fillColor="..." strokeColor="..." points="x1,y1 x2,y2 ..." />
                 if (shape.points && shape.points.length > 0) {
                     const polygonPoints = shape.points.map(p => `${p.x},${p.y}`).join(' ');
-                    xmlParts.push(`<polygon l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${polygonPoints}" />\r\n`);
+                    const polygonCornerRadius = shape.cornerRadius || 0;
+                    xmlParts.push(`<polygon l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="${polygonCornerRadius}" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${polygonPoints}" />\r\n`);
                 }
                 break;
 
@@ -5369,25 +6228,50 @@ class BasicFigureEditor {
                 return;
             }
 
-            // その他の図形は座標を回転
+            // その他の図形は座標を回転（GeometryUtilsを使用）
             const centerX = (shape.startX + shape.endX) / 2;
             const centerY = (shape.startY + shape.endY) / 2;
 
-            const rad = angle * Math.PI / 180;
-            const cos = Math.cos(rad);
-            const sin = Math.sin(rad);
+            if (window.GeometryUtils) {
+                // GeometryUtilsで回転
+                const rotatedStart = window.GeometryUtils.rotatePoint(
+                    shape.startX, shape.startY, centerX, centerY, angle
+                );
+                const rotatedEnd = window.GeometryUtils.rotatePoint(
+                    shape.endX, shape.endY, centerX, centerY, angle
+                );
+                shape.startX = rotatedStart.x;
+                shape.startY = rotatedStart.y;
+                shape.endX = rotatedEnd.x;
+                shape.endY = rotatedEnd.y;
+            } else {
+                // フォールバック：従来の実装
+                const rad = angle * Math.PI / 180;
+                const cos = Math.cos(rad);
+                const sin = Math.sin(rad);
 
-            // 始点を回転
-            const sx = shape.startX - centerX;
-            const sy = shape.startY - centerY;
-            shape.startX = centerX + sx * cos - sy * sin;
-            shape.startY = centerY + sx * sin + sy * cos;
+                const sx = shape.startX - centerX;
+                const sy = shape.startY - centerY;
+                shape.startX = centerX + sx * cos - sy * sin;
+                shape.startY = centerY + sx * sin + sy * cos;
 
-            // 終点を回転
-            const ex = shape.endX - centerX;
-            const ey = shape.endY - centerY;
-            shape.endX = centerX + ex * cos - ey * sin;
-            shape.endY = centerY + ex * sin + ey * cos;
+                const ex = shape.endX - centerX;
+                const ey = shape.endY - centerY;
+                shape.endX = centerX + ex * cos - ey * sin;
+                shape.endY = centerY + ex * sin + ey * cos;
+            }
+
+            // 座標を正規化（GeometryUtilsを使用）
+            if (window.GeometryUtils) {
+                window.GeometryUtils.normalizeCoords(shape);
+            } else {
+                if (shape.startX > shape.endX) {
+                    [shape.startX, shape.endX] = [shape.endX, shape.startX];
+                }
+                if (shape.startY > shape.endY) {
+                    [shape.startY, shape.endY] = [shape.endY, shape.startY];
+                }
+            }
         });
 
         this.redraw();
@@ -5412,20 +6296,40 @@ class BasicFigureEditor {
                 return;
             }
 
-            // 弧の場合は角度を反転
+            // 弧の場合は角度と座標を反転
             if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') {
                 if (direction === 'horizontal') {
                     // 左右反転：開始角度と終了角度を水平軸で反転
-                    const startAngle = shape.startAngle || 0;
-                    const endAngle = shape.endAngle || 0;
+                    const startAngle = shape.startAngle ?? 0;
+                    const endAngle = shape.endAngle ?? Math.PI / 2;
+                    const angle = shape.angle ?? 0;
+
+                    // 水平軸で反転：Math.PI - angle
                     shape.startAngle = Math.PI - endAngle;
                     shape.endAngle = Math.PI - startAngle;
+                    // 回転角度も水平軸で反転
+                    shape.angle = -angle;
+
+                    // 位置座標も反転
+                    const tempX = shape.startX;
+                    shape.startX = shape.endX;
+                    shape.endX = tempX;
                 } else {
                     // 上下反転：開始角度と終了角度を垂直軸で反転
-                    const startAngle = shape.startAngle || 0;
-                    const endAngle = shape.endAngle || 0;
+                    const startAngle = shape.startAngle ?? 0;
+                    const endAngle = shape.endAngle ?? Math.PI / 2;
+                    const angle = shape.angle ?? 0;
+
+                    // 垂直軸で反転：-angle
                     shape.startAngle = -endAngle;
                     shape.endAngle = -startAngle;
+                    // 回転角度も垂直軸で反転
+                    shape.angle = -angle;
+
+                    // 位置座標も反転
+                    const tempY = shape.startY;
+                    shape.startY = shape.endY;
+                    shape.endY = tempY;
                 }
                 return;
             }
@@ -5475,12 +6379,19 @@ class BasicFigureEditor {
     }
 
     applyStrokeColorToSelected(color) {
-        if (this.selectedShapes.length === 0) return;
+        console.log('[FIGURE EDITOR] applyStrokeColorToSelected:', color, '選択図形数:', this.selectedShapes.length);
 
-        this.selectedShapes.forEach(shape => {
+        if (this.selectedShapes.length === 0) {
+            console.warn('[FIGURE EDITOR] 選択された図形がありません');
+            return;
+        }
+
+        this.selectedShapes.forEach((shape, index) => {
+            console.log(`[FIGURE EDITOR] 図形${index}の線色を変更: ${shape.strokeColor} -> ${color}`);
             shape.strokeColor = color;
         });
 
+        console.log('[FIGURE EDITOR] redraw()を呼び出します');
         this.redraw();
         this.isModified = true;
         this.setStatus(`線色を変更しました: ${color}`);
@@ -5509,6 +6420,21 @@ class BasicFigureEditor {
         this.isModified = true;
         const patternName = pattern === 'solid' ? '実線' : pattern === 'dotted' ? '点線' : '破線';
         this.setStatus(`線種を変更しました: ${patternName}`);
+    }
+
+    applyLineConnectionTypeToSelected(connectionType) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            if (shape.type === 'line') {
+                shape.lineConnectionType = connectionType;
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        const typeName = connectionType === 'straight' ? '直線' : connectionType === 'elbow' ? 'カギ線' : '曲線';
+        this.setStatus(`接続形状を変更しました: ${typeName}`);
     }
 
     applyCornerRadiusToSelected(radius) {
@@ -5736,13 +6662,13 @@ class BasicFigureEditor {
         }
 
         this.selectedShapes.forEach(shape => {
-            // RGB色を反転
-            const invertHex = (hex) => {
+            // RGB色を反転（共通ユーティリティを使用）
+            const invertHex = window.invertColor || ((hex) => {
                 const r = 255 - parseInt(hex.substr(1, 2), 16);
                 const g = 255 - parseInt(hex.substr(3, 2), 16);
                 const b = 255 - parseInt(hex.substr(5, 2), 16);
                 return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
-            };
+            });
 
             shape.strokeColor = invertHex(shape.strokeColor);
             if (shape.fillColor && shape.fillColor !== 'transparent') {
@@ -5889,7 +6815,7 @@ class BasicFigureEditor {
      * 仮身一覧プラグインから完全コピー
      * @param {string} pluginId - 開くプラグインのID
      */
-    executeVirtualObjectWithPlugin(pluginId) {
+    async executeVirtualObjectWithPlugin(pluginId) {
         // 選択中の仮身図形を取得
         const virtualObjectShape = this.selectedShapes.find(s => s.type === 'virtual-object');
         if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
@@ -5903,33 +6829,6 @@ class BasicFigureEditor {
 
         // ウィンドウが開いた通知を受け取るハンドラー
         const messageId = `open-${realId}-${Date.now()}`;
-        const handleWindowOpened = (e) => {
-            if (e.data && e.data.type === 'window-opened' && e.data.messageId === messageId) {
-                window.removeEventListener('message', handleWindowOpened);
-
-                if (e.data.success && e.data.windowId) {
-                    // 開いたウィンドウを追跡
-                    this.openedRealObjects.set(realId, e.data.windowId);
-                    console.log('[FIGURE EDITOR] ウィンドウが開きました:', e.data.windowId, 'realId:', realId);
-
-                    // ウィンドウのアイコンを設定
-                    // realIdから_0.xtadなどのサフィックスを除去して基本実身IDを取得
-                    let baseRealId = realId.replace(/\.(xtad|json)$/, '').replace(/_\d+$/, '');
-                    const iconPath = `${baseRealId}.ico`;
-                    if (window.parent && window.parent !== window) {
-                        window.parent.postMessage({
-                            type: 'set-window-icon',
-                            windowId: e.data.windowId,
-                            iconPath: iconPath
-                        }, '*');
-                        console.log('[FIGURE EDITOR] ウィンドウアイコン設定要求:', e.data.windowId, iconPath);
-                    }
-                }
-            }
-        };
-
-        window.addEventListener('message', handleWindowOpened);
-
         // 親ウィンドウ(tadjs-desktop.js)に実身を開くよう要求
         if (window.parent && window.parent !== window) {
             window.parent.postMessage({
@@ -5938,6 +6837,33 @@ class BasicFigureEditor {
                 pluginId: pluginId,
                 messageId: messageId
             }, '*');
+
+            try {
+                const result = await this.messageBus.waitFor('window-opened', 30000, (data) => {
+                    return data.messageId === messageId;
+                });
+
+                if (result.success && result.windowId) {
+                    // 開いたウィンドウを追跡
+                    this.openedRealObjects.set(realId, result.windowId);
+                    console.log('[FIGURE EDITOR] ウィンドウが開きました:', result.windowId, 'realId:', realId);
+
+                    // ウィンドウのアイコンを設定
+                    // realIdから_0.xtadなどのサフィックスを除去して基本実身IDを取得
+                    let baseRealId = realId.replace(/\.(xtad|json)$/, '').replace(/_\d+$/, '');
+                    const iconPath = `${baseRealId}.ico`;
+                    if (window.parent && window.parent !== window) {
+                        window.parent.postMessage({
+                            type: 'set-window-icon',
+                            windowId: result.windowId,
+                            iconPath: iconPath
+                        }, '*');
+                        console.log('[FIGURE EDITOR] ウィンドウアイコン設定要求:', result.windowId, iconPath);
+                    }
+                }
+            } catch (error) {
+                console.error('[FIGURE EDITOR] ウィンドウ開起エラー:', error);
+            }
         }
     }
 
@@ -6014,11 +6940,11 @@ class BasicFigureEditor {
             tbcol: vobj.tbcol || '#ffffff',
             bgcol: vobj.bgcol || '#ffffff',
             autoopen: vobj.autoopen === 'true',
-            chsz: parseFloat(vobj.chsz) || 9.6
+            chsz: parseFloat(vobj.chsz) || 14
         };
 
         // 文字サイズの倍率を計算
-        const baseFontSize = 9.6;
+        const baseFontSize = 14;
         const ratio = currentAttrs.chsz / baseFontSize;
         let selectedRatio = '標準';
         const ratioMap = {
@@ -6042,18 +6968,6 @@ class BasicFigureEditor {
         if (window.parent && window.parent !== window) {
             const messageId = `change-vobj-attrs-${Date.now()}-${Math.random()}`;
 
-            const handleMessage = (e) => {
-                if (e.data && e.data.type === 'virtual-object-attributes-changed' && e.data.messageId === messageId) {
-                    window.removeEventListener('message', handleMessage);
-
-                    if (e.data.success && e.data.attributes) {
-                        this.applyVirtualObjectAttributes(virtualObjectShape, e.data.attributes);
-                    }
-                }
-            };
-
-            window.addEventListener('message', handleMessage);
-
             window.parent.postMessage({
                 type: 'change-virtual-object-attributes',
                 virtualObject: vobj,
@@ -6063,6 +6977,18 @@ class BasicFigureEditor {
             }, '*');
 
             console.log('[FIGURE EDITOR] 仮身属性変更ダイアログ要求');
+
+            try {
+                const result = await this.messageBus.waitFor('virtual-object-attributes-changed', 30000, (data) => {
+                    return data.messageId === messageId;
+                });
+
+                if (result.success && result.attributes) {
+                    this.applyVirtualObjectAttributes(virtualObjectShape, result.attributes);
+                }
+            } catch (error) {
+                console.error('[FIGURE EDITOR] 仮身属性変更エラー:', error);
+            }
         }
     }
 
@@ -6109,8 +7035,14 @@ class BasicFigureEditor {
     }
 
     toggleFullscreen() {
-        // 親ウィンドウ（tadjs-desktop.js）にメッセージを送信してウィンドウを最大化/元に戻す
-        if (window.parent && window.parent !== window) {
+        // MessageBus Phase 2: messageBus.send()を使用
+        if (this.messageBus) {
+            this.messageBus.send('toggle-maximize');
+
+            this.isFullscreen = !this.isFullscreen;
+            this.setStatus(this.isFullscreen ? '全画面表示ON' : '全画面表示OFF');
+        } else if (window.parent && window.parent !== window) {
+            // フォールバック: MessageBus未利用時
             window.parent.postMessage({
                 type: 'toggle-maximize'
             }, '*');
@@ -6255,26 +7187,21 @@ class BasicFigureEditor {
      */
     async showSaveConfirmDialog() {
         return new Promise((resolve) => {
-            const messageId = `save-confirm-${++this.dialogMessageId}`;
-
-            // コールバックを登録
-            this.dialogCallbacks[messageId] = (result) => {
-                resolve(result);
-            };
-
-            // 親ウィンドウにダイアログ表示を要求
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'show-save-confirm-dialog',
-                    messageId: messageId,
-                    message: '保存してから閉じますか？',
-                    buttons: [
-                        { label: '取消', value: 'cancel' },
-                        { label: '保存しない', value: 'no' },
-                        { label: '保存', value: 'yes' }
-                    ]
-                }, '*');
-            }
+            this.messageBus.sendWithCallback('show-save-confirm-dialog', {
+                message: '保存してから閉じますか？',
+                buttons: [
+                    { label: '取消', value: 'cancel' },
+                    { label: '保存しない', value: 'no' },
+                    { label: '保存', value: 'yes' }
+                ]
+            }, (result) => {
+                if (result.error) {
+                    console.warn('[FIGURE EDITOR] Save confirm dialog error:', result.error);
+                    resolve(null);
+                    return;
+                }
+                resolve(result.result);
+            }, 300000); // タイムアウト5分（ユーザー操作待ち）
         });
     }
 
@@ -6283,35 +7210,35 @@ class BasicFigureEditor {
         // ステータスバーがある場合はそこに表示
     }
 
-    showInputDialog(message, defaultValue = '') {
+    async showInputDialog(message, defaultValue = '') {
         return new Promise((resolve) => {
-            const messageId = ++this.dialogMessageId;
-            this.dialogCallbacks[messageId] = resolve;
-
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'show-input-dialog',
-                    messageId: messageId,
-                    message: message,
-                    defaultValue: defaultValue
-                }, '*');
-            }
+            this.messageBus.sendWithCallback('show-input-dialog', {
+                message: message,
+                defaultValue: defaultValue
+            }, (result) => {
+                if (result.error) {
+                    console.warn('[FIGURE EDITOR] Input dialog error:', result.error);
+                    resolve(null);
+                    return;
+                }
+                resolve(result.result);
+            }, 300000); // タイムアウト5分（ユーザー操作待ち）
         });
     }
 
-    showMessageDialog(message, buttons = [{ label: 'OK', value: 'ok' }]) {
+    async showMessageDialog(message, buttons = [{ label: 'OK', value: 'ok' }]) {
         return new Promise((resolve) => {
-            const messageId = ++this.dialogMessageId;
-            this.dialogCallbacks[messageId] = resolve;
-
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'show-message-dialog',
-                    messageId: messageId,
-                    message: message,
-                    buttons: buttons
-                }, '*');
-            }
+            this.messageBus.sendWithCallback('show-message-dialog', {
+                message: message,
+                buttons: buttons
+            }, (result) => {
+                if (result.error) {
+                    console.warn('[FIGURE EDITOR] Message dialog error:', result.error);
+                    resolve(null);
+                    return;
+                }
+                resolve(result.result);
+            }, 300000); // タイムアウト5分（ユーザー操作待ち）
         });
     }
 
@@ -6547,45 +7474,34 @@ class BasicFigureEditor {
         }
     }
 
-    // HEX色をRGBに変換
+    // HEX色をRGBに変換（共通ユーティリティを使用）
     hexToRgb(hex) {
-        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-        return result ? {
-            r: parseInt(result[1], 16),
-            g: parseInt(result[2], 16),
-            b: parseInt(result[3], 16)
-        } : {r: 0, g: 0, b: 0};
+        return window.hexToRgb ? window.hexToRgb(hex) : {r: 0, g: 0, b: 0};
     }
 
     // 画像ファイルの絶対パスを取得（非同期）
     getImageFilePath(fileName) {
         return new Promise((resolve, reject) => {
-            const requestId = `img_${this.imagePathRequestId++}`;
+            const messageId = `img_${this.imagePathMessageId++}`;
 
             // コールバックを登録
-            this.imagePathCallbacks[requestId] = (filePath) => {
+            this.imagePathCallbacks[messageId] = (filePath) => {
                 resolve(filePath);
             };
 
             // タイムアウト設定（5秒）
             setTimeout(() => {
-                if (this.imagePathCallbacks[requestId]) {
-                    delete this.imagePathCallbacks[requestId];
+                if (this.imagePathCallbacks[messageId]) {
+                    delete this.imagePathCallbacks[messageId];
                     reject(new Error('画像パス取得タイムアウト'));
                 }
             }, 5000);
 
-            // 最上位ウィンドウ(tadjs-desktop.js)に画像パス要求を送信
-            if (window.top && window.top !== window) {
-                window.top.postMessage({
-                    type: 'get-image-file-path',
-                    requestId: requestId,
-                    fileName: fileName
-                }, '*');
-            } else {
-                // 親ウィンドウがない場合は相対パスを返す
-                resolve(fileName);
-            }
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('get-image-file-path', {
+                messageId: messageId,
+                fileName: fileName
+            });
         });
     }
 
@@ -6824,60 +7740,43 @@ class BasicFigureEditor {
         try {
             console.log('[FIGURE EDITOR] getAppListData開始 realId:', realId);
             const jsonFileName = `${realId}.json`;
+            const messageId = `load-json-${Date.now()}-${Math.random()}`;
 
-            return new Promise((resolve) => {
-                const messageId = `load-json-${Date.now()}-${Math.random()}`;
-                let timeoutId = null;
+            window.top.postMessage({
+                type: 'load-data-file-request',
+                fileName: jsonFileName,
+                messageId: messageId
+            }, '*');
 
-                const messageHandler = async (event) => {
-                    const matchesId = event.data.messageId === messageId || event.data.requestId === messageId;
+            try {
+                const result = await this.messageBus.waitFor('load-data-file-response', 10000, (data) => {
+                    return data.messageId === messageId;
+                });
 
-                    if (event.data && event.data.type === 'load-data-file-response' && matchesId) {
-                        if (timeoutId) {
-                            clearTimeout(timeoutId);
-                            timeoutId = null;
-                        }
-                        window.removeEventListener('message', messageHandler);
-
-                        if (event.data.success) {
-                            try {
-                                let jsonText;
-                                if (event.data.data && event.data.data instanceof File) {
-                                    jsonText = await event.data.data.text();
-                                } else if (event.data.content) {
-                                    jsonText = event.data.content;
-                                } else {
-                                    resolve(null);
-                                    return;
-                                }
-
-                                const jsonData = JSON.parse(jsonText);
-                                resolve(jsonData.applist || null);
-                            } catch (error) {
-                                console.error('[FIGURE EDITOR] JSONパースエラー:', error);
-                                resolve(null);
-                            }
+                if (result.success) {
+                    try {
+                        let jsonText;
+                        if (result.data && result.data instanceof File) {
+                            jsonText = await result.data.text();
+                        } else if (result.content) {
+                            jsonText = result.content;
                         } else {
-                            resolve(null);
+                            return null;
                         }
+
+                        const jsonData = JSON.parse(jsonText);
+                        return jsonData.applist || null;
+                    } catch (error) {
+                        console.error('[FIGURE EDITOR] JSONパースエラー:', error);
+                        return null;
                     }
-                };
-
-                window.addEventListener('message', messageHandler);
-
-                window.top.postMessage({
-                    type: 'load-data-file-request',
-                    fileName: jsonFileName,
-                    messageId: messageId,
-                    requestId: messageId
-                }, '*');
-
-                timeoutId = setTimeout(() => {
-                    window.removeEventListener('message', messageHandler);
-                    console.error('[FIGURE EDITOR] JSONファイル読み込みタイムアウト');
-                    resolve(null);
-                }, 10000);
-            });
+                } else {
+                    return null;
+                }
+            } catch (error) {
+                console.error('[FIGURE EDITOR] JSONファイル読み込みタイムアウト:', error);
+                return null;
+            }
         } catch (error) {
             console.error('[FIGURE EDITOR] appList取得エラー:', error);
             return null;
@@ -6900,33 +7799,22 @@ class BasicFigureEditor {
      * 実身データを読み込む
      */
     async loadRealObjectData(realId) {
-        return new Promise((resolve, reject) => {
-            const messageId = `load-real-${Date.now()}-${Math.random()}`;
+        const messageId = `load-real-${Date.now()}-${Math.random()}`;
 
-            const messageHandler = (e) => {
-                if (e.data && e.data.messageId === messageId) {
-                    window.removeEventListener('message', messageHandler);
-                    if (e.data.type === 'real-object-loaded') {
-                        resolve(e.data.realObject);
-                    } else if (e.data.type === 'real-object-error') {
-                        reject(new Error(e.data.error));
-                    }
-                }
-            };
+        window.top.postMessage({
+            type: 'load-real-object',
+            realId: realId,
+            messageId: messageId
+        }, '*');
 
-            window.addEventListener('message', messageHandler);
-
-            setTimeout(() => {
-                window.removeEventListener('message', messageHandler);
-                reject(new Error('実身データ読み込みタイムアウト'));
-            }, 5000);
-
-            window.top.postMessage({
-                type: 'load-real-object',
-                realId: realId,
-                messageId: messageId
-            }, '*');
-        });
+        try {
+            const result = await this.messageBus.waitFor('real-object-loaded', 5000, (data) => {
+                return data.messageId === messageId;
+            });
+            return result.realObject;
+        } catch (error) {
+            throw new Error('実身データ読み込みタイムアウト: ' + error.message);
+        }
     }
 
     /**
@@ -6935,34 +7823,26 @@ class BasicFigureEditor {
      * @returns {Promise<Blob>} ファイルデータ
      */
     async loadDataFileFromParent(fileName) {
-        return new Promise((resolve, reject) => {
-            const requestId = `load-${Date.now()}-${Math.random()}`;
+        const messageId = `load-${Date.now()}-${Math.random()}`;
 
-            const messageHandler = (event) => {
-                if (event.data && event.data.type === 'load-data-file-response' && event.data.requestId === requestId) {
-                    window.removeEventListener('message', messageHandler);
-                    if (event.data.success) {
-                        resolve(event.data.data);
-                    } else {
-                        reject(new Error(event.data.error || 'ファイル読み込み失敗'));
-                    }
-                }
-            };
+        window.parent.postMessage({
+            type: 'load-data-file-request',
+            messageId: messageId,
+            fileName: fileName
+        }, '*');
 
-            window.addEventListener('message', messageHandler);
-
-            window.parent.postMessage({
-                type: 'load-data-file-request',
-                requestId: requestId,
-                fileName: fileName
-            }, '*');
-
-            // 5秒でタイムアウト
-            setTimeout(() => {
-                window.removeEventListener('message', messageHandler);
-                reject(new Error('タイムアウト'));
-            }, 5000);
-        });
+        try {
+            const result = await this.messageBus.waitFor('load-data-file-response', 5000, (data) => {
+                return data.messageId === messageId;
+            });
+            if (result.success) {
+                return result.data;
+            } else {
+                throw new Error(result.error || 'ファイル読み込み失敗');
+            }
+        } catch (error) {
+            throw new Error('ファイル読み込みエラー: ' + error.message);
+        }
     }
 
     /**
@@ -7086,7 +7966,12 @@ class BasicFigureEditor {
             console.log('[FIGURE EDITOR] defaultOpenプラグイン:', defaultOpenPlugin);
 
             // 2. XTADファイルを読み込む（親ウィンドウ経由）
-            const xtadFile = await this.loadDataFileFromParent(virtualObject.link_id);
+            const xtadFileName = `${virtualObject.link_id}_0.xtad`;
+            const xtadFile = await this.loadDataFileFromParent(xtadFileName);
+            if (!xtadFile) {
+                console.error('[FIGURE EDITOR] XTADファイルの読み込みに失敗しました:', xtadFileName);
+                return null;
+            }
             const xmlData = await xtadFile.text();
             console.log('[FIGURE EDITOR] XTADデータ読み込み完了:', xmlData.length, '文字');
 
@@ -7336,49 +8221,39 @@ class BasicFigureEditor {
         }
 
         console.log('[FIGURE EDITOR] アイコンキャッシュミス、親ウィンドウに要求:', realId);
-        return new Promise((resolve) => {
-            let resolved = false; // resolveされたかどうかのフラグ
 
-            const messageHandler = (event) => {
-                if (event.data && event.data.type === 'icon-file-loaded' && event.data.realId === realId) {
-                    if (resolved) return; // 既にresolveされていたら何もしない
-                    resolved = true;
-                    window.removeEventListener('message', messageHandler);
-
-                    if (event.data.success) {
-                        // キャッシュに保存
-                        this.iconCache.set(realId, event.data.data);
-                        console.log('[FIGURE EDITOR] アイコン読み込み成功（親から）:', realId, 'データ長:', event.data.data.length);
-                        resolve(event.data.data);
-                    } else {
-                        // アイコンが存在しない場合はnullを返す
-                        this.iconCache.set(realId, null);
-                        console.log('[FIGURE EDITOR] アイコン読み込み失敗（親から）:', realId);
-                        resolve(null);
-                    }
-                }
-            };
-
-            window.addEventListener('message', messageHandler);
-
-            window.parent.postMessage({
-                type: 'read-icon-file',
-                realId: realId
-            }, '*');
-
-            // 3秒でタイムアウト（アイコンがない場合も多いのでnullを返す）
-            setTimeout(() => {
-                if (resolved) return; // 既にresolveされていたら何もしない
-                resolved = true;
-                window.removeEventListener('message', messageHandler);
-                // キャッシュにまだ入っていない場合のみnullをセット
-                if (!this.iconCache.has(realId)) {
-                    this.iconCache.set(realId, null);
-                }
-                console.log('[FIGURE EDITOR] アイコン読み込みタイムアウト:', realId);
-                resolve(null);
-            }, 3000);
+        const messageId = `icon-${realId}-${Date.now()}`;
+        this.messageBus.send('read-icon-file', {
+            realId: realId,
+            messageId: messageId
         });
+
+        try {
+            // フィルタを使用して、このリクエストに対応するレスポンスだけを受け取る
+            const result = await this.messageBus.waitFor('icon-file-loaded', 3000, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.success) {
+                // キャッシュに保存
+                this.iconCache.set(realId, result.data);
+                console.log('[FIGURE EDITOR] アイコン読み込み成功（親から）:', realId, 'データ長:', result.data.length);
+                return result.data;
+            } else {
+                // アイコンが存在しない場合はnullを返す
+                this.iconCache.set(realId, null);
+                console.log('[FIGURE EDITOR] アイコン読み込み失敗（親から）:', realId);
+                return null;
+            }
+        } catch (error) {
+            // タイムアウト（アイコンがない場合も多いのでnullを返す）
+            console.log('[FIGURE EDITOR] アイコン読み込みタイムアウト:', realId);
+            // キャッシュにまだ入っていない場合のみnullをセット
+            if (!this.iconCache.has(realId)) {
+                this.iconCache.set(realId, null);
+            }
+            return null;
+        }
     }
 
     /**
@@ -8100,7 +8975,7 @@ class BasicFigureEditor {
     /**
      * ダブルクリック+ドラッグによる実身複製処理
      */
-    handleDoubleClickDragDuplicate(shape) {
+    async handleDoubleClickDragDuplicate(shape) {
         const virtualObject = shape.virtualObject;
         if (!virtualObject || !virtualObject.link_id) {
             console.error('[FIGURE EDITOR] 複製対象の仮身が不正です');
@@ -8124,67 +8999,89 @@ class BasicFigureEditor {
         // メッセージIDを生成
         const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
 
-        // 応答を待つハンドラ
-        const handleMessage = (e) => {
-            if (e.data && e.data.type === 'real-object-duplicated' && e.data.messageId === messageId) {
-                window.removeEventListener('message', handleMessage);
-
-                if (e.data.cancelled) {
-                    console.log('[FIGURE EDITOR] 実身複製がキャンセルされました');
-                } else if (e.data.success) {
-                    // 複製成功: 新しい実身IDで仮身を作成
-                    const newRealId = e.data.newRealId;
-                    const newName = e.data.newName;
-                    console.log('[FIGURE EDITOR] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
-
-                    // 新しい仮身図形を作成（元の位置から少しずらして配置）
-                    const newShape = {
-                        type: 'vobj',
-                        x: shape.x + 20,  // 20px右にずらす
-                        y: shape.y + 20,  // 20px下にずらす
-                        width: width,
-                        height: height,
-                        virtualObject: {
-                            link_id: newRealId,
-                            link_name: newName,
-                            width: width,
-                            heightPx: height,
-                            chsz: chsz,
-                            frcol: frcol,
-                            chcol: chcol,
-                            tbcol: tbcol,
-                            bgcol: bgcol,
-                            dlen: dlen,
-                            applist: applist
-                        }
-                    };
-
-                    // 図形リストに追加
-                    this.shapes.push(newShape);
-
-                    // 新しい仮身を選択状態にする
-                    this.selectedShapes = [newShape];
-
-                    // 再描画
-                    this.redraw();
-
-                    // 変更フラグを立てる
-                    this.hasUnsavedChanges = true;
-
-                    console.log('[FIGURE EDITOR] 新しい仮身を配置:', newName, '位置:', newShape.x, newShape.y);
-                } else {
-                    console.error('[FIGURE EDITOR] 実身複製失敗:', e.data.error);
-                }
-            }
-        };
-
-        window.addEventListener('message', handleMessage);
-
         window.parent.postMessage({
             type: 'duplicate-real-object',
             realId: realId,
             messageId: messageId
         }, '*');
+
+        try {
+            const result = await this.messageBus.waitFor('real-object-duplicated', 30000, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.cancelled) {
+                console.log('[FIGURE EDITOR] 実身複製がキャンセルされました');
+            } else if (result.success) {
+                // 複製成功: 新しい実身IDで仮身を作成
+                const newRealId = result.newRealId;
+                const newName = result.newName;
+                console.log('[FIGURE EDITOR] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
+
+                // 新しい仮身図形を作成（元の位置から少しずらして配置）
+                const newShape = {
+                    type: 'vobj',
+                    x: shape.x + 20,  // 20px右にずらす
+                    y: shape.y + 20,  // 20px下にずらす
+                    width: width,
+                    height: height,
+                    virtualObject: {
+                        link_id: newRealId,
+                        link_name: newName,
+                        width: width,
+                        heightPx: height,
+                        chsz: chsz,
+                        frcol: frcol,
+                        chcol: chcol,
+                        tbcol: tbcol,
+                        bgcol: bgcol,
+                        dlen: dlen,
+                        applist: applist
+                    }
+                };
+
+                // 図形リストに追加
+                this.shapes.push(newShape);
+
+                // 新しい仮身を選択状態にする
+                this.selectedShapes = [newShape];
+
+                // 再描画
+                this.redraw();
+
+                // 変更フラグを立てる
+                this.hasUnsavedChanges = true;
+
+                console.log('[FIGURE EDITOR] 新しい仮身を配置:', newName, '位置:', newShape.x, newShape.y);
+            } else {
+                console.error('[FIGURE EDITOR] 実身複製失敗:', result.error);
+            }
+        } catch (error) {
+            console.error('[FIGURE EDITOR] 実身複製エラー:', error);
+        }
+    }
+
+    /**
+     * デバッグログ出力（デバッグモード時のみ）
+     */
+    log(...args) {
+        if (this.debug) {
+            console.log('[FIGURE EDITOR]', ...args);
+        }
+    }
+
+    /**
+     * エラーログ出力（常に出力）
+     */
+    error(...args) {
+        console.error('[FIGURE EDITOR]', ...args);
+    }
+
+    /**
+     * 警告ログ出力（常に出力）
+     */
+    warn(...args) {
+        console.warn('[FIGURE EDITOR]', ...args);
     }
 
 }

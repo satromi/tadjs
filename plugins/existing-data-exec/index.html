@@ -10,6 +10,11 @@
     <div class="plugin-content">
         <div class="message">既存データを開いています...</div>
     </div>
-    <script src="app.js"></script>
+    <!-- メッセージバスをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <script defer src="app.js"></script>
 </body>
 </html>

@@ -601,6 +601,20 @@ class PluginManager {
                 windowInfo.fileData = fileData;
             }
 
+            // Phase 2: 親MessageBusに子を登録
+            if (window.tadjsDesktop.parentMessageBus) {
+                setTimeout(() => {
+                    const iframe = document.getElementById(iframeId);
+                    if (iframe) {
+                        window.tadjsDesktop.parentMessageBus.registerChild(windowId, iframe, {
+                            windowId: windowId,
+                            pluginId: plugin.id
+                        });
+                        console.log(`[PluginManager] Phase 2: 子を登録 windowId=${windowId}, pluginId=${plugin.id}`);
+                    }
+                }, 100); // iframe作成を待つ
+            }
+
             // プラグインへのメッセージ送信を初期化
             this.initializePluginMessaging(iframeId, plugin, fileData, windowId);
 

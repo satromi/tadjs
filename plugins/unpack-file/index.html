@@ -19,7 +19,12 @@
     <script src="unpack.js?v=20251109"></script>
     <!-- LHZ解凍ライブラリ -->
     <script src="lh5.js?v=20251109"></script>
+    <!-- メッセージバスをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
     <!-- アプリケーションロジック -->
-    <script src="app.js?v=20251109"></script>
+    <script defer src="app.js?v=20251109"></script>
 </body>
 </html>

@@ -129,7 +129,7 @@ let colorPattern = []; // 配列として初期化
 let groupList = [];
 
 // フォント設定
-const defaultFontSize = 9.6; // デフォルトフォントサイズ
+const defaultFontSize = 14; // デフォルトフォントサイズ
 let textFontSize = defaultFontSize;
 let textFontSet = textFontSize + 'px serif';
 let currentFontFamily = 'serif'; // 現在指定されているフォントファミリー
@@ -923,7 +923,7 @@ function drawDetailModeRulerAsSegment() {
     
     ctx.save();
     
-    // 標準文字サイズ（9.6）での文字幅を計算
+    // 標準文字サイズ（14）での文字幅を計算
     const standardCharSize = defaultFontSize;
     const charWidth = standardCharSize * 0.8; // 文字幅の概算
     const rulerHeight = 20;
@@ -3376,8 +3376,9 @@ function tsRulerLineMoveSetFusen(segLen, tadSeg) {
 
     // XML出力（文章セグメント内の場合のみ）
     if (isXmlDumpEnabled()) {
-        // HTML5のtab要素として出力
-        xmlBuffer.push(`<text tab="${textColumn}"/>`);
+        // indent要素として出力（行頭移動指定付箋）
+        // タグの直後の文字位置に基づいてインデントを自動計算
+        xmlBuffer.push(`<indent/>`);
     }
 }
 
@@ -4359,6 +4360,11 @@ function tsFixedWidthSpaceFusen(segLen, tadSeg) {
     // 固定幅空白状態を設定
     fixedWidthSpaceState.active = true;
     fixedWidthSpaceState.scaleData = widthData;
+
+    // XML出力用
+    if (isXmlDumpEnabled()) {
+        xmlBuffer.push(`<widthspace scale="${widthData}"/>`);
+    }
 
     console.debug(`固定幅空白指定付箋: 状態設定完了 scaleData=${IntToHex(widthData, 4)}`);
 }
