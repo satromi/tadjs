@@ -1,6 +1,7 @@
 /**
  * UUID v7 生成ユーティリティ
  * 時刻ベースのUUID生成
+ * 
  */
 
 class UuidV7Generator {

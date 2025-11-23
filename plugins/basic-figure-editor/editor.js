@@ -3,8 +3,11 @@
  * TADファイルの図形セグメントを編集
  */
 
-class BasicFigureEditor {
+class BasicFigureEditor extends window.PluginBase {
     constructor() {
+        // 基底クラスのコンストラクタを呼び出し
+        super('BasicFigureEditor');
+
         this.canvas = document.getElementById('figureCanvas');
         this.ctx = this.canvas.getContext('2d');
         this.currentFile = null;
@@ -12,7 +15,7 @@ class BasicFigureEditor {
         this.isFullscreen = false;
         this.viewMode = 'canvas'; // 'canvas' or 'xml'
         this.dialogMessageId = 0; // ダイアログメッセージID
-        this.realId = null; // 実身ID
+        // this.realId は基底クラスで定義済み
         this.isModified = false; // 編集状態フラグ
         this.originalContent = ''; // 保存時の内容
         this.imagePathCallbacks = {}; // 画像パス取得コールバック（messageId -> callback）
@@ -35,6 +38,8 @@ class BasicFigureEditor {
         this.connectorRadius = 3; // コネクタの表示半径(px)
         this.connectorSnapDistance = 5; // スナップ距離(px)
         this.connectorShowDistance = 15; // コネクタ表示距離(px)
+        this.vobjConnectorShowDistance = 30; // 仮身用コネクタ表示距離(px)
+        this.vobjConnectorSnapDistance = 25; // 仮身用スナップ距離(px)
         this.visibleConnectors = []; // 現在表示中のコネクタ情報 {shapeId, points: [{x, y, index}]}
         this.isDraggingLineEndpoint = false; // 線の端点をドラッグ中か
         this.draggedLineEndpoint = null; // ドラッグ中の線端点情報 {shape, endpoint: 'start'|'end'}
@@ -60,6 +65,8 @@ class BasicFigureEditor {
         this.linePattern = 'solid'; // 'solid', 'dotted', 'dashed'
         this.lineConnectionType = 'straight'; // 'straight', 'elbow', 'curve'
         this.cornerRadius = 0; // 角丸半径
+        this.arrowPosition = 'none'; // 'none', 'start', 'end', 'both'
+        this.arrowType = 'simple'; // 'simple', 'double', 'filled'
         this.bgColor = '#ffffff';
 
         // 道具パネル
@@ -111,6 +118,10 @@ class BasicFigureEditor {
 
         // 開いている実身を追跡するためのMap (realId -> windowId)
         this.openedRealObjects = new Map();
+
+        // ドラッグクールダウン（連続ドラッグ防止）
+        this.dragCooldown = false;
+        this.dragCooldownTimeout = null;
 
         // ダブルクリック+ドラッグ用の状態管理
         this.dblClickDragState = {
@@ -167,6 +178,12 @@ class BasicFigureEditor {
         this.messageBus.on('init', (data) => {
             console.log('[FIGURE EDITOR] [MessageBus] init受信');
 
+            // ウィンドウIDを保存（親から渡されたIDを使用）
+            if (data.windowId) {
+                this.windowId = data.windowId;
+                console.log('[FIGURE EDITOR] [MessageBus] windowId更新:', this.windowId);
+            }
+
             // fileIdを保存（拡張子を除去）
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;
@@ -184,13 +201,27 @@ class BasicFigureEditor {
             if (data.fileData && data.fileData.realObject && data.fileData.realObject.window) {
                 this.isFullscreen = data.fileData.realObject.window.maximize || false;
                 console.log('[FIGURE EDITOR] [MessageBus] 全画面表示状態を復元:', this.isFullscreen);
+
+                // 道具パネル位置を復元
+                if (data.fileData.realObject.window.panelpos) {
+                    this.panelpos = data.fileData.realObject.window.panelpos;
+                    console.log('[FIGURE EDITOR] [MessageBus] 道具パネル位置を復元:', this.panelpos);
+                }
+
+                // 道具パネル表示状態を復元
+                if (data.fileData.realObject.window.panel !== undefined) {
+                    this.toolPanelVisible = data.fileData.realObject.window.panel;
+                    console.log('[FIGURE EDITOR] [MessageBus] 道具パネル表示状態を復元:', this.toolPanelVisible);
+                }
             }
 
             this.loadFile(data.fileData);
 
-            // ファイル読み込み後に道具パネルを開く
+            // ファイル読み込み後に道具パネルの表示状態に従って開く
             setTimeout(() => {
-                this.openToolPanelWindow();
+                if (this.toolPanelVisible) {
+                    this.openToolPanelWindow();
+                }
             }, 500);
         });
 
@@ -278,6 +309,12 @@ class BasicFigureEditor {
             this.toolPanelWindowId = data.windowId;
         });
 
+        // tool-panel-window-moved メッセージ
+        this.messageBus.on('tool-panel-window-moved', (data) => {
+            console.log('[FIGURE EDITOR] [MessageBus] tool-panel-window-moved受信:', data.pos);
+            this.updatePanelPosition(data.pos);
+        });
+
         // select-tool メッセージ
         this.messageBus.on('select-tool', (data) => {
             this.selectTool(data.tool);
@@ -325,6 +362,18 @@ class BasicFigureEditor {
         this.messageBus.on('update-corner-radius', (data) => {
             this.cornerRadius = data.cornerRadius;
             this.applyCornerRadiusToSelected(data.cornerRadius);
+        });
+
+        // update-arrow-position メッセージ
+        this.messageBus.on('update-arrow-position', (data) => {
+            this.arrowPosition = data.arrowPosition;
+            this.applyArrowPositionToSelected(data.arrowPosition);
+        });
+
+        // update-arrow-type メッセージ
+        this.messageBus.on('update-arrow-type', (data) => {
+            this.arrowType = data.arrowType;
+            this.applyArrowTypeToSelected(data.arrowType);
         });
 
         // update-grid-mode メッセージ
@@ -451,29 +500,8 @@ class BasicFigureEditor {
 
                         console.log('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
 
-                        // 各仮身を削除
-                        shapesToDelete.forEach(s => {
-                            // 図形を削除
-                            const index = this.shapes.indexOf(s);
-                            if (index > -1) {
-                                this.shapes.splice(index, 1);
-                            }
-
-                            // 選択状態をクリア
-                            const selectedIndex = this.selectedShapes.indexOf(s);
-                            if (selectedIndex > -1) {
-                                this.selectedShapes.splice(selectedIndex, 1);
-                            }
-
-                            // 展開されたiframeがあれば削除
-                            if (s.expandedElement && s.expandedElement.parentNode) {
-                                s.expandedElement.parentNode.removeChild(s.expandedElement);
-                            }
-                        });
-
-                        // 再描画
-                        this.redraw();
-                        this.isModified = true;
+                        // 共通メソッドで仮身を削除
+                        this.deleteVirtualObjectShapes(shapesToDelete);
                     } else {
                         console.log('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
                     }
@@ -489,6 +517,13 @@ class BasicFigureEditor {
         this.messageBus.on('cross-window-drop-success', (data) => {
             // 他のウィンドウへのドロップが成功した通知（直接受信した場合）
             console.log('[FIGURE EDITOR] [MessageBus] cross-window-drop-success受信:', data);
+
+            // 同じウィンドウ内でのドロップの場合は無視
+            if (data.sourceWindowId === this.windowId) {
+                console.log('[FIGURE EDITOR] 同じウィンドウ内でのドロップ: 処理をスキップ');
+                return;
+            }
+
             if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
                 const shape = this.draggingVirtualObjectShape;
                 const dragMode = data.mode || this.dragState.dragMode;
@@ -511,29 +546,8 @@ class BasicFigureEditor {
 
                     console.log('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
 
-                    // 各仮身を削除
-                    shapesToDelete.forEach(s => {
-                        // 図形を削除
-                        const index = this.shapes.indexOf(s);
-                        if (index > -1) {
-                            this.shapes.splice(index, 1);
-                        }
-
-                        // 選択状態をクリア
-                        const selectedIndex = this.selectedShapes.indexOf(s);
-                        if (selectedIndex > -1) {
-                            this.selectedShapes.splice(selectedIndex, 1);
-                        }
-
-                        // 展開されたiframeがあれば削除
-                        if (s.expandedElement && s.expandedElement.parentNode) {
-                            s.expandedElement.parentNode.removeChild(s.expandedElement);
-                        }
-                    });
-
-                    // 再描画
-                    this.redraw();
-                    this.isModified = true;
+                    // 共通メソッドで仮身を削除
+                    this.deleteVirtualObjectShapes(shapesToDelete);
                 } else {
                     console.log('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
                 }
@@ -758,8 +772,9 @@ class BasicFigureEditor {
                 this.lastBlinkTime = currentTime;
 
                 // 選択中の図形がある場合のみ再描画
+                // 注意: 仮身を再作成しない軽量版の再描画を使用
                 if (this.selectedShapes.length > 0) {
-                    this.redraw();
+                    this.redrawForSelectionBlink();
                 }
             }
 
@@ -911,15 +926,24 @@ class BasicFigureEditor {
                                 this.insertVirtualObject(x - offsetX, y - offsetY, virtualObject);
                             });
 
-                            // ドラッグ元のウィンドウに「クロスウィンドウドロップ成功」を通知
-                            if (window.parent && window.parent !== window) {
-                                window.parent.postMessage({
-                                    type: 'cross-window-drop-success',
+                            // クロスウィンドウドラッグの場合のみメッセージを送信
+                            if (dragData.sourceWindowId !== this.windowId) {
+                                // ドラッグ元のウィンドウに「クロスウィンドウドロップ進行中」を通知
+                                // これによりdragendハンドラでfinishDrag()がスキップされる
+                                this.messageBus.send('cross-window-drop-in-progress', {
+                                    targetWindowId: this.windowId,
+                                    sourceWindowId: dragData.sourceWindowId
+                                });
+
+                                // ドラッグ元のウィンドウに「クロスウィンドウドロップ成功」を通知
+                                // MessageBus Phase 2: messageBus.send()を使用
+                                this.messageBus.send('cross-window-drop-success', {
                                     mode: dragData.mode,
                                     source: dragData.source,
                                     sourceWindowId: dragData.sourceWindowId,
-                                    virtualObjectId: virtualObjects[0].link_id // 最初の仮身のIDを通知
-                                }, '*');
+                                    virtualObjects: virtualObjects, // 仮身一覧プラグインでの削除用
+                                    virtualObjectId: virtualObjects[0].link_id // 最初の仮身のIDを通知（後方互換性）
+                                });
                             }
                             return;
                         } else if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
@@ -994,8 +1018,81 @@ class BasicFigureEditor {
      * グローバルマウスイベントハンドラーを設定（仮身一覧プラグインと同じパターン）
      */
     setupGlobalMouseHandlers() {
+        console.log('[FIGURE EDITOR] ★★★ setupGlobalMouseHandlers 呼び出し ★★★');
+
         // ドラッグ用のmousemoveハンドラ
-        const handleDragMouseMove = (_e) => {
+        const handleDragMouseMove = (e) => {
+            // マウス座標を常に更新（コネクタ表示のため）
+            const container = document.querySelector('.editor-container');
+            if (container) {
+                const rect = container.getBoundingClientRect();
+                this.lastMouseX = e.clientX - rect.left + container.scrollLeft;
+                this.lastMouseY = e.clientY - rect.top + container.scrollTop;
+
+                // 直線ツール選択中または線の端点ドラッグ中は再描画（コネクタ表示のため）
+                if (this.currentTool === 'line' || this.isDraggingLineEndpoint) {
+                    this.redraw();
+                }
+            }
+
+            // ダブルクリック+ドラッグ候補の検出
+            if (this.dblClickDragState.isDblClickDragCandidate && !this.dblClickDragState.isDblClickDrag) {
+                const deltaX = e.clientX - this.dblClickDragState.startX;
+                const deltaY = e.clientY - this.dblClickDragState.startY;
+                console.log('[FIGURE EDITOR] handleDragMouseMove: isDblClickDragCandidate=true, delta=(' + deltaX + ',' + deltaY + ')');
+
+                // 5px以上移動したらダブルクリック+ドラッグ確定
+                if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+                    console.log('[FIGURE EDITOR] ダブルクリック+ドラッグを確定（ドラッグ完了待ち）、プレビュー作成');
+                    this.dblClickDragState.isDblClickDrag = true;
+                    this.dblClickDragState.isDblClickDragCandidate = false;
+
+                    // プレビュー要素を作成
+                    const shape = this.dblClickDragState.dblClickedShape;
+                    if (shape && shape.type === 'vobj') {
+                        const width = Math.abs(shape.endX - shape.startX);
+                        const height = Math.abs(shape.endY - shape.startY);
+
+                        const preview = document.createElement('div');
+                        preview.className = 'dblclick-drag-preview';
+                        preview.style.position = 'absolute';
+                        preview.style.border = '2px solid #0078d4';
+                        preview.style.backgroundColor = 'rgba(0, 120, 212, 0.1)';
+                        preview.style.pointerEvents = 'none';
+                        preview.style.zIndex = '10000';
+                        preview.style.width = width + 'px';
+                        preview.style.height = height + 'px';
+                        preview.style.left = shape.startX + 'px';
+                        preview.style.top = shape.startY + 'px';
+
+                        const container = document.querySelector('.editor-container');
+                        if (container) {
+                            container.appendChild(preview);
+                            this.dblClickDragState.previewElement = preview;
+                        }
+                    }
+                    return;
+                }
+            }
+
+            // ダブルクリック+ドラッグ中のプレビュー位置更新
+            if (this.dblClickDragState.isDblClickDrag && this.dblClickDragState.previewElement) {
+                const preview = this.dblClickDragState.previewElement;
+                const container = document.querySelector('.editor-container');
+                if (container) {
+                    const rect = container.getBoundingClientRect();
+                    const canvasX = e.clientX - rect.left + container.scrollLeft;
+                    const canvasY = e.clientY - rect.top + container.scrollTop;
+                    preview.style.left = canvasX + 'px';
+                    preview.style.top = canvasY + 'px';
+                }
+                return;
+            }
+
+            // デバッグ: isDblClickDrag状態の確認
+            if (this.dblClickDragState.isDblClickDrag) {
+                console.log('[FIGURE EDITOR] handleDragMouseMove: isDblClickDrag=true, previewElement=' + (this.dblClickDragState.previewElement ? 'あり' : 'なし'));
+            }
         };
 
         // スロットル版のmousemoveハンドラ（60FPS制限）
@@ -1016,13 +1113,44 @@ class BasicFigureEditor {
 
         // document全体でのmouseup
         document.addEventListener('mouseup', (e) => {
-            console.log('[FIGURE EDITOR] document mouseup検知 isDblClickDrag:', this.dblClickDragState.isDblClickDrag, 'isDblClickDragCandidate:', this.dblClickDragState.isDblClickDragCandidate, 'button:', e.button);
+            console.log('[FIGURE EDITOR] ★★★ document mouseup検知 ★★★');
+            console.log('[FIGURE EDITOR] document mouseup: isDblClickDrag=' + this.dblClickDragState.isDblClickDrag + ', isDblClickDragCandidate=' + this.dblClickDragState.isDblClickDragCandidate + ', button=' + e.button);
 
             // ダブルクリック+ドラッグのプレビュー要素を削除
             const preview = this.dblClickDragState.previewElement;
             if (preview) {
                 preview.remove();
                 this.dblClickDragState.previewElement = null;
+            }
+
+            // ダブルクリック+ドラッグ確定後のmouseup処理（実身複製）
+            if (this.dblClickDragState.isDblClickDrag) {
+                console.log('[FIGURE EDITOR] ダブルクリック+ドラッグ完了、実身を複製');
+
+                const dblClickedShape = this.dblClickDragState.dblClickedShape;
+                const dblClickedElement = this.dblClickDragState.dblClickedElement;
+
+                if (dblClickedShape && dblClickedElement && !this.readonly) {
+                    // マウスアップ位置をキャンバス座標に変換
+                    const container = document.querySelector('.editor-container');
+                    if (container) {
+                        const rect = container.getBoundingClientRect();
+                        const canvasX = e.clientX - rect.left + container.scrollLeft;
+                        const canvasY = e.clientY - rect.top + container.scrollTop;
+
+                        // handleDoubleClickDragDuplicateメソッドを呼び出し（ドロップ位置を渡す）
+                        this.handleDoubleClickDragDuplicate(dblClickedShape, canvasX, canvasY);
+                    }
+
+                    // draggableをtrueに戻す
+                    dblClickedElement.setAttribute('draggable', 'true');
+                }
+
+                // 状態をクリア
+                this.dblClickDragState.isDblClickDrag = false;
+                this.dblClickDragState.dblClickedShape = null;
+                this.dblClickDragState.dblClickedElement = null;
+                return;
             }
 
             // ダブルクリック候補でドラッグしなかった場合、仮身を開く
@@ -1078,7 +1206,7 @@ class BasicFigureEditor {
             let right = 0;
             let bottom = 0;
 
-            if (shape.type === 'rect' || shape.type === 'textbox' || shape.type === 'virtual-object' || shape.type === 'image' || shape.type === 'pixelmap') {
+            if (shape.type === 'rect' || shape.type === 'textbox' || shape.type === 'vobj' || shape.type === 'image' || shape.type === 'pixelmap') {
                 // startX, startY, endX, endY を使う図形
                 right = Math.max(shape.startX || 0, shape.endX || 0);
                 bottom = Math.max(shape.startY || 0, shape.endY || 0);
@@ -1191,6 +1319,7 @@ class BasicFigureEditor {
             window.parent.postMessage({
                 type: 'open-tool-panel-window',
                 pluginId: 'basic-figure-editor',
+                panelpos: this.panelpos || { x: 50, y: 50 }, // 道具パネルの位置を指定
                 settings: {
                     fillColor: this.fillColor,
                     fillEnabled: this.fillEnabled,
@@ -1341,7 +1470,7 @@ class BasicFigureEditor {
                 this.createResizePreviewBox(resizeHandle.shape);
 
                 // 仮身の場合、iframe の pointer-events を無効化し、z-indexを下げる
-                if (resizeHandle.shape.type === 'virtual-object' && resizeHandle.shape.expandedElement) {
+                if (resizeHandle.shape.type === 'vobj' && resizeHandle.shape.expandedElement) {
                     resizeHandle.shape.expandedElement.style.pointerEvents = 'none';
                     resizeHandle.shape.originalZIndex = resizeHandle.shape.expandedElement.style.zIndex;
                     resizeHandle.shape.expandedElement.style.zIndex = '1';
@@ -1394,7 +1523,7 @@ class BasicFigureEditor {
 
                 // 仮身図形の場合、DOM要素のpointer-eventsを有効化（ドラッグ用）
                 this.selectedShapes.forEach(shape => {
-                    if (shape.type === 'virtual-object' && shape.vobjElement) {
+                    if (shape.type === 'vobj' && shape.vobjElement) {
                         shape.vobjElement.style.pointerEvents = 'auto';
                     }
                 });
@@ -1577,9 +1706,15 @@ class BasicFigureEditor {
                 cornerRadius: this.currentTool === 'rect' || this.currentTool === 'polygon' ? this.cornerRadius : 0
             };
 
-            // 直線の場合、開始点の接続情報を保存
-            if (this.currentTool === 'line' && startConnection) {
-                this.currentShape.startConnection = startConnection;
+            // 直線の場合、開始点の接続情報と矢印情報を保存
+            if (this.currentTool === 'line') {
+                if (startConnection) {
+                    this.currentShape.startConnection = startConnection;
+                }
+                // 矢印情報を追加
+                this.currentShape.start_arrow = (this.arrowPosition === 'start' || this.arrowPosition === 'both') ? 1 : 0;
+                this.currentShape.end_arrow = (this.arrowPosition === 'end' || this.arrowPosition === 'both') ? 1 : 0;
+                this.currentShape.arrow_type = this.arrowType;
             }
         }
     }
@@ -1626,7 +1761,7 @@ class BasicFigureEditor {
             let minWidth = 10; // 通常の図形の最小幅
             let minHeight = 10; // 通常の図形の最小高さ
 
-            if (shape.type === 'virtual-object') {
+            if (shape.type === 'vobj') {
                 minWidth = 50; // 仮身の最小幅
                 minHeight = shape.originalHeight || 32; // chszから計算された元の高さ
             }
@@ -1663,14 +1798,14 @@ class BasicFigureEditor {
             }
 
             // 仮身の場合、iframe のサイズを更新（展開済みの場合のみ）
-            if (shape.type === 'virtual-object' && shape.expanded) {
+            if (shape.type === 'vobj' && shape.expanded) {
                 const newHeight = shape.endY - shape.startY;
                 const newWidth = shape.endX - shape.startX;
                 this.updateExpandedVirtualObjectSize(shape, newWidth, newHeight);
             }
 
             // 仮身DOM要素のサイズを更新
-            if (shape.type === 'virtual-object' && shape.vobjElement) {
+            if (shape.type === 'vobj' && shape.vobjElement) {
                 const newWidth = shape.endX - shape.startX;
                 const newHeight = shape.endY - shape.startY;
                 shape.vobjElement.style.width = `${newWidth}px`;
@@ -1702,7 +1837,7 @@ class BasicFigureEditor {
 
                 // コネクタ対応図形のみチェック
                 if (targetShape.type !== 'rect' && targetShape.type !== 'roundRect' &&
-                    targetShape.type !== 'ellipse' && targetShape.type !== 'polygon') {
+                    targetShape.type !== 'ellipse' && targetShape.type !== 'polygon' && targetShape.type !== 'vobj') {
                     continue;
                 }
 
@@ -1815,7 +1950,7 @@ class BasicFigureEditor {
                 }
 
                 // 展開された仮身のiframe位置を更新
-                if (shape.type === 'virtual-object' && shape.expanded && shape.expandedElement) {
+                if (shape.type === 'vobj' && shape.expanded && shape.expandedElement) {
                     const chsz = shape.virtualObject.chsz || 14;
                     const titleBarHeight = chsz + 16;
                     shape.expandedElement.style.left = `${shape.startX}px`;
@@ -1823,7 +1958,7 @@ class BasicFigureEditor {
                 }
 
                 // 仮身DOM要素の位置を更新
-                if (shape.type === 'virtual-object' && shape.vobjElement) {
+                if (shape.type === 'vobj' && shape.vobjElement) {
                     shape.vobjElement.style.left = `${shape.startX}px`;
                     shape.vobjElement.style.top = `${shape.startY}px`;
                 }
@@ -1990,7 +2125,7 @@ class BasicFigureEditor {
             this.removeResizePreviewBox();
 
             // 仮身の場合、iframe の pointer-events と z-index を元に戻す
-            if (resizedShape && resizedShape.type === 'virtual-object' && resizedShape.expandedElement) {
+            if (resizedShape && resizedShape.type === 'vobj' && resizedShape.expandedElement) {
                 resizedShape.expandedElement.style.pointerEvents = 'none'; // キャンバス側でイベント処理
                 if (resizedShape.originalZIndex !== undefined) {
                     resizedShape.expandedElement.style.zIndex = resizedShape.originalZIndex;
@@ -2022,7 +2157,7 @@ class BasicFigureEditor {
 
             // 仮身図形のDOM要素のpointer-eventsを無効化
             this.shapes.forEach(shape => {
-                if (shape.type === 'virtual-object' && shape.vobjElement) {
+                if (shape.type === 'vobj' && shape.vobjElement) {
                     shape.vobjElement.style.pointerEvents = 'none';
                 }
             });
@@ -2088,7 +2223,7 @@ class BasicFigureEditor {
                     this.enterPixelmapMode(shape);
                 }
                 return;
-            } else if (shape.type === 'virtual-object' && this.isPointInShape(x, y, shape)) {
+            } else if (shape.type === 'vobj' && this.isPointInShape(x, y, shape)) {
                 // 仮身をダブルクリック：defaultOpenプラグインで実身を開く
                 // 選択状態にしてから開く
                 if (!this.selectedShapes.includes(shape)) {
@@ -2380,7 +2515,7 @@ class BasicFigureEditor {
 
         for (const shape of this.selectedShapes) {
             // 仮身の場合は専用リサイズを使うため、通常のリサイズハンドルは無効
-            if (shape.type === 'virtual-object') {
+            if (shape.type === 'vobj') {
                 continue;
             }
 
@@ -2420,13 +2555,16 @@ class BasicFigureEditor {
             // コネクタポイントを取得
             const connectorPoints = this.getConnectorPoints(shape);
 
+            // 仮身の場合は拡張距離を使用
+            const showDistance = shape.type === 'vobj' ? this.vobjConnectorShowDistance : this.connectorShowDistance;
+
             // 各コネクタポイントとの距離をチェック
             for (const point of connectorPoints) {
                 const dist = Math.sqrt(
                     Math.pow(x - point.x, 2) + Math.pow(y - point.y, 2)
                 );
 
-                if (dist <= this.connectorShowDistance) {
+                if (dist <= showDistance) {
                     nearbyShapes.push({
                         shape: shape,
                         connectors: connectorPoints
@@ -2459,13 +2597,16 @@ class BasicFigureEditor {
             // コネクタポイントを取得
             const connectorPoints = this.getConnectorPoints(shape);
 
+            // 仮身の場合は拡張距離を使用
+            const snapDistance = shape.type === 'vobj' ? this.vobjConnectorSnapDistance : this.connectorSnapDistance;
+
             // 各コネクタポイントとの距離をチェック
             for (const point of connectorPoints) {
                 const dist = Math.sqrt(
                     Math.pow(x - point.x, 2) + Math.pow(y - point.y, 2)
                 );
 
-                if (dist < minDistance) {
+                if (dist < minDistance && dist <= snapDistance) {
                     minDistance = dist;
                     closestConnector = {
                         shape: shape,
@@ -2566,15 +2707,45 @@ class BasicFigureEditor {
                 const hasEndConnection = shape.endConnection && shape.endConnection.shapeId !== undefined;
                 const bothEndsConnected = hasStartConnection && hasEndConnection;
 
+                let lineAngles = null;
                 // 両端が接続されている場合のみ接続形状を適用
                 if (bothEndsConnected && shape.lineConnectionType && shape.lineConnectionType !== 'straight') {
-                    this.drawConnectedLine(shape);
+                    lineAngles = this.drawConnectedLine(shape);
                 } else {
                     // 直線として描画
                     this.ctx.beginPath();
                     this.ctx.moveTo(shape.startX, shape.startY);
                     this.ctx.lineTo(shape.endX, shape.endY);
                     this.ctx.stroke();
+                }
+
+                // 矢印を描画
+                if (shape.start_arrow || shape.end_arrow) {
+                    const arrowType = shape.arrow_type || 'simple';
+                    let startAngle, endAngle;
+
+                    if (lineAngles) {
+                        // 接続形状の場合は、計算された角度を使用
+                        startAngle = lineAngles.startAngle;
+                        endAngle = lineAngles.endAngle;
+                    } else {
+                        // 直線の場合は、単純に始点と終点から角度を計算
+                        const dx = shape.endX - shape.startX;
+                        const dy = shape.endY - shape.startY;
+                        const angle = Math.atan2(dy, dx);
+                        startAngle = angle + Math.PI; // 始点は逆向き
+                        endAngle = angle;
+                    }
+
+                    // 始点の矢印
+                    if (shape.start_arrow) {
+                        this.drawArrow(shape.startX, shape.startY, startAngle, arrowType, shape.lineWidth, shape.strokeColor);
+                    }
+
+                    // 終点の矢印
+                    if (shape.end_arrow) {
+                        this.drawArrow(shape.endX, shape.endY, endAngle, arrowType, shape.lineWidth, shape.strokeColor);
+                    }
                 }
                 break;
 
@@ -2820,7 +2991,7 @@ class BasicFigureEditor {
                 }
                 break;
 
-            case 'virtual-object':
+            case 'vobj':
                 // 仮身はDOM要素として描画するため、キャンバス描画はスキップ
                 // renderVirtualObjectsAsElementsメソッドで描画される
                 break;
@@ -2852,14 +3023,6 @@ class BasicFigureEditor {
                     this.ctx.drawImage(shape.imageElement, -width / 2, -height / 2, width, height);
 
                     this.ctx.restore();
-
-                    // 選択されていない場合は枠線を表示
-                    if (!this.selectedShapes.includes(shape)) {
-                        this.ctx.strokeStyle = '#cccccc';
-                        this.ctx.lineWidth = 1;
-                        this.ctx.setLineDash([]);
-                        this.ctx.strokeRect(shape.startX, shape.startY, width, height);
-                    }
                 }
                 break;
         }
@@ -2957,6 +3120,7 @@ class BasicFigureEditor {
     /**
      * 接続形状（カギ線・曲線）で線を描画
      * @param {Object} shape - 線図形オブジェクト
+     * @returns {Object} {startAngle, endAngle} - 始点と終点の角度（ラジアン）
      */
     drawConnectedLine(shape) {
         const startX = shape.startX;
@@ -2973,6 +3137,9 @@ class BasicFigureEditor {
         // 全体の距離を計算（曲線で使用）
         const totalDist = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
 
+        let startAngle = 0;
+        let endAngle = 0;
+
         this.ctx.beginPath();
         this.ctx.moveTo(startX, startY);
 
@@ -2988,18 +3155,22 @@ class BasicFigureEditor {
                 // 垂直 → 水平 → 垂直
                 // 始点から垂直にmidYまで延ばす
                 this.ctx.lineTo(startX, midY);
+                startAngle = Math.atan2(midY - startY, 0) + Math.PI; // 矢印は逆方向
                 // 水平に終点のX座標まで
                 this.ctx.lineTo(endX, midY);
                 // 垂直に終点まで
                 this.ctx.lineTo(endX, endY);
+                endAngle = Math.atan2(endY - midY, 0);
             } else {
                 // 水平 → 垂直 → 水平
                 // 始点から水平にmidXまで延ばす
                 this.ctx.lineTo(midX, startY);
+                startAngle = Math.atan2(0, midX - startX) + Math.PI; // 矢印は逆方向
                 // 垂直に終点のY座標まで
                 this.ctx.lineTo(midX, endY);
                 // 水平に終点まで
                 this.ctx.lineTo(endX, endY);
+                endAngle = Math.atan2(0, endX - midX);
             }
         } else if (shape.lineConnectionType === 'curve') {
             // 曲線: ベジェ曲線で、制御点を法線方向に配置
@@ -3012,9 +3183,16 @@ class BasicFigureEditor {
             const cp2y = endY + endDir.y * controlDist;
 
             this.ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
+
+            // ベジェ曲線の始点のタンジェント：startDir方向の逆（矢印は逆方向）
+            startAngle = Math.atan2(startDir.y, startDir.x) + Math.PI;
+            // ベジェ曲線の終点のタンジェント：cp2からendへの方向
+            endAngle = Math.atan2(endY - cp2y, endX - cp2x);
         }
 
         this.ctx.stroke();
+
+        return { startAngle, endAngle };
     }
 
     /**
@@ -3052,14 +3230,14 @@ class BasicFigureEditor {
 
             case 'vobj':
                 // 仮身: 四角形と同様に4辺の中点 + 4つの角 = 8点
-                const vobjWidth = shape.width;
-                const vobjHeight = shape.height;
-                const vobjLeft = shape.x;
-                const vobjRight = shape.x + shape.width;
-                const vobjTop = shape.y;
-                const vobjBottom = shape.y + shape.height;
-                const vobjCenterX = shape.x + vobjWidth / 2;
-                const vobjCenterY = shape.y + vobjHeight / 2;
+                const vobjWidth = shape.endX - shape.startX;
+                const vobjHeight = shape.endY - shape.startY;
+                const vobjLeft = shape.startX;
+                const vobjRight = shape.endX;
+                const vobjTop = shape.startY;
+                const vobjBottom = shape.endY;
+                const vobjCenterX = shape.startX + vobjWidth / 2;
+                const vobjCenterY = shape.startY + vobjHeight / 2;
 
                 points.push(
                     { x: vobjCenterX, y: vobjTop, index: 0 },      // 上辺中点
@@ -3180,6 +3358,51 @@ class BasicFigureEditor {
     }
 
     /**
+     * 矢印を描画
+     * @param {number} x - 矢印の位置X
+     * @param {number} y - 矢印の位置Y
+     * @param {number} angle - 矢印の角度（ラジアン）
+     * @param {string} arrowType - 矢印の種類 ('simple', 'filled')
+     * @param {number} lineWidth - 線の太さ
+     * @param {string} strokeColor - 線の色
+     */
+    drawArrow(x, y, angle, arrowType, lineWidth, strokeColor) {
+        const arrowLength = 15 + lineWidth * 2; // 矢印の長さ
+        const arrowWidth = 8 + lineWidth; // 矢印の幅
+
+        this.ctx.save();
+        this.ctx.translate(x, y);
+        this.ctx.rotate(angle);
+        this.ctx.strokeStyle = strokeColor;
+        this.ctx.fillStyle = strokeColor;
+        this.ctx.lineWidth = lineWidth;
+        this.ctx.setLineDash([]); // 矢印は実線で描画
+
+        switch (arrowType) {
+            case 'simple': // → (線のみ)
+                this.ctx.beginPath();
+                this.ctx.moveTo(0, 0);
+                this.ctx.lineTo(-arrowLength, -arrowWidth);
+                this.ctx.moveTo(0, 0);
+                this.ctx.lineTo(-arrowLength, arrowWidth);
+                this.ctx.stroke();
+                break;
+
+            case 'filled': // ➜ (塗りつぶし)
+                this.ctx.beginPath();
+                this.ctx.moveTo(0, 0);
+                this.ctx.lineTo(-arrowLength, -arrowWidth);
+                this.ctx.lineTo(-arrowLength, arrowWidth);
+                this.ctx.closePath();
+                this.ctx.fill();
+                this.ctx.stroke();
+                break;
+        }
+
+        this.ctx.restore();
+    }
+
+    /**
      * キャンバス再描画（通常はスロットル版を使用）
      */
     redraw() {
@@ -3215,18 +3438,18 @@ class BasicFigureEditor {
             this.drawSelectionHighlight(shape);
         });
 
-        // 選択中の図形にコネクタを表示
-        this.selectedShapes.forEach(shape => {
-            // 四角形、円、多角形のみコネクタを表示（仮身は除外）
-            if (shape.type === 'rect' || shape.type === 'roundRect' ||
-                shape.type === 'ellipse' || shape.type === 'polygon') {
-                this.drawConnectors(shape);
-            }
-            // 直線の端点にコネクタを表示
-            else if (shape.type === 'line') {
-                this.drawLineEndpointConnectors(shape);
-            }
-        });
+        // 選択中の図形にコネクタは表示しない（ユーザー要望により無効化）
+        // this.selectedShapes.forEach(shape => {
+        //     // 四角形、円、多角形、仮身にコネクタを表示
+        //     if (shape.type === 'rect' || shape.type === 'roundRect' ||
+        //         shape.type === 'ellipse' || shape.type === 'polygon' || shape.type === 'vobj') {
+        //         this.drawConnectors(shape);
+        //     }
+        //     // 直線の端点にコネクタを表示
+        //     else if (shape.type === 'line') {
+        //         this.drawLineEndpointConnectors(shape);
+        //     }
+        // });
 
         // 直線描画中：マウス位置近くの図形のコネクタを表示
         if (this.currentTool === 'line' && this.isDrawing && this.currentShape) {
@@ -3282,6 +3505,102 @@ class BasicFigureEditor {
 
         // 仮身をDOM要素として描画
         this.renderVirtualObjectsAsElements();
+    }
+
+    /**
+     * 選択枠点滅用の軽量再描画
+     * 仮身のDOM要素は再作成せず、キャンバス上の図形と選択枠のみを再描画
+     */
+    redrawForSelectionBlink() {
+        // キャンバスをクリア
+        this.ctx.fillStyle = this.bgColor;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // 格子点を描画（最後部）
+        if (this.gridMode === 'show' || this.gridMode === 'snap') {
+            this.drawGrid();
+        }
+
+        // すべての図形を再描画（ただし仮身はスキップ）
+        this.shapes.forEach(shape => {
+            // 仮身以外の図形のみ再描画
+            if (shape.type !== 'vobj') {
+                this.drawShape(shape);
+            }
+        });
+
+        // 選択中の図形にハイライトを表示
+        this.selectedShapes.forEach(shape => {
+            this.drawSelectionHighlight(shape);
+        });
+
+        // 選択中の図形にコネクタは表示しない（ユーザー要望により無効化）
+        // this.selectedShapes.forEach(shape => {
+        //     // 四角形、円、多角形、仮身にコネクタを表示
+        //     if (shape.type === 'rect' || shape.type === 'roundRect' ||
+        //         shape.type === 'ellipse' || shape.type === 'polygon' || shape.type === 'vobj') {
+        //         this.drawConnectors(shape);
+        //     }
+        //     // 直線の端点にコネクタを表示
+        //     else if (shape.type === 'line') {
+        //         this.drawLineEndpointConnectors(shape);
+        //     }
+        // });
+
+        // 直線描画中：マウス位置近くの図形のコネクタを表示
+        if (this.currentTool === 'line' && this.isDrawing && this.currentShape) {
+            // 終点位置（マウス位置）の近くの図形を探す
+            const nearbyShapes = this.findNearbyShapes(this.currentShape.endX, this.currentShape.endY);
+            nearbyShapes.forEach(item => {
+                this.drawConnectors(item.shape);
+            });
+        }
+
+        // 直線ツール選択中（まだ描画していない）：マウス位置近くの図形のコネクタを表示
+        if (this.currentTool === 'line' && !this.isDrawing && !this.currentShape) {
+            const nearbyShapes = this.findNearbyShapes(this.lastMouseX, this.lastMouseY);
+            nearbyShapes.forEach(item => {
+                this.drawConnectors(item.shape);
+            });
+        }
+
+        // 直線端点ドラッグ中：マウス位置近くの図形のコネクタを表示
+        if (this.isDraggingLineEndpoint && this.draggedLineEndpoint) {
+            const shape = this.draggedLineEndpoint.shape;
+            const endpoint = this.draggedLineEndpoint.endpoint;
+            const endpointX = endpoint === 'start' ? shape.startX : shape.endX;
+            const endpointY = endpoint === 'start' ? shape.startY : shape.endY;
+
+            const nearbyShapes = this.findNearbyShapes(endpointX, endpointY);
+            nearbyShapes.forEach(item => {
+                this.drawConnectors(item.shape);
+            });
+        }
+
+        // 矩形選択のプレビューを描画
+        if (this.isRectangleSelecting && this.selectionRect) {
+            const minX = Math.min(this.selectionRect.startX, this.selectionRect.endX);
+            const maxX = Math.max(this.selectionRect.startX, this.selectionRect.endX);
+            const minY = Math.min(this.selectionRect.startY, this.selectionRect.endY);
+            const maxY = Math.max(this.selectionRect.startY, this.selectionRect.endY);
+
+            this.ctx.save();
+            this.ctx.strokeStyle = 'rgba(0, 123, 255, 0.8)';
+            this.ctx.lineWidth = 1;
+            this.ctx.setLineDash([5, 5]);
+            this.ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+            this.ctx.fillStyle = 'rgba(0, 123, 255, 0.1)';
+            this.ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
+            this.ctx.restore();
+        }
+
+        // 描画中の図形プレビューを表示（マウス停止時もプレビューを維持）
+        if (this.currentShape && (this.isDrawing || this.currentTool === 'polygon')) {
+            this.drawShape(this.currentShape);
+        }
+
+        // 注意: 仮身のDOM要素は再作成しない（パフォーマンス最適化）
+        // 既存のDOM要素はそのまま維持される
     }
 
     drawGrid() {
@@ -3588,7 +3907,7 @@ class BasicFigureEditor {
         this.ctx.setLineDash([]);
 
         // 仮身の場合は専用リサイズを使うため、通常のリサイズハンドルは描画しない
-        if (shape.type === 'virtual-object') {
+        if (shape.type === 'vobj') {
             return;
         }
 
@@ -3775,7 +4094,71 @@ class BasicFigureEditor {
 
     async insertVirtualObject(x, y, virtualObject) {
         console.log('[FIGURE EDITOR] 仮身を配置:', virtualObject.link_name, 'at', x, y);
+        console.log('[FIGURE EDITOR] ドラッグ状態チェック: isDraggingVirtualObjectShape=', this.isDraggingVirtualObjectShape, 'draggingVirtualObjectShape=', this.draggingVirtualObjectShape ? this.draggingVirtualObjectShape.virtualObject.link_name : 'null', 'dragMode=', this.dragState.dragMode);
 
+        // 同じウィンドウ内での移動かチェック
+        if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
+            const oldShape = this.draggingVirtualObjectShape;
+            const dragMode = this.dragState.dragMode;
+
+            console.log('[FIGURE EDITOR] 同じウィンドウ内での仮身ドラッグを検出（モード:', dragMode, '）');
+
+            // 移動モードの場合、既存のshapeの座標のみ更新（新しいshapeは作成しない）
+            if (dragMode === 'move') {
+                console.log('[FIGURE EDITOR] 移動モード: 既存shapeの座標を更新');
+
+                // Undo用に状態を保存
+                this.saveStateForUndo();
+
+                // 幅と高さは既存のshapeから取得（サイズを保持）
+                const width = oldShape.endX - oldShape.startX;
+                const height = oldShape.endY - oldShape.startY;
+                console.log('[FIGURE EDITOR] 既存のshapeサイズを使用: width=', width, 'height=', height);
+
+                // 既存のshapeの座標を更新
+                oldShape.startX = x;
+                oldShape.startY = y;
+                oldShape.endX = x + width;
+                oldShape.endY = y + height;
+
+                // 接続されている線の端点を更新
+                const connections = this.getConnectedLines(oldShape);
+                if (connections.length > 0) {
+                    console.log('[FIGURE EDITOR] 接続線を', connections.length, '本検出、端点を更新');
+
+                    connections.forEach(conn => {
+                        // コネクタポイントを取得
+                        const connectorPoints = this.getConnectorPoints(oldShape);
+                        const connectorPoint = connectorPoints.find(p => p.index === conn.connectorIndex);
+
+                        if (connectorPoint) {
+                            // 線の端点座標を更新
+                            if (conn.endpoint === 'start') {
+                                conn.line.startX = connectorPoint.x;
+                                conn.line.startY = connectorPoint.y;
+                                console.log('[FIGURE EDITOR] 線の始点を更新:', connectorPoint.x, connectorPoint.y);
+                            } else {
+                                conn.line.endX = connectorPoint.x;
+                                conn.line.endY = connectorPoint.y;
+                                console.log('[FIGURE EDITOR] 線の終点を更新:', connectorPoint.x, connectorPoint.y);
+                            }
+                        }
+                    });
+                }
+
+                // cross-window-drop-successで削除されないようにフラグをクリア
+                this.isDraggingVirtualObjectShape = false;
+                this.draggingVirtualObjectShape = null;
+
+                this.isModified = true;
+                this.setStatus(`仮身「${virtualObject.link_name}」を移動しました`);
+                // resizeCanvas()がredraw()を呼ぶので、ここでは呼ばない
+                this.resizeCanvas();
+                return;
+            }
+        }
+
+        // 通常の仮身配置（新規追加、またはコピーモード）
         // Undo用に状態を保存
         this.saveStateForUndo();
 
@@ -3798,7 +4181,7 @@ class BasicFigureEditor {
 
         // 仮身を図形として追加
         const voShape = {
-            type: 'virtual-object',
+            type: 'vobj',
             startX: x,
             startY: y,
             endX: x + width,
@@ -3813,10 +4196,9 @@ class BasicFigureEditor {
 
         this.shapes.push(voShape);
 
-        this.redraw();
         this.isModified = true;
         this.setStatus(`仮身「${virtualObject.link_name}」を配置しました`);
-        // スクロールバー更新を通知
+        // resizeCanvas()がredraw()を呼ぶので、ここでは呼ばない
         this.resizeCanvas();
     }
 
@@ -3867,7 +4249,7 @@ class BasicFigureEditor {
 
         try {
             // タイムアウト5秒でレスポンスを待つ
-            const result = await this.messageBus.waitFor('clipboard-data', 5000, (data) => {
+            const result = await this.messageBus.waitFor('clipboard-data', window.DEFAULT_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
             return result.clipboardData;
@@ -4064,11 +4446,20 @@ class BasicFigureEditor {
 
         // 削除可能な図形のみ削除
         deletableShapes.forEach(shape => {
-            // 開いた仮身の場合はiframe要素を削除
-            if (shape.type === 'virtual-object' && shape.expanded && shape.expandedElement) {
-                shape.expandedElement.remove();
-                delete shape.expandedElement;
-                console.log('[FIGURE EDITOR] 開いた仮身のiframe要素を削除:', shape.virtualObject.link_name);
+            // 仮身の場合はDOM要素を削除
+            if (shape.type === 'vobj') {
+                // vobjElement（仮身のDOM要素）を削除
+                if (shape.vobjElement && shape.vobjElement.parentNode) {
+                    shape.vobjElement.parentNode.removeChild(shape.vobjElement);
+                    console.log('[FIGURE EDITOR] 仮身DOM要素を削除:', shape.virtualObject.link_name);
+                }
+
+                // expandedElement（開いた仮身のiframe要素）を削除
+                if (shape.expanded && shape.expandedElement) {
+                    shape.expandedElement.remove();
+                    delete shape.expandedElement;
+                    console.log('[FIGURE EDITOR] 開いた仮身のiframe要素を削除:', shape.virtualObject.link_name);
+                }
             }
 
             const index = this.shapes.indexOf(shape);
@@ -4083,6 +4474,74 @@ class BasicFigureEditor {
         this.isModified = true;
         // スクロールバー更新を通知
         this.resizeCanvas();
+    }
+
+    /**
+     * 仮身図形を削除する（共通処理）
+     * @param {Array} shapesToDelete - 削除する仮身図形の配列
+     * @param {Object} options - オプション {redraw: boolean, setModified: boolean}
+     */
+    deleteVirtualObjectShapes(shapesToDelete, options = {redraw: true, setModified: true}) {
+        // 削除する図形のインデックスを記録（降順でソート）
+        const indicesToDelete = shapesToDelete
+            .map(s => this.shapes.indexOf(s))
+            .filter(index => index > -1)
+            .sort((a, b) => b - a); // 降順でソート（後ろから削除）
+
+        console.log('[FIGURE EDITOR] 削除するインデックス:', indicesToDelete);
+
+        shapesToDelete.forEach(s => {
+            // 図形を削除
+            const index = this.shapes.indexOf(s);
+            if (index > -1) {
+                this.shapes.splice(index, 1);
+            }
+
+            // 選択状態をクリア
+            const selectedIndex = this.selectedShapes.indexOf(s);
+            if (selectedIndex > -1) {
+                this.selectedShapes.splice(selectedIndex, 1);
+            }
+
+            // DOM要素を削除
+            if (s.vobjElement && s.vobjElement.parentNode) {
+                s.vobjElement.parentNode.removeChild(s.vobjElement);
+                console.log('[FIGURE EDITOR] 仮身DOM要素を削除:', s.virtualObject.link_name);
+            }
+
+            // 展開されたiframeがあれば削除
+            if (s.expandedElement && s.expandedElement.parentNode) {
+                s.expandedElement.parentNode.removeChild(s.expandedElement);
+            }
+        });
+
+        // 削除後、接続線のインデックスを更新
+        indicesToDelete.forEach(deletedIndex => {
+            this.shapes.forEach(shape => {
+                if (shape.type === 'line') {
+                    // startConnection のインデックスを更新
+                    if (shape.startConnection && shape.startConnection.shapeId > deletedIndex) {
+                        const oldIndex = shape.startConnection.shapeId;
+                        shape.startConnection.shapeId--;
+                        console.log('[FIGURE EDITOR] 線の始点接続インデックスを更新:', oldIndex, '→', shape.startConnection.shapeId);
+                    }
+                    // endConnection のインデックスを更新
+                    if (shape.endConnection && shape.endConnection.shapeId > deletedIndex) {
+                        const oldIndex = shape.endConnection.shapeId;
+                        shape.endConnection.shapeId--;
+                        console.log('[FIGURE EDITOR] 線の終点接続インデックスを更新:', oldIndex, '→', shape.endConnection.shapeId);
+                    }
+                }
+            });
+        });
+
+        // 再描画
+        if (options.redraw) {
+            this.redraw();
+        }
+        if (options.setModified) {
+            this.isModified = true;
+        }
     }
 
     undo() {
@@ -4226,6 +4685,11 @@ class BasicFigureEditor {
                 } else if (tagName === 'group') {
                     this.shapes.push(this.parseGroupElement(elem));
                 } else if (tagName === 'document') {
+                    // document内にtext要素がある場合は文字枠として処理（新形式）
+                    const textElem = elem.querySelector('text');
+                    if (textElem) {
+                        this.shapes.push(this.parseTextBoxElement(textElem, elem));
+                    }
                     // textなしのdocumentは無視（既に処理済み、またはスタンドアロン）
                     continue;
                 }
@@ -4234,7 +4698,7 @@ class BasicFigureEditor {
             console.log('[FIGURE EDITOR] 図形を読み込みました:', this.shapes.length, '個');
 
             // 仮身のメタデータ（applist等）を読み込み
-            const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'virtual-object' && shape.virtualObject);
+            const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'vobj' && shape.virtualObject);
             console.log('[FIGURE EDITOR] 仮身のメタデータを読み込み中:', virtualObjectShapes.length, '個');
             for (const shape of virtualObjectShapes) {
                 await this.loadVirtualObjectMetadata(shape.virtualObject);
@@ -4283,7 +4747,44 @@ class BasicFigureEditor {
         // 色情報を取得
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
-        return {
+        // 接続状態を取得 (0=両端接続無し, 1=開始点のみ接続, 2=終端点のみ接続, 3=両端接続)
+        const conn_pat = parseInt(elem.getAttribute('conn_pat')) || 0;
+
+        // 開始点接続情報を取得 (format: "shapeId,connectorIndex")
+        const start_conn = elem.getAttribute('start_conn') || '';
+        let startConnection = null;
+        if (start_conn) {
+            const parts = start_conn.split(',');
+            if (parts.length === 2) {
+                startConnection = {
+                    shapeId: parseInt(parts[0]),
+                    connectorIndex: parseInt(parts[1])
+                };
+            }
+        }
+
+        // 終端点接続情報を取得 (format: "shapeId,connectorIndex")
+        const end_conn = elem.getAttribute('end_conn') || '';
+        let endConnection = null;
+        if (end_conn) {
+            const parts = end_conn.split(',');
+            if (parts.length === 2) {
+                endConnection = {
+                    shapeId: parseInt(parts[0]),
+                    connectorIndex: parseInt(parts[1])
+                };
+            }
+        }
+
+        // 接続形状を取得 (straight, elbow, curve)
+        const lineConnectionType = elem.getAttribute('lineConnectionType') || 'straight';
+
+        // 矢印情報を取得
+        const start_arrow = parseInt(elem.getAttribute('start_arrow')) || 0;
+        const end_arrow = parseInt(elem.getAttribute('end_arrow')) || 0;
+        const arrow_type = elem.getAttribute('arrow_type') || 'simple';
+
+        const lineShape = {
             type: 'line',
             startX: startX,
             startY: startY,
@@ -4293,8 +4794,23 @@ class BasicFigureEditor {
             fillColor: 'transparent',
             lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
             linePattern: linePattern,
-            fillEnabled: false
+            fillEnabled: false,
+            connPat: conn_pat,  // 接続状態パターンを保存
+            lineConnectionType: lineConnectionType,  // 接続形状を保存
+            start_arrow: start_arrow,  // 始点矢印
+            end_arrow: end_arrow,  // 終点矢印
+            arrow_type: arrow_type  // 矢印種類
         };
+
+        // 接続情報を復元
+        if (startConnection) {
+            lineShape.startConnection = startConnection;
+        }
+        if (endConnection) {
+            lineShape.endConnection = endConnection;
+        }
+
+        return lineShape;
     }
 
     parseRectElement(elem) {
@@ -4353,20 +4869,48 @@ class BasicFigureEditor {
                     .replace(/<[^>]*>/g, '') // その他のタグを除去
                     .trim();
             } else if (documentElem) {
-                // 旧形式：document/text要素から取得
-                const textElem = documentElem.querySelector('text');
-                if (textElem) {
-                    content = textElem.textContent || '';
-                    fontSize = parseInt(textElem.getAttribute('fontSize')) || 16;
-                    fontFamily = textElem.getAttribute('fontFamily') || 'sans-serif';
-                    textColor = textElem.getAttribute('color') || '#000000';
+                // 標準形式：document内にtext要素とfont要素がある
+                // font要素からフォント情報を取得
+                const fontElems = documentElem.querySelectorAll('font');
+                fontElems.forEach(fontElem => {
+                    if (fontElem.hasAttribute('size')) {
+                        fontSize = parseInt(fontElem.getAttribute('size')) || 16;
+                    }
+                    if (fontElem.hasAttribute('face')) {
+                        fontFamily = fontElem.getAttribute('face') || 'sans-serif';
+                    }
+                    if (fontElem.hasAttribute('color')) {
+                        textColor = fontElem.getAttribute('color') || '#000000';
+                    }
+                });
 
-                    const decoration = textElem.getAttribute('decoration') || '';
-                    decorations.bold = decoration.includes('B');
-                    decorations.italic = decoration.includes('I');
-                    decorations.underline = decoration.includes('U');
-                    decorations.strikethrough = decoration.includes('S');
+                // 文字修飾の取得
+                if (documentElem.querySelector('underline')) {
+                    decorations.underline = true;
                 }
+                if (documentElem.querySelector('strikethrough')) {
+                    decorations.strikethrough = true;
+                }
+
+                // テキスト内容を取得（font、text要素を除外し、br要素を改行に変換）
+                const docClone = documentElem.cloneNode(true);
+                // font、text要素を削除
+                docClone.querySelectorAll('font, text').forEach(el => el.remove());
+                // underline、strikethrough要素の中身を取り出す
+                docClone.querySelectorAll('underline, strikethrough').forEach(el => {
+                    const parent = el.parentNode;
+                    while (el.firstChild) {
+                        parent.insertBefore(el.firstChild, el);
+                    }
+                    parent.removeChild(el);
+                });
+                // br要素を改行に変換
+                content = docClone.innerHTML
+                    .replace(/<br\s*\/?>/gi, '\n')
+                    .replace(/<[^>]*>/g, '') // その他のタグを除去
+                    .replace(/\r\n/g, '\n')  // \r\nを\nに正規化
+                    .replace(/\r/g, '\n')    // \rを\nに正規化
+                    .trim();
             }
 
             return {
@@ -4482,11 +5026,18 @@ class BasicFigureEditor {
             let currentText = '';
             const processNode = (node) => {
                 if (node.nodeType === Node.TEXT_NODE) {
-                    currentText += node.textContent;
+                    // XMLのフォーマット用の改行（\r\n, \r, \n）は削除
+                    const text = node.textContent.replace(/\r\n/g, '').replace(/\r/g, '').replace(/\n/g, '');
+                    if (text.trim() !== '') {
+                        currentText += text;
+                    }
                 } else if (node.nodeType === Node.ELEMENT_NODE) {
                     const tagName = node.tagName.toLowerCase();
 
-                    if (tagName === 'font') {
+                    if (tagName === 'text') {
+                        // text要素は位置情報のみで内容はないのでスキップ
+                        return;
+                    } else if (tagName === 'font') {
                         // フォント設定
                         if (node.hasAttribute('size')) {
                             fontSize = parseInt(node.getAttribute('size')) || 16;
@@ -4710,7 +5261,7 @@ class BasicFigureEditor {
         const originalHeight = textHeight + 8; // 閉じた仮身の高さ
 
         return {
-            type: 'virtual-object',
+            type: 'vobj',
             startX: left,
             startY: top,
             endX: right,
@@ -5113,7 +5664,7 @@ class BasicFigureEditor {
             this.isModified = false;
 
             // 選択されている仮身を取得
-            const selectedVobjShape = this.selectedShapes.find(shape => shape.type === 'virtual-object');
+            const selectedVobjShape = this.selectedShapes.find(shape => shape.type === 'vobj');
             if (!selectedVobjShape) {
                 console.warn('[FIGURE EDITOR] 仮身が選択されていません');
                 this.setStatus('仮身を選択してください');
@@ -5132,7 +5683,7 @@ class BasicFigureEditor {
 
             this.setStatus('新しい実身への保存を準備中...');
 
-            const result = await this.messageBus.waitFor('save-as-new-real-object-completed', 30000, (data) => {
+            const result = await this.messageBus.waitFor('save-as-new-real-object-completed', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
 
@@ -5169,7 +5720,7 @@ class BasicFigureEditor {
                 const newHeight = textHeight + 8;
 
                 const newVobjShape = {
-                    type: 'virtual-object',
+                    type: 'vobj',
                     startX: selectedVobjShape.startX,
                     startY: selectedVobjShape.endY + 10,
                     endX: selectedVobjShape.endX,
@@ -5192,7 +5743,7 @@ class BasicFigureEditor {
                         this.virtualObjectRenderer.loadIconToCache(realId, iconData);
                     }
                     // 再描画
-                    this.draw();
+                    this.redraw();
                 });
 
                 // XMLデータを更新
@@ -5256,9 +5807,40 @@ class BasicFigureEditor {
 
         switch (shape.type) {
             case 'line':
-                // tad.js形式: <line l_atr="..." l_pat="..." f_pat="0" strokeColor="..." start_arrow="0" end_arrow="0" points="x1,y1 x2,y2" />
+                // tad.js形式: <line l_atr="..." l_pat="..." f_pat="0" strokeColor="..." start_arrow="0" end_arrow="0" conn_pat="..." start_conn="..." end_conn="..." points="x1,y1 x2,y2" />
                 const linePoints = `${shape.startX},${shape.startY} ${shape.endX},${shape.endY}`;
-                xmlParts.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" strokeColor="${strokeColor}" start_arrow="0" end_arrow="0" points="${linePoints}" />\r\n`);
+                // 接続状態を計算: 0=両端接続無し, 1=開始点のみ接続, 2=終端点のみ接続, 3=両端接続
+                let conn_pat = 0;
+                let start_conn = '';
+                let end_conn = '';
+
+                if (shape.startConnection && shape.endConnection) {
+                    conn_pat = 3;
+                } else if (shape.startConnection) {
+                    conn_pat = 1;
+                } else if (shape.endConnection) {
+                    conn_pat = 2;
+                }
+
+                // 開始点の接続情報を保存 (format: "shapeId,connectorIndex")
+                if (shape.startConnection) {
+                    start_conn = `${shape.startConnection.shapeId},${shape.startConnection.connectorIndex}`;
+                }
+
+                // 終端点の接続情報を保存 (format: "shapeId,connectorIndex")
+                if (shape.endConnection) {
+                    end_conn = `${shape.endConnection.shapeId},${shape.endConnection.connectorIndex}`;
+                }
+
+                // 接続形状を保存 (straight, elbow, curve)
+                const lineConnectionType = shape.lineConnectionType || 'straight';
+
+                // 矢印情報を取得
+                const start_arrow = shape.start_arrow || 0;
+                const end_arrow = shape.end_arrow || 0;
+                const arrow_type = shape.arrow_type || 'simple';
+
+                xmlParts.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" strokeColor="${strokeColor}" start_arrow="${start_arrow}" end_arrow="${end_arrow}" arrow_type="${arrow_type}" conn_pat="${conn_pat}" start_conn="${start_conn}" end_conn="${end_conn}" lineConnectionType="${lineConnectionType}" points="${linePoints}" />\r\n`);
                 break;
 
             case 'rect':
@@ -5332,7 +5914,7 @@ class BasicFigureEditor {
                 }
                 break;
 
-            case 'virtual-object':
+            case 'vobj':
                 // tad.js形式: <link id="..." vobjleft="..." vobjtop="..." vobjright="..." vobjbottom="...">
                 if (shape.virtualObject) {
                     const vo = shape.virtualObject;
@@ -5356,12 +5938,12 @@ class BasicFigureEditor {
 
             case 'textbox':
                 // 文字枠 - TAD.js形式に準拠
-                // 1. text要素で位置を定義（図形TADにおける文字枠の位置指定）
-                xmlParts.push(`<text viewleft="${shape.startX}" viewtop="${shape.startY}" viewright="${shape.endX}" viewbottom="${shape.endY}" drawleft="${shape.startX}" drawtop="${shape.startY}" drawright="${shape.endX}" drawbottom="${shape.endY}"/>\r\n`);
-
-                // 2. document要素で文章セグメントを開始
+                // 1. document要素で文章セグメントを開始
                 if (shape.content && shape.content.trim() !== '') {
                     xmlParts.push(`<document>\r\n`);
+
+                    // 2. text要素で位置を定義（図形TADにおける文字枠の位置指定）
+                    xmlParts.push(`<text viewleft="${shape.startX}" viewtop="${shape.startY}" viewright="${shape.endX}" viewbottom="${shape.endY}" drawleft="${shape.startX}" drawtop="${shape.startY}" drawright="${shape.endX}" drawbottom="${shape.endY}"/>\r\n`);
 
                     // 3. フォント設定
                     const fontSize = shape.fontSize || 16;
@@ -5380,8 +5962,10 @@ class BasicFigureEditor {
                         xmlParts.push(`<strikethrough>\r\n`);
                     }
 
-                    // 5. テキスト内容（改行は段落として扱う）
-                    const lines = shape.content.split('\n');
+                    // 5. テキスト内容（\r\nは無視し、改行は<br/>、改段落は<p></p>で処理）
+                    // \r\nを\nに正規化してから分割
+                    const normalizedContent = shape.content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                    const lines = normalizedContent.split('\n');
                     for (let i = 0; i < lines.length; i++) {
                         if (i > 0) {
                             xmlParts.push(`<br/>\r\n`);
@@ -5499,11 +6083,26 @@ class BasicFigureEditor {
 
     updateWindowConfig(config) {
         // ウィンドウ設定を更新
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'update-window-config',
+        if (this.messageBus && this.realId) {
+            this.messageBus.send('update-window-config', {
                 fileId: this.realId,
                 windowConfig: config
+            });
+            console.log('[FIGURE EDITOR] ウィンドウ設定を更新:', this.realId, config);
+        }
+    }
+
+    updatePanelPosition(pos) {
+        // 道具パネルの位置を更新
+        this.panelpos = pos;
+        console.log('[FIGURE EDITOR] 道具パネル位置を更新:', pos);
+
+        // 親ウィンドウに道具パネル位置の保存を要求
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'update-panel-position',
+                fileId: this.realId,
+                panelpos: pos
             }, '*');
         }
     }
@@ -5579,23 +6178,98 @@ class BasicFigureEditor {
                     { label: '用紙枠表示オンオフ', action: 'toggle-paper-frame' },
                     { label: '用紙枠設定', action: 'page-setup' }
                 ]
-            },
-            {
-                label: '仮身操作',
-                submenu: [
-                    { label: '開く', action: 'open-virtual' },
-                    { label: '閉じる', action: 'close-virtual' },
-                    { separator: true },
-                    { label: '属性変更', action: 'virtual-attributes' }
-                ]
             }
         ];
+
+        // 仮身が選択されている場合は仮身操作メニューを追加
+        console.log('[FIGURE EDITOR] getMenuDefinition: contextMenuVirtualObject:', this.contextMenuVirtualObject);
+        if (this.contextMenuVirtualObject) {
+            try {
+                console.log('[FIGURE EDITOR] getMenuDefinition: 仮身が選択されています realId:', this.contextMenuVirtualObject.realId);
+
+                // 仮身操作メニュー
+                const realId = this.contextMenuVirtualObject.realId;
+                const isOpened = this.openedRealObjects.has(realId);
+
+                const virtualObjSubmenu = [
+                    { label: '開く', action: 'open-real-object', disabled: isOpened },
+                    { label: '閉じる', action: 'close-real-object', disabled: !isOpened },
+                    { separator: true },
+                    { label: '属性変更', action: 'change-virtual-object-attributes' }
+                ];
+
+                menuDef.push({
+                    label: '仮身操作',
+                    submenu: virtualObjSubmenu
+                });
+
+                // 実身操作メニュー
+                const realObjSubmenu = [
+                    { label: '実身名変更', action: 'rename-real-object' },
+                    { label: '実身複製', action: 'duplicate-real-object' }
+                ];
+
+                menuDef.push({
+                    label: '実身操作',
+                    submenu: realObjSubmenu
+                });
+
+                // 屑実身操作メニュー
+                menuDef.push({
+                    label: '屑実身操作',
+                    action: 'open-trash-real-objects'
+                });
+
+                // 実行メニュー
+                const applistData = await this.getAppListData(this.contextMenuVirtualObject.realId);
+                console.log('[FIGURE EDITOR] getMenuDefinition: applistData:', applistData);
+                if (applistData && Object.keys(applistData).length > 0) {
+                    const executeSubmenu = [];
+                    for (const [pluginId, appInfo] of Object.entries(applistData)) {
+                        console.log('[FIGURE EDITOR] getMenuDefinition: 実行メニュー項目追加:', pluginId, appInfo);
+                        executeSubmenu.push({
+                            label: appInfo.name || pluginId,
+                            action: `execute-with-${pluginId}`
+                        });
+                    }
+
+                    menuDef.push({
+                        label: '実行',
+                        submenu: executeSubmenu
+                    });
+                    console.log('[FIGURE EDITOR] getMenuDefinition: 実行メニュー追加完了 項目数:', executeSubmenu.length);
+                } else {
+                    console.warn('[FIGURE EDITOR] getMenuDefinition: applistDataが空またはnull');
+                }
+            } catch (error) {
+                console.error('[FIGURE EDITOR] applist取得エラー:', error);
+            }
+        } else {
+            console.log('[FIGURE EDITOR] getMenuDefinition: 仮身が選択されていません');
+        }
 
         return menuDef;
     }
 
     async executeMenuAction(action, additionalData) {
         console.log('[FIGURE EDITOR] メニューアクション実行:', action);
+
+        // 仮身の実行メニューからのアクション（基本文章編集プラグインと同じ処理）
+        if (action.startsWith('execute-with-')) {
+            const pluginId = action.replace('execute-with-', '');
+            console.log('[FIGURE EDITOR] 仮身を指定アプリで起動:', pluginId);
+
+            // contextMenuVirtualObjectから仮身情報を取得
+            if (this.contextMenuVirtualObject && this.contextMenuVirtualObject.virtualObj) {
+                // MessageBus Phase 2: messageBus.send()を使用
+                this.messageBus.send('open-virtual-object-real', {
+                    virtualObj: this.contextMenuVirtualObject.virtualObj,
+                    pluginId: pluginId
+                });
+                this.setStatus(`${pluginId}で実身を開きます`);
+            }
+            return;
+        }
 
         switch (action) {
             // 保存
@@ -5745,17 +6419,31 @@ class BasicFigureEditor {
                 await this.showPageSetup();
                 break;
 
-            // 仮身操作
-            case 'open-virtual':
+            // 仮身操作（基本文章編集プラグインと同じアクション名）
+            case 'open-real-object':
                 this.openRealObjectWithDefaultApp();
                 break;
 
-            case 'close-virtual':
-                this.closeVirtualObject();
+            case 'close-real-object':
+                this.closeRealObject();
                 break;
 
-            case 'virtual-attributes':
-                this.showVirtualAttributes();
+            case 'change-virtual-object-attributes':
+                this.changeVirtualObjectAttributes();
+                break;
+
+            // 実身操作
+            case 'rename-real-object':
+                this.renameRealObject();
+                break;
+
+            case 'duplicate-real-object':
+                this.duplicateRealObject();
+                break;
+
+            // 屑実身操作
+            case 'open-trash-real-objects':
+                this.openTrashRealObjects();
                 break;
 
             default:
@@ -6452,6 +7140,40 @@ class BasicFigureEditor {
         this.setStatus(`角丸半径を変更しました: ${radius}px`);
     }
 
+    applyArrowPositionToSelected(arrowPosition) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            if (shape.type === 'line') {
+                // arrowPositionから start_arrow と end_arrow を設定
+                shape.start_arrow = (arrowPosition === 'start' || arrowPosition === 'both') ? 1 : 0;
+                shape.end_arrow = (arrowPosition === 'end' || arrowPosition === 'both') ? 1 : 0;
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        const positionName = arrowPosition === 'none' ? 'なし' :
+                            arrowPosition === 'start' ? '始点のみ' :
+                            arrowPosition === 'end' ? '終点のみ' : '両端';
+        this.setStatus(`矢印位置を変更しました: ${positionName}`);
+    }
+
+    applyArrowTypeToSelected(arrowType) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            if (shape.type === 'line') {
+                shape.arrow_type = arrowType;
+            }
+        });
+
+        this.redraw();
+        this.isModified = true;
+        const typeName = arrowType === 'simple' ? '線のみ' : '塗りつぶし';
+        this.setStatus(`矢印種類を変更しました: ${typeName}`);
+    }
+
     applyFontSizeToSelected(fontSize) {
         if (this.selectedShapes.length === 0) return;
 
@@ -6776,7 +7498,7 @@ class BasicFigureEditor {
      */
     closeVirtualObject() {
         // 選択された図形の中から仮身を探す
-        const virtualObjectShape = this.selectedShapes.find(shape => shape.type === 'virtual-object');
+        const virtualObjectShape = this.selectedShapes.find(shape => shape.type === 'vobj');
 
         if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
             this.setStatus('仮身が選択されていません');
@@ -6817,7 +7539,7 @@ class BasicFigureEditor {
      */
     async executeVirtualObjectWithPlugin(pluginId) {
         // 選択中の仮身図形を取得
-        const virtualObjectShape = this.selectedShapes.find(s => s.type === 'virtual-object');
+        const virtualObjectShape = this.selectedShapes.find(s => s.type === 'vobj');
         if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
             console.warn('[FIGURE EDITOR] 仮身が選択されていません');
             return;
@@ -6839,7 +7561,7 @@ class BasicFigureEditor {
             }, '*');
 
             try {
-                const result = await this.messageBus.waitFor('window-opened', 30000, (data) => {
+                const result = await this.messageBus.waitFor('window-opened', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
                     return data.messageId === messageId;
                 });
 
@@ -6849,8 +7571,8 @@ class BasicFigureEditor {
                     console.log('[FIGURE EDITOR] ウィンドウが開きました:', result.windowId, 'realId:', realId);
 
                     // ウィンドウのアイコンを設定
-                    // realIdから_0.xtadなどのサフィックスを除去して基本実身IDを取得
-                    let baseRealId = realId.replace(/\.(xtad|json)$/, '').replace(/_\d+$/, '');
+                    // realIdから_0.xtadなどのサフィックスを除去して基本実身IDを取得（共通メソッドを使用）
+                    const baseRealId = window.RealObjectSystem.extractRealId(realId);
                     const iconPath = `${baseRealId}.ico`;
                     if (window.parent && window.parent !== window) {
                         window.parent.postMessage({
@@ -6873,7 +7595,7 @@ class BasicFigureEditor {
      */
     openRealObjectWithDefaultApp() {
         // 選択中の仮身図形を取得
-        const virtualObjectShape = this.selectedShapes.find(s => s.type === 'virtual-object');
+        const virtualObjectShape = this.selectedShapes.find(s => s.type === 'vobj');
         if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
             console.warn('[FIGURE EDITOR] 選択中の仮身がありません');
             return;
@@ -6917,7 +7639,7 @@ class BasicFigureEditor {
 
     async showVirtualAttributes() {
         // 選択された図形の中から仮身を探す
-        const virtualObjectShape = this.selectedShapes.find(shape => shape.type === 'virtual-object');
+        const virtualObjectShape = this.selectedShapes.find(shape => shape.type === 'vobj');
 
         if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
             this.setStatus('仮身が選択されていません');
@@ -6979,7 +7701,7 @@ class BasicFigureEditor {
             console.log('[FIGURE EDITOR] 仮身属性変更ダイアログ要求');
 
             try {
-                const result = await this.messageBus.waitFor('virtual-object-attributes-changed', 30000, (data) => {
+                const result = await this.messageBus.waitFor('virtual-object-attributes-changed', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
                     return data.messageId === messageId;
                 });
 
@@ -7027,11 +7749,67 @@ class BasicFigureEditor {
         // 修正フラグを立てる
         this.isModified = true;
 
-        // 再描画
+        // 既存のDOM要素を削除して強制再作成（属性を反映させるため）
+        if (shape.vobjElement && shape.vobjElement.parentNode) {
+            console.log('[FIGURE EDITOR] 属性変更のため既存のDOM要素を削除:', vobj.link_name);
+            shape.vobjElement.remove();
+            shape.vobjElement = null;
+        }
+
+        // Canvas再描画
         this.redraw();
+
+        // 仮身DOM要素を再生成して表示を更新
+        this.renderVirtualObjectsAsElements();
 
         console.log('[FIGURE EDITOR] 仮身属性を適用:', attrs);
         this.setStatus('仮身属性を変更しました');
+    }
+
+    /**
+     * 実身のapplistデータを取得（基本文章編集プラグインから丸コピー）
+     */
+    // getAppListData() は基底クラス PluginBase で定義
+
+    /**
+     * 選択中の仮身が指し示す実身を閉じる（基本文章編集プラグインから丸コピー）
+     */
+    closeRealObject() {
+        window.RealObjectSystem.closeRealObject(this);
+    }
+
+    /**
+     * 仮身属性変更ダイアログを表示（基本文章編集プラグインから適応）
+     */
+    async changeVirtualObjectAttributes() {
+        await window.RealObjectSystem.changeVirtualObjectAttributes(this);
+    }
+
+    /**
+     * 選択中の仮身が指し示す実身名を変更（基本文章編集プラグインから丸コピー）
+     */
+    async renameRealObject() {
+        await window.RealObjectSystem.renameRealObject(this);
+
+        // 図形エディタ特有の処理: 仮身の表示名を更新して再描画
+        if (this.contextMenuVirtualObject && this.contextMenuVirtualObject.virtualObj) {
+            this.renderVirtualObjectsAsElements();
+            this.redraw();
+        }
+    }
+
+    /**
+     * 選択中の仮身が指し示す実身を複製（基本文章編集プラグインから丸コピー）
+     */
+    async duplicateRealObject() {
+        await window.RealObjectSystem.duplicateRealObject(this);
+    }
+
+    /**
+     * 屑実身操作ウィンドウを開く（基本文章編集プラグインから丸コピー）
+     */
+    openTrashRealObjects() {
+        window.RealObjectSystem.openTrashRealObjects(this);
     }
 
     toggleFullscreen() {
@@ -7084,12 +7862,20 @@ class BasicFigureEditor {
                 }, '*');
             }
             this.toolPanelWindowId = null;
+            this.toolPanelVisible = false;
             this.setStatus('道具パネルを閉じました');
+
+            // 実身管理用JSONにパネル状態を保存
+            this.updateWindowConfig({ panel: false });
         } else {
             // 道具パネルが閉じている場合は開く
             console.log('[FIGURE EDITOR] 道具パネルウィンドウを開きます');
             this.openToolPanelWindow();
+            this.toolPanelVisible = true;
             this.setStatus('道具パネルを開きました');
+
+            // 実身管理用JSONにパネル状態を保存
+            this.updateWindowConfig({ panel: true });
         }
     }
 
@@ -7181,66 +7967,16 @@ class BasicFigureEditor {
         }
     }
 
-    /**
-     * 保存確認ダイアログを表示
-     * @returns {Promise<string>} 'yes', 'no', 'cancel'
-     */
-    async showSaveConfirmDialog() {
-        return new Promise((resolve) => {
-            this.messageBus.sendWithCallback('show-save-confirm-dialog', {
-                message: '保存してから閉じますか？',
-                buttons: [
-                    { label: '取消', value: 'cancel' },
-                    { label: '保存しない', value: 'no' },
-                    { label: '保存', value: 'yes' }
-                ]
-            }, (result) => {
-                if (result.error) {
-                    console.warn('[FIGURE EDITOR] Save confirm dialog error:', result.error);
-                    resolve(null);
-                    return;
-                }
-                resolve(result.result);
-            }, 300000); // タイムアウト5分（ユーザー操作待ち）
-        });
-    }
+    // showSaveConfirmDialog() は基底クラス PluginBase で定義
 
     setStatus(message) {
         console.log('[FIGURE EDITOR]', message);
         // ステータスバーがある場合はそこに表示
     }
 
-    async showInputDialog(message, defaultValue = '') {
-        return new Promise((resolve) => {
-            this.messageBus.sendWithCallback('show-input-dialog', {
-                message: message,
-                defaultValue: defaultValue
-            }, (result) => {
-                if (result.error) {
-                    console.warn('[FIGURE EDITOR] Input dialog error:', result.error);
-                    resolve(null);
-                    return;
-                }
-                resolve(result.result);
-            }, 300000); // タイムアウト5分（ユーザー操作待ち）
-        });
-    }
+    // showInputDialog() は基底クラス PluginBase で定義
 
-    async showMessageDialog(message, buttons = [{ label: 'OK', value: 'ok' }]) {
-        return new Promise((resolve) => {
-            this.messageBus.sendWithCallback('show-message-dialog', {
-                message: message,
-                buttons: buttons
-            }, (result) => {
-                if (result.error) {
-                    console.warn('[FIGURE EDITOR] Message dialog error:', result.error);
-                    resolve(null);
-                    return;
-                }
-                resolve(result.result);
-            }, 300000); // タイムアウト5分（ユーザー操作待ち）
-        });
-    }
+    // showMessageDialog() は基底クラス PluginBase で定義
 
     // ピクセルマップモードに入る
     enterPixelmapMode(pixelmapShape) {
@@ -7734,56 +8470,6 @@ class BasicFigureEditor {
     }
 
     /**
-     * 実身のappList情報を取得
-     */
-    async getAppListData(realId) {
-        try {
-            console.log('[FIGURE EDITOR] getAppListData開始 realId:', realId);
-            const jsonFileName = `${realId}.json`;
-            const messageId = `load-json-${Date.now()}-${Math.random()}`;
-
-            window.top.postMessage({
-                type: 'load-data-file-request',
-                fileName: jsonFileName,
-                messageId: messageId
-            }, '*');
-
-            try {
-                const result = await this.messageBus.waitFor('load-data-file-response', 10000, (data) => {
-                    return data.messageId === messageId;
-                });
-
-                if (result.success) {
-                    try {
-                        let jsonText;
-                        if (result.data && result.data instanceof File) {
-                            jsonText = await result.data.text();
-                        } else if (result.content) {
-                            jsonText = result.content;
-                        } else {
-                            return null;
-                        }
-
-                        const jsonData = JSON.parse(jsonText);
-                        return jsonData.applist || null;
-                    } catch (error) {
-                        console.error('[FIGURE EDITOR] JSONパースエラー:', error);
-                        return null;
-                    }
-                } else {
-                    return null;
-                }
-            } catch (error) {
-                console.error('[FIGURE EDITOR] JSONファイル読み込みタイムアウト:', error);
-                return null;
-            }
-        } catch (error) {
-            console.error('[FIGURE EDITOR] appList取得エラー:', error);
-            return null;
-        }
-    }
-
-    /**
      * appListからdefaultOpenのプラグインIDを取得
      */
     getDefaultOpenFromAppList(appListData) {
@@ -7808,7 +8494,7 @@ class BasicFigureEditor {
         }, '*');
 
         try {
-            const result = await this.messageBus.waitFor('real-object-loaded', 5000, (data) => {
+            const result = await this.messageBus.waitFor('real-object-loaded', window.DEFAULT_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
             return result.realObject;
@@ -7832,7 +8518,7 @@ class BasicFigureEditor {
         }, '*');
 
         try {
-            const result = await this.messageBus.waitFor('load-data-file-response', 5000, (data) => {
+            const result = await this.messageBus.waitFor('load-data-file-response', window.DEFAULT_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
             if (result.success) {
@@ -7851,9 +8537,9 @@ class BasicFigureEditor {
      */
     async loadVirtualObjectMetadata(virtualObj) {
         try {
-            // _[recordno].xtad パターンを取り除いてベースファイルIDを取得
-            const baseFileId = virtualObj.link_id.replace(/_\d+\.xtad$/i, '');
-            const jsonFileName = `${baseFileId}.json`;
+            // 実身IDを抽出してJSONファイル名を生成（共通メソッドを使用）
+            const baseFileId = window.RealObjectSystem.extractRealId(virtualObj.link_id);
+            const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(baseFileId);
             console.log('[FIGURE EDITOR] メタデータ読み込み試行:', virtualObj.link_id, 'JSONファイル:', jsonFileName);
 
             // 親ウィンドウのfileObjectsからJSONファイルを取得
@@ -7957,6 +8643,14 @@ class BasicFigureEditor {
         this.isExpandingVirtualObject = true;
 
         try {
+            // 実身IDを取得
+            const linkId = virtualObject.link_id;
+            console.log('[FIGURE EDITOR] linkId:', linkId);
+            // 実身IDを抽出（共通メソッドを使用）
+            const realId = window.RealObjectSystem.extractRealId(linkId);
+            console.log('[FIGURE EDITOR] 抽出されたrealId:', realId);
+            console.log('[FIGURE EDITOR] レコード番号削除後（最終的な実身ID）:', realId);
+
             // 1. defaultOpenプラグインを取得
             const defaultOpenPlugin = this.getDefaultOpenPlugin(virtualObject);
             if (!defaultOpenPlugin) {
@@ -7965,15 +8659,13 @@ class BasicFigureEditor {
             }
             console.log('[FIGURE EDITOR] defaultOpenプラグイン:', defaultOpenPlugin);
 
-            // 2. XTADファイルを読み込む（親ウィンドウ経由）
-            const xtadFileName = `${virtualObject.link_id}_0.xtad`;
-            const xtadFile = await this.loadDataFileFromParent(xtadFileName);
-            if (!xtadFile) {
-                console.error('[FIGURE EDITOR] XTADファイルの読み込みに失敗しました:', xtadFileName);
+            // 2. 実身データを読み込む
+            const realObjectData = await this.loadRealObjectData(realId);
+            if (!realObjectData) {
+                console.warn('[FIGURE EDITOR] 実身データの読み込みに失敗しました, realId:', realId);
                 return null;
             }
-            const xmlData = await xtadFile.text();
-            console.log('[FIGURE EDITOR] XTADデータ読み込み完了:', xmlData.length, '文字');
+            console.log('[FIGURE EDITOR] 実身データ読み込み完了:', realObjectData);
 
             // 3. コンテンツ領域を取得
             const contentArea = vobjElement.querySelector('.virtual-object-content-area');
@@ -7987,8 +8679,43 @@ class BasicFigureEditor {
                 contentArea.style.overflow = 'hidden';
             }
 
+            // コンテンツ領域自体のドラッグも無効化
+            contentArea.style.pointerEvents = 'none';
+            contentArea.style.userSelect = 'none';
+            contentArea.setAttribute('draggable', 'false');
+
+            // 仮身の色属性を取得
+            const bgcol = virtualObject.bgcol || '#ffffff';
+
             // 4. プラグインをiframeで読み込む（プラグインが描画する）
-            const iframe = this.createPluginIframe(defaultOpenPlugin, virtualObject, xmlData, options);
+            const iframe = document.createElement('iframe');
+            iframe.className = 'virtual-object-content';
+            iframe.style.width = '100%';
+            iframe.style.height = '100%';
+            iframe.style.border = 'none';
+            iframe.style.overflow = 'hidden';
+            iframe.style.padding = '0';
+            iframe.style.backgroundColor = bgcol;
+            iframe.style.userSelect = 'none';
+            iframe.style.pointerEvents = 'none'; // 開いた仮身内の操作を無効化（図形編集上では表示のみ）
+            iframe.style.webkitUserDrag = 'none'; // Webkitブラウザでのドラッグを無効化
+            iframe.setAttribute('draggable', 'false'); // iframe自体のドラッグを無効化
+            iframe.src = `../../plugins/${defaultOpenPlugin}/index.html`;
+
+            // iframeロード後にデータを送信（load-virtual-objectメッセージ形式）
+            iframe.addEventListener('load', () => {
+                console.log('[FIGURE EDITOR] iframe読み込み完了、プラグインにload-virtual-objectメッセージ送信');
+                iframe.contentWindow.postMessage({
+                    type: 'load-virtual-object',
+                    virtualObj: virtualObject,
+                    realObject: realObjectData,
+                    bgcol: bgcol,
+                    readonly: options.readonly !== false,
+                    noScrollbar: options.noScrollbar !== false
+                }, '*');
+                console.log('[FIGURE EDITOR] 開いた仮身表示にデータを送信:', { virtualObject, realObjectData, bgcol, readonly: options.readonly !== false, noScrollbar: options.noScrollbar !== false });
+            });
+
             contentArea.appendChild(iframe);
             console.log('[FIGURE EDITOR] iframe追加完了');
 
@@ -8006,6 +8733,11 @@ class BasicFigureEditor {
     }
 
     /**
+     * 実身データを読み込む
+     */
+    // loadRealObjectData() は基底クラス PluginBase で定義
+
+    /**
      * defaultOpenプラグインを取得
      * @param {Object} virtualObject - 仮身オブジェクト
      * @returns {string|null} プラグインID
@@ -8021,50 +8753,6 @@ class BasicFigureEditor {
         return 'basic-text-editor';
     }
 
-    /**
-     * プラグインをiframeで読み込み、描画を依頼
-     * @param {string} pluginId - プラグインID
-     * @param {Object} virtualObject - 仮身オブジェクト
-     * @param {string} xmlData - XTADファイルの内容
-     * @param {Object} options - オプション
-     * @returns {HTMLIFrameElement} iframe要素
-     */
-    createPluginIframe(pluginId, virtualObject, xmlData, options = {}) {
-        const iframe = document.createElement('iframe');
-        iframe.className = 'virtual-object-content';
-        iframe.style.width = '100%';
-        iframe.style.height = '100%';
-        iframe.style.border = 'none';
-        iframe.style.overflow = 'hidden';
-        iframe.style.padding = '0';
-        iframe.style.backgroundColor = options.bgcol || virtualObject.bgcol || '#ffffff';
-        iframe.style.userSelect = 'none';
-        iframe.style.pointerEvents = 'none'; // 開いた仮身内の操作を無効化（図形編集上では表示のみ）
-
-        // プラグインのパスを取得
-        const pluginPath = `../../plugins/${pluginId}/index.html`;
-        iframe.src = pluginPath;
-
-        // iframeロード後にデータを送信（load-dataメッセージ形式）
-        iframe.addEventListener('load', () => {
-            console.log('[FIGURE EDITOR] iframe読み込み完了、プラグインにload-dataメッセージ送信');
-            iframe.contentWindow.postMessage({
-                type: 'load-data',
-                realId: virtualObject.link_id,
-                realObject: {
-                    records: [{
-                        xtad: xmlData,
-                        data: xmlData
-                    }]
-                },
-                readonly: options.readonly !== false,
-                noScrollbar: options.noScrollbar !== false,
-                bgcol: options.bgcol || virtualObject.bgcol
-            }, '*');
-        });
-
-        return iframe;
-    }
 
     /**
      * 開いた仮身のサイズを更新
@@ -8187,7 +8875,7 @@ class BasicFigureEditor {
             return;
         }
 
-        const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'virtual-object' && shape.virtualObject && shape.virtualObject.link_id);
+        const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'vobj' && shape.virtualObject && shape.virtualObject.link_id);
         console.log('[FIGURE EDITOR] 仮身のアイコンを事前読み込み開始:', virtualObjectShapes.length, '個');
 
         const iconLoadPromises = virtualObjectShapes.map(async (shape) => {
@@ -8230,15 +8918,33 @@ class BasicFigureEditor {
 
         try {
             // フィルタを使用して、このリクエストに対応するレスポンスだけを受け取る
-            const result = await this.messageBus.waitFor('icon-file-loaded', 3000, (data) => {
+            const result = await this.messageBus.waitFor('icon-file-loaded', window.ICON_LOAD_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
 
-            if (result.success) {
-                // キャッシュに保存
-                this.iconCache.set(realId, result.data);
-                console.log('[FIGURE EDITOR] アイコン読み込み成功（親から）:', realId, 'データ長:', result.data.length);
-                return result.data;
+            if (result.success && result.filePath) {
+                // Electron環境の場合、パスからファイルを読み込む
+                if (typeof require !== 'undefined') {
+                    try {
+                        const fs = require('fs');
+                        const buffer = fs.readFileSync(result.filePath);
+                        const base64 = buffer.toString('base64');
+                        // VirtualObjectRendererが data:image/x-icon;base64, を追加するので、ここでは Base64 のみ返す
+
+                        // キャッシュに保存
+                        this.iconCache.set(realId, base64);
+                        console.log('[FIGURE EDITOR] アイコン読み込み成功（親から）:', realId, 'パス:', result.filePath);
+                        return base64;
+                    } catch (error) {
+                        console.error('[FIGURE EDITOR] アイコンファイル読み込みエラー:', realId, error);
+                        this.iconCache.set(realId, null);
+                        return null;
+                    }
+                } else {
+                    console.error('[FIGURE EDITOR] require not available (not in Electron environment)');
+                    this.iconCache.set(realId, null);
+                    return null;
+                }
             } else {
                 // アイコンが存在しない場合はnullを返す
                 this.iconCache.set(realId, null);
@@ -8275,18 +8981,50 @@ class BasicFigureEditor {
             return;
         }
 
-        // 既存の仮身DOM要素をすべて削除
-        const existingElements = document.querySelectorAll('.virtual-object-element');
-        existingElements.forEach(el => el.remove());
-
         // 仮身図形をフィルタ
         const virtualObjectShapes = this.shapes.filter(shape =>
-            shape.type === 'virtual-object' && shape.virtualObject
+            shape.type === 'vobj' && shape.virtualObject
         );
 
-        // 各仮身図形をDOM要素として作成
+        // 現在有効な仮身のlink_idセットを作成
+        const validLinkIds = new Set(virtualObjectShapes.map(shape => shape.virtualObject.link_id));
+
+        // 既存のDOM要素のうち、対応するshapeがないものだけを削除
+        const existingElements = document.querySelectorAll('.virtual-object-element');
+        existingElements.forEach(el => {
+            const linkId = el.dataset.linkId;
+            if (!linkId || !validLinkIds.has(linkId)) {
+                console.log('[FIGURE EDITOR] 不要な仮身DOM要素を削除:', linkId);
+                el.remove();
+            }
+        });
+
+        // 各仮身図形をDOM要素として作成または更新
         virtualObjectShapes.forEach(shape => {
-            this.renderVirtualObjectElement(shape);
+            // 既にDOM要素が存在し、親ノードにも接続されている場合は、位置とサイズのみ更新
+            if (shape.vobjElement && shape.vobjElement.parentNode) {
+                console.log('[FIGURE EDITOR] 既存の仮身DOM要素を再利用:', shape.virtualObject.link_name, 'vobjElement:', !!shape.vobjElement, 'parentNode:', !!shape.vobjElement.parentNode);
+                const width = shape.endX - shape.startX;
+                const height = shape.endY - shape.startY;
+
+                // 位置とサイズが変わっている場合のみ更新
+                const currentLeft = parseInt(shape.vobjElement.style.left) || 0;
+                const currentTop = parseInt(shape.vobjElement.style.top) || 0;
+                const currentWidth = parseInt(shape.vobjElement.style.width) || 0;
+                const currentHeight = parseInt(shape.vobjElement.style.height) || 0;
+
+                if (currentLeft !== shape.startX || currentTop !== shape.startY ||
+                    currentWidth !== width || currentHeight !== height) {
+                    shape.vobjElement.style.left = shape.startX + 'px';
+                    shape.vobjElement.style.top = shape.startY + 'px';
+                    shape.vobjElement.style.width = width + 'px';
+                    shape.vobjElement.style.height = height + 'px';
+                }
+            } else {
+                // DOM要素が存在しない場合のみ新規作成
+                console.log('[FIGURE EDITOR] 新しい仮身DOM要素を作成:', shape.virtualObject.link_name, 'vobjElement:', !!shape.vobjElement, 'parentNode:', shape.vobjElement ? !!shape.vobjElement.parentNode : 'N/A');
+                this.renderVirtualObjectElement(shape);
+            }
         });
     }
 
@@ -8294,6 +9032,8 @@ class BasicFigureEditor {
      * 個別の仮身をDOM要素として描画
      */
     renderVirtualObjectElement(shape) {
+        console.log('[FIGURE EDITOR] ★ renderVirtualObjectElement 開始:', shape.virtualObject?.link_name);
+
         if (!this.virtualObjectRenderer) {
             console.warn('[FIGURE EDITOR] VirtualObjectRenderer not available');
             return;
@@ -8343,55 +9083,111 @@ class BasicFigureEditor {
 
         // draggable属性をtrueに設定（クロスウィンドウドラッグ用）
         vobjElement.setAttribute('draggable', 'true');
+        console.log('[FIGURE EDITOR] vobjElement初期化: draggable=true, link_name=' + virtualObject.link_name);
+
+        // 仮身要素自体のテキスト選択を無効化（文字部分のドラッグ時の問題を防止）
+        vobjElement.style.userSelect = 'none';
+        vobjElement.style.webkitUserSelect = 'none';
+        // pointer-eventsを明示的にautoに設定（dragend後のリセットを確実にする）
+        vobjElement.style.pointerEvents = 'auto';
+
+        // CRITICAL: 仮身内部の全要素のドラッグを無効化（画像ドラッグとの競合を防ぐ）
+        const allInnerElements = vobjElement.querySelectorAll('*');
+        allInnerElements.forEach(el => {
+            // 全ての内部要素のドラッグを無効化
+            el.setAttribute('draggable', 'false');
+            // pointer-eventsをnoneに設定して、内部要素が直接イベントを受け取らないようにする
+            el.style.pointerEvents = 'none';
+            // 全ての内部要素のテキスト選択を無効化（文字部分のドラッグ時の問題を防止）
+            el.style.userSelect = 'none';
+            el.style.webkitUserSelect = 'none';
+            // 画像要素の場合、追加でwebkitUserDragも無効化
+            if (el.tagName === 'IMG') {
+                el.style.webkitUserDrag = 'none';
+            }
+        });
+        console.log('[FIGURE EDITOR] 仮身内部要素のドラッグを無効化:', allInnerElements.length, '個の要素');
 
         // データ属性を設定（shape特定用）
         vobjElement.dataset.shapeId = this.shapes.indexOf(shape);
         vobjElement.dataset.linkId = virtualObject.link_id;
 
-        // 既に展開済みの仮身の場合は、DOM要素を再利用（位置とサイズのみ更新）
-        if (shape.expanded && shape.vobjElement && shape.vobjElement.parentNode) {
-            console.log('[FIGURE EDITOR] 展開済み仮身のDOM要素を再利用:', virtualObject.link_name);
+        // 既存のvobjElementがあれば削除（親ノードに接続されている場合）
+        if (shape.vobjElement) {
+            // イベントリスナーのクリーンアップ
+            if (shape.vobjElement._cleanupMouseHandlers) {
+                shape.vobjElement._cleanupMouseHandlers();
+            }
 
-            // 既存の要素の位置とサイズのみ更新
-            shape.vobjElement.style.left = shape.startX + 'px';
-            shape.vobjElement.style.top = shape.startY + 'px';
-            shape.vobjElement.style.width = width + 'px';
-            shape.vobjElement.style.height = height + 'px';
+            // mousedownハンドラーの削除
+            if (shape.vobjElement._mousedownHandler) {
+                shape.vobjElement.removeEventListener('mousedown', shape.vobjElement._mousedownHandler);
+                shape.vobjElement._mousedownHandler = null;
+            }
 
-            // 新しく作成したvobjElementは破棄
-            vobjElement.remove();
+            // dragstartハンドラーの削除
+            if (shape.vobjElement._dragstartHandler) {
+                shape.vobjElement.removeEventListener('dragstart', shape.vobjElement._dragstartHandler);
+                shape.vobjElement._dragstartHandler = null;
+            }
 
-            // 既存の開いた仮身のiframeサイズも更新
-            if (shape.expandedElement) {
-                const iframe = shape.expandedElement.querySelector('iframe');
-                if (iframe) {
-                    const chsz = Math.round(virtualObject.chsz || 14);
-                    const lineHeight = 1.2;
-                    const chszPx = window.convertPtToPx(chsz);
-                    const textHeight = Math.ceil(chszPx * lineHeight);
-                    const contentHeight = height - textHeight - 8 - 2; // タイトルバー - 区切り線
-                    iframe.style.height = contentHeight + 'px';
-                    iframe.style.width = width + 'px';
+            // dragendハンドラーの削除
+            if (shape.vobjElement._dragendHandler) {
+                shape.vobjElement.removeEventListener('dragend', shape.vobjElement._dragendHandler);
+                shape.vobjElement._dragendHandler = null;
+            }
+
+            // contextmenuハンドラーの削除
+            if (shape.vobjElement._contextmenuHandler) {
+                shape.vobjElement.removeEventListener('contextmenu', shape.vobjElement._contextmenuHandler);
+                shape.vobjElement._contextmenuHandler = null;
+            }
+
+            // この仮身がドラッグ中の場合、ドラッグ状態をクリア
+            if (this.draggingVirtualObjectShape === shape) {
+                this.draggingVirtualObjectShape = null;
+                this.isDraggingVirtualObjectShape = false;
+                this.draggingVirtualObjectOffsetX = 0;
+                this.draggingVirtualObjectOffsetY = 0;
+
+                // ドラッグタイムアウトをクリア
+                if (this.virtualObjectDragTimeout) {
+                    clearTimeout(this.virtualObjectDragTimeout);
+                    this.virtualObjectDragTimeout = null;
                 }
             }
 
-            return; // 既存要素を再利用したので、以降の処理をスキップ
+            // DOM要素を削除
+            if (shape.vobjElement.parentNode) {
+                shape.vobjElement.parentNode.removeChild(shape.vobjElement);
+            }
+            // 参照をクリア
+            shape.vobjElement = null;
         }
 
-        // 既存のvobjElementがあれば削除（展開済みでない場合）
-        if (shape.vobjElement && shape.vobjElement.parentNode) {
-            shape.vobjElement.parentNode.removeChild(shape.vobjElement);
-        }
-
-        // 展開状態をリセット（新しく作成する場合のみ）
-        shape.expanded = false;
-        shape.expandedElement = null;
+        // 既存の展開済みiframeは保持（展開状態を維持）
+        // shape.expanded と shape.expandedElement はそのまま保持
 
         // shapeにDOM要素への参照を保存
         shape.vobjElement = vobjElement;
 
         // mousedownイベント（ドラッグの準備）
-        vobjElement.addEventListener('mousedown', (e) => {
+        // 重複登録を防ぐため、既存のハンドラーをクリーンアップ
+        if (vobjElement._mousedownHandler) {
+            vobjElement.removeEventListener('mousedown', vobjElement._mousedownHandler);
+            vobjElement._mousedownHandler = null;
+        }
+
+        // 新しいハンドラーを定義
+        const mousedownHandler = (e) => {
+            console.log('[FIGURE EDITOR] vobjElement mousedown: button=' + e.button + ', draggable=' + vobjElement.getAttribute('draggable'));
+
+            // ドラッグクールダウン中は処理をスキップ
+            if (this.dragCooldown) {
+                console.log('[FIGURE EDITOR] ドラッグクールダウン中のため処理をスキップ');
+                return;
+            }
+
             // ダブルクリック検出ロジック（読み取り専用モードでも実行）
             const now = Date.now();
             const timeSinceLastClick = now - this.dblClickDragState.lastClickTime;
@@ -8409,8 +9205,15 @@ class BasicFigureEditor {
                 // 一時的にdraggableをfalseにして、ブラウザの自動ドラッグを防ぐ
                 // これにより、mouseupイベントが確実に発火する
                 vobjElement.setAttribute('draggable', 'false');
+                console.log('[FIGURE EDITOR] draggable=false に設定（ダブルクリック候補）');
             } else {
                 // 通常のクリック：時刻と図形を記録（全てのボタンで記録）
+
+                // 前回のダブルクリック候補要素のdraggableをtrueに戻す
+                if (this.dblClickDragState.dblClickedElement) {
+                    this.dblClickDragState.dblClickedElement.setAttribute('draggable', 'true');
+                }
+
                 this.dblClickDragState.lastClickTime = now;
                 this.dblClickDragState.lastClickedShape = shape;
                 this.dblClickDragState.isDblClickDragCandidate = false;
@@ -8506,34 +9309,70 @@ class BasicFigureEditor {
                 }
             };
 
-            const mouseupHandler = (upEvent) => {
-                // BTRONの仕様: 左右両方押してドラッグ中に、左ボタンを先に離した場合はコピーモード
-                if (this.dragState.hasMoved && upEvent.button === 0 && vobjElement._dragStarted) {
-                    // 左ボタンが離された
-                    // ドラッグ中であれば、dragModeをcopyに変更
-                    this.dragState.dragMode = 'copy';
-                    console.log('[FIGURE EDITOR] 左ボタンをドラッグ中に離した → コピーモードに変更');
-                    return; // 右ボタンのmouseupを待つ
-                }
-
+            // クリーンアップ関数（mouseup/dragstart/dragendから呼び出し）
+            const cleanupHandlers = () => {
+                console.log('[FIGURE EDITOR] クリーンアップ: ハンドラ削除、状態リセット');
                 document.removeEventListener('mousemove', mousemoveHandler);
                 document.removeEventListener('mouseup', mouseupHandler);
+                if (vobjElement._handlerTimeout) {
+                    clearTimeout(vobjElement._handlerTimeout);
+                    vobjElement._handlerTimeout = null;
+                }
                 vobjElement._dragStarted = false;
-
-                // ドラッグ状態をリセット
                 this.dragState.hasMoved = false;
+                vobjElement._cleanupMouseHandlers = null; // 参照をクリア
+            };
+
+            const mouseupHandler = (upEvent) => {
+                console.log('[FIGURE EDITOR] 要素レベルmouseup: button=' + upEvent.button + ', hasMoved=' + this.dragState.hasMoved + ', _dragStarted=' + vobjElement._dragStarted);
+
+                // 左+右同時押しのコピーモード検出はdragstartで行うため、ここでは常にクリーンアップを実行
+                console.log('[FIGURE EDITOR] 要素レベルmouseup: ハンドラ削除、状態リセット');
+                cleanupHandlers();
 
                 // ダブルクリック検出とドラッグ処理はdocument-levelのmouseupハンドラで処理される
             };
 
+            // ハンドラを登録
             document.addEventListener('mousemove', mousemoveHandler);
             document.addEventListener('mouseup', mouseupHandler);
-        });
+
+            // クリーンアップ関数を要素に保存（dragstart/dragendから呼び出せるように）
+            vobjElement._cleanupMouseHandlers = cleanupHandlers;
+
+            // フェイルセーフ: 5秒後に強制的にクリーンアップ（dragstartでmouseupが発火しない場合の対策）
+            vobjElement._handlerTimeout = setTimeout(() => {
+                console.log('[FIGURE EDITOR] タイムアウト: 強制的にハンドラをクリーンアップ');
+                cleanupHandlers();
+            }, 5000);
+
+            console.log('[FIGURE EDITOR] mousedown/mousemove/mouseupイベントリスナーを登録:', virtualObject.link_name);
+        };
+
+        // ハンドラーを登録して参照を保存
+        vobjElement.addEventListener('mousedown', mousedownHandler);
+        vobjElement._mousedownHandler = mousedownHandler;
 
         // dragstartイベント
-        vobjElement.addEventListener('dragstart', (e) => {
+        // 重複登録を防ぐため、既存のハンドラーをクリーンアップ
+        if (vobjElement._dragstartHandler) {
+            vobjElement.removeEventListener('dragstart', vobjElement._dragstartHandler);
+            vobjElement._dragstartHandler = null;
+        }
+
+        // 新しいハンドラーを定義
+        const dragstartHandler = (e) => {
+            console.log('[FIGURE EDITOR] dragstart: buttons=' + e.buttons + ', isDblClickDragCandidate=' + this.dblClickDragState.isDblClickDragCandidate + ', isDblClickDrag=' + this.dblClickDragState.isDblClickDrag);
+
+            // mousedownで登録したハンドラをクリーンアップ（dragstartが発火するとmouseupが発火しないため）
+            if (vobjElement._cleanupMouseHandlers) {
+                console.log('[FIGURE EDITOR] dragstart: mousedownハンドラをクリーンアップ');
+                vobjElement._cleanupMouseHandlers();
+            }
+
             // ダブルクリック+ドラッグ候補またはダブルクリック+ドラッグ中の場合は通常のドラッグを抑制
             if (this.dblClickDragState.isDblClickDragCandidate || this.dblClickDragState.isDblClickDrag) {
+                console.log('[FIGURE EDITOR] ダブルクリック+ドラッグ検出、通常のドラッグを抑制');
                 e.preventDefault();
                 return;
             }
@@ -8542,6 +9381,12 @@ class BasicFigureEditor {
             if (!this.draggingVirtualObjectShape || this.draggingVirtualObjectShape !== shape) {
                 e.preventDefault();
                 return;
+            }
+
+            // 左+右同時押し検出（e.buttons: 1=左, 2=右, 3=左+右）
+            if (e.buttons === 3) {
+                this.dragState.dragMode = 'copy';
+                console.log('[FIGURE EDITOR] 左+右同時押し検出、コピーモードに変更');
             }
 
             // 選択中の仮身を取得（複数選択ドラッグのサポート）
@@ -8593,7 +9438,11 @@ class BasicFigureEditor {
 
             // 半透明にする
             vobjElement.style.opacity = '0.5';
-        });
+        };
+
+        // ハンドラーを登録して参照を保存
+        vobjElement.addEventListener('dragstart', dragstartHandler);
+        vobjElement._dragstartHandler = dragstartHandler;
 
         // mouseupイベント（ドラッグキャンセル、draggableを無効化）
         vobjElement.addEventListener('mouseup', (_e) => {
@@ -8603,24 +9452,55 @@ class BasicFigureEditor {
                 vobjElement._draggableTimeout = null;
             }
 
-            // draggableを無効化（次のクリックに備える）
-            vobjElement.setAttribute('draggable', 'false');
-            // ドラッグフラグをリセット
-            this.draggingVirtualObjectShape = null;
+            // draggableをtrueに戻す（ダブルクリック+ドラッグ後の状態復元）
+            vobjElement.setAttribute('draggable', 'true');
+
+            // ドラッグフラグをリセット（ただし、ドラッグ中の場合はクリアしない）
+            // dragstartの後、mouseupが発火してもドラッグは続行されるため
+            if (!this.isDraggingVirtualObjectShape) {
+                this.draggingVirtualObjectShape = null;
+            }
         });
 
         // dragendイベント
-        vobjElement.addEventListener('dragend', () => {
+        // 重複登録を防ぐため、既存のハンドラーをクリーンアップ
+        if (vobjElement._dragendHandler) {
+            vobjElement.removeEventListener('dragend', vobjElement._dragendHandler);
+            vobjElement._dragendHandler = null;
+        }
+
+        // 新しいハンドラーを定義
+        const dragendHandler = () => {
+            // mousedownで登録したハンドラをクリーンアップ（バックアップとして）
+            if (vobjElement._cleanupMouseHandlers) {
+                console.log('[FIGURE EDITOR] dragend: mousedownハンドラをクリーンアップ（バックアップ）');
+                vobjElement._cleanupMouseHandlers();
+            }
+
             // 透明度を戻す
             vobjElement.style.opacity = '1.0';
 
-            // draggableを無効化
-            vobjElement.setAttribute('draggable', 'false');
-
-            // pointer-eventsを無効化
+            // pointer-eventsを一時的に無効化（dragend直後のクリック防止）
             vobjElement.style.pointerEvents = 'none';
 
-            // タイムアウトを設定（1秒以内にcross-window-drop-successが来なければリセット）
+            // 100ms後にpointer-eventsとdraggableを復元（次のドラッグを可能にする）
+            setTimeout(() => {
+                vobjElement.style.pointerEvents = 'auto';
+                vobjElement.setAttribute('draggable', 'true');
+                console.log('[FIGURE EDITOR] dragend後のpointer-eventsとdraggableを復元');
+            }, 100);
+
+            // ドラッグクールダウンを設定（連続ドラッグ防止）
+            this.dragCooldown = true;
+            if (this.dragCooldownTimeout) {
+                clearTimeout(this.dragCooldownTimeout);
+            }
+            this.dragCooldownTimeout = setTimeout(() => {
+                this.dragCooldown = false;
+                console.log('[FIGURE EDITOR] ドラッグクールダウン解除');
+            }, 200);
+
+            // タイムアウトを設定（2秒以内にcross-window-drop-successが来なければリセット）
             if (this.virtualObjectDragTimeout) {
                 clearTimeout(this.virtualObjectDragTimeout);
             }
@@ -8629,11 +9509,22 @@ class BasicFigureEditor {
                 this.isDraggingVirtualObjectShape = false;
                 this.draggingVirtualObjectShape = null;
                 this.virtualObjectDragTimeout = null;
-            }, 1000);
-        });
+            }, 2000);
+        };
+
+        // ハンドラーを登録して参照を保存
+        vobjElement.addEventListener('dragend', dragendHandler);
+        vobjElement._dragendHandler = dragendHandler;
 
         // 右クリックで仮身を選択してコンテキストメニューを表示
-        vobjElement.addEventListener('contextmenu', (e) => {
+        // 重複登録を防ぐため、既存のハンドラーをクリーンアップ
+        if (vobjElement._contextmenuHandler) {
+            vobjElement.removeEventListener('contextmenu', vobjElement._contextmenuHandler);
+            vobjElement._contextmenuHandler = null;
+        }
+
+        // 新しいハンドラーを定義
+        const contextmenuHandler = (e) => {
             e.preventDefault();
             e.stopPropagation();
 
@@ -8661,6 +9552,17 @@ class BasicFigureEditor {
                     console.log('[FIGURE EDITOR] 右クリックで仮身を選択:', virtualObject.link_name);
                 }
 
+                // 実身IDを抽出（共通メソッドを使用）
+                const realId = window.RealObjectSystem.extractRealId(virtualObject.link_id);
+
+                // 右クリックされた仮身の情報を保存（メニュー生成時に使用）
+                this.contextMenuVirtualObject = {
+                    element: vobjElement,
+                    realId: realId,
+                    virtualObj: virtualObject
+                };
+                console.log('[FIGURE EDITOR] contextMenuVirtualObject設定完了:', this.contextMenuVirtualObject);
+
                 // 親ウィンドウにコンテキストメニュー要求を送信
                 if (window.parent && window.parent !== window) {
                     const rect = window.frameElement.getBoundingClientRect();
@@ -8671,7 +9573,11 @@ class BasicFigureEditor {
                     }, '*');
                 }
             }
-        });
+        };
+
+        // ハンドラーを登録して参照を保存
+        vobjElement.addEventListener('contextmenu', contextmenuHandler);
+        vobjElement._contextmenuHandler = contextmenuHandler;
 
         // リサイズ機能を追加
         this.makeVirtualObjectResizable(vobjElement, shape);
@@ -8683,9 +9589,11 @@ class BasicFigureEditor {
         } else {
             document.body.appendChild(vobjElement);
         }
+        console.log('[FIGURE EDITOR] ★ renderVirtualObjectElement 完了、DOMに追加:', virtualObject.link_name);
 
         // 開いた仮身の場合、展開処理を実行（まだ展開されていない場合のみ）
-        if (isOpenVirtualObj && !shape.expanded) {
+        // 展開試行済み（expanded）またはエラー発生済み（expandError）の場合はスキップ
+        if (isOpenVirtualObj && !shape.expanded && !shape.expandError) {
             console.log('[FIGURE EDITOR] 開いた仮身を展開:', virtualObject.link_name);
             // 無限ループを防ぐため、先にフラグを設定
             shape.expanded = true;
@@ -8697,8 +9605,8 @@ class BasicFigureEditor {
                     bgcol: virtualObject.bgcol
                 }).catch(err => {
                     console.error('[FIGURE EDITOR] 仮身展開エラー:', err);
-                    // エラー時はフラグをリセット
-                    shape.expanded = false;
+                    // エラー時はエラーフラグを設定（無限ループ防止のためフラグはリセットしない）
+                    shape.expandError = true;
                 });
             }, 0);
         }
@@ -8916,9 +9824,10 @@ class BasicFigureEditor {
                         clearTimeout(this.recreateVirtualObjectTimer);
                     }
 
-                    // 展開状態をリセット
+                    // 展開状態をリセット（エラーフラグも含む）
                     shape.expanded = false;
                     shape.expandedElement = null;
+                    shape.expandError = false;
 
                     // 再作成フラグを設定（renderVirtualObjectsAsElementsによる中断を防ぐ）
                     this.isRecreatingVirtualObject = true;
@@ -8947,6 +9856,9 @@ class BasicFigureEditor {
                     vobjElement.style.height = `${finalHeight}px`;
                 }
 
+                // draggableを再び有効化（リサイズ開始時に無効化したため）
+                vobjElement.setAttribute('draggable', 'true');
+
                 // リサイズ終了フラグをリセット
                 this.isResizingVirtualObject = false;
             };
@@ -8974,8 +9886,11 @@ class BasicFigureEditor {
 
     /**
      * ダブルクリック+ドラッグによる実身複製処理
+     * @param {Object} shape - 元の仮身図形
+     * @param {number} targetX - ドロップ先のX座標
+     * @param {number} targetY - ドロップ先のY座標
      */
-    async handleDoubleClickDragDuplicate(shape) {
+    async handleDoubleClickDragDuplicate(shape, targetX, targetY) {
         const virtualObject = shape.virtualObject;
         if (!virtualObject || !virtualObject.link_id) {
             console.error('[FIGURE EDITOR] 複製対象の仮身が不正です');
@@ -8983,7 +9898,7 @@ class BasicFigureEditor {
         }
 
         const realId = virtualObject.link_id;
-        console.log('[FIGURE EDITOR] ダブルクリック+ドラッグによる実身複製:', realId);
+        console.log('[FIGURE EDITOR] ダブルクリック+ドラッグによる実身複製:', realId, 'ドロップ位置:', targetX, targetY);
 
         // 元の仮身のサイズと属性を保存
         const width = virtualObject.width || shape.width || 100;
@@ -8999,14 +9914,15 @@ class BasicFigureEditor {
         // メッセージIDを生成
         const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
 
-        window.parent.postMessage({
-            type: 'duplicate-real-object',
+        // MessageBus経由で実身複製を要求
+        this.messageBus.send('duplicate-real-object', {
             realId: realId,
             messageId: messageId
-        }, '*');
+        });
 
         try {
-            const result = await this.messageBus.waitFor('real-object-duplicated', 30000, (data) => {
+            // レスポンスを待つ（タイムアウト5秒）
+            const result = await this.messageBus.waitFor('real-object-duplicated', window.DEFAULT_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
 
@@ -9018,13 +9934,13 @@ class BasicFigureEditor {
                 const newName = result.newName;
                 console.log('[FIGURE EDITOR] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
 
-                // 新しい仮身図形を作成（元の位置から少しずらして配置）
+                // 新しい仮身図形を作成（ドロップ位置に配置）
                 const newShape = {
                     type: 'vobj',
-                    x: shape.x + 20,  // 20px右にずらす
-                    y: shape.y + 20,  // 20px下にずらす
-                    width: width,
-                    height: height,
+                    startX: targetX,
+                    startY: targetY,
+                    endX: targetX + width,
+                    endY: targetY + height,
                     virtualObject: {
                         link_id: newRealId,
                         link_name: newName,
@@ -9052,7 +9968,7 @@ class BasicFigureEditor {
                 // 変更フラグを立てる
                 this.hasUnsavedChanges = true;
 
-                console.log('[FIGURE EDITOR] 新しい仮身を配置:', newName, '位置:', newShape.x, newShape.y);
+                console.log('[FIGURE EDITOR] 新しい仮身を配置:', newName, 'ドロップ位置:', newShape.startX, newShape.startY);
             } else {
                 console.error('[FIGURE EDITOR] 実身複製失敗:', result.error);
             }

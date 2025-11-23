@@ -57,6 +57,42 @@
         import { MessageBus } from './js/message-bus.js';
         window.MessageBus = MessageBus;
     </script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from './js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
+    </script>
+    <!-- 共通定数とユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import {
+            UI_UPDATE_DELAY_MS,
+            QUICK_UI_UPDATE_DELAY_MS,
+            DEFAULT_INPUT_WIDTH,
+            MIN_WINDOW_WIDTH,
+            MIN_WINDOW_HEIGHT,
+            MIN_SCROLLBAR_THUMB_SIZE,
+            DESKTOP_BG_COLOR,
+            SCROLLBAR_THUMB_COLOR,
+            HOVER_BG_COLOR,
+            DIALOG_BG_COLOR,
+            BORDER_COLOR,
+            escapeHtml
+        } from './js/util.js';
+        window.UI_UPDATE_DELAY_MS = UI_UPDATE_DELAY_MS;
+        window.QUICK_UI_UPDATE_DELAY_MS = QUICK_UI_UPDATE_DELAY_MS;
+        window.DEFAULT_INPUT_WIDTH = DEFAULT_INPUT_WIDTH;
+        window.MIN_WINDOW_WIDTH = MIN_WINDOW_WIDTH;
+        window.MIN_WINDOW_HEIGHT = MIN_WINDOW_HEIGHT;
+        window.MIN_SCROLLBAR_THUMB_SIZE = MIN_SCROLLBAR_THUMB_SIZE;
+        window.DESKTOP_BG_COLOR = DESKTOP_BG_COLOR;
+        window.SCROLLBAR_THUMB_COLOR = SCROLLBAR_THUMB_COLOR;
+        window.HOVER_BG_COLOR = HOVER_BG_COLOR;
+        window.DIALOG_BG_COLOR = DIALOG_BG_COLOR;
+        window.BORDER_COLOR = BORDER_COLOR;
+        window.escapeHtml = escapeHtml;
+    </script>
+    <!-- ファイルインポートマネージャーを読み込み -->
+    <script src="./js/fileimport.js"></script>
     <script src="tadjs-desktop.js"></script>
     <script>
         // プラグインマネージャーとTADjsDesktopを順番に初期化

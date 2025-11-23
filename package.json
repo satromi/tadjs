@@ -9,7 +9,7 @@
     "build": "electron-builder",
     "build:win": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win --x64",
     "package": "electron-packager . \"TADjs Desktop\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=tadjs.ico --executable-name=tadjs_desktop --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|.*\\.ps1)$\" --prune=true",
-    "postpackage": "cp -v encoding.js encoding.min.js tad.js \"dist/TADjs Desktop-win32-x64/\" && cp -v xtaddata/*.json xtaddata/*.xtad xtaddata/*.ico \"dist/TADjs Desktop-win32-x64/\"",
+    "postpackage": "cp -v encoding.js encoding.min.js tad.js \"dist/TADjs Desktop-win32-x64/\" && cp -v xtaddata/*.json xtaddata/*.xtad xtaddata/*.ico xtaddata/*.png \"dist/TADjs Desktop-win32-x64/\"",
     "postinstall": "node scripts/patch-font-list.js"
   },
   "keywords": [

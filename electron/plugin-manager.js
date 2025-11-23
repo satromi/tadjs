@@ -222,7 +222,7 @@ class PluginManager {
 
         const unpackFilePlugin = {
             id: 'unpack-file',
-            name: '書庫管理',
+            name: '書庫解凍',
             version: '1.0.0',
             type: 'base',
             basefile: 'unpack-file.xtad',
@@ -237,7 +237,7 @@ class PluginManager {
             },
             contextMenu: [
                 {
-                    label: '書庫管理',
+                    label: '書庫解凍',
                     fileTypes: ['bpk', 'BPK'],
                     action: 'open-unpack'
                 }
@@ -274,17 +274,8 @@ class PluginManager {
      * 原紙タイプのプラグイン一覧を取得
      */
     getBasePlugins() {
-        console.log('[PluginManager] getBasePlugins呼び出し');
-        console.log('[PluginManager] 登録済みプラグイン数:', this.plugins.size);
         const allPlugins = Array.from(this.plugins.values());
-        console.log('[PluginManager] 全プラグイン:', allPlugins.map(p => `${p.id} (type: ${p.type})`));
-        const basePlugins = allPlugins.filter(plugin => {
-            const isBase = plugin.type === 'base';
-            console.log(`[PluginManager] ${plugin.id}: type=${plugin.type}, isBase=${isBase}, basefile=`, plugin.basefile);
-            return isBase;
-        });
-        console.log('[PluginManager] 原紙プラグイン数:', basePlugins.length);
-        console.log('[PluginManager] 原紙プラグイン:', basePlugins);
+        const basePlugins = allPlugins.filter(plugin => plugin.type === 'base');
         return basePlugins;
     }
 
@@ -320,6 +311,18 @@ class PluginManager {
      */
     getAccessoryPlugins() {
         return Array.from(this.plugins.values()).filter(plugin => plugin.type === 'accessory');
+    }
+
+    /**
+     * 実身を開くことができるプラグイン（実行可能プラグイン）を取得
+     * @returns {Array<Object>} 実行可能プラグインの配列
+     */
+    getExecutablePlugins() {
+        return Array.from(this.plugins.values()).filter(plugin => {
+            // openable: falseのプラグインは除外
+            // openableが未定義の場合はtrueとして扱う
+            return plugin.openable !== false;
+        });
     }
 
     /**
@@ -472,7 +475,7 @@ class PluginManager {
     async createPluginWindow(plugin, fileData) {
         // TADjsDesktopを使用してプラグインウィンドウを作成
         if (typeof window.tadjsDesktop !== 'undefined') {
-            const { iframeHtml, iframeId } = this.createPluginContent(plugin, fileData);
+            const { iframeHtml, iframeId, pluginSrc } = this.createPluginContent(plugin, fileData);
 
             // プラグインタイプに応じてウィンドウサイズを決定
             let windowOptions = {
@@ -550,9 +553,11 @@ class PluginManager {
                 const hiddenIframeId = `plugin-iframe-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
                 const hiddenIframe = document.createElement('iframe');
                 hiddenIframe.id = hiddenIframeId;
-                hiddenIframe.src = plugin.main;
                 hiddenIframe.style.display = 'none';
+                // IMPORTANT: nodeintegration属性を先に設定してからsrcを設定
+                hiddenIframe.setAttribute('nodeintegration', '');
                 hiddenIframe.setAttribute('data-plugin-id', plugin.id);
+                hiddenIframe.src = plugin.main; // nodeintegration設定後にsrcを設定
                 document.body.appendChild(hiddenIframe);
 
                 // iframeが読み込まれたら、initメッセージを送信
@@ -601,6 +606,20 @@ class PluginManager {
                 windowInfo.fileData = fileData;
             }
 
+            // IMPORTANT: iframe設定（nodeintegration属性を設定してからsrcを設定）
+            setTimeout(() => {
+                const iframe = document.getElementById(iframeId);
+                if (iframe) {
+                    // nodeintegration属性を設定してからsrcを設定（これが重要！）
+                    iframe.setAttribute('nodeintegration', '');
+                    console.log(`[PluginManager] nodeintegration属性を設定: ${iframeId}`);
+
+                    // srcを設定（nodeintegration設定後）
+                    iframe.src = pluginSrc;
+                    console.log(`[PluginManager] iframe srcを設定: ${pluginSrc}`);
+                }
+            }, 50); // iframe作成を待つ
+
             // Phase 2: 親MessageBusに子を登録
             if (window.tadjsDesktop.parentMessageBus) {
                 setTimeout(() => {
@@ -635,17 +654,17 @@ class PluginManager {
 
         console.log('プラグインコンテンツ作成:', plugin.id, 'xmlData length:', fileData && fileData.xmlData ? fileData.xmlData.length : 0);
 
-        // iframeのHTML文字列を返す
+        // iframeのHTML文字列を返す（srcは後から設定）
         const iframeHtml = `
             <iframe id="${iframeId}"
-                    src="${plugin.main}"
                     style="width: 100%; height: 100%; border: none;"
                     tabindex="0"
-                    data-plugin-id="${plugin.id}">
+                    data-plugin-id="${plugin.id}"
+                    data-plugin-src="${plugin.main}">
             </iframe>
         `;
 
-        return { iframeHtml, iframeId };
+        return { iframeHtml, iframeId, pluginSrc: plugin.main };
     }
 
     /**

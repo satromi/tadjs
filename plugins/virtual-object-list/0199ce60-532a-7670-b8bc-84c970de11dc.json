@@ -8,7 +8,7 @@
   "refCount": 1,
   "editable": true,
   "readable": true,
-  "maker": "satromi",
+  "maker": "TRON User",
   "window": {
     "pos": {
       "x": 100,
@@ -35,8 +35,8 @@
       "name": "仮身一覧",
       "defaultOpen": true
     },
-    "basic-text-editor": {
-      "name": "基本文章編集",
+    "basic-figure-editor": {
+      "name": "基本図形編集",
       "defaultOpen": false
     }
   }

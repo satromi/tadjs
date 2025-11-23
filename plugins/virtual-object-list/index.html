@@ -22,13 +22,20 @@
         import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
         window.VirtualObjectRenderer = VirtualObjectRenderer;
     </script>
-    <!-- 共通ユーティリティをグローバル変数として読み込み -->
+    <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
     <script type="module">
-        import { convertPtToPx, rgbToHex, hexToRgb, invertColor } from '../../js/util.js';
+        import {
+            convertPtToPx, rgbToHex, hexToRgb, invertColor,
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, ERROR_CHECK_TIMEOUT_MS
+        } from '../../js/util.js';
         window.convertPtToPx = convertPtToPx;
         window.rgbToHex = rgbToHex;
         window.hexToRgb = hexToRgb;
         window.invertColor = invertColor;
+        window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+        window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
+        window.ICON_LOAD_TIMEOUT_MS = ICON_LOAD_TIMEOUT_MS;
+        window.ERROR_CHECK_TIMEOUT_MS = ERROR_CHECK_TIMEOUT_MS;
     </script>
     <!-- パフォーマンス最適化ユーティリティをグローバル変数として読み込み -->
     <script type="module">
@@ -42,7 +49,17 @@
         import { MessageBus } from '../../js/message-bus.js';
         window.MessageBus = MessageBus;
     </script>
-    <!-- Phase 2 Fix: app.js を module として読み込むことで、MessageBus が確実に利用可能になってから実行 -->
-    <script type="module" src="app.js"></script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
+    </script>
+    <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
+    <script type="module">
+        import { PluginBase } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+    </script>
+    <!-- app.jsを通常のスクリプトとして読み込み（requireが使える） -->
+    <script defer src="app.js"></script>
 </body>
 </html>

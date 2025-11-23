@@ -8,12 +8,17 @@
 </head>
 <body>
     <div class="plugin-content">
-        <div class="message">既存データを開いています...</div>
+        <div class="message">既存データをデフォルト起動アプリで開いています...</div>
     </div>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">
         import { MessageBus } from '../../js/message-bus.js';
         window.MessageBus = MessageBus;
+    </script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
     </script>
     <script defer src="app.js"></script>
 </body>

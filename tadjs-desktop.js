@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.14
+ * TADjs Desktop Ver 0.15
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -27,6 +27,7 @@ class TADjsDesktop {
         this.windows = new Map();
         this.activeWindow = null;
         this.windowCounter = 0;
+        this.windowFocusHistory = []; // ウィンドウのフォーカス履歴（最後の要素が最前面）
         // Canvas用の独立カウンタ（ウインドウカウンタと分離し最初のTADをcanvas-0にする）
         this.canvasCounter = 0;
         // 再利用可能なcanvas IDのプール
@@ -37,9 +38,24 @@ class TADjsDesktop {
         this.dragState = null;
         this.fileObjects = {}; // ファイルオブジェクトを保存
         this.statusMessageTimer = null; // ステータスメッセージのタイマー
+        this.statusTimeUpdateInterval = null; // 時刻更新用インターバル
         this.clipboard = null; // グローバルクリップボード（仮身データ）
         this.closeConfirmCallbacks = {}; // ウィンドウクローズ確認コールバック
         this.openedRealObjects = new Map(); // 開いている実身ID -> ウィンドウIDのマッピング
+        this.currentUser = null; // 現在の使用者名（xtad更新時のmakerフィールドに使用）
+
+        // グローバルイベントハンドラー保存用（クリーンアップ時に使用）
+        this.globalEventHandlers = {
+            mousedown: null,
+            mouseup: null,
+            dragover: null,
+            dragend: null,
+            contextmenu: null,
+            click: null,
+            keydown: null,
+            resize: null,
+            message: null
+        };
 
         // 実身仮身システム (init()で初期化)
         this.realObjectSystem = null;
@@ -72,7 +88,6 @@ class TADjsDesktop {
             console.log('[TADjs] ブラウザ環境を検出');
         }
 
-        // Phase 2: 親MessageBus（親→子通信用）
         if (typeof window.MessageBus === 'undefined') {
             throw new Error('[TADjs] MessageBusが利用できません - アプリケーションを起動できません');
         }
@@ -102,11 +117,14 @@ class TADjsDesktop {
         // ユーザ環境設定を適用
         this.applyUserConfig();
 
-        // Phase 2: 親MessageBusのハンドラを初期化
         this.setupParentMessageBusHandlers();
 
         // 実身仮身システム初期化
         await this.initRealObjectSystem();
+
+        // ファイルインポートマネージャー初期化
+        this.fileImportManager = new window.FileImportManager(this);
+        console.log('[TADjs] FileImportManager初期化完了');
 
         // プラグインマネージャーは既に初期化されているので、直接初期ウィンドウを作成
         this.createInitialWindow();
@@ -181,7 +199,6 @@ class TADjsDesktop {
 
         // activate-window: ウィンドウをアクティブ化
         this.parentMessageBus.on('activate-window', (_data, event) => {
-            // Phase 2: event.sourceからwindowIdを取得
             const windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
             if (windowId) {
                 this.setActiveWindow(windowId);
@@ -193,7 +210,6 @@ class TADjsDesktop {
         // context-menu-request: コンテキストメニュー表示
         this.parentMessageBus.on('context-menu-request', (data, event) => {
             console.log('[TADjs] Phase 2: context-menu-request受信:', data);
-            // Phase 2: event.sourceからwindowIdを取得してiframeを取得
             const windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
             let iframe = null;
             if (windowId) {
@@ -214,7 +230,6 @@ class TADjsDesktop {
 
         // toggle-maximize: ウィンドウの最大化切り替え
         this.parentMessageBus.on('toggle-maximize', (_data, event) => {
-            // Phase 2: event.sourceからwindowIdを取得
             const windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
             if (windowId) {
                 this.toggleMaximizeWindow(windowId);
@@ -229,7 +244,6 @@ class TADjsDesktop {
 
             // windowIdが指定されていない場合は、送信元から取得
             if (!windowId) {
-                // Phase 2: event.sourceからwindowIdを取得
                 windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
             }
 
@@ -238,6 +252,64 @@ class TADjsDesktop {
             } else {
                 console.warn('[TADjs] close-window: windowIdが見つかりません');
             }
+        });
+
+        // child-drag-position: 子iframeからのドラッグ位置通知
+        // ドラッグ中の表示/非表示制御のため、マウスがどのウィンドウ上にあるかを通知
+        // z-index判定は行わず、単純な座標判定のみ（効率化のため）
+        this.parentMessageBus.on('child-drag-position', (data) => {
+            const clientX = data.clientX;
+            const clientY = data.clientY;
+
+            // すべての子ウィンドウに対して、マウスが自分の上にあるかを通知
+            for (const [_id, childInfo] of this.parentMessageBus.children.entries()) {
+                try {
+                    const iframe = childInfo.iframe;
+                    if (!iframe) continue;
+
+                    const rect = iframe.getBoundingClientRect();
+                    const isOverThisIframe = (
+                        clientX >= rect.left && clientX <= rect.right &&
+                        clientY >= rect.top && clientY <= rect.bottom
+                    );
+
+                    if (childInfo.windowId) {
+                        // マウスがこのウィンドウ上にあるかを通知
+                        // 座標変換してウィンドウ内相対座標も送る
+                        const relativeX = clientX - rect.left;
+                        const relativeY = clientY - rect.top;
+
+                        this.parentMessageBus.sendToWindow(childInfo.windowId, 'parent-drag-position', {
+                            isOverThisWindow: isOverThisIframe,
+                            relativeX: relativeX,
+                            relativeY: relativeY,
+                            currentMouseOverWindowId: isOverThisIframe ? childInfo.windowId : null
+                        });
+                    }
+                } catch (error) {
+                    // エラーはスキップ
+                }
+            }
+        });
+
+        // get-drop-target-window: dragend時にどのウィンドウにドロップしたかを判定
+        this.parentMessageBus.on('get-drop-target-window', (data, _source) => {
+            const targetWindowId = this.getWindowAtPosition(data.clientX, data.clientY);
+
+            console.log('[TADjs] ドロップ先ウィンドウ判定:', {
+                clientX: data.clientX,
+                clientY: data.clientY,
+                targetWindowId: targetWindowId,
+                requestFrom: data.sourceWindowId
+            });
+
+            // リクエスト元のウィンドウに結果を返す
+            this.parentMessageBus.sendToWindow(data.sourceWindowId, 'drop-target-window-response', {
+                sourceWindowId: data.sourceWindowId,
+                targetWindowId: targetWindowId,
+                clientX: data.clientX,
+                clientY: data.clientY
+            });
         });
 
         console.log('[TADjs] Phase 2: 親MessageBusハンドラ登録完了');
@@ -518,9 +590,9 @@ class TADjsDesktop {
     }
 
     /**
-     * アイコンファイルを読み込む
+     * アイコンファイルのパスを取得する
      * @param {string} realId - 実身ID
-     * @returns {Promise<{success: boolean, data?: string, error?: string}>} Base64エンコードされたアイコンデータ
+     * @returns {Promise<{success: boolean, filePath?: string, error?: string}>} アイコンファイルのパス
      */
     async readIconFile(realId) {
         // Electron環境の場合のみ動作
@@ -535,13 +607,9 @@ class TADjsDesktop {
                     return { success: false, error: 'Icon file not found' };
                 }
 
-                console.log('[TADjs] アイコンファイルを読み込みます:', iconPath);
-                const buffer = this.fs.readFileSync(iconPath);
-                const base64 = buffer.toString('base64');
-                console.log('[TADjs] アイコンファイル読み込み成功:', iconPath, 'サイズ:', buffer.length, 'bytes');
-                return { success: true, data: base64 };
+                return { success: true, filePath: iconPath };
             } catch (error) {
-                console.error('[TADjs] アイコンファイル読み込みエラー:', error);
+                console.error('[TADjs] アイコンファイルパス取得エラー:', error);
                 return { success: false, error: error.message };
             }
         }
@@ -793,6 +861,9 @@ class TADjsDesktop {
             'load-image-file': { handler: 'handleLoadImageFile', async: true },
             'save-image-file': { handler: 'handleSaveImageFile', async: true },
             'get-image-file-path': { handler: 'handleGetImageFilePath', async: true },
+            'get-current-user': { handler: (_, e) => this.handleGetCurrentUser(e) },
+            'duplicate-real-object': { handler: 'handleDuplicateRealObject', async: true },
+            'import-files': { handler: 'handleImportFiles', async: true },
         };
     }
 
@@ -812,16 +883,14 @@ class TADjsDesktop {
             this.parentMessageBus.broadcast('parent-mouseup');
         });
 
-        // ドラッグ中のマウス位置を追跡し、どのiframeの上にあるかを通知
+        // dragover/dragendイベントを全てのiframeに通知
+        // 注: iframe内でのドラッグ位置追跡は child-drag-position メッセージで行うため、
+        // ここではtrackDragOverIframes()を呼ばない
         document.addEventListener('dragover', (e) => {
             e.preventDefault();
-            console.log('[TADjs] dragover:', e.clientX, e.clientY);
-            // 現在のマウス位置を各iframeに通知
-            this.trackDragOverIframes(e.clientX, e.clientY);
         });
 
         document.addEventListener('dragend', () => {
-            // Phase 3: MessageBus経由でのみ送信
             this.parentMessageBus.broadcast('parent-dragend');
         });
 
@@ -862,7 +931,6 @@ class TADjsDesktop {
 
         // プラグインからのメッセージを受信
         window.addEventListener('message', async (e) => {
-            // Phase 2: context-menu-request は MessageBus に移行済み
             if (e.data && e.data.type === 'content-size-changed') {
                 // プラグインのコンテンツサイズが変更された
                 this.updatePluginContentSize(e.source, e.data.height, e.data.width);
@@ -884,7 +952,6 @@ class TADjsDesktop {
                 const file = this.fileObjects[e.data.fileName];
                 if (file) {
                     file.arrayBuffer().then(arrayBuffer => {
-                        // Phase 3: MessageBus経由でのみレスポンス送信
                         if (e.source) {
                             this.parentMessageBus.respondTo(e.source, 'file-data', {
                                 fileName: e.data.fileName,
@@ -906,7 +973,6 @@ class TADjsDesktop {
             } else if (e.data && e.data.type === 'get-image-file-path') {
                 // プラグインから画像ファイルパス取得要求
                 const filePath = this.getImageFilePath(e.data.fileName);
-                // Phase 3: MessageBus経由でのみレスポンス送信
                 if (e.source) {
                     this.parentMessageBus.respondTo(e.source, 'image-file-path-response', {
                         messageId: e.data.messageId,
@@ -1021,14 +1087,12 @@ class TADjsDesktop {
                 const chunkInfo = e.data.chunkInfo || { index: 0, total: 1, isLast: true };
                 console.log(`[TADjs] 実身ファイルセットチャンク受信 (${chunkInfo.index + 1}/${chunkInfo.total}):`, filesCount, '個のファイル、', imagesCount, '個の画像');
                 await this.handleArchiveFilesGenerated(e.data.files, e.data.images);
-            // Phase 2: toggle-maximize, close-window は MessageBus に移行済み
             } else if (e.data && e.data.type === 'open-external-file') {
                 // 既存データをOSのデフォルトアプリで開く
                 console.log('[TADjs] open-external-file受信:', e.data.realId, e.data.extension);
                 try {
                     const result = await this.openExternalFile(e.data.realId, e.data.extension);
 
-                    // Phase 3: MessageBus経由でのみレスポンス送信
                     if (e.source) {
                         this.parentMessageBus.respondTo(e.source, 'external-file-opened', {
                             realId: e.data.realId,
@@ -1040,7 +1104,6 @@ class TADjsDesktop {
                 } catch (error) {
                     console.error('[TADjs] 外部ファイルを開くエラー:', error);
                     if (e.source) {
-                        // Phase 3: MessageBus経由でのみレスポンス送信
                         this.parentMessageBus.respondTo(e.source, 'external-file-opened', {
                             realId: e.data.realId,
                             extension: e.data.extension,
@@ -1055,7 +1118,6 @@ class TADjsDesktop {
                 try {
                     const result = await this.readXtadText(e.data.realId);
 
-                    // Phase 3: MessageBus経由でのみレスポンス送信
                     if (e.source) {
                         this.parentMessageBus.respondTo(e.source, 'xtad-text-loaded', {
                             realId: e.data.realId,
@@ -1067,7 +1129,6 @@ class TADjsDesktop {
                 } catch (error) {
                     console.error('[TADjs] xtadテキストを読み取るエラー:', error);
                     if (e.source) {
-                        // Phase 3: MessageBus経由でのみレスポンス送信
                         this.parentMessageBus.respondTo(e.source, 'xtad-text-loaded', {
                             realId: e.data.realId,
                             success: false,
@@ -1099,7 +1160,7 @@ class TADjsDesktop {
                     }
                 }
             } else if (e.data && e.data.type === 'read-icon-file') {
-                // アイコンファイルを読み込む
+                // アイコンファイルのパスを取得
                 console.log('[TADjs] read-icon-file受信:', e.data.realId);
                 try {
                     const result = await this.readIconFile(e.data.realId);
@@ -1109,12 +1170,12 @@ class TADjsDesktop {
                             messageId: e.data.messageId,
                             realId: e.data.realId,
                             success: result.success,
-                            data: result.data,
+                            filePath: result.filePath,
                             error: result.error
                         });
                     }
                 } catch (error) {
-                    console.error('[TADjs] アイコンファイル読み込みエラー:', error);
+                    console.error('[TADjs] アイコンファイルパス取得エラー:', error);
                     if (e.source) {
                         this.parentMessageBus.respondTo(e.source, 'icon-file-loaded', {
                             messageId: e.data.messageId,
@@ -1126,15 +1187,11 @@ class TADjsDesktop {
                 }
             } else if (e.data && e.data.type === 'request-base-plugins') {
                 // 原紙プラグイン一覧取得要求
-                console.log('[TADjs] request-base-plugins受信');
-                console.log('[TADjs] window.pluginManager:', window.pluginManager);
                 const basePlugins = window.pluginManager ? window.pluginManager.getBasePlugins() : [];
-                console.log('[TADjs] basePlugins:', basePlugins);
                 if (e.source) {
                     this.parentMessageBus.respondTo(e.source, 'base-plugins-response', {
                         plugins: basePlugins
                     });
-                    console.log('[TADjs] base-plugins-response送信:', basePlugins.length, '個');
                 } else {
                     console.warn('[TADjs] e.sourceが存在しません');
                 }
@@ -1179,6 +1236,10 @@ class TADjsDesktop {
                 // iframe内で屑実身操作からのドロップが検出された
                 console.log('[TADjs] trash-real-object-drop-request受信:', e.data);
                 this.handleTrashRealObjectDrop(e.data.dragData, e);
+            } else if (e.data && e.data.type === 'notify-cross-window-drop') {
+                // クロスウィンドウドロップ発生の即座通知（dragendより前に処理）
+                console.log('[TADjs] notify-cross-window-drop受信:', e.data);
+                this.notifySourceWindowOfCrossWindowDropInProgress(e.data);
             } else if (e.data && e.data.type === 'cross-window-drop-success') {
                 // 別ウィンドウへのドロップ成功通知を元のウィンドウに転送
                 console.log('[TADjs] cross-window-drop-success受信:', e.data);
@@ -1314,7 +1375,7 @@ class TADjsDesktop {
                 console.log('[TADjs] 道具パネルウィンドウを開く:', e.data.pluginId);
                 // e.sourceからiframe要素を取得
                 const pluginIframe = e.source ? e.source.frameElement : null;
-                this.openToolPanelWindow(e.data.pluginId, e.data.settings, pluginIframe);
+                this.openToolPanelWindow(e.data.pluginId, e.data.settings, pluginIframe, e.data.panelpos);
             } else if (e.data && e.data.type === 'show-tool-panel-popup') {
                 // 道具パネルからポップアップ表示要求
                 this.showToolPanelPopup(e.data, e.source);
@@ -1338,7 +1399,6 @@ class TADjsDesktop {
                                 const toolPanelIframe = toolPanelWindow.querySelector('iframe');
 
                                 if (toolPanelIframe && toolPanelIframe.contentWindow) {
-                                    // Phase 3: MessageBus経由で送信
                                     const windowId = this.parentMessageBus.getWindowIdFromIframe(toolPanelIframe);
                                     if (windowId) {
                                         // fromEditorフラグを除去してから道具パネルに中継
@@ -1379,7 +1439,6 @@ class TADjsDesktop {
                             const relation = this.toolPanelRelations[windowId];
 
                             if (relation && relation.editorIframe && relation.editorIframe.contentWindow) {
-                                // Phase 3: MessageBus経由で送信
                                 const editorWindowId = this.parentMessageBus.getWindowIdFromIframe(relation.editorIframe);
                                 if (editorWindowId) {
                                     // fromToolPanelフラグを除去してから編集ウィンドウに中継
@@ -1421,17 +1480,13 @@ class TADjsDesktop {
                         const hScrollbar = windowElement.querySelector('.custom-scrollbar-horizontal');
 
                         if (content && vScrollbar) {
-                            // console.log('[TADjs] 垂直スクロールバー更新開始');
                             this.forceUpdateScrollbarForPlugin(iframe, content, vScrollbar, 'vertical');
                         }
                         if (content && hScrollbar) {
-                            // console.log('[TADjs] 水平スクロールバー更新開始');
                             this.forceUpdateScrollbarForPlugin(iframe, content, hScrollbar, 'horizontal');
                         }
-                        // console.log('[TADjs] スクロールバー更新:', windowElement.id);
                     }
                 }
-            // Phase 2: activate-window は MessageBus に移行済み
             } else if (e.data && e.data.type === 'set-clipboard') {
                 // クリップボードに仮身データを設定
                 this.clipboard = e.data.clipboardData;
@@ -1469,6 +1524,11 @@ class TADjsDesktop {
                 // ウィンドウ設定更新
                 this.handleUpdateWindowConfig(e).catch(err => {
                     console.error('[TADjs] ウィンドウ設定更新エラー:', err);
+                });
+            } else if (e.data && e.data.type === 'update-panel-position') {
+                // 道具パネル位置更新
+                this.handleUpdatePanelPosition(e).catch(err => {
+                    console.error('[TADjs] 道具パネル位置更新エラー:', err);
                 });
             } else if (e.data && e.data.type && this.messageHandlers && this.messageHandlers[e.data.type]) {
                 // 汎用メッセージハンドラー（フォールバック）
@@ -1510,11 +1570,104 @@ class TADjsDesktop {
     }
 
     /**
+     * 指定された座標にあるウィンドウIDを取得（z-index考慮）
+     * @param {number} clientX - マウスのX座標（親ウィンドウ座標系）
+     * @param {number} clientY - マウスのY座標（親ウィンドウ座標系）
+     * @returns {string|null} - ウィンドウID、見つからない場合はnull
+     */
+    getWindowAtPosition(clientX, clientY) {
+        let candidateWindows = [];
+
+        for (const [id, childInfo] of this.parentMessageBus.children.entries()) {
+            try {
+                const iframe = childInfo.iframe;
+                if (!iframe) continue;
+
+                const rect = iframe.getBoundingClientRect();
+                const isOverThisIframe = (
+                    clientX >= rect.left && clientX <= rect.right &&
+                    clientY >= rect.top && clientY <= rect.bottom
+                );
+
+                if (isOverThisIframe && childInfo.windowId) {
+                    // ウィンドウ要素を取得してz-indexを確認
+                    const windowElement = iframe.closest('.window');
+                    const zIndex = windowElement ? (parseInt(getComputedStyle(windowElement).zIndex) || 0) : 0;
+
+                    candidateWindows.push({
+                        windowId: childInfo.windowId,
+                        zIndex: zIndex
+                    });
+                }
+            } catch (error) {
+                // エラーはスキップ
+            }
+        }
+
+        // z-indexが最も高いウィンドウを選択（降順ソート）
+        if (candidateWindows.length > 0) {
+            candidateWindows.sort((a, b) => b.zIndex - a.zIndex);
+
+            // デバッグ: 複数のウィンドウが重なっている場合のみログ出力
+            if (candidateWindows.length > 1) {
+                console.log('[TADjs] 複数ウィンドウが重なっています:', candidateWindows.map(w => `${w.windowId}(z:${w.zIndex})`).join(', '), '選択:', candidateWindows[0].windowId);
+            }
+
+            return candidateWindows[0].windowId;
+        }
+
+        return null;
+    }
+
+    /**
      * ドラッグ中のマウス位置を追跡し、どのiframeの上にあるかを各iframeに通知
+     * @deprecated 頻繁な呼び出しは非効率なため、dragend時のgetWindowAtPosition()を使用すること
      * @param {number} clientX - マウスのX座標（親ウィンドウ座標系）
      * @param {number} clientY - マウスのY座標（親ウィンドウ座標系）
      */
     trackDragOverIframes(clientX, clientY) {
+        // まず、現在マウスがどのウィンドウ上にあるかを特定
+        // ウィンドウが重なっている場合は、z-indexが最も高い（最前面の）ウィンドウを選択
+        let currentMouseOverWindowId = null;
+        let candidateWindows = [];
+
+        for (const [id, childInfo] of this.parentMessageBus.children.entries()) {
+            try {
+                const iframe = childInfo.iframe;
+                if (!iframe) continue;
+
+                const rect = iframe.getBoundingClientRect();
+                const isOverThisIframe = (
+                    clientX >= rect.left && clientX <= rect.right &&
+                    clientY >= rect.top && clientY <= rect.bottom
+                );
+
+                if (isOverThisIframe && childInfo.windowId) {
+                    // ウィンドウ要素を取得してz-indexを確認
+                    const windowElement = iframe.closest('.window');
+                    const zIndex = windowElement ? (parseInt(getComputedStyle(windowElement).zIndex) || 0) : 0;
+
+                    candidateWindows.push({
+                        windowId: childInfo.windowId,
+                        zIndex: zIndex
+                    });
+                }
+            } catch (error) {
+                // エラーはスキップ
+            }
+        }
+
+        // z-indexが最も高いウィンドウを選択（降順ソート）
+        if (candidateWindows.length > 0) {
+            candidateWindows.sort((a, b) => b.zIndex - a.zIndex);
+            currentMouseOverWindowId = candidateWindows[0].windowId;
+
+            // デバッグ: 複数のウィンドウが重なっている場合のみログ出力
+            if (candidateWindows.length > 1) {
+                console.log('[TADjs] 複数ウィンドウが重なっています:', candidateWindows.map(w => `${w.windowId}(z:${w.zIndex})`).join(', '), '選択:', currentMouseOverWindowId);
+            }
+        }
+
         // MessageBusに登録された各子iframeに通知
         for (const [id, childInfo] of this.parentMessageBus.children.entries()) {
             try {
@@ -1534,9 +1687,10 @@ class TADjsDesktop {
                 const relativeX = clientX - rect.left;
                 const relativeY = clientY - rect.top;
 
-                // 各iframeに個別のデータを送信
+                // 各iframeに個別のデータを送信（現在マウスがあるウィンドウIDも含める）
                 this.parentMessageBus.sendToChild(id, 'parent-drag-position', {
                     isOverThisWindow: isOverThisIframe,
+                    currentMouseOverWindowId: currentMouseOverWindowId,  // 追加: 現在マウスがあるウィンドウID
                     clientX: clientX,
                     clientY: clientY,
                     relativeX: relativeX,
@@ -1554,16 +1708,16 @@ class TADjsDesktop {
     setupStatusBar() {
         // 即座に時刻を更新
         this.updateStatusTime();
-        
+
         // 次の秒の開始時点に合わせてタイマーを開始
         const now = new Date();
         const msUntilNextSecond = 1000 - now.getMilliseconds();
-        
+
         // 次の秒の開始時点で最初の更新を行い、その後1秒ごとに更新
         setTimeout(() => {
             this.updateStatusTime();
-            // 以降は正確に1秒ごとに更新
-            setInterval(() => this.updateStatusTime(), 1000);
+            // 以降は正確に1秒ごとに更新（IDを保存してクリーンアップ可能にする）
+            this.statusTimeUpdateInterval = setInterval(() => this.updateStatusTime(), 1000);
         }, msUntilNextSecond);
     }
 
@@ -1745,8 +1899,18 @@ class TADjsDesktop {
                                         clientY: iframeY
                                     }, '*');
                                 }
-                                
+
                                 console.log('[TADjs] iframeにドロップイベントを転送完了');
+
+                                // クロスウィンドウドロップの場合、元のウィンドウに成功メッセージを送信
+                                if (dragData.sourceWindowId && dragData.sourceWindowId !== windowId) {
+                                    console.log('[TADjs] クロスウィンドウドロップ検出: source=', dragData.sourceWindowId, 'target=', windowId);
+                                    this.parentMessageBus.sendToWindow(dragData.sourceWindowId, 'cross-window-drop-success', {
+                                        targetWindowId: windowId
+                                    });
+                                    console.log('[TADjs] cross-window-drop-successメッセージを送信:', dragData.sourceWindowId);
+                                }
+
                                 e.preventDefault();
                                 return false;
                             } catch (err) {
@@ -1768,151 +1932,9 @@ class TADjsDesktop {
      * ドロップされたファイルを処理
      * @param {FileList} files - ドロップされたファイルリスト
      */
-    handleFilesDrop(files) {
-        this.setStatusMessage(`${files.length}個のファイルを受け取りました`);
-
-        console.log('[TADjs] handleFilesDrop - files:', files.length);
-
-        // アクティブなウィンドウを取得
-        const activeWindow = document.querySelector('.window.active');
-        console.log('[TADjs] activeWindow:', activeWindow ? activeWindow.id : 'null');
-
-        // アクティブなウィンドウの情報を取得（windows Mapから）
-        let pluginId = null;
-        if (activeWindow) {
-            const windowInfo = this.windows.get(activeWindow.id);
-            if (windowInfo && windowInfo.pluginId) {
-                pluginId = windowInfo.pluginId;
-            }
-        }
-        console.log('[TADjs] pluginId:', pluginId);
-
-        // アクティブなウィンドウがプラグインウィンドウかチェック
-        if (activeWindow && pluginId) {
-            console.log('[TADjs] アクティブなプラグインウィンドウ:', pluginId);
-
-            // 仮身一覧プラグインの場合は、仮身として追加
-            if (pluginId === 'virtual-object-list') {
-                const iframe = activeWindow.querySelector('iframe');
-                console.log('[TADjs] iframe:', iframe ? 'found' : 'null', 'contentWindow:', iframe && iframe.contentWindow ? 'found' : 'null');
-
-                if (iframe && iframe.contentWindow) {
-                    files.forEach(async (file) => {
-                        console.log('[TADjs] 仮身一覧プラグインにファイルを追加:', file.name);
-
-                        // ファイルをメモリに保存
-                        this.fileObjects[file.name] = file;
-
-                        // Electron環境の場合、ファイルシステムにも保存
-                        try {
-                            const arrayBuffer = await file.arrayBuffer();
-                            const uint8Array = new Uint8Array(arrayBuffer);
-                            await this.saveDataFile(file.name, uint8Array);
-                            console.log('[TADjs] ファイルをディスクに保存しました:', file.name);
-                        } catch (error) {
-                            console.error('[TADjs] ファイル保存エラー:', error);
-                        }
-
-                        // プラグインに仮身追加メッセージを送信
-                        const windowId = this.parentMessageBus.getWindowIdFromIframe(iframe);
-                        if (windowId) {
-                            this.parentMessageBus.sendToWindow(windowId, 'add-virtual-object', {
-                                file: {
-                                    name: file.name,
-                                    // ファイルの中身は後で読み込むため、ここではファイル名のみ
-                                }
-                            });
-                        } else {
-                            // フォールバック: windowIdが見つからない場合は旧方式
-                            iframe.contentWindow.postMessage({
-                                type: 'add-virtual-object',
-                                file: {
-                                    name: file.name,
-                                }
-                            }, '*');
-                        }
-                    });
-                    return; // 処理完了
-                }
-            } else {
-                // その他のプラグインウィンドウの場合は、各ファイルを開く
-                files.forEach((file) => {
-                    console.log('[TADjs] プラグインウィンドウでファイルを開く:', file.name);
-                    this.openTADFile(file);
-                });
-                return; // 処理完了
-            }
-        }
-
-        // アクティブなウィンドウがない、またはプラグインウィンドウでない場合
-        {
-            console.log('[TADjs] アクティブなウィンドウがない、またはプラグインウィンドウでない');
-
-            // デフォルトウィンドウの場合は、ファイルアイコンを追加
-            // file-iconsコンテナが存在するかチェック
-            const fileIconsContainer = document.getElementById('file-icons');
-            console.log('[TADjs] file-iconsコンテナ:', fileIconsContainer ? 'found' : 'null');
-
-            if (fileIconsContainer) {
-                // file-iconsコンテナが存在する場合は、ファイルアイコンを追加
-                console.log('[TADjs] file-iconsコンテナにファイルアイコンを追加');
-                files.forEach((file, index) => {
-                    this.addFileIcon(file, index);
-                });
-            } else {
-                // file-iconsコンテナが存在しない場合、仮身一覧プラグインのウィンドウを探す
-                // windows Mapから仮身一覧プラグインのウィンドウを探す
-                let virtualObjectListWindow = null;
-                for (const [windowId, windowInfo] of this.windows.entries()) {
-                    if (windowInfo.pluginId === 'virtual-object-list') {
-                        virtualObjectListWindow = document.getElementById(windowId);
-                        break;
-                    }
-                }
-                console.log('[TADjs] 仮身一覧プラグインのウィンドウ:', virtualObjectListWindow ? virtualObjectListWindow.id : 'null');
-
-                if (virtualObjectListWindow) {
-                    // 仮身一覧プラグインがあれば、そこに追加
-                    const iframe = virtualObjectListWindow.querySelector('iframe');
-                    console.log('[TADjs] 仮身一覧プラグインのiframe:', iframe ? 'found' : 'null');
-
-                    if (iframe && iframe.contentWindow) {
-                        console.log('[TADjs] 仮身一覧プラグインに追加（フォールバック）');
-                        files.forEach(async (file) => {
-                            console.log('[TADjs] 仮身一覧プラグインにファイルを追加:', file.name);
-
-                            // ファイルをメモリに保存
-                            this.fileObjects[file.name] = file;
-
-                            // Electron環境の場合、ファイルシステムにも保存
-                            try {
-                                const arrayBuffer = await file.arrayBuffer();
-                                const uint8Array = new Uint8Array(arrayBuffer);
-                                await this.saveDataFile(file.name, uint8Array);
-                                console.log('[TADjs] ファイルをディスクに保存しました:', file.name);
-                            } catch (error) {
-                                console.error('[TADjs] ファイル保存エラー:', error);
-                            }
-                            const windowId = this.parentMessageBus.getWindowIdFromIframe(iframe);
-                            if (windowId) {
-                                this.parentMessageBus.sendToWindow(windowId, 'add-virtual-object', {
-                                    file: { name: file.name }
-                                });
-                            } else {
-                                // フォールバック: windowIdが見つからない場合は旧方式
-                                iframe.contentWindow.postMessage({
-                                    type: 'add-virtual-object',
-                                    file: { name: file.name }
-                                }, '*');
-                            }
-                        });
-                    }
-                } else {
-                    // どちらもない場合は、警告を出す（ファイルは開かない）
-                    console.warn('[TADjs] 初期ウィンドウも仮身一覧プラグインもありません。ファイルを配置できません。');
-                }
-            }
-        }
+    async handleFilesDrop(files) {
+        // FileImportManagerに処理を委譲
+        await this.fileImportManager.handleFilesDrop(files);
     }
 
     /**
@@ -2030,7 +2052,8 @@ class TADjsDesktop {
             makeDate: currentDateTime,     // 作成日時
             updateDate: currentDateTime,   // 更新日時
             accessDate: currentDateTime,   // アクセス日時
-            refCount: 1  // 新規作成時は1
+            refCount: 1,  // 新規作成時は1
+            maker: this.currentUser || 'TRON User'  // 使用者名を設定
         };
 
         // 新しい実身のXTADを作成（filename属性を更新）
@@ -2065,7 +2088,7 @@ class TADjsDesktop {
         }
 
         // Electron環境の場合のファイル保存は既にrealObjectSystemが行っているので不要
-        const jsonFileName = `${newRealId}.json`;
+        const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(newRealId);
         const xtadFileName = `${newRealId}_0.xtad`;
 
         const jsonSaved = await this.saveDataFile(jsonFileName, JSON.stringify(newRealJson, null, 2));
@@ -2180,7 +2203,7 @@ class TADjsDesktop {
             const newRefCount = currentRefCount + 1;
 
             // メタデータを更新
-            const jsonFileName = `${realId}.json`;
+            const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(realId);
             const jsonPath = this.getDataBasePath() + '/' + jsonFileName;
             const metadata = loadedRealObject.metadata;
             metadata.refCount = newRefCount;
@@ -2224,18 +2247,32 @@ class TADjsDesktop {
     }
 
     /**
+     * クロスウィンドウドロップ進行中を元のウィンドウに即座通知（dragendより前）
+     * @param {Object} data - ドロップデータ
+     */
+    notifySourceWindowOfCrossWindowDropInProgress(data) {
+        console.log('[TADjs] クロスウィンドウドロップ進行中通知:', data.sourceWindowId);
+
+        // 特定のウィンドウ（sourceWindowId）だけに即座通知
+        this.parentMessageBus.sendToWindow(data.sourceWindowId, 'cross-window-drop-in-progress', {
+            targetWindowId: data.targetWindowId
+        });
+    }
+
+    /**
      * クロスウィンドウドロップ成功を元のウィンドウに通知
      * @param {Object} data - ドロップデータ
      */
     notifySourceWindowOfCrossWindowDrop(data) {
         console.log('[TADjs] クロスウィンドウドロップ通知:', data.sourceWindowId);
 
-        this.parentMessageBus.broadcast('check-window-id', {
-            targetWindowId: data.sourceWindowId,
-            dropData: {
-                mode: data.mode,
-                virtualObjectId: data.virtualObjectId
-            }
+        // 特定のウィンドウ（sourceWindowId）だけに通知
+        this.parentMessageBus.sendToWindow(data.sourceWindowId, 'cross-window-drop-success', {
+            mode: data.mode,
+            source: data.source,
+            sourceWindowId: data.sourceWindowId,
+            targetWindowId: data.targetWindowId,
+            virtualObjects: data.virtualObjects
         });
     }
 
@@ -2261,10 +2298,16 @@ class TADjsDesktop {
         fileIcon.dataset.filename = file.name;
         fileIcon.dataset.fileName = file.name;  // プラグインメニュー用(大文字N)
 
-        fileIcon.innerHTML = `
-            <div class="file-icon-image"></div>
-            <div class="file-icon-text">${file.name}</div>
-        `;
+        // XSS対策: DOM APIを使用して安全に設定
+        const iconImage = document.createElement('div');
+        iconImage.className = 'file-icon-image';
+
+        const iconText = document.createElement('div');
+        iconText.className = 'file-icon-text';
+        iconText.textContent = file.name; // textContentでXSS対策
+
+        fileIcon.appendChild(iconImage);
+        fileIcon.appendChild(iconText);
 
         // クリックとダブルクリックを区別するためのタイマー
         let clickTimer = null;
@@ -2618,34 +2661,24 @@ class TADjsDesktop {
             const x = displayX * scaleX;
             const y = displayY * scaleY;
             
-            // console.log(`TADjsDesktop dblclick at display(${displayX}, ${displayY}) -> canvas(${x}, ${y}) on canvas:`, canvas.id);
-            // console.log(`Canvas size: ${canvas.width}x${canvas.height}, Display size: ${rect.width}x${rect.height}, Scale: ${scaleX}x${scaleY}`);
             
             // canvasに保存された仮身情報を使用（各canvasで独立）
             // canvas.virtualObjectLinksには既に[0]のデータが保存されているので、直接使用
             const links = canvas.virtualObjectLinks || (window.linkRecordList && window.linkRecordList[0]) || [];
             
-            // console.log('Available virtual object links:', links);
             
             if (links && links.length > 0) {
-                // console.log(`Checking ${links.length} links for hit test`);
                 
                 // クリック位置に仮身があるかチェック
                 for (let i = 0; i < links.length; i++) {
                     const link = links[i];
-                    // console.log(`Link ${i}:`, link);
-                    // console.log(`  Coordinates: left=${link.left}, top=${link.top}, right=${link.right}, bottom=${link.bottom}`);
-                    // console.log(`  Click position: x=${x}, y=${y}`);
-                    // console.log(`  Hit test: ${link.left} <= ${x} <= ${link.right} && ${link.top} <= ${y} <= ${link.bottom}`);
                     
                     if (link && link.left !== undefined && link.left <= x && x <= link.right && 
                         link.top !== undefined && link.top <= y && y <= link.bottom) {
-                        // console.log('Virtual object double-clicked:', link);
                         
                         // 重複クリック防止（短時間での連続クリックを防ぐ）
                         const now = Date.now();
                         if (this.lastLinkClickTime && now - this.lastLinkClickTime < 1000) {
-                            // console.log('Duplicate click detected, ignoring');
                             return;
                         }
                         this.lastLinkClickTime = now;
@@ -2654,8 +2687,6 @@ class TADjsDesktop {
                         if (link.raw && link.raw.length > 0) {
                             // リンク先のTADデータがある場合は新しいウィンドウで開く
                             const title = link.link_name || `仮身 - ${link.link_id || 'リンク'}`;
-                            // console.log(`Opening link window with raw data: ${link.raw.length} bytes`);
-                            // console.log('Link raw data preview:', link.raw.slice(0, 20));
                             const windowId = await this.createTADWindow(title, link.raw, null, link.link_id);
                             this.setStatusMessage(`${title} を新しいウィンドウで開きました`);
                         } else if (link.link_id !== undefined) {
@@ -2663,12 +2694,10 @@ class TADjsDesktop {
                             const linkedIndex = parseInt(link.link_id);
                             const tadRecordArray = canvas.tadRecordDataArray || window.tadRecordDataArray;
                             
-                            // console.log('Looking for link_id:', linkedIndex, 'in tadRecordArray:', tadRecordArray ? tadRecordArray.length : 'null');
                             
                             if (tadRecordArray && tadRecordArray[linkedIndex]) {
                                 const linkedEntry = tadRecordArray[linkedIndex];
                                 const title = linkedEntry.name || `ファイル ${linkedIndex}`;
-                                // console.log('Opening linked entry:', title, 'data length:', linkedEntry.data ? linkedEntry.data.length : 'null');
                                 const windowId = await this.createTADWindow(title, linkedEntry.data, null, link.link_id);
                                 this.setStatusMessage(`${title} を新しいウィンドウで開きました`);
                             } else {
@@ -2681,9 +2710,7 @@ class TADjsDesktop {
                         break;
                     }
                 }
-                // console.log('No virtual object found at click position');
             } else {
-                // console.log('No virtual object links available');
             }
         };
         
@@ -2716,14 +2743,12 @@ class TADjsDesktop {
             const linkId = linkIdOrObject;
             console.log('[TADjs] 仮身一覧から仮身を開く:', linkId, linkName);
 
-            // link_idから実身ID（UUID）を抽出
-            let realId = linkId;
-            realId = realId.replace(/\.(xtad|json|bpk|BPK)$/, '');
-            realId = realId.replace(/_\d+$/, '');
+            // link_idから実身ID（UUID）を抽出（共通メソッドを使用）
+            const realId = window.RealObjectSystem.extractRealId(linkId);
 
             // 実身管理用JSONを読み込む
             try {
-                const jsonFileName = `${realId}.json`;
+                const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(realId);
                 const jsonFile = await this.loadDataFileAsFile(jsonFileName);
                 if (!jsonFile) {
                     throw new Error(`JSONファイルが見つかりません: ${jsonFileName}`);
@@ -2767,7 +2792,6 @@ class TADjsDesktop {
 
         // 従来のlinkオブジェクトが渡された場合（TADファイル内の仮身から呼ばれた場合）
         const link = linkIdOrObject;
-        // console.log('Opening virtual object:', link);
 
         if (link.raw && link.raw.length > 0) {
             // リンク先のTADデータがある場合は新しいウィンドウで開く
@@ -2779,7 +2803,6 @@ class TADjsDesktop {
             const linkedIndex = parseInt(link.link_id);
             const tadRecordArray = window.tadRecordDataArray;
 
-            // console.log('openVirtualObject: Looking for link_id:', linkedIndex, 'in global tadRecordArray:', tadRecordArray ? tadRecordArray.length : 'null');
 
             if (tadRecordArray && tadRecordArray[linkedIndex]) {
                 const linkedEntry = tadRecordArray[linkedIndex];
@@ -2916,14 +2939,14 @@ class TADjsDesktop {
                 
                 if (scrollHeight <= clientHeight) {
                     // スクロール不要の場合
-                    thumb.style.height = Math.max(20, trackRect.height - 4) + 'px';
+                    thumb.style.height = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height - 4) + 'px';
                     thumb.style.top = '2px';
-                    thumb.style.background = '#d0d0d0';
+                    thumb.style.background = window.SCROLLBAR_THUMB_COLOR;
                     thumb.style.cursor = 'default';
                 } else {
                     // スクロール可能な場合
                     const viewportRatio = clientHeight / scrollHeight;
-                    const thumbHeight = Math.max(20, trackRect.height * viewportRatio);
+                    const thumbHeight = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height * viewportRatio);
                     const scrollRatio = content.scrollTop / (scrollHeight - clientHeight);
                     const maxThumbTop = trackRect.height - thumbHeight;
                     const thumbTop = scrollRatio * maxThumbTop;
@@ -2942,14 +2965,14 @@ class TADjsDesktop {
                 
                 if (scrollWidth <= clientWidth) {
                     // スクロール不要の場合
-                    thumb.style.width = Math.max(20, trackRect.width - 4) + 'px';
+                    thumb.style.width = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width - 4) + 'px';
                     thumb.style.left = '2px';
-                    thumb.style.background = '#d0d0d0';
+                    thumb.style.background = window.SCROLLBAR_THUMB_COLOR;
                     thumb.style.cursor = 'default';
                 } else {
                     // スクロール可能な場合
                     const viewportRatio = clientWidth / scrollWidth;
-                    const thumbWidth = Math.max(20, trackRect.width * viewportRatio);
+                    const thumbWidth = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width * viewportRatio);
                     const scrollRatio = content.scrollLeft / (scrollWidth - clientWidth);
                     const maxThumbLeft = trackRect.width - thumbWidth;
                     const thumbLeft = scrollRatio * maxThumbLeft;
@@ -3051,12 +3074,12 @@ class TADjsDesktop {
         // リサイズ監視（ウィンドウサイズ変更時など）
         const resizeObserver = new ResizeObserver(() => {
             // 少し遅延させてから更新（レンダリング完了を待つ）
-            setTimeout(updateScrollbar, 10);
+            setTimeout(updateScrollbar, window.QUICK_UI_UPDATE_DELAY_MS);
         });
         resizeObserver.observe(content);
         
         // 初期更新（少し遅延させる）
-        setTimeout(updateScrollbar, 100);
+        setTimeout(updateScrollbar, window.UI_UPDATE_DELAY_MS);
         
         // クリーンアップ関数を返す
         return () => {
@@ -3088,14 +3111,14 @@ class TADjsDesktop {
             
             if (scrollHeight <= clientHeight) {
                 // スクロール不要
-                thumb.style.height = Math.max(20, trackRect.height - 4) + 'px';
+                thumb.style.height = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height - 4) + 'px';
                 thumb.style.top = '2px';
                 thumb.style.background = '#d0d0d0';
                 thumb.style.cursor = 'default';
             } else {
                 // スクロール可能
                 const viewportRatio = clientHeight / scrollHeight;
-                const thumbHeight = Math.max(20, trackRect.height * viewportRatio);
+                const thumbHeight = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height * viewportRatio);
                 const scrollRatio = content.scrollTop / (scrollHeight - clientHeight);
                 const maxThumbTop = trackRect.height - thumbHeight;
                 const thumbTop = scrollRatio * maxThumbTop;
@@ -3111,14 +3134,14 @@ class TADjsDesktop {
             
             if (scrollWidth <= clientWidth) {
                 // スクロール不要
-                thumb.style.width = Math.max(20, trackRect.width - 4) + 'px';
+                thumb.style.width = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width - 4) + 'px';
                 thumb.style.left = '2px';
                 thumb.style.background = '#d0d0d0';
                 thumb.style.cursor = 'default';
             } else {
                 // スクロール可能
                 const viewportRatio = clientWidth / scrollWidth;
-                const thumbWidth = Math.max(20, trackRect.width * viewportRatio);
+                const thumbWidth = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width * viewportRatio);
                 const scrollRatio = content.scrollLeft / (scrollWidth - clientWidth);
                 const maxThumbLeft = trackRect.width - thumbWidth;
                 const thumbLeft = scrollRatio * maxThumbLeft;
@@ -3158,7 +3181,6 @@ class TADjsDesktop {
                 const scrollHeight = pluginContent.scrollHeight;
                 const clientHeight = pluginContent.clientHeight;
 
-                // console.log('[TADjs] スクロールバー更新(垂直):', {
                 //     scrollHeight,
                 //     clientHeight,
                 //     needsScroll: scrollHeight > clientHeight
@@ -3166,14 +3188,14 @@ class TADjsDesktop {
 
                 if (scrollHeight <= clientHeight) {
                     // スクロール不要
-                    thumb.style.height = Math.max(20, trackRect.height - 4) + 'px';
+                    thumb.style.height = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height - 4) + 'px';
                     thumb.style.top = '2px';
-                    thumb.style.background = '#d0d0d0';
+                    thumb.style.background = window.SCROLLBAR_THUMB_COLOR;
                     thumb.style.cursor = 'default';
                 } else {
                     // スクロール可能
                     const viewportRatio = clientHeight / scrollHeight;
-                    const thumbHeight = Math.max(20, trackRect.height * viewportRatio);
+                    const thumbHeight = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height * viewportRatio);
                     // pluginContentの現在のscrollTopを使用
                     const scrollRatio = pluginContent.scrollTop / (scrollHeight - clientHeight);
                     const maxThumbTop = trackRect.height - thumbHeight;
@@ -3188,7 +3210,6 @@ class TADjsDesktop {
                 const scrollWidth = pluginContent.scrollWidth;
                 const clientWidth = pluginContent.clientWidth;
 
-                // console.log('[TADjs] スクロールバー更新(水平):', {
                 //     scrollWidth,
                 //     clientWidth,
                 //     needsScroll: scrollWidth > clientWidth
@@ -3196,14 +3217,14 @@ class TADjsDesktop {
 
                 if (scrollWidth <= clientWidth) {
                     // スクロール不要
-                    thumb.style.width = Math.max(20, trackRect.width - 4) + 'px';
+                    thumb.style.width = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width - 4) + 'px';
                     thumb.style.left = '2px';
-                    thumb.style.background = '#d0d0d0';
+                    thumb.style.background = window.SCROLLBAR_THUMB_COLOR;
                     thumb.style.cursor = 'default';
                 } else {
                     // スクロール可能
                     const viewportRatio = clientWidth / scrollWidth;
-                    const thumbWidth = Math.max(20, trackRect.width * viewportRatio);
+                    const thumbWidth = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width * viewportRatio);
                     // pluginContentの現在のscrollLeftを使用
                     const scrollRatio = pluginContent.scrollLeft / (scrollWidth - clientWidth);
                     const maxThumbLeft = trackRect.width - thumbWidth;
@@ -3515,7 +3536,6 @@ class TADjsDesktop {
         console.log('Direct resize - start values:', { startX, startY, startWidth, startHeight, startLeft, startTop });
 
         const handleMouseMove = (moveEvent) => {
-            // console.log('Direct mousemove detected');
             const deltaX = moveEvent.clientX - startX;
             const deltaY = moveEvent.clientY - startY;
 
@@ -3540,8 +3560,8 @@ class TADjsDesktop {
             }
 
             // 最小サイズ制限
-            newWidth = Math.max(200, newWidth);
-            newHeight = Math.max(150, newHeight);
+            newWidth = Math.max(window.MIN_WINDOW_WIDTH, newWidth);
+            newHeight = Math.max(window.MIN_WINDOW_HEIGHT, newHeight);
 
             windowElement.style.width = newWidth + 'px';
             windowElement.style.height = newHeight + 'px';
@@ -3563,7 +3583,6 @@ class TADjsDesktop {
                 }
             }
 
-            // console.log('Direct resize applied:', { newWidth, newHeight, newLeft, newTop });
         };
 
         const handleMouseUp = () => {
@@ -3575,7 +3594,6 @@ class TADjsDesktop {
             // ウィンドウサイズ変更後、iframe内のキャンバスサイズ更新を通知
             const iframe = windowElement.querySelector('iframe');
 
-            // Phase 2: MessageBus経由で通知（利用可能な場合）
             const windowId = windowElement.dataset.windowId;
             if (this.parentMessageBus && windowId) {
                 this.parentMessageBus.sendToWindow(windowId, 'window-resized', {});
@@ -3703,8 +3721,27 @@ class TADjsDesktop {
             const rect = windowElement.getBoundingClientRect();
             const windowId = windowElement.dataset.windowId;
 
-            // Phase 2: MessageBus経由で通知（利用可能な場合）
-            if (this.parentMessageBus && windowId) {
+            // 道具パネルウィンドウかどうかを判定
+            const isToolPanel = this.toolPanelRelations && this.toolPanelRelations[windowId];
+
+            if (isToolPanel) {
+                // 道具パネルウィンドウの場合、編集ウィンドウに通知
+                const relation = this.toolPanelRelations[windowId];
+                const editorIframe = relation.editorIframe;
+                if (editorIframe && this.parentMessageBus) {
+                    const editorWindowId = this.parentMessageBus.getWindowIdFromIframe(editorIframe);
+                    if (editorWindowId) {
+                        this.parentMessageBus.sendToWindow(editorWindowId, 'tool-panel-window-moved', {
+                            pos: {
+                                x: Math.round(rect.left),
+                                y: Math.round(rect.top)
+                            }
+                        });
+                        console.log('[WindowDrag] 道具パネル移動終了を通知:', { x: rect.left, y: rect.top });
+                    }
+                }
+            } else if (this.parentMessageBus && windowId) {
+                // 通常のウィンドウの場合
                 this.parentMessageBus.sendToWindow(windowId, 'window-moved', {
                     pos: {
                         x: Math.round(rect.left),
@@ -3842,6 +3879,31 @@ class TADjsDesktop {
             cancelAnimationFrame(this.toolPanelDragState.rafId);
         }
 
+        // 道具パネル移動終了を編集ウィンドウに通知
+        if (this.toolPanelDragState && this.toolPanelDragState.element) {
+            const toolPanelWindow = this.toolPanelDragState.element;
+            const rect = toolPanelWindow.getBoundingClientRect();
+            const windowId = toolPanelWindow.dataset.windowId;
+
+            // 道具パネルと編集ウィンドウの関連を取得
+            if (this.toolPanelRelations && this.toolPanelRelations[windowId]) {
+                const relation = this.toolPanelRelations[windowId];
+                const editorIframe = relation.editorIframe;
+                if (editorIframe && this.parentMessageBus) {
+                    const editorWindowId = this.parentMessageBus.getWindowIdFromIframe(editorIframe);
+                    if (editorWindowId) {
+                        this.parentMessageBus.sendToWindow(editorWindowId, 'tool-panel-window-moved', {
+                            pos: {
+                                x: Math.round(rect.left),
+                                y: Math.round(rect.top)
+                            }
+                        });
+                        console.log('[ToolPanelDrag] 道具パネル移動終了を通知:', { x: rect.left, y: rect.top });
+                    }
+                }
+            }
+        }
+
         this.isToolPanelDragging = false;
         this.toolPanelDragState = null;
 
@@ -3973,8 +4035,8 @@ class TADjsDesktop {
         }
 
         // 最小サイズ制限
-        newWidth = Math.max(200, newWidth);
-        newHeight = Math.max(150, newHeight);
+        newWidth = Math.max(window.MIN_WINDOW_WIDTH, newWidth);
+        newHeight = Math.max(window.MIN_WINDOW_HEIGHT, newHeight);
 
         // WとNの方向でサイズが最小値に達した場合の位置調整
         if (newWidth === 200 && direction && direction.includes('w')) {
@@ -4009,7 +4071,6 @@ class TADjsDesktop {
             const rect = windowElement.getBoundingClientRect();
             const windowId = windowElement.dataset.windowId;
 
-            // Phase 2: MessageBus経由で通知（利用可能な場合）
             if (this.parentMessageBus && windowId) {
                 this.parentMessageBus.sendToWindow(windowId, 'window-resized-end', {
                     pos: {
@@ -4078,6 +4139,15 @@ class TADjsDesktop {
             window.element.classList.remove('inactive');
             this.activeWindow = windowId;
 
+            // フォーカス履歴を更新
+            // 既存の履歴から削除（重複を防ぐ）
+            const existingIndex = this.windowFocusHistory.indexOf(windowId);
+            if (existingIndex !== -1) {
+                this.windowFocusHistory.splice(existingIndex, 1);
+            }
+            // 履歴の最後に追加（最後が最前面）
+            this.windowFocusHistory.push(windowId);
+
             // 最前面に移動（ただし、alwaysOnTopウィンドウは除外して計算）
             const maxZ = Math.max(...Array.from(document.querySelectorAll('.window:not(.always-on-top)')).map(w =>
                 parseInt(getComputedStyle(w).zIndex) || 0));
@@ -4128,18 +4198,11 @@ class TADjsDesktop {
             return;
         }
 
-        // デバッグ: 設定前の状態を確認
-        console.log('[TADjs] アイコン設定前のクラス:', windowIcon.className);
-        console.log('[TADjs] アイコン設定前のスタイル:', windowIcon.style.cssText);
-
         // アイコンファイルを読み込む
         const iconData = await this.loadIconFileAsBase64(iconPath);
         if (iconData) {
             // CSSの擬似要素を無効化するクラスを追加
             windowIcon.classList.add('custom-icon');
-
-            // デバッグ: クラス追加後の状態を確認
-            console.log('[TADjs] custom-iconクラス追加後:', windowIcon.className);
 
             // アイコンを設定
             windowIcon.style.backgroundImage = `url('data:image/x-icon;base64,${iconData}')`;
@@ -4147,31 +4210,6 @@ class TADjsDesktop {
             windowIcon.style.backgroundRepeat = 'no-repeat';
             windowIcon.style.backgroundPosition = 'center';
             windowIcon.style.backgroundColor = 'transparent';
-
-            // デバッグ: 設定後の状態を確認
-            console.log('[TADjs] スタイル設定後:', windowIcon.style.cssText);
-
-            // デバッグ: 計算済みスタイルを確認
-            // Note: window.getComputedStyle はこのコンテキストで利用できないためコメントアウト
-            // const computedStyle = window.getComputedStyle(windowIcon);
-            // console.log('[TADjs] 計算済みスタイル:', {
-            //     backgroundImage: computedStyle.backgroundImage,
-            //     backgroundColor: computedStyle.backgroundColor,
-            //     backgroundSize: computedStyle.backgroundSize,
-            //     backgroundPosition: computedStyle.backgroundPosition,
-            //     backgroundRepeat: computedStyle.backgroundRepeat,
-            //     display: computedStyle.display,
-            //     width: computedStyle.width,
-            //     height: computedStyle.height
-            // });
-
-            // デバッグ: 擬似要素のスタイルも確認
-            // const beforeStyle = window.getComputedStyle(windowIcon, '::before');
-            // const afterStyle = window.getComputedStyle(windowIcon, '::after');
-            // console.log('[TADjs] ::before display:', beforeStyle.display);
-            // console.log('[TADjs] ::after display:', afterStyle.display);
-
-            console.log('[TADjs] ウィンドウアイコン設定完了:', windowId, iconPath);
         } else {
             console.warn('[TADjs] アイコンファイルが読み込めませんでした:', iconPath);
         }
@@ -4196,7 +4234,6 @@ class TADjsDesktop {
 
                 const buffer = this.fs.readFileSync(filePath);
                 const base64Data = buffer.toString('base64');
-                console.log('[TADjs] アイコンファイル読み込み成功:', filePath);
                 return base64Data;
             } catch (error) {
                 console.error('[TADjs] アイコンファイル読み込みエラー:', error);
@@ -4276,6 +4313,8 @@ class TADjsDesktop {
                         console.log('[TADjs] 道具パネルウィンドウを閉じる:', toolPanelWindowId);
                         const toolPanelWindow = document.getElementById(toolPanelWindowId);
                         if (toolPanelWindow) {
+                            // MessageBusから登録解除
+                            this.parentMessageBus.unregisterChild(toolPanelWindowId);
                             toolPanelWindow.remove();
                             this.windows.delete(toolPanelWindowId);
                         }
@@ -4306,9 +4345,17 @@ class TADjsDesktop {
             }
         }
 
-        // Phase 2: 親MessageBusから子を解除
         this.parentMessageBus.unregisterChild(windowId);
         console.log(`[TADjs] Phase 2: 子を解除 windowId=${windowId}`);
+
+        // フォーカス履歴から削除
+        const historyIndex = this.windowFocusHistory.indexOf(windowId);
+        if (historyIndex !== -1) {
+            this.windowFocusHistory.splice(historyIndex, 1);
+        }
+
+        // アクティブウィンドウが閉じられた場合、履歴の最後のウィンドウにフォーカス
+        const shouldFocusPrevious = this.activeWindow === windowId;
 
         setTimeout(() => {
             window.element.remove();
@@ -4316,6 +4363,19 @@ class TADjsDesktop {
 
             if (this.activeWindow === windowId) {
                 this.activeWindow = null;
+
+                // フォーカス履歴から前のウィンドウを探してフォーカス
+                if (shouldFocusPrevious) {
+                    // 履歴を後ろから辿って、まだ存在するウィンドウを探す
+                    for (let i = this.windowFocusHistory.length - 1; i >= 0; i--) {
+                        const prevWindowId = this.windowFocusHistory[i];
+                        if (this.windows.has(prevWindowId)) {
+                            console.log('[TADjs] 前のウィンドウにフォーカスを移動:', prevWindowId);
+                            this.setActiveWindow(prevWindowId);
+                            break;
+                        }
+                    }
+                }
             }
         }, 150);
     }
@@ -4604,7 +4664,6 @@ class TADjsDesktop {
                 return;
             }
 
-            // Phase 3: MessageBus経由でメッセージを送信
             console.log('[TADjs] メッセージ送信:', windowId, pluginId, message);
             const msgWindowId = this.parentMessageBus.getWindowIdFromIframe(iframe);
             if (msgWindowId) {
@@ -4871,13 +4930,9 @@ class TADjsDesktop {
             // link_idから実身ID（UUID）を抽出
             // 形式: "実身ID_recordNo.xtad" または "実身ID" または "実身ID.json"
             const fullRealId = virtualObj.link_id; // _0.xtad付きのフルID
-            let realId = fullRealId;
 
-            // .xtad, .json などの拡張子を除去
-            realId = realId.replace(/\.(xtad|json)$/, '');
-
-            // _recordNo の部分を除去（例: _0, _1, _10 など）
-            realId = realId.replace(/_\d+$/, '');
+            // 実身IDを抽出（共通メソッドを使用）
+            const realId = window.RealObjectSystem.extractRealId(fullRealId);
 
             console.log('[TADjs] 実身ID抽出:', realId, 'フルID:', fullRealId);
 
@@ -4887,7 +4942,6 @@ class TADjsDesktop {
                 console.log('[TADjs] 実身は既に開いています:', realId, 'ウィンドウID:', existingWindowId);
                 // ウィンドウをアクティブにする
                 this.setActiveWindow(existingWindowId);
-                // Phase 2: 呼び出し元に通知（MessageBus互換の type に変更）
                 if (messageId && source) {
                     source.postMessage({
                         type: 'window-opened',
@@ -4948,7 +5002,6 @@ class TADjsDesktop {
                     console.error('[TADjs] プラグインマネージャーが見つかりません');
                 }
 
-                // Phase 2: 呼び出し元に通知（MessageBus互換の type に変更）
                 if (messageId && source) {
                     source.postMessage({
                         type: 'window-opened',
@@ -4960,22 +5013,23 @@ class TADjsDesktop {
                 return;
             }
 
-            // tadjs-viewプラグインの場合は、ファイルをそのまま開く
-            if (pluginId === 'tadjs-view') {
-                // link_idがそのままファイル名
-                const fileName = virtualObj.link_id;
+            // tadjs-viewer/tadjs-viewまたはunpack-fileプラグインの場合は、BPKファイルを開く
+            if (pluginId === 'tadjs-viewer' || pluginId === 'tadjs-view' || pluginId === 'unpack-file') {
+                // link_idから実身IDを抽出し、実身ID.bpkファイルを探す
+                const bpkFileName = `${realId}.bpk`;
+                console.log('[TADjs] BPKファイルを開く:', bpkFileName, 'プラグイン:', pluginId);
 
                 // fileObjectsからファイルを取得
-                let file = this.fileObjects[fileName];
+                let file = this.fileObjects[bpkFileName];
 
                 // fileObjectsに無い場合はloadDataFileAsFileで読み込む
                 if (!file) {
-                    console.log('[TADjs] ファイルを読み込みます:', fileName);
-                    file = await this.loadDataFileAsFile(fileName);
+                    console.log('[TADjs] BPKファイルを読み込みます:', bpkFileName);
+                    file = await this.loadDataFileAsFile(bpkFileName);
                     if (file) {
-                        this.fileObjects[fileName] = file;
+                        this.fileObjects[bpkFileName] = file;
                     } else {
-                        throw new Error(`ファイルが見つかりません: ${fileName}`);
+                        throw new Error(`BPKファイルが見つかりません: ${bpkFileName}`);
                     }
                 }
 
@@ -4983,18 +5037,21 @@ class TADjsDesktop {
                 const arrayBuffer = await file.arrayBuffer();
                 const uint8Array = new Uint8Array(arrayBuffer);
 
-                // tadjs-viewプラグインで開く
+                // プラグインに渡すデータを準備
                 const fileData = {
-                    file: { name: fileName },
-                    fileName: fileName,
-                    rawData: Array.from(uint8Array),  // ← rawDataを追加！
-                    name: virtualObj.link_name || fileName,  // 実身名
-                    realName: virtualObj.link_name || fileName,  // 実身名（互換性）
-                    displayName: virtualObj.link_name || fileName
+                    realId: fullRealId,  // _0.xtad付きのフルID
+                    fileId: fullRealId,  // 互換性のため
+                    fileName: bpkFileName,
+                    fileData: file,
+                    rawData: Array.from(uint8Array),
+                    name: virtualObj.link_name || bpkFileName,  // 実身名
+                    realName: virtualObj.link_name || bpkFileName,  // 実身名（互換性）
+                    displayName: virtualObj.link_name || bpkFileName,
+                    isBPK: true  // BPKファイルであることを示すフラグ
                 };
 
                 const windowId = await window.pluginManager.launchPlugin(pluginId, fileData);
-                console.log('[TADjs] tadjs-viewプラグインで実身を開きました:', fileName, 'windowId:', windowId);
+                console.log(`[TADjs] ${pluginId}プラグインで実身を開きました:`, bpkFileName, 'windowId:', windowId);
 
                 // 開いたウィンドウを記録
                 if (windowId) {
@@ -5019,7 +5076,6 @@ class TADjsDesktop {
                     console.warn('[TADjs] windowIdがnullのためアクティブ化できません');
                 }
 
-                // Phase 2: 呼び出し元に通知（MessageBus互換の type に変更）
                 if (messageId && source) {
                     source.postMessage({
                         type: 'window-opened',
@@ -5032,7 +5088,7 @@ class TADjsDesktop {
             }
 
             // 実身ID.jsonを読み込む
-            const jsonFileName = `${realId}.json`;
+            const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(realId);
             let jsonFile = this.fileObjects[jsonFileName];
 
             if (!jsonFile) {
@@ -5081,16 +5137,12 @@ class TADjsDesktop {
 
             // XTADファイルをXMLとして読み込む（既にXML形式）
             let xmlData = '';
-            if (pluginId !== 'unpack-file') {
-                try {
-                    xmlData = await xtadFile.text();
-                    console.log(`[TADjs] XTAD読み込み完了: ${xmlData.length}文字`);
-                } catch (error) {
-                    console.error('[TADjs] XTAD読み込みエラー:', error);
-                    console.warn('[TADjs] XMLデータが空のままプラグインを起動します');
-                }
-            } else if (pluginId === 'unpack-file') {
-                console.log('[TADjs] unpack-fileプラグインのため、XML読み込みをスキップ');
+            try {
+                xmlData = await xtadFile.text();
+                console.log(`[TADjs] XTAD読み込み完了: ${xmlData.length}文字`);
+            } catch (error) {
+                console.error('[TADjs] XTAD読み込みエラー:', error);
+                console.warn('[TADjs] XMLデータが空のままプラグインを起動します');
             }
 
             // プラグインに渡すデータを準備
@@ -5100,7 +5152,7 @@ class TADjsDesktop {
                 fileData: xtadFile,          // XTADファイルオブジェクト
                 rawData: Array.from(uint8Array), // XTADのバイトデータ
                 xmlData: xmlData,            // XML文字列
-                jsonData: jsonData,          // 実身管理用セグメント（JSON）
+                realObject: jsonData,        // 実身管理用セグメント（JSON）
                 windowConfig: jsonData.window || null, // ウィンドウ設定
                 name: jsonData.name || virtualObj.link_name || realId,  // 実身名
                 realName: jsonData.name || virtualObj.link_name || realId,  // 実身名（互換性）
@@ -5139,7 +5191,6 @@ class TADjsDesktop {
                 console.error('[TADjs] プラグインマネージャーが見つかりません');
             }
 
-            // Phase 2: 呼び出し元に通知（MessageBus互換の type に変更）
             if (messageId && source) {
                 source.postMessage({
                     type: 'window-opened',
@@ -5150,7 +5201,6 @@ class TADjsDesktop {
             }
         } catch (error) {
             console.error('[TADjs] 実身を開くエラー:', error);
-            // Phase 2: エラー時も通知（MessageBus互換の type に変更）
             if (messageId && source) {
                 source.postMessage({
                     type: 'window-opened',
@@ -5293,8 +5343,6 @@ class TADjsDesktop {
         } else {
             // デスクトップのメニュー
             items.push(
-                { text: 'ファイルを開く...', action: 'open-file' },
-                { separator: true },
                 { text: 'ウインドウ一覧', action: 'window-list' },
                 { text: 'デスクトップをクリア', action: 'clear-desktop' },
                 { separator: true }
@@ -5412,11 +5460,18 @@ class TADjsDesktop {
                 menuItem.className = 'menu-item';
                 menuItem.dataset.action = item.action;
 
+                // XSS対策: DOM APIを使用して安全に設定
                 if (item.shortcut) {
-                    menuItem.innerHTML = `
-                        <span class="menu-text">${item.text}</span>
-                        <span class="menu-shortcut">${item.shortcut}</span>
-                    `;
+                    const textSpan = document.createElement('span');
+                    textSpan.className = 'menu-text';
+                    textSpan.textContent = item.text;
+
+                    const shortcutSpan = document.createElement('span');
+                    shortcutSpan.className = 'menu-shortcut';
+                    shortcutSpan.textContent = item.shortcut;
+
+                    menuItem.appendChild(textSpan);
+                    menuItem.appendChild(shortcutSpan);
                 } else {
                     menuItem.textContent = item.text;
                 }
@@ -5596,11 +5651,7 @@ class TADjsDesktop {
                     this.toggleWrapAtWindowWidth(data.windowId, data.canvasId);
                 }
                 break;
-                
-            case 'open-file':
-                this.showFileOpenDialog();
-                break;
-                
+
             case 'window-list':
                 this.showWindowList();
                 break;
@@ -5971,9 +6022,9 @@ class TADjsDesktop {
                 <p>バージョン: 1.0</p>
                 <p>作成者: TADjs System</p>
                 <p>コメント: このファイルはTADjs環境で作成されました。</p>
-                <div style="width: 500px; padding: 10px; background: #f0f0f0;">
+                <div style="width: 500px; padding: 10px; background: ${window.DIALOG_BG_COLOR};">
                     <p>拡張属性テーブル（横スクロールテスト用）</p>
-                    <table style="width: 100%; border: 1px solid #ccc;">
+                    <table style="width: 100%; border: 1px solid ${window.BORDER_COLOR};">
                         <tr><td>属性1</td><td>値1</td><td>説明1</td><td>タイプ</td><td>更新日時</td></tr>
                         <tr><td>属性2</td><td>値2</td><td>説明2</td><td>タイプ</td><td>更新日時</td></tr>
                     </table>
@@ -5987,23 +6038,6 @@ class TADjsDesktop {
             x: 200,
             y: 100
         });
-    }
-
-    /**
-     * ファイルを開くダイアログを表示
-     */
-    showFileOpenDialog() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.tad,.TAD,.bpk,.BPK';
-        input.multiple = true;
-        
-        input.onchange = (e) => {
-            const files = Array.from(e.target.files);
-            this.handleFilesDrop(files);
-        };
-        
-        input.click();
     }
 
     /**
@@ -6122,7 +6156,7 @@ class TADjsDesktop {
 
         if (bgId === 'none') {
             desktop.style.backgroundImage = 'none';
-            desktop.style.backgroundColor = '#c0c0c0';
+            desktop.style.backgroundColor = window.DESKTOP_BG_COLOR;
         } else {
             const savedBackgrounds = JSON.parse(localStorage.getItem('systemBackgrounds') || '[]');
             const background = savedBackgrounds.find(bg => bg.id == bgId);
@@ -6140,6 +6174,10 @@ class TADjsDesktop {
      * ユーザー環境設定を適用
      */
     applyUserConfig() {
+        // 使用者名を読み込み
+        this.currentUser = localStorage.getItem('username') || 'TRON User';
+        console.log('[TADjs] 使用者名を読み込みました:', this.currentUser);
+
         // タイトル文字サイズ
         const titleFontSize = localStorage.getItem('title-font-size') || '14';
         document.documentElement.style.setProperty('--title-font-size', titleFontSize + 'px');
@@ -6184,6 +6222,21 @@ class TADjsDesktop {
 
         // 全てのプラグインに設定変更を通知
         this.parentMessageBus.broadcast('user-config-updated', {});
+    }
+
+    /**
+     * 現在の使用者名を取得
+     * @param {MessageEvent} e - メッセージイベント
+     */
+    handleGetCurrentUser(e) {
+        const currentUser = this.currentUser || 'TRON User';
+
+        if (e.source) {
+            e.source.postMessage({
+                type: 'current-user-response',
+                currentUser: currentUser
+            }, '*');
+        }
     }
 
     /**
@@ -6304,16 +6357,20 @@ class TADjsDesktop {
      * @param {number} defaultButton - デフォルトボタンのインデックス (0始まり)
      * @returns {Promise<any>} - 選択されたボタンのvalue
      */
-    openToolPanelWindow(pluginId, settings, pluginIframe) {
+    openToolPanelWindow(pluginId, settings, pluginIframe, panelpos) {
         const pluginPath = `plugins/${pluginId}/tool-panel.html`;
 
         const content = `<iframe src="${pluginPath}" style="width: 100%; height: 100%; border: none;"></iframe>`;
 
+        // panelposが指定されていればそれを使用、なければデフォルト位置
+        const pos = panelpos || { x: 50, y: 50 };
+        console.log('[TADjs] 道具パネル位置:', pos);
+
         const windowId = this.createWindow('道具パネル', content, {
             width: 390,
             height: 80,
-            x: 50,
-            y: 50,
+            x: pos.x,
+            y: pos.y,
             resizable: false,
             closeable: true,
             alwaysOnTop: true,
@@ -6339,6 +6396,12 @@ class TADjsDesktop {
                 if (iframe && iframe.contentWindow) {
                     // 道具パネルiframeへの参照も保存
                     this.toolPanelRelations[windowId].toolPanelIframe = iframe;
+
+                    // MessageBusにiframeを登録
+                    this.parentMessageBus.registerChild(windowId, iframe, {
+                        windowId: windowId,
+                        pluginId: pluginId
+                    });
 
                     this.parentMessageBus.sendToWindow(windowId, 'init-tool-panel', {
                         settings: settings
@@ -6442,9 +6505,8 @@ class TADjsDesktop {
                 });
 
                 // クリックされたボタンを選択状態にする
-                e.target.style.background = '#e0e0e0';
+                e.target.style.background = window.HOVER_BG_COLOR;
 
-                // Phase 3: MessageBus経由で送信
                 this.sendToToolPanelSource(source, 'popup-grid-interval-click', {
                     interval: interval
                 });
@@ -6458,9 +6520,8 @@ class TADjsDesktop {
                 });
 
                 // クリックされたボタンを選択状態にする
-                e.target.style.background = '#e0e0e0';
+                e.target.style.background = window.HOVER_BG_COLOR;
 
-                // Phase 3: MessageBus経由で送信
                 this.sendToToolPanelSource(source, 'popup-material-tool-click', {
                     materialTool: tool
                 });
@@ -6469,30 +6530,25 @@ class TADjsDesktop {
 
         const handlePopupChange = (e) => {
             if (e.target.id === 'gridModeSelect') {
-                // Phase 3: MessageBus経由で送信
                 this.sendToToolPanelSource(source, 'popup-grid-mode-change', {
                     gridMode: e.target.value
                 });
             } else if (e.target.id === 'gridIntervalCustom') {
                 const value = parseInt(e.target.value);
                 if (value > 0 && value <= 200) {
-                    // Phase 3: MessageBus経由で送信
                     this.sendToToolPanelSource(source, 'popup-grid-interval-custom', {
                         interval: value
                     });
                 }
             } else if (e.target.id === 'fontSizeSelect') {
-                // Phase 3: MessageBus経由で送信（エディタへ）
                 this.sendToEditorFromToolPanel(source, 'update-font-size', {
                     fontSize: parseInt(e.target.value)
                 });
             } else if (e.target.id === 'fontFamilySelect') {
-                // Phase 3: MessageBus経由で送信（エディタへ）
                 this.sendToEditorFromToolPanel(source, 'update-font-family', {
                     fontFamily: e.target.value
                 });
             } else if (e.target.id === 'textColorPicker') {
-                // Phase 3: MessageBus経由で送信（エディタへ）
                 this.sendToEditorFromToolPanel(source, 'update-text-color', {
                     textColor: e.target.value
                 });
@@ -6500,7 +6556,6 @@ class TADjsDesktop {
                        e.target.id === 'underlineCheck' || e.target.id === 'strikethroughCheck') {
                 // 文字修飾変更
                 const decorationType = e.target.id.replace('Check', '');
-                // Phase 3: MessageBus経由で送信（エディタへ）
                 this.sendToEditorFromToolPanel(source, 'update-text-decoration', {
                     decoration: decorationType,
                     enabled: e.target.checked
@@ -6536,6 +6591,14 @@ class TADjsDesktop {
             } else if (e.target.id === 'lineConnectionTypeSelect') {
                 this.sendToToolPanelSource(source, 'popup-line-connection-type-change', {
                     lineConnectionType: e.target.value
+                });
+            } else if (e.target.id === 'arrowPositionSelect') {
+                this.sendToToolPanelSource(source, 'popup-arrow-position-change', {
+                    arrowPosition: e.target.value
+                });
+            } else if (e.target.id === 'arrowTypeSelect') {
+                this.sendToToolPanelSource(source, 'popup-arrow-type-change', {
+                    arrowType: e.target.value
                 });
             } else if (e.target.id === 'cornerRadiusInput') {
                 this.sendToToolPanelSource(source, 'popup-corner-radius-change', {
@@ -6689,7 +6752,6 @@ class TADjsDesktop {
             // ファイルが存在するかチェック
             if (!this.fs.existsSync(filePath)) {
                 console.error('[TADjs] 画像ファイルが見つかりません:', filePath);
-                // Phase 2: MessageBus互換の type に変更
                 source.postMessage({
                     type: 'load-image-response',
                     messageId: messageId,
@@ -6714,7 +6776,6 @@ class TADjsDesktop {
                 mimeType = 'image/bmp';
             }
 
-            // Phase 2: MessageBus互換の type に変更
             source.postMessage({
                 type: 'load-image-response',
                 messageId: messageId,
@@ -6726,7 +6787,6 @@ class TADjsDesktop {
             console.log('[TADjs] 画像ファイル読み込み成功:', filePath, '(', buffer.length, 'bytes)');
         } catch (error) {
             console.error('[TADjs] 画像ファイル読み込みエラー:', error);
-            // Phase 2: MessageBus互換の type に変更
             source.postMessage({
                 type: 'load-image-response',
                 messageId: messageId,
@@ -6752,7 +6812,6 @@ class TADjsDesktop {
             // ファイルが存在するかチェック
             if (!this.fs.existsSync(filePath)) {
                 console.error('[TADjs] [MessageBus] 画像ファイルが見つかりません:', filePath);
-                // MessageBus Phase 2: messageBus.send()を使用
                 this.messageBus.send('load-image-response', {
                     messageId: data.messageId,
                     success: false,
@@ -6776,7 +6835,6 @@ class TADjsDesktop {
                 mimeType = 'image/bmp';
             }
 
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('load-image-response', {
                 messageId: data.messageId,
                 success: true,
@@ -6787,7 +6845,6 @@ class TADjsDesktop {
             console.log('[TADjs] [MessageBus] 画像ファイル読み込み成功:', filePath, '(', buffer.length, 'bytes)');
         } catch (error) {
             console.error('[TADjs] [MessageBus] 画像ファイル読み込みエラー:', error);
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('load-image-response', {
                 messageId: data.messageId,
                 success: false,
@@ -6813,7 +6870,6 @@ class TADjsDesktop {
 
             console.log('[TADjs] [MessageBus] 画像ファイル保存成功:', filePath);
 
-            // MessageBus Phase 2: messageBus.send()を使用（保存成功の通知）
             if (data.messageId) {
                 this.messageBus.send('save-image-response', {
                     messageId: data.messageId,
@@ -6823,7 +6879,6 @@ class TADjsDesktop {
         } catch (error) {
             console.error('[TADjs] [MessageBus] 画像ファイル保存エラー:', error);
 
-            // MessageBus Phase 2: messageBus.send()を使用（エラー通知）
             if (data.messageId) {
                 this.messageBus.send('save-image-response', {
                     messageId: data.messageId,
@@ -6842,7 +6897,6 @@ class TADjsDesktop {
 
         const filePath = this.getImageFilePath(data.fileName);
 
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('image-file-path-response', {
             messageId: data.messageId,
             fileName: data.fileName,
@@ -6926,7 +6980,7 @@ class TADjsDesktop {
      * @param {number} defaultButton - デフォルトボタンのインデックス (0始まり)
      * @returns {Promise<{button: any, value: string}>} - 選択されたボタンと入力値
      */
-    showInputDialog(message, defaultValue = '', inputWidth = 30, buttons = [{ label: '取消', value: 'cancel' }, { label: 'OK', value: 'ok' }], defaultButton = 1) {
+    showInputDialog(message, defaultValue = '', inputWidth = window.DEFAULT_INPUT_WIDTH, buttons = [{ label: '取消', value: 'cancel' }, { label: 'OK', value: 'ok' }], defaultButton = 1) {
         return new Promise((resolve) => {
             const overlay = document.getElementById('dialog-overlay');
             const dialog = document.getElementById('input-dialog');
@@ -7157,35 +7211,29 @@ class TADjsDesktop {
      * @param {string} canvasId - canvas要素のID
      */
     saveTadDataToCanvas(canvas, tadData, canvasId) {
-        //console.log(`=== saveTadDataToCanvas called for ${canvasId} ===`);
         const { linkRecordList, tadRecordDataArray, currentFileIndex } = tadData;
         
         // canvasIdに対応するウィンドウのoriginalLinkIdを取得
         let originalLinkId = null;
         for (const [windowId, windowInfo] of this.windows) {
-            // console.log(`Checking window ${windowId}:`, {
             //     canvasId: windowInfo.canvasId,
             //     originalLinkId: windowInfo.originalLinkId,
             //     matches: windowInfo.canvasId === canvasId
             // });
             if (windowInfo.canvasId === canvasId) {
                 originalLinkId = windowInfo.originalLinkId;
-                //console.log(`Found matching window ${windowId} with originalLinkId:`, originalLinkId);
                 break;
             }
         }
         
         // グローバル変数からも確認
         const globalOriginalLinkId = window.originalLinkId;
-        // console.log(`Global originalLinkId: ${globalOriginalLinkId}, Local originalLinkId: ${originalLinkId}`);
 
         // グローバル変数を優先（tad.jsで設定された値を使用）
         if (globalOriginalLinkId !== null && globalOriginalLinkId !== undefined) {
             originalLinkId = globalOriginalLinkId;
-            // console.log(`Using global originalLinkId: ${originalLinkId}`);
         }
         
-        // console.debug('saveTadDataToCanvas called:', {
         //     canvasId,
         //     originalLinkId,
         //     currentFileIndex,
@@ -7200,27 +7248,22 @@ class TADjsDesktop {
         if (originalLinkId !== null && originalLinkId !== undefined) {
             // セカンダリウィンドウの場合：link_id - 1のインデックスを使用
             const linkIndex = parseInt(originalLinkId) - 1;
-            // console.log(`Secondary window: using linkRecordList[${linkIndex}] for originalLinkId ${originalLinkId}`);
 
             if (linkRecordList && linkRecordList[linkIndex] && Array.isArray(linkRecordList[linkIndex])) {
                 virtualLinks = [...linkRecordList[linkIndex]];
-                // console.log(`Using linkRecordList[${linkIndex}] with ${virtualLinks.length} links`);
             } else {
                 // console.warn(`linkRecordList[${linkIndex}] not found for link_id ${originalLinkId}`);
             }
         } else {
             // メインウィンドウの場合：最初のファイルのリンクレコード
-            // console.log('Main window: using linkRecordList[0]');
 
             if (linkRecordList && linkRecordList[0] && Array.isArray(linkRecordList[0])) {
                 virtualLinks = [...linkRecordList[0]];
-                // console.log(`Using linkRecordList[0] with ${virtualLinks.length} links`);
             } else {
                 // console.warn('linkRecordList[0] not found');
             }
         }
 
-        // console.debug('Final virtualLinks for', canvasId, ':', virtualLinks);
 
         // canvasにデータを保存
         canvas.virtualObjectLinks = virtualLinks;
@@ -7334,6 +7377,10 @@ class TADjsDesktop {
                     if (jsonResult.success && jsonResult.data) {
                         const jsonData = JSON.parse(jsonResult.data);
                         jsonData.updateDate = new Date().toISOString();
+                        // 使用者名が設定されている場合はmakerフィールドも更新
+                        if (this.currentUser) {
+                            jsonData.maker = this.currentUser;
+                        }
 
                         const jsonSaved = await this.saveDataFile(jsonFileName, JSON.stringify(jsonData, null, 2));
                         if (jsonSaved) {
@@ -7386,17 +7433,20 @@ class TADjsDesktop {
         try {
             console.log('[TADjs] backgroundColor更新開始:', fileId, backgroundColor);
 
+            // fileIdから実身IDを抽出（_0.xtad等の拡張子を除去）
+            const realId = fileId.replace(/_\d+\.xtad$/, '');
+
             // JSONファイル名を構築
-            const jsonFilename = `${fileId}.json`;
+            const jsonFilename = `${realId}.json`;
 
             // Electron環境の場合、ファイルシステムから読み込んで更新
             if (this.isElectronEnv) {
                 const dataBasePath = this.getDataBasePath();
-                const jsonPath = path.join(dataBasePath, jsonFilename);
+                const jsonPath = this.path.join(dataBasePath, jsonFilename);
 
                 // JSONファイルを読み込み
                 try {
-                    const jsonContent = fs.readFileSync(jsonPath, 'utf-8');
+                    const jsonContent = this.fs.readFileSync(jsonPath, 'utf-8');
                     const metadata = JSON.parse(jsonContent);
 
                     // backgroundColorを更新（window.backgroundColor）
@@ -7405,8 +7455,12 @@ class TADjsDesktop {
                     }
                     metadata.window.backgroundColor = backgroundColor;
 
-                    // metadataにrealIdを設定
-                    metadata.realId = fileId;
+                    // updateDateを更新
+                    metadata.updateDate = new Date().toISOString();
+                    // 使用者名が設定されている場合はmakerフィールドも更新
+                    if (this.currentUser) {
+                        metadata.maker = this.currentUser;
+                    }
 
                     // JSONファイルに保存
                     const saved = await this.saveDataFile(jsonFilename, JSON.stringify(metadata, null, 2));
@@ -7448,11 +7502,11 @@ class TADjsDesktop {
             // Electron環境の場合、ファイルシステムから読み込んで更新
             if (this.isElectronEnv) {
                 const dataBasePath = this.getDataBasePath();
-                const jsonPath = path.join(dataBasePath, jsonFilename);
+                const jsonPath = this.path.join(dataBasePath, jsonFilename);
 
                 // JSONファイルを読み込み
                 try {
-                    const jsonContent = fs.readFileSync(jsonPath, 'utf-8');
+                    const jsonContent = this.fs.readFileSync(jsonPath, 'utf-8');
                     const metadata = JSON.parse(jsonContent);
 
                     // isFullscreenを更新
@@ -7976,7 +8030,7 @@ class TADjsDesktop {
             const basePath = this.getDataBasePath();
 
             // すべてのXTADファイルを検索
-            const files = fs.readdirSync(basePath);
+            const files = this.fs.readdirSync(basePath);
             const xtadFiles = files.filter(f => f.endsWith('_0.xtad'));
 
             console.log('[TADjs] リンク名更新対象XTADファイル数:', xtadFiles.length);
@@ -7991,15 +8045,24 @@ class TADjsDesktop {
                 const linkPattern = new RegExp(`<link[^>]*id="${realId}_0\\.xtad"[^>]*>([^<]*)</link>`, 'g');
 
                 if (linkPattern.test(content)) {
-                    // リンク名を更新
-                    const updatedContent = content.replace(
+                    // name属性とリンクテキストの両方を更新
+                    let updatedContent = content;
+
+                    // 1. name属性を更新
+                    updatedContent = updatedContent.replace(
+                        new RegExp(`(<link[^>]*id="${realId}_0\\.xtad"[^>]*name=")[^"]*("[^>]*>)`, 'g'),
+                        `$1${newName}$2`
+                    );
+
+                    // 2. リンクテキストを更新
+                    updatedContent = updatedContent.replace(
                         new RegExp(`(<link[^>]*id="${realId}_0\\.xtad"[^>]*>)[^<]*(</link>)`, 'g'),
                         `$1${newName}$2`
                     );
 
                     // ファイルを保存
                     await this.saveDataFile(xtadFile, updatedContent);
-                    console.log('[TADjs] リンク名を更新:', xtadFile, '->', newName);
+                    console.log('[TADjs] リンク名とname属性を更新:', xtadFile, '->', newName);
                 }
             }
         } catch (error) {
@@ -8009,14 +8072,27 @@ class TADjsDesktop {
 
     /**
      * 実身複製ハンドラー
+     * MessageBus Phase 2: data と event の2引数形式に対応
      */
-    async handleDuplicateRealObject(e) {
+    async handleDuplicateRealObject(dataOrEvent, event) {
         if (!this.realObjectSystem) {
             console.error('[TADjs] 実身仮身システムが初期化されていません');
             return;
         }
 
-        const { realId: fullRealId, messageId } = e.data;
+        // MessageBus経由 (data, event) と postMessage経由 (event) の両方に対応
+        let data, source;
+        if (event && event.source) {
+            // MessageBus経由: 第1引数がdata, 第2引数がevent
+            data = dataOrEvent;
+            source = event.source;
+        } else {
+            // postMessage経由: 第1引数がevent
+            data = dataOrEvent.data;
+            source = dataOrEvent.source;
+        }
+
+        const { realId: fullRealId, messageId } = data;
 
         // 実身IDを抽出（_0.xtad を除去）
         let realId = fullRealId;
@@ -8045,14 +8121,11 @@ class TADjsDesktop {
             // キャンセルされた場合
             if (result.button === 'cancel' || !result.value) {
                 console.log('[TADjs] 実身複製がキャンセルされました');
-                if (e.source) {
-                    e.source.postMessage({
-                        type: 'real-object-duplicated',
-                        messageId: messageId,
-                        success: false,
-                        cancelled: true
-                    }, '*');
-                }
+                this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
+                    messageId: messageId,
+                    success: false,
+                    cancelled: true
+                });
                 return;
             }
 
@@ -8072,28 +8145,110 @@ class TADjsDesktop {
             await this.updateJsonFileRefCount(newRealId);
 
             // 成功を通知
-            if (e.source) {
-                e.source.postMessage({
-                    type: 'real-object-duplicated',
-                    messageId: messageId,
-                    success: true,
-                    newRealId: newRealId,
-                    newName: newName
-                }, '*');
-            }
+            this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
+                messageId: messageId,
+                success: true,
+                newRealId: newRealId,
+                newName: newName
+            });
 
             console.log('[TADjs] 実身複製完了:', realId, '->', newRealId, '名前:', newName);
             this.setStatusMessage(`実身を複製しました: ${newName}`);
         } catch (error) {
             console.error('[TADjs] 実身複製エラー:', error);
-            if (e.source) {
-                e.source.postMessage({
-                    type: 'real-object-duplicated',
-                    messageId: messageId,
-                    success: false,
-                    error: error.message
-                }, '*');
+            this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
+                messageId: messageId,
+                success: false,
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * ファイル取り込みハンドラー
+     * file-import プラグインから呼び出される
+     * @param {Object} dataOrEvent - データまたはイベント
+     * @param {Object} event - イベント（MessageBus経由の場合）
+     */
+    async handleImportFiles(dataOrEvent, event) {
+        console.log('[TADjs] handleImportFiles開始');
+
+        // MessageBus経由 (data, event) と postMessage経由 (event) の両方に対応
+        let data, source;
+        if (event && event.source) {
+            // MessageBus経由: 第1引数がdata, 第2引数がevent
+            data = dataOrEvent;
+            source = event.source;
+        } else {
+            // postMessage経由: 第1引数がevent
+            data = dataOrEvent.data;
+            source = dataOrEvent.source;
+        }
+
+        const { files, windowId } = data;
+
+        if (!files || files.length === 0) {
+            console.warn('[TADjs] ファイルが指定されていません');
+            this.parentMessageBus.respondTo(source, 'files-imported', {
+                success: false,
+                error: 'ファイルが指定されていません'
+            });
+            return;
+        }
+
+        console.log('[TADjs] ファイルを取り込みます:', files.length, '個');
+
+        try {
+            // アクティブな仮身一覧プラグインのiframeを探す
+            let virtualObjectListIframe = null;
+
+            // まず、windows Mapから仮身一覧プラグインのウィンドウを探す
+            for (const [windowId, windowInfo] of this.windows.entries()) {
+                if (windowInfo.pluginId === 'virtual-object-list') {
+                    const windowElement = document.getElementById(windowId);
+                    if (windowElement) {
+                        virtualObjectListIframe = windowElement.querySelector('iframe');
+                        if (virtualObjectListIframe && virtualObjectListIframe.contentWindow) {
+                            console.log('[TADjs] 仮身一覧プラグインのiframeを見つけました:', windowId);
+                            break;
+                        }
+                    }
+                }
             }
+
+            // 仮身一覧プラグインが見つからない場合はエラー
+            if (!virtualObjectListIframe || !virtualObjectListIframe.contentWindow) {
+                console.error('[TADjs] 仮身一覧プラグインが見つかりません');
+                this.parentMessageBus.respondTo(source, 'files-imported', {
+                    success: false,
+                    error: '仮身一覧プラグインが開かれていません'
+                });
+                return;
+            }
+
+            // FileImportManagerを使用してファイルをインポート
+            if (this.fileImportManager) {
+                await this.fileImportManager.handleFilesImport(files, virtualObjectListIframe);
+
+                // 成功を通知
+                this.parentMessageBus.respondTo(source, 'files-imported', {
+                    success: true
+                });
+
+                console.log('[TADjs] ファイル取り込み完了');
+            } else {
+                console.error('[TADjs] FileImportManagerが初期化されていません');
+                this.parentMessageBus.respondTo(source, 'files-imported', {
+                    success: false,
+                    error: 'FileImportManagerが初期化されていません'
+                });
+            }
+        } catch (error) {
+            console.error('[TADjs] ファイル取り込みエラー:', error);
+            this.parentMessageBus.respondTo(source, 'files-imported', {
+                success: false,
+                error: error.message
+            });
         }
     }
 
@@ -8291,9 +8446,22 @@ class TADjsDesktop {
                 if (windowConfig.maximize !== undefined) {
                     jsonData.window.maximize = windowConfig.maximize;
                 }
+                if (windowConfig.panel !== undefined) {
+                    jsonData.window.panel = windowConfig.panel;
+                }
+                if (windowConfig.panelpos) {
+                    jsonData.window.panelpos = windowConfig.panelpos;
+                }
+                if (windowConfig.backgroundColor !== undefined) {
+                    jsonData.window.backgroundColor = windowConfig.backgroundColor;
+                }
 
                 // updateDateを更新
                 jsonData.updateDate = new Date().toISOString();
+                // 使用者名が設定されている場合はmakerフィールドも更新
+                if (this.currentUser) {
+                    jsonData.maker = this.currentUser;
+                }
 
                 // JSONファイルに保存
                 if (this.isElectronEnv) {
@@ -8311,6 +8479,60 @@ class TADjsDesktop {
             }
         } catch (error) {
             console.error('[TADjs] ウィンドウ設定更新エラー:', error);
+        }
+    }
+
+    /**
+     * 道具パネル位置更新ハンドラー
+     */
+    async handleUpdatePanelPosition(e) {
+        const { fileId, panelpos } = e.data;
+
+        if (!fileId || !panelpos) {
+            console.error('[TADjs] 道具パネル位置更新: fileIdまたはpanelposが不足');
+            return;
+        }
+
+        try {
+            // realIdを抽出（fileIdは{realId}_0.xtadの形式またはrealIdそのもの）
+            const realId = fileId.replace(/_\d+\.xtad$/, '');
+
+            // JSONファイルから実身データを読み込んで更新
+            const jsonFileName = `${realId}.json`;
+            const jsonResult = await this.loadDataFile(this.getDataBasePath(), jsonFileName);
+
+            if (jsonResult.success && jsonResult.data) {
+                const jsonData = JSON.parse(jsonResult.data);
+
+                // panelposを更新
+                if (!jsonData.window) {
+                    jsonData.window = {};
+                }
+                jsonData.window.panelpos = panelpos;
+
+                // updateDateを更新
+                jsonData.updateDate = new Date().toISOString();
+                // 使用者名が設定されている場合はmakerフィールドも更新
+                if (this.currentUser) {
+                    jsonData.maker = this.currentUser;
+                }
+
+                // JSONファイルに保存
+                if (this.isElectronEnv) {
+                    const saved = await this.saveDataFile(jsonFileName, JSON.stringify(jsonData, null, 2));
+                    if (saved) {
+                        console.log('[TADjs] 道具パネル位置をJSONファイルに保存:', realId, panelpos);
+                    } else {
+                        console.error('[TADjs] 道具パネル位置のJSONファイル保存失敗:', jsonFileName);
+                    }
+                } else {
+                    console.log('[TADjs] ブラウザ環境のためJSONファイル保存をスキップ:', realId);
+                }
+            } else {
+                console.warn('[TADjs] 道具パネル位置更新: JSONファイルが見つかりません:', jsonFileName);
+            }
+        } catch (error) {
+            console.error('[TADjs] 道具パネル位置更新エラー:', error);
         }
     }
 

@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.13
+ * TADjs Ver0.15
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -3656,7 +3656,7 @@ function tsFigLineDraw(segLen, tadSeg) {
         }
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}" />\r\n`);
+        xmlBuffer.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" />\r\n`);
     }
 }
 
@@ -3729,7 +3729,7 @@ function tsFigArcDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<arc l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" />\r\n`);
+        xmlBuffer.push(`<arc l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" />\r\n`);
     }
 }
 
@@ -3786,7 +3786,7 @@ function tsFigChordDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<chord l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startXOnEllipse}" startY="${startYOnEllipse}" endX="${endXOnEllipse}" endY="${endYOnEllipse}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" />\r\n`);
+        xmlBuffer.push(`<chord l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startXOnEllipse}" startY="${startYOnEllipse}" endX="${endXOnEllipse}" endY="${endYOnEllipse}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" />\r\n`);
     }
 }
 
@@ -3822,7 +3822,7 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<elliptical_arc l_atr="${l_atr}" l_pat="${l_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${radianStart}" endAngle="${radianEnd}" start_arrow="${startArrow}" end_arrow="${endArrow}" />\r\n`);
+        xmlBuffer.push(`<elliptical_arc l_atr="${l_atr}" l_pat="${l_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${radianStart}" endAngle="${radianEnd}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" />\r\n`);
     }
 }
 
@@ -3860,7 +3860,7 @@ function tsFigPolylineDraw(segLen, tadSeg) {
         }
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<polyline l_atr="${l_atr}" l_pat="${l_pat}" round="${round}" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}" />\r\n`);
+        xmlBuffer.push(`<polyline l_atr="${l_atr}" l_pat="${l_pat}" round="${round}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" />\r\n`);
     }
 }
 
@@ -3925,7 +3925,7 @@ function tsFigCurveDraw(segLen, tadSeg) {
         }
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" type="${type}" closed="${isClosed ? '1' : '0'}" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}" />\r\n`);
+        xmlBuffer.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" type="${type}" closed="${isClosed ? '1' : '0'}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" />\r\n`);
     }
 }
 
@@ -4484,9 +4484,9 @@ function tsFigureModifier(segLen, tadSeg) {
     console.debug(`図形要素修飾セグメント: arrow=0x${arrow.toString(16)}, startArrow=${startArrow}, endArrow=${endArrow}`);
 
     // XMLダンプ機能が有効な場合、図形修飾タグを出力
-    if (isXmlDumpEnabled()) {
-        xmlBuffer.push(`<figmodifier arrow="0x${arrow.toString(16)}" start="${startArrow}" end="${endArrow}" />\r\n`);
-    }
+    // if (isXmlDumpEnabled()) {
+    //     xmlBuffer.push(`<figmodifier arrow="0x${arrow.toString(16)}" start="${startArrow}" end="${endArrow}" />\r\n`);
+    // }
 }
 
 

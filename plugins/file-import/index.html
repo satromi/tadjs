@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ファイル取込</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>ファイル取込</h2>
+        </div>
+
+        <div class="content">
+            <!-- ドロップゾーン -->
+            <div class="drop-zone" id="drop-zone">
+                <div class="drop-zone-content">
+                    <div class="icon">📥</div>
+                    <p>ファイルをドラッグ&ドロップ</p>
+                    <p class="or-text">または</p>
+                    <button class="select-button" id="select-button">ファイルを選択</button>
+                </div>
+            </div>
+
+            <!-- 非表示のファイル入力 -->
+            <input type="file" id="file-input" multiple style="display: none;">
+
+            <!-- 選択されたファイルのリスト -->
+            <div class="file-list" id="file-list" style="display: none;">
+                <h3>選択されたファイル</h3>
+                <div class="file-items" id="file-items"></div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <button class="button button-primary" id="import-button" disabled>取り込み</button>
+            <button class="button" id="cancel-button">キャンセル</button>
+        </div>
+    </div>
+
+    <!-- MessageBusをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <script src="app.js"></script>
+</body>
+</html>

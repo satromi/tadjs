@@ -15,6 +15,8 @@ class ToolPanel {
         this.linePattern = 'solid';
         this.lineConnectionType = 'straight'; // 'straight', 'elbow', 'curve'
         this.cornerRadius = 0;
+        this.arrowPosition = 'none'; // 'none', 'start', 'end', 'both'
+        this.arrowType = 'simple'; // 'simple', 'double', 'filled'
 
         // 格子点設定
         this.gridMode = 'none'; // 'none', 'show', 'snap'
@@ -141,6 +143,20 @@ class ToolPanel {
                 this.sendToEditor({
                     type: 'update-corner-radius',
                     cornerRadius: this.cornerRadius
+                });
+            } else if (event.data && event.data.type === 'popup-arrow-position-change') {
+                // 矢印位置変更
+                this.arrowPosition = event.data.arrowPosition;
+                this.sendToEditor({
+                    type: 'update-arrow-position',
+                    arrowPosition: this.arrowPosition
+                });
+            } else if (event.data && event.data.type === 'popup-arrow-type-change') {
+                // 矢印種類変更
+                this.arrowType = event.data.arrowType;
+                this.sendToEditor({
+                    type: 'update-arrow-type',
+                    arrowType: this.arrowType
                 });
             } else if (event.data && event.data.type === 'popup-material-tool-click') {
                 // 画材ツール選択
@@ -528,7 +544,7 @@ class ToolPanel {
         const y = iframeRect.top + rect.bottom + 5;
 
         const htmlContent = `
-            <label style="display: flex; align-items: center; gap: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
                 <span>線の太さ:</span>
                 <select id="lineWidthSelect" style="padding: 4px;">
                     <option value="1" ${this.lineWidth === 1 ? 'selected' : ''}>1px</option>
@@ -538,7 +554,7 @@ class ToolPanel {
                     <option value="10" ${this.lineWidth === 10 ? 'selected' : ''}>10px</option>
                 </select>
             </label>
-            <label style="display: flex; align-items: center; gap: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
                 <span>線種:</span>
                 <select id="linePatternSelect" style="padding: 4px;">
                     <option value="solid" ${this.linePattern === 'solid' ? 'selected' : ''}>実線</option>
@@ -546,7 +562,7 @@ class ToolPanel {
                     <option value="dashed" ${this.linePattern === 'dashed' ? 'selected' : ''}>破線</option>
                 </select>
             </label>
-            <label style="display: flex; align-items: center; gap: 8px;">
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
                 <span>接続形状:</span>
                 <select id="lineConnectionTypeSelect" style="padding: 4px;">
                     <option value="straight" ${this.lineConnectionType === 'straight' ? 'selected' : ''}>直線</option>
@@ -554,6 +570,24 @@ class ToolPanel {
                     <option value="curve" ${this.lineConnectionType === 'curve' ? 'selected' : ''}>曲線</option>
                 </select>
             </label>
+            <div style="border-top: 1px solid #ccc; margin: 8px 0; padding-top: 8px;">
+                <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                    <span>矢印位置:</span>
+                    <select id="arrowPositionSelect" style="padding: 4px;">
+                        <option value="none" ${this.arrowPosition === 'none' ? 'selected' : ''}>なし</option>
+                        <option value="start" ${this.arrowPosition === 'start' ? 'selected' : ''}>始点のみ</option>
+                        <option value="end" ${this.arrowPosition === 'end' ? 'selected' : ''}>終点のみ</option>
+                        <option value="both" ${this.arrowPosition === 'both' ? 'selected' : ''}>両端</option>
+                    </select>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px;">
+                    <span>矢印種類:</span>
+                    <select id="arrowTypeSelect" style="padding: 4px;">
+                        <option value="simple" ${this.arrowType === 'simple' ? 'selected' : ''}>→ (線のみ)</option>
+                        <option value="filled" ${this.arrowType === 'filled' ? 'selected' : ''}>➜ (塗りつぶし)</option>
+                    </select>
+                </label>
+            </div>
         `;
 
         if (window.parent && window.parent !== window) {

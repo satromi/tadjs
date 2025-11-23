@@ -1,3 +1,5 @@
+// electron/main.js
+
 const electron = require('electron');
 
 // Electronモジュールの型を確認（パスが返される場合がある）
@@ -170,6 +172,7 @@ function createWindow() {
         height: 800,
         webPreferences: {
             nodeIntegration: true,
+            nodeIntegrationInSubFrames: true,
             contextIsolation: false,
             enableRemoteModule: true,
             preload: path.join(__dirname, 'preload.js')

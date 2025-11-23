@@ -1,5 +1,5 @@
 {
-  "name": "書庫管理",
+  "name": "書庫解凍",
   "linktype": false,
   "makeDate": "2025-11-09T00:00:00.000Z",
   "updateDate": "2025-11-09T00:00:00.000Z",
@@ -8,7 +8,7 @@
   "refCount": 1,
   "editable": true,
   "readable": true,
-  "maker": "satromi",
+  "maker": "TRON User",
   "window": {
     "pos": {
       "x": 100,
@@ -31,9 +31,13 @@
     "backgroundColor": "#ffffff"
   },
   "applist": {
-    "unpack-file":{
-      "name":"書庫管理",
+    "tadjs-view":{
+      "name":"TADjs View",
       "defaultOpen": true
+    },
+    "unpack-file":{
+      "name":"書庫解凍",
+      "defaultOpen": false
     }
   }
 }

@@ -1,3 +1,14 @@
+import {
+    DEFAULT_TIMEOUT_MS,
+    LONG_OPERATION_TIMEOUT_MS,
+    LOAD_DATA_FILE_TIMEOUT_MS,
+    DEFAULT_FRCOL,
+    DEFAULT_CHCOL,
+    DEFAULT_TBCOL,
+    DEFAULT_BGCOL,
+    DEFAULT_FONT_SIZE
+} from './util.js';
+
 /**
  * 実身仮身システム - ファイル直接アクセス版
  * IndexedDBを使わず、ファイルシステムから直接読み書き
@@ -462,6 +473,30 @@ export class RealObjectSystem {
     }
 
     /**
+     * 仮身をコピー（参照カウントを増やす）
+     * @param {string} realId - 実身ID
+     */
+    async copyVirtualObject(realId) {
+        if (!this.isElectronEnv) {
+            throw new Error('ファイルシステムアクセスにはElectron環境が必要です');
+        }
+
+        const basePath = this._basePath;
+        const jsonPath = this.path.join(basePath, `${realId}.json`);
+
+        if (!this.fs.existsSync(jsonPath)) {
+            throw new Error(`メタデータが見つかりません: ${realId}`);
+        }
+
+        const metadata = JSON.parse(this.fs.readFileSync(jsonPath, 'utf-8'));
+        const currentRefCount = metadata.refCount || 0;
+        const newRefCount = currentRefCount + 1;
+
+        await this.updateRefCount(realId, newRefCount);
+        console.log(`[RealObjectSystem] 仮身コピー完了: ${realId} (refCount: ${currentRefCount} -> ${newRefCount})`);
+    }
+
+    /**
      * すべての実身のメタデータを取得
      * @returns {Promise<Array>} メタデータの配列
      */
@@ -520,5 +555,335 @@ export class RealObjectSystem {
      */
     async physicalDeleteRealObject(realId) {
         return await this.deleteRealObject(realId);
+    }
+
+    /**
+     * link_idから実身IDを抽出
+     * @param {string} linkId link_id（例: "019a6c96-e262-7dfd-a3bc-1e85d495d60d_0.xtad"）
+     * @returns {string} 実身ID（例: "019a6c96-e262-7dfd-a3bc-1e85d495d60d"）
+     */
+    static extractRealId(linkId) {
+        if (!linkId) {
+            console.warn('[RealObjectSystem] extractRealId: linkIdが空です');
+            return '';
+        }
+        // .xtadまたは.jsonの拡張子を削除
+        let realId = linkId.replace(/\.(xtad|json)$/, '');
+        // 末尾の_数字を削除（仮身のインデックス）
+        realId = realId.replace(/_\d+$/, '');
+        return realId;
+    }
+
+    /**
+     * 実身IDから管理用JSONファイル名を生成
+     * @param {string} realId 実身ID
+     * @returns {string} JSONファイル名（例: "019a6c96-e262-7dfd-a3bc-1e85d495d60d.json"）
+     */
+    static getRealObjectJsonFileName(realId) {
+        if (!realId) {
+            console.warn('[RealObjectSystem] getRealObjectJsonFileName: realIdが空です');
+            return '';
+        }
+        return `${realId}.json`;
+    }
+
+    /**
+     * applistデータを取得（プラグイン共通）
+     * @param {Object} plugin プラグインインスタンス（messageBusを持つ）
+     * @param {string} realId 実身ID
+     * @returns {Promise<Object|null>} applistデータ
+     */
+    static async getAppListData(plugin, realId) {
+        try {
+            console.log('[RealObjectSystem] getAppListData開始 realId:', realId);
+            const jsonFileName = this.getRealObjectJsonFileName(realId);
+            console.log('[RealObjectSystem] JSONファイル名:', jsonFileName);
+
+            // 親ウィンドウ経由でファイルを読み込む（仮身一覧プラグインと同じ方法）
+            const messageId = `load-json-${Date.now()}-${Math.random()}`;
+
+            // 親ウィンドウにファイル読み込みを要求
+            plugin.messageBus.send('load-data-file-request', {
+                fileName: jsonFileName,
+                messageId: messageId
+            });
+
+            console.log('[RealObjectSystem] 親ウィンドウにファイル読み込み要求送信:', jsonFileName);
+
+            try {
+                // レスポンスを待つ（10秒タイムアウト）
+                const result = await plugin.messageBus.waitFor('load-data-file-response', LOAD_DATA_FILE_TIMEOUT_MS, (data) => {
+                    return data.messageId === messageId;
+                });
+
+                if (result.success) {
+                    console.log('[RealObjectSystem] JSONファイル読み込み成功（親ウィンドウ経由）:', jsonFileName);
+
+                    // dataフィールド（Fileオブジェクト）またはcontentフィールド（テキスト）に対応
+                    let jsonText;
+                    if (result.data && result.data instanceof File) {
+                        console.log('[RealObjectSystem] Fileオブジェクトをテキストとして読み込み');
+                        jsonText = await result.data.text();
+                    } else if (result.content) {
+                        jsonText = result.content;
+                    } else {
+                        console.error('[RealObjectSystem] レスポンスにdataまたはcontentフィールドがありません');
+                        return null;
+                    }
+
+                    const jsonData = JSON.parse(jsonText);
+                    console.log('[RealObjectSystem] JSONパース成功 keys:', Object.keys(jsonData));
+
+                    // applistセクションを返す（小文字）
+                    if (jsonData.applist) {
+                        console.log('[RealObjectSystem] applist found:', Object.keys(jsonData.applist));
+                        return jsonData.applist;
+                    } else {
+                        console.warn('[RealObjectSystem] applistが設定されていません jsonData:', jsonData);
+                        return null;
+                    }
+                } else {
+                    console.error('[RealObjectSystem] JSONファイル読み込み失敗:', result.error);
+                    return null;
+                }
+            } catch (error) {
+                console.error('[RealObjectSystem] JSONファイル読み込みタイムアウトまたはエラー:', jsonFileName, error);
+                return null;
+            }
+        } catch (error) {
+            console.error('[RealObjectSystem] appList取得エラー:', error);
+            return null;
+        }
+    }
+
+    /**
+     * 実身ウィンドウを閉じる（プラグイン共通）
+     * @param {Object} plugin プラグインインスタンス（messageBus、contextMenuVirtualObject、openedRealObjects、setStatusを持つ）
+     */
+    static closeRealObject(plugin) {
+        if (!plugin.contextMenuVirtualObject) {
+            console.warn('[RealObjectSystem] 選択中の仮身がありません');
+            return;
+        }
+
+        const realId = plugin.contextMenuVirtualObject.realId;
+        const windowId = plugin.openedRealObjects.get(realId);
+
+        if (!windowId) {
+            console.warn('[RealObjectSystem] 実身が開いていません:', realId);
+            plugin.setStatus('実身が開いていません');
+            return;
+        }
+
+        // 親ウィンドウにウィンドウを閉じるよう要求
+        plugin.messageBus.send('close-window', {
+            windowId: windowId
+        });
+
+        console.log('[RealObjectSystem] ウィンドウを閉じる要求:', windowId);
+        plugin.setStatus('実身を閉じました');
+    }
+
+    /**
+     * 仮身属性変更ダイアログを表示（プラグイン共通）
+     * @param {Object} plugin プラグインインスタンス（messageBus、contextMenuVirtualObject、applyVirtualObjectAttributesメソッドを持つ）
+     */
+    static async changeVirtualObjectAttributes(plugin) {
+        if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
+            console.warn('[RealObjectSystem] 選択中の仮身がありません');
+            return;
+        }
+
+        const vobj = plugin.contextMenuVirtualObject.virtualObj;
+        const element = plugin.contextMenuVirtualObject.element;
+
+        // 現在の属性値を取得（elementのdatasetから最新の値を読み取る）
+        const pictdisp = element.dataset.linkPictdisp !== undefined ? element.dataset.linkPictdisp : (vobj.pictdisp || 'true');
+        const namedisp = element.dataset.linkNamedisp !== undefined ? element.dataset.linkNamedisp : (vobj.namedisp || 'true');
+        const roledisp = element.dataset.linkRoledisp !== undefined ? element.dataset.linkRoledisp : (vobj.roledisp || 'false');
+        const typedisp = element.dataset.linkTypedisp !== undefined ? element.dataset.linkTypedisp : (vobj.typedisp || 'false');
+        const updatedisp = element.dataset.linkUpdatedisp !== undefined ? element.dataset.linkUpdatedisp : (vobj.updatedisp || 'false');
+        const framedisp = element.dataset.linkFramedisp !== undefined ? element.dataset.linkFramedisp : (vobj.framedisp || 'true');
+        const frcol = element.dataset.linkFrcol || vobj.frcol || DEFAULT_FRCOL;
+        const chcol = element.dataset.linkChcol || vobj.chcol || DEFAULT_CHCOL;
+        const tbcol = element.dataset.linkTbcol || vobj.tbcol || DEFAULT_TBCOL;
+        const bgcol = element.dataset.linkBgcol || vobj.bgcol || DEFAULT_BGCOL;
+        const autoopen = element.dataset.linkAutoopen !== undefined ? element.dataset.linkAutoopen : (vobj.autoopen || 'false');
+        const chsz = element.dataset.linkChsz ? parseFloat(element.dataset.linkChsz) : (parseFloat(vobj.chsz) || 14);
+
+        console.log('[RealObjectSystem] 仮身属性ダイアログ用に現在の属性を取得:', {
+            pictdisp, namedisp, roledisp, typedisp, updatedisp, framedisp,
+            frcol, chcol, tbcol, bgcol, autoopen, chsz
+        });
+
+        const currentAttrs = {
+            pictdisp: pictdisp !== 'false',  // デフォルトtrue
+            namedisp: namedisp !== 'false',  // デフォルトtrue
+            roledisp: roledisp === 'true',   // デフォルトfalse
+            typedisp: typedisp === 'true',   // デフォルトfalse
+            updatedisp: updatedisp === 'true',  // デフォルトfalse
+            framedisp: framedisp !== 'false',  // デフォルトtrue
+            frcol: frcol,
+            chcol: chcol,
+            tbcol: tbcol,
+            bgcol: bgcol,
+            autoopen: autoopen === 'true',
+            chsz: chsz
+        };
+
+        // 文字サイズの倍率を計算
+        const baseFontSize = DEFAULT_FONT_SIZE;
+        const ratio = currentAttrs.chsz / baseFontSize;
+        let selectedRatio = '標準';
+        const ratioMap = {
+            '1/2倍': 0.5,
+            '3/4倍': 0.75,
+            '標準': 1.0,
+            '3/2倍': 1.5,
+            '2倍': 2.0,
+            '3倍': 3.0,
+            '4倍': 4.0
+        };
+
+        for (const [label, value] of Object.entries(ratioMap)) {
+            if (Math.abs(ratio - value) < 0.01) {
+                selectedRatio = label;
+                break;
+            }
+        }
+
+        // 親ウィンドウにダイアログ表示を要求
+        const messageId = `change-vobj-attrs-${Date.now()}-${Math.random()}`;
+
+        plugin.messageBus.send('change-virtual-object-attributes', {
+            virtualObject: vobj,
+            currentAttributes: currentAttrs,
+            selectedRatio: selectedRatio,
+            messageId: messageId
+        });
+
+        console.log('[RealObjectSystem] 仮身属性変更ダイアログ要求');
+
+        try {
+            // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
+            const result = await plugin.messageBus.waitFor('virtual-object-attributes-changed', LONG_OPERATION_TIMEOUT_MS, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.success && result.attributes) {
+                // プラグイン固有のapplyVirtualObjectAttributesメソッドを呼び出す
+                plugin.applyVirtualObjectAttributes(result.attributes, vobj, element);
+            }
+        } catch (error) {
+            console.error('[RealObjectSystem] 仮身属性変更エラー:', error);
+        }
+    }
+
+    /**
+     * 実身名を変更（プラグイン共通）
+     * @param {Object} plugin プラグインインスタンス（messageBus、contextMenuVirtualObject、setStatus、isModifiedを持つ）
+     */
+    static async renameRealObject(plugin) {
+        if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
+            console.warn('[RealObjectSystem] 選択中の仮身がありません');
+            return { success: false };
+        }
+
+        const realId = plugin.contextMenuVirtualObject.realId;
+        const virtualObj = plugin.contextMenuVirtualObject.virtualObj;
+        const currentName = virtualObj.link_name;
+
+        // 親ウィンドウにダイアログ表示を要求
+        const messageId = `rename-real-${Date.now()}-${Math.random()}`;
+
+        plugin.messageBus.send('rename-real-object', {
+            realId: realId,
+            currentName: currentName,
+            messageId: messageId
+        });
+
+        console.log('[RealObjectSystem] 実身名変更要求:', realId, currentName);
+
+        try {
+            // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
+            const result = await plugin.messageBus.waitFor('real-object-renamed', LONG_OPERATION_TIMEOUT_MS, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.success) {
+                // 仮身の表示名を更新（DOM要素を更新）
+                if (plugin.contextMenuVirtualObject.element) {
+                    const element = plugin.contextMenuVirtualObject.element;
+                    element.textContent = result.newName;
+                    element.dataset.linkName = result.newName;
+                }
+                console.log('[RealObjectSystem] 実身名変更成功:', realId, result.newName);
+                plugin.setStatus(`実身名を「${result.newName}」に変更しました`);
+                plugin.isModified = true;
+
+                // 結果を返す
+                return { success: true, newName: result.newName, realId: realId };
+            }
+
+            return { success: false };
+        } catch (error) {
+            console.error('[RealObjectSystem] 実身名変更エラー:', error);
+            return { success: false, error: error };
+        }
+    }
+
+    /**
+     * 実身を複製（プラグイン共通）
+     * @param {Object} plugin プラグインインスタンス（messageBus、contextMenuVirtualObject、setStatusを持つ）
+     */
+    static async duplicateRealObject(plugin) {
+        if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
+            console.warn('[RealObjectSystem] 選択中の仮身がありません');
+            return;
+        }
+
+        const realId = plugin.contextMenuVirtualObject.realId;
+
+        // 親ウィンドウに実身複製を要求
+        const messageId = `duplicate-real-${Date.now()}-${Math.random()}`;
+
+        plugin.messageBus.send('duplicate-real-object', {
+            realId: realId,
+            messageId: messageId
+        });
+
+        console.log('[RealObjectSystem] 実身複製要求:', realId);
+
+        try {
+            // レスポンスを待つ（デフォルトタイムアウト5秒）
+            const result = await plugin.messageBus.waitFor('real-object-duplicated', DEFAULT_TIMEOUT_MS, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.success) {
+                console.log('[RealObjectSystem] 実身複製成功:', realId, '->', result.newRealId);
+                plugin.setStatus(`実身を複製しました: ${result.newName}`);
+            }
+        } catch (error) {
+            console.error('[RealObjectSystem] 実身複製エラー:', error);
+            plugin.setStatus('実身の複製に失敗しました');
+        }
+    }
+
+    /**
+     * 屑実身操作ウィンドウを開く（プラグイン共通）
+     * @param {Object} plugin プラグインインスタンス（setStatusを持つ）
+     */
+    static openTrashRealObjects(plugin) {
+        if (window.parent && window.parent !== window && window.parent.pluginManager) {
+            try {
+                window.parent.pluginManager.launchPlugin('trash-real-objects', null);
+                console.log('[RealObjectSystem] 屑実身操作ウィンドウ起動');
+                plugin.setStatus('屑実身操作ウィンドウを起動しました');
+            } catch (error) {
+                console.error('[RealObjectSystem] 屑実身操作ウィンドウ起動エラー:', error);
+                plugin.setStatus('屑実身操作ウィンドウの起動に失敗しました');
+            }
+        }
     }
 }

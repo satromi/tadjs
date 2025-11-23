@@ -7,11 +7,16 @@
   "refCount": 1,
   "editable": true,
   "readable": true,
-  "maker": "satromi",
+  "maker": "TRON User",
   "window": {
     "pos": {
       "x": 100,
       "y": 100
+    },
+    "panel": true,
+    "panelpos": {
+      "x": 100,
+      "y": 90
     },
     "width": 800,
     "height": 600,

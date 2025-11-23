@@ -21,7 +21,6 @@ class BaseFileManager {
                 pluginName: 'BaseFileManager'
             });
             this.messageBus.start();
-            console.log('[BaseFileManager] MessageBus initialized');
         } else {
             console.warn('[BaseFileManager] MessageBus not available');
         }
@@ -30,12 +29,9 @@ class BaseFileManager {
     }
 
     init() {
-        console.log('[BaseFileManager] 初期化開始');
-
         // VirtualObjectRendererの初期化
         if (window.VirtualObjectRenderer) {
             this.virtualObjectRenderer = new window.VirtualObjectRenderer();
-            console.log('[BaseFileManager] VirtualObjectRenderer initialized');
         }
 
         // 親ウィンドウからのメッセージを受信
@@ -67,14 +63,11 @@ class BaseFileManager {
     setupMessageBusHandlers() {
         // init メッセージ
         this.messageBus.on('init', async (data) => {
-            console.log('[BaseFileManager] [MessageBus] init受信', data);
-
             // fileDataを保存
             if (data.fileData) {
                 this.fileData = data.fileData;
                 let rawId = data.fileData.realId || data.fileData.fileId;
                 this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
-                console.log('[BaseFileManager] [MessageBus] fileData設定完了:', this.realId);
             }
 
             // 背景色を適用してファイルを読み込む
@@ -84,7 +77,6 @@ class BaseFileManager {
 
         // window-moved メッセージ
         this.messageBus.on('window-moved', (data) => {
-            console.log('[BaseFileManager] [MessageBus] window-moved受信');
             if (data.pos && data.width !== undefined && data.height !== undefined) {
                 this.updateWindowConfig({
                     pos: data.pos,
@@ -96,7 +88,6 @@ class BaseFileManager {
 
         // window-resized-end メッセージ
         this.messageBus.on('window-resized-end', (data) => {
-            console.log('[BaseFileManager] [MessageBus] window-resized-end受信');
             if (data.width !== undefined && data.height !== undefined) {
                 this.updateWindowConfig({
                     width: data.width,
@@ -107,7 +98,6 @@ class BaseFileManager {
 
         // window-maximize-toggled メッセージ
         this.messageBus.on('window-maximize-toggled', (data) => {
-            console.log('[BaseFileManager] [MessageBus] window-maximize-toggled受信');
             if (data.width !== undefined && data.height !== undefined) {
                 this.updateWindowConfig({
                     width: data.width,
@@ -118,7 +108,6 @@ class BaseFileManager {
 
         // get-menu-definition メッセージ
         this.messageBus.on('get-menu-definition', (data) => {
-            console.log('[BaseFileManager] [MessageBus] get-menu-definition受信');
             const menuDefinition = this.getMenuDefinition();
             this.messageBus.send('menu-definition-response', {
                 messageId: data.messageId,
@@ -128,23 +117,18 @@ class BaseFileManager {
 
         // menu-action メッセージ
         this.messageBus.on('menu-action', (data) => {
-            console.log('[BaseFileManager] [MessageBus] menu-action受信:', data.action);
             this.handleMenuAction(data.action);
         });
 
         // custom-dialog-response メッセージ (MessageBusが自動処理)
         this.messageBus.on('custom-dialog-response', (data) => {
-            console.log('[BaseFileManager] [MessageBus] custom-dialog-response受信:', data.messageId);
             // sendWithCallback使用時は自動的にコールバックが実行される
         });
 
         // input-dialog-response メッセージ (MessageBusが自動処理)
         this.messageBus.on('input-dialog-response', (data) => {
-            console.log('[BaseFileManager] [MessageBus] input-dialog-response受信:', data.messageId);
             // sendWithCallback使用時は自動的にコールバックが実行される
         });
-
-        console.log('[BaseFileManager] MessageBusハンドラ登録完了');
     }
 
     getMenuDefinition() {
@@ -166,22 +150,17 @@ class BaseFileManager {
     }
 
     async handleMenuAction(action) {
-        console.log('[BaseFileManager] handleMenuAction呼び出し:', action);
         switch (action) {
             case 'reload':
-                console.log('[BaseFileManager] リロード実行');
                 await this.loadBaseFiles();
                 break;
             case 'close':
-                console.log('[BaseFileManager] ウィンドウを閉じる');
                 this.requestCloseWindow();
                 break;
             case 'change-bg-color':
-                console.log('[BaseFileManager] 背景色変更開始');
                 await this.changeBgColor();
                 break;
             case 'toggle-fullscreen':
-                console.log('[BaseFileManager] 全画面表示切り替え');
                 this.toggleFullscreen();
                 break;
             default:
@@ -223,6 +202,13 @@ class BaseFileManager {
                 this.handleMenuAction('close');
                 return;
             }
+
+            // Ctrl+L: 全画面表示切り替え
+            if (e.ctrlKey && e.key === 'l') {
+                e.preventDefault();
+                this.handleMenuAction('toggle-fullscreen');
+                return;
+            }
         });
     }
 
@@ -238,25 +224,14 @@ class BaseFileManager {
      * プラグインの type="base" で basefile が指定されているものを対象
      */
     async loadBaseFiles() {
-        console.log('[BaseFileManager] 原紙ファイル読み込み開始');
-
         try {
-            // 親ウィンドウにプラグイン一覧を要求
-            console.log('[BaseFileManager] request-base-plugins送信中...');
-            console.log('[BaseFileManager] window.parent:', window.parent);
-
             // MessageBus使用
             this.messageBus.send('request-base-plugins');
-            console.log('[BaseFileManager] request-base-plugins送信完了');
 
             // レスポンスを待つ
-            console.log('[BaseFileManager] レスポンス待機中...');
-            const response = await this.messageBus.waitFor('base-plugins-response', 5000);
-            console.log('[BaseFileManager] レスポンス受信:', response);
+            const response = await this.messageBus.waitFor('base-plugins-response', window.DEFAULT_TIMEOUT_MS);
 
             if (response && response.plugins) {
-                console.log('[BaseFileManager] 原紙プラグイン:', response.plugins);
-
                 // 原紙ファイルを読み込んで表示
                 await this.loadAndDisplayBaseFiles(response.plugins);
             } else {
@@ -281,8 +256,6 @@ class BaseFileManager {
                 const basefileName = typeof plugin.basefile === 'object'
                     ? plugin.basefile.xmltad
                     : plugin.basefile;
-
-                console.log(`[BaseFileManager] 読み込み: ${plugin.name} (${basefileName})`);
 
                 try {
                     // 原紙ファイルのパスを構築（相対パス）
@@ -327,8 +300,6 @@ class BaseFileManager {
                             xmlData: xmlData,
                             rawData: uint8Array
                         });
-
-                        console.log(`[BaseFileManager] 追加: ${displayName} realId: ${realId} icon: ${iconFile}`);
                     }
 
                 } catch (error) {
@@ -352,7 +323,6 @@ class BaseFileManager {
         if (firstChar === '<') {
             // すでにXML形式なのでそのまま文字列として返す
             const xmlText = textDecoder.decode(rawData);
-            console.log('[BaseFileManager] XML形式のファイル:', xmlText.substring(0, 100) + '...');
             return xmlText;
         }
 
@@ -392,8 +362,6 @@ class BaseFileManager {
             const vobjElement = this.createVirtualObject(baseFile, index);
             listElement.appendChild(vobjElement);
         });
-
-        console.log(`[BaseFileManager] ${this.baseFiles.length}個の原紙を表示`);
     }
 
     /**
@@ -503,24 +471,19 @@ class BaseFileManager {
      * アイコンを読み込む
      */
     async loadIcon(realId, baseFile) {
-        console.log('[BaseFileManager] アイコン読み込み:', realId, baseFile.iconFile);
-
         // キャッシュにあればそれを返す
         if (this.iconCache.has(realId)) {
-            console.log('[BaseFileManager] アイコンキャッシュヒット:', realId);
             return this.iconCache.get(realId);
         }
 
         // iconFileがない場合
         if (!baseFile.iconFile) {
-            console.log('[BaseFileManager] アイコンファイルが設定されていません:', realId);
             return null;
         }
 
         try {
             // アイコンファイルのパスを構築
             const iconPath = `../../plugins/${baseFile.pluginId}/${baseFile.iconFile}`;
-            console.log('[BaseFileManager] アイコンパス:', iconPath);
 
             // アイコンファイルを読み込む
             const response = await fetch(iconPath);
@@ -542,7 +505,6 @@ class BaseFileManager {
 
             // キャッシュに保存
             this.iconCache.set(realId, base64);
-            console.log('[BaseFileManager] アイコン読み込み成功:', realId);
 
             return base64;
         } catch (error) {
@@ -555,8 +517,6 @@ class BaseFileManager {
      * ドラッグ開始処理
      */
     handleDragStart(event, baseFile, index) {
-        console.log('[BaseFileManager] ドラッグ開始:', baseFile.displayName);
-
         // ドラッグデータを設定（コピー用）
         const dragData = {
             type: 'base-file-copy',
@@ -581,8 +541,6 @@ class BaseFileManager {
      * ドラッグ終了処理
      */
     handleDragEnd(event) {
-        console.log('[BaseFileManager] ドラッグ終了');
-
         // スタイルを元に戻す
         event.target.style.opacity = '1';
     }
@@ -591,8 +549,6 @@ class BaseFileManager {
      * 原紙ファイルを開く
      */
     openBaseFile(baseFile) {
-        console.log('[BaseFileManager] 原紙ファイルを開く:', baseFile.displayName);
-
         // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('open-base-file', {
             pluginId: baseFile.pluginId,
@@ -612,8 +568,6 @@ class BaseFileManager {
                 fileId: this.realId,
                 windowConfig: windowConfig
             });
-
-            console.log('[BaseFileManager] ウィンドウ設定を更新:', windowConfig);
         }
     }
 
@@ -633,13 +587,10 @@ class BaseFileManager {
                 }
                 if (list) {
                     list.style.background = bgColor;
-                    console.log('[BaseFileManager] 背景色を適用:', bgColor);
                 } else {
                     console.warn('[BaseFileManager] .base-file-list 要素が見つかりません');
                 }
             }, 100);
-        } else {
-            console.log('[BaseFileManager] 背景色が設定されていません');
         }
     }
 
@@ -647,13 +598,11 @@ class BaseFileManager {
      * 背景色変更ダイアログを表示
      */
     async changeBgColor() {
-        console.log('[BaseFileManager] changeBgColor開始 fileData:', this.fileData);
         return new Promise((resolve) => {
             // 現在の背景色を取得
             const currentBgColor = (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor)
                 ? this.fileData.windowConfig.backgroundColor
                 : '#ffffff';
-            console.log('[BaseFileManager] 現在の背景色:', currentBgColor);
 
             // ダイアログのHTML要素を作成
             const dialogHtml = `
@@ -666,15 +615,18 @@ class BaseFileManager {
             `;
 
             const handleResponse = (result) => {
-                console.log('[BaseFileManager] ダイアログコールバック呼び出し:', result);
-                if (result.button === 'ok') {
-                    const inputColor = result.input;
-                    console.log('[BaseFileManager] 入力された色:', inputColor);
+                console.log('[BaseFileManager] 背景色変更ダイアログコールバック実行:', result);
+
+                // Dialog result is wrapped in result.result
+                const dialogResult = result.result || result;
+
+                if (dialogResult.button === 'ok') {
+                    console.log('[BaseFileManager] OKボタンが押されました');
+                    const inputColor = dialogResult.input;
 
                     // 入力された色を検証
                     if (/^#[0-9A-Fa-f]{6}$/.test(inputColor)) {
                         const newBgColor = inputColor;
-                        console.log('[BaseFileManager] 色検証OK:', newBgColor);
 
                         // コンテナと一覧の背景色を変更
                         const container = document.querySelector('.manager-container');
@@ -684,7 +636,6 @@ class BaseFileManager {
                         }
                         if (list) {
                             list.style.background = newBgColor;
-                            console.log('[BaseFileManager] 背景色を変更しました:', newBgColor);
                         } else {
                             console.error('[BaseFileManager] .base-file-listが見つかりません');
                         }
@@ -696,7 +647,6 @@ class BaseFileManager {
                                 fileId: this.realId,
                                 backgroundColor: newBgColor
                             });
-                            console.log('[BaseFileManager] 背景色更新を親ウィンドウに通知:', this.realId, newBgColor);
                         }
 
                         // this.fileDataを更新（再表示時に正しい色を適用するため）
@@ -708,18 +658,16 @@ class BaseFileManager {
                             this.fileData.windowConfig = {};
                         }
                         this.fileData.windowConfig.backgroundColor = newBgColor;
-                        console.log('[BaseFileManager] fileData更新完了:', this.fileData);
                     } else {
                         console.warn('[BaseFileManager] 無効な色形式:', inputColor);
                     }
                 } else {
-                    console.log('[BaseFileManager] ダイアログがキャンセルされました');
+                    console.log('[BaseFileManager] OKボタンが押されませんでした。button:', dialogResult.button);
                 }
                 resolve(result);
             };
 
             // MessageBus使用
-            console.log('[BaseFileManager] [MessageBus] ダイアログ表示要求送信');
             this.messageBus.sendWithCallback('show-custom-dialog', {
                 dialogHtml: dialogHtml,
                 buttons: [
@@ -731,7 +679,6 @@ class BaseFileManager {
                     text: 'bgColorInput'
                 }
             }, handleResponse);
-            console.log('[BaseFileManager] [MessageBus] ダイアログ表示要求送信完了');
         });
     }
 
@@ -743,7 +690,6 @@ class BaseFileManager {
         this.messageBus.send('toggle-maximize');
 
         this.isFullscreen = !this.isFullscreen;
-        console.log('[BaseFileManager] 全画面表示:', this.isFullscreen ? 'ON' : 'OFF');
 
         // 実身管理用セグメントのfullscreenフラグを更新
         if (this.realId) {
@@ -752,7 +698,6 @@ class BaseFileManager {
                 fileId: this.realId,
                 isFullscreen: this.isFullscreen
             });
-            console.log('[BaseFileManager] 全画面表示状態更新を親ウィンドウに通知:', this.realId, this.isFullscreen);
         }
     }
 

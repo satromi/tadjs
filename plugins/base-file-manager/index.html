@@ -21,10 +21,11 @@
         import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
         window.VirtualObjectRenderer = VirtualObjectRenderer;
     </script>
-    <!-- 共通ユーティリティをグローバル変数として読み込み -->
+    <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
     <script type="module">
-        import { convertPtToPx } from '../../js/util.js';
+        import { convertPtToPx, DEFAULT_TIMEOUT_MS } from '../../js/util.js';
         window.convertPtToPx = convertPtToPx;
+        window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
     </script>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">

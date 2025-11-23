@@ -1,0 +1,23 @@
+{
+  "id": "file-import",
+  "name": "ファイル取込",
+  "version": "1.0.0",
+  "type": "accessory",
+  "description": "外部ファイルを実身として取り込むプラグイン",
+  "icon": "📥",
+  "author": "BTRON Desktop",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 600,
+    "height": 400,
+    "resizable": true,
+    "scrollable": false,
+    "openable": true
+  },
+  "contextMenu": [],
+  "permissions": [
+    "file-read",
+    "file-write"
+  ]
+}

@@ -63,7 +63,7 @@ class SystemConfigApp {
         // get-menu-definition メッセージ
         this.messageBus.on('get-menu-definition', async (data) => {
             // 編集メニューを返す
-            return [
+            const menuDefinition = [
                 {
                     text: '編集',
                     submenu: [
@@ -75,6 +75,10 @@ class SystemConfigApp {
                     ]
                 }
             ];
+            this.messageBus.send('menu-definition-response', {
+                messageId: data.messageId,
+                menuDefinition: menuDefinition
+            });
         });
 
         // menu-action メッセージ

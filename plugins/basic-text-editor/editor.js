@@ -3,15 +3,18 @@
  * TADファイルをリッチテキストエディタで編集
  */
 
-class BasicTextEditor {
+class BasicTextEditor extends window.PluginBase {
     constructor() {
+        // 基底クラスのコンストラクタを呼び出し
+        super('BasicTextEditor');
+
         this.editor = document.getElementById('editor');
         this.currentFile = null;
         this.tadData = null;
         this.isFullscreen = false;
         this.wrapMode = true;
         this.viewMode = 'formatted'; // 'formatted' or 'xml'
-        this.realId = null; // 実身ID
+        // this.realId は基底クラスで定義済み
         this.isModified = false; // 編集状態フラグ
         this.originalContent = ''; // 保存時の内容
         this.updateHeightTimer = null; // スクロールバー更新のデバウンスタイマー
@@ -26,6 +29,16 @@ class BasicTextEditor {
         this.isDraggingImage = false; // 画像ドラッグ中フラグ
         this.dragStartX = 0; // ドラッグ開始X座標
         this.dragStartY = 0; // ドラッグ開始Y座標
+
+        // 仮身ドラッグ用の詳細状態管理
+        this.virtualObjectDragState = {
+            dragMode: 'move',              // 'move' または 'copy'
+            isRightButtonPressed: false,   // 右ボタンが押されているか
+            hasMoved: false,               // ドラッグで移動したか（5px以上）
+            startX: 0,                     // ドラッグ開始X座標
+            startY: 0                      // ドラッグ開始Y座標
+        };
+
         this.recentFonts = []; // 最近使用したフォント（最大10個）
         this.systemFonts = []; // システムフォント一覧
         this.debug = window.TADjsConfig?.debug || false; // デバッグモード（config.jsで管理）
@@ -91,20 +104,20 @@ class BasicTextEditor {
     setupMessageBusHandlers() {
         // init メッセージ
         this.messageBus.on('init', (data) => {
-            console.log('[EDITOR] [MessageBus] init受信');
-            console.log('[EDITOR] [MessageBus] fileData:', data.fileData);
+            // ウィンドウIDを保存（親から渡されたIDを使用）
+            if (data.windowId) {
+                this.windowId = data.windowId;
+            }
 
             // realIdを保存（拡張子を除去）
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;
                 this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
-                console.log('[EDITOR] [MessageBus] realId設定:', this.realId);
 
                 // readonlyモードの設定（開いた仮身表示用）
                 if (data.fileData.readonly) {
                     this.editor.contentEditable = 'false';
                     this.editor.style.cursor = 'default';
-                    console.log('[EDITOR] [MessageBus] 読み取り専用モードを適用');
                 }
 
                 // スクロールバー非表示モードの設定（開いた仮身表示用）
@@ -115,18 +128,15 @@ class BasicTextEditor {
                     if (pluginContent) {
                         pluginContent.style.overflow = 'hidden';
                     }
-                    console.log('[EDITOR] [MessageBus] スクロールバー非表示モードを適用');
                 }
 
                 // 背景色の設定（開いた仮身表示用）
                 if (data.fileData.bgcol) {
                     document.body.style.backgroundColor = data.fileData.bgcol;
                     this.editor.style.backgroundColor = data.fileData.bgcol;
-                    console.log('[EDITOR] [MessageBus] 背景色を適用:', data.fileData.bgcol);
                 } else if (data.fileData.windowConfig && data.fileData.windowConfig.backgroundColor) {
                     document.body.style.backgroundColor = data.fileData.windowConfig.backgroundColor;
                     this.editor.style.backgroundColor = data.fileData.windowConfig.backgroundColor;
-                    console.log('[EDITOR] [MessageBus] ウィンドウ背景色を適用:', data.fileData.windowConfig.backgroundColor);
                 }
             }
 
@@ -135,19 +145,21 @@ class BasicTextEditor {
             // キーボードショートカットが動作するようにbodyにフォーカスを設定
             setTimeout(() => {
                 document.body.focus();
-                console.log('[EDITOR] [MessageBus] bodyにフォーカスを設定');
             }, 100);
         });
 
         // load-virtual-object メッセージ（開いた仮身表示用）
         this.messageBus.on('load-virtual-object', (data) => {
-            console.log('[EDITOR] [MessageBus] load-virtual-object受信:', data);
+
+            // 初期メッセージをクリア（開いた仮身表示では不要）
+            if (this.editor.innerHTML === '<p>ここに文章を入力してください...</p>') {
+                this.editor.innerHTML = '';
+            }
 
             // readonlyモードの設定
             if (data.readonly) {
                 this.editor.contentEditable = 'false';
                 this.editor.style.cursor = 'default';
-                console.log('[EDITOR] [MessageBus] 読み取り専用モードを適用');
             }
 
             // スクロールバー非表示モードの設定
@@ -158,14 +170,12 @@ class BasicTextEditor {
                 if (pluginContent) {
                     pluginContent.style.overflow = 'hidden';
                 }
-                console.log('[EDITOR] [MessageBus] スクロールバー非表示モードを適用');
             }
 
             // 背景色の設定
             if (data.bgcol) {
                 document.body.style.backgroundColor = data.bgcol;
                 this.editor.style.backgroundColor = data.bgcol;
-                console.log('[EDITOR] [MessageBus] 背景色を適用:', data.bgcol);
             }
 
             // realObjectからデータを読み込む
@@ -177,7 +187,6 @@ class BasicTextEditor {
                 if (rawId) {
                     // _数字.xtad の形式を除去して実身IDのみを取得
                     this.realId = rawId.replace(/_\d+\.xtad$/i, '');
-                    console.log('[EDITOR] [MessageBus] fileId設定:', this.realId, '(元:', rawId, ')');
                 }
 
                 // データを読み込む
@@ -185,14 +194,11 @@ class BasicTextEditor {
                     realId: this.realId,
                     xmlData: realObject.xtad || realObject.records?.[0]?.xtad || realObject.xmlData
                 });
-
-                console.log('[EDITOR] [MessageBus] 開いた仮身データを読み込み完了');
             }
         });
 
         // window-moved メッセージ
         this.messageBus.on('window-moved', (data) => {
-            console.log('[EDITOR] [MessageBus] window-moved受信');
             this.updateWindowConfig({
                 pos: data.pos,
                 width: data.width,
@@ -202,7 +208,6 @@ class BasicTextEditor {
 
         // window-resized-end メッセージ
         this.messageBus.on('window-resized-end', (data) => {
-            console.log('[EDITOR] [MessageBus] window-resized-end受信');
             this.updateWindowConfig({
                 pos: data.pos,
                 width: data.width,
@@ -214,7 +219,6 @@ class BasicTextEditor {
 
         // window-maximize-toggled メッセージ
         this.messageBus.on('window-maximize-toggled', (data) => {
-            console.log('[EDITOR] [MessageBus] window-maximize-toggled受信');
             this.updateWindowConfig({
                 pos: data.pos,
                 width: data.width,
@@ -227,13 +231,11 @@ class BasicTextEditor {
 
         // menu-action メッセージ
         this.messageBus.on('menu-action', (data) => {
-            console.log('[EDITOR] [MessageBus] menu-action受信:', data.action);
             this.executeMenuAction(data.action, data.additionalData);
         });
 
         // get-menu-definition メッセージ
         this.messageBus.on('get-menu-definition', async (data) => {
-            console.log('[EDITOR] [MessageBus] get-menu-definition受信');
             const menuDefinition = await this.getMenuDefinition();
             this.messageBus.send('menu-definition-response', {
                 messageId: data.messageId,
@@ -245,13 +247,11 @@ class BasicTextEditor {
 
         // window-close-request メッセージ
         this.messageBus.on('window-close-request', (data) => {
-            console.log('[EDITOR] [MessageBus] window-close-request受信');
             this.handleCloseRequest(data.windowId);
         });
 
         // window-closed メッセージ
         this.messageBus.on('window-closed', (data) => {
-            console.log('[EDITOR] [MessageBus] window-closed受信');
             this.handleWindowClosed(data.windowId, data.fileData);
         });
 
@@ -269,14 +269,11 @@ class BasicTextEditor {
 
         // add-virtual-object-from-base メッセージ
         this.messageBus.on('add-virtual-object-from-base', (data) => {
-            console.log('[EDITOR] [MessageBus] 原紙箱から仮身追加:', data.realId, data.name);
             this.addVirtualObjectFromRealId(data.realId, data.name, data.applist);
         });
 
         // parent-drop-event メッセージ
         this.messageBus.on('parent-drop-event', (data) => {
-            console.log('[EDITOR] [MessageBus] parent-drop-event受信:', data);
-
             const dragData = data.dragData;
             const clientX = data.clientX;
             const clientY = data.clientY;
@@ -284,7 +281,6 @@ class BasicTextEditor {
             // 仮身一覧からの仮身ドロップの場合
             if (dragData.type === 'virtual-object-drag' && dragData.source === 'virtual-object-list') {
                 const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
-                console.log('[EDITOR] [MessageBus] 親ウィンドウ経由で仮身ドロップ受信:', virtualObjects.length, '個');
 
                 // ドロップ位置にカーソルを設定
                 const range = document.caretRangeFromPoint(clientX, clientY);
@@ -317,11 +313,9 @@ class BasicTextEditor {
 
         // check-window-id メッセージ
         this.messageBus.on('check-window-id', (data) => {
-            console.log('[EDITOR] [MessageBus] check-window-id受信:', data);
 
             // このウィンドウIDと一致する場合、ドロップ成功フラグを設定
             if (data.targetWindowId && data.targetWindowId === this.windowId) {
-                console.log('[EDITOR] [MessageBus] このウィンドウのドロップ成功を確認');
                 this.virtualObjectDropSuccess = true;
 
                 // moveモードの場合、元の仮身を削除
@@ -343,7 +337,6 @@ class BasicTextEditor {
                     }
 
                     if (voToRemove && voToRemove.parentNode) {
-                        console.log('[EDITOR] [MessageBus] 元の仮身を削除（クロスウィンドウ移動完了）');
                         voToRemove.remove();
                         this.isModified = true;
                         this.updateContentHeight();
@@ -354,14 +347,12 @@ class BasicTextEditor {
 
         // load-image-file メッセージ（開いた仮身内のプラグインからの画像読み込み要求を親ウィンドウに転送）
         this.messageBus.on('load-image-file', (data) => {
-            console.log('[EDITOR] [MessageBus] load-image-file受信、親ウィンドウに転送:', data.fileName);
             // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send(data.type, data);
         });
 
         // load-image-response メッセージ（親ウィンドウからのレスポンスを開いた仮身内のプラグインに転送）
         this.messageBus.on('load-image-response', (data) => {
-            console.log('[EDITOR] [MessageBus] load-image-response受信、子iframeに転送:', data.messageId);
             // すべての子iframeに転送（messageIdで識別されるので問題ない）
             const iframes = document.querySelectorAll('iframe');
             iframes.forEach(iframe => {
@@ -373,14 +364,12 @@ class BasicTextEditor {
 
         // save-image-file メッセージ（開いた仮身内のプラグインからの画像保存要求を親ウィンドウに転送）
         this.messageBus.on('save-image-file', (data) => {
-            console.log('[EDITOR] [MessageBus] save-image-file受信、親ウィンドウに転送:', data.fileName);
             // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send(data.type, data);
         });
 
         // save-image-response メッセージ（親ウィンドウからのレスポンスを開いた仮身内のプラグインに転送）
         this.messageBus.on('save-image-response', (data) => {
-            console.log('[EDITOR] [MessageBus] save-image-response受信、子iframeに転送:', data.messageId);
             // すべての子iframeに転送（messageIdで識別されるので問題ない）
             const iframes = document.querySelectorAll('iframe');
             iframes.forEach(iframe => {
@@ -392,14 +381,12 @@ class BasicTextEditor {
 
         // get-image-file-path メッセージ（開いた仮身内のプラグインからの画像パス取得要求を親ウィンドウに転送）
         this.messageBus.on('get-image-file-path', (data) => {
-            console.log('[EDITOR] [MessageBus] get-image-file-path受信、親ウィンドウに転送:', data.fileName);
             // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send(data.type, data);
         });
 
         // image-file-path-response メッセージ（親ウィンドウからのレスポンス）
         this.messageBus.on('image-file-path-response', (data) => {
-            console.log('[EDITOR] [MessageBus] image-file-path-response受信:', data.messageId);
 
             // 自分宛のコールバックがあれば呼び出す
             if (this.imagePathCallbacks && this.imagePathCallbacks[data.messageId]) {
@@ -414,6 +401,40 @@ class BasicTextEditor {
                     iframe.contentWindow.postMessage(data, '*');
                 }
             });
+        });
+
+        // cross-window-drop-success メッセージ
+        this.messageBus.on('cross-window-drop-success', (data) => {
+            // 他のウィンドウへのドロップが成功した通知
+            // ドラッグ中の仮身情報を確認
+            if (this.draggingVirtualObject) {
+                const dragMode = data.mode || 'move';
+
+                // 移動モードの場合のみ元の仮身を削除
+                if (dragMode === 'move') {
+                    // エディタから仮身を削除（draggingVirtualObjectはDOM要素）
+                    if (this.draggingVirtualObject.parentNode) {
+                        this.draggingVirtualObject.remove();
+                    }
+
+                    this.isModified = true;
+                    this.updateContentHeight();
+                } else if (dragMode === 'copy') {
+                    // コピーモードの場合は元の仮身の透明度を元に戻す
+                    console.log('[EDITOR] コピーモードでクロスウィンドウドロップ: 元の仮身を保持');
+                    if (this.draggingVirtualObject) {
+                        this.draggingVirtualObject.style.opacity = '1';
+                    }
+                }
+
+                // クロスウィンドウドロップ成功フラグを立てる（dragendでの重複削除を防ぐため）
+                this.crossWindowDropSuccess = true;
+
+                // ドラッグ状態をクリア
+                this.isDraggingVirtualObject = false;
+                this.draggingVirtualObject = null;
+                this.draggingVirtualObjectData = null;
+            }
         });
 
         console.log('[EDITOR] MessageBusハンドラ登録完了');
@@ -468,7 +489,7 @@ class BasicTextEditor {
         });
 
         // 初期高さを設定
-        setTimeout(() => this.updateContentHeight(), 100);
+        setTimeout(() => this.updateContentHeight(), window.UI_UPDATE_DELAY_MS);
 
         // ドラッグ&ドロップイベント
         this.setupDragAndDrop();
@@ -528,38 +549,72 @@ class BasicTextEditor {
                     return;
                 }
 
-                // 仮身をドロップして移動する場合
+                // 仮身をドロップして移動/コピーする場合
                 if (this.isDraggingVirtualObject && this.draggingVirtualObjectData) {
-                    console.log('[EDITOR] 仮身を移動');
-
                     // ドロップ位置にカーソルを設定
                     this.setCursorAtDropPosition(e);
 
-                    // 元の仮身要素をそのまま移動（表示属性を保持）
                     const selection = window.getSelection();
                     if (selection.rangeCount > 0 && this.draggingVirtualObject && this.draggingVirtualObject.parentNode) {
-                        const range = selection.getRangeAt(0);
-                        range.deleteContents();
-                        range.insertNode(this.draggingVirtualObject);
+                        // コピーモードの場合は元の仮身を残し、新しい仮身を作成
+                        if (this.virtualObjectDragState.dragMode === 'copy') {
+                            console.log('[EDITOR] コピーモードでドロップ: 元の仮身を保持し、新しい仮身を作成');
 
-                        // 仮身の後にスペースを追加（カーソル移動のため）
-                        const space = document.createTextNode(' ');
-                        this.draggingVirtualObject.parentNode.insertBefore(space, this.draggingVirtualObject.nextSibling);
+                            const range = selection.getRangeAt(0);
+                            range.deleteContents();
 
-                        // カーソルを仮身の後に移動
-                        const newRange = document.createRange();
-                        newRange.setStartAfter(space);
-                        newRange.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(newRange);
+                            // 元の仮身要素をクローン
+                            const clonedVo = this.draggingVirtualObject.cloneNode(true);
 
-                        console.log('[EDITOR] 仮身移動完了（表示属性保持）');
+                            // クローンを挿入
+                            range.insertNode(clonedVo);
+
+                            // 仮身の後にスペースを追加（カーソル移動のため）
+                            const space = document.createTextNode(' ');
+                            clonedVo.parentNode.insertBefore(space, clonedVo.nextSibling);
+
+                            // カーソルを仮身の後に移動
+                            const newRange = document.createRange();
+                            newRange.setStartAfter(space);
+                            newRange.collapse(true);
+                            selection.removeAllRanges();
+                            selection.addRange(newRange);
+
+                            // 元の仮身の透明度を元に戻す
+                            this.draggingVirtualObject.style.opacity = '1';
+
+                            // クローンされた仮身にイベントハンドラを再設定
+                            // setupVirtualObjectEventHandlers() は全ての仮身要素に対してイベントリスナーを設定する
+                            this.setupVirtualObjectEventHandlers();
+
+                            // ドロップ成功フラグを設定（dragendで元の仮身を削除しないように）
+                            this.virtualObjectDropSuccess = true;
+                        } else {
+                            // 移動モード（既存の処理）
+                            console.log('[EDITOR] 移動モードでドロップ');
+
+                            const range = selection.getRangeAt(0);
+                            range.deleteContents();
+                            range.insertNode(this.draggingVirtualObject);
+
+                            // 仮身の後にスペースを追加（カーソル移動のため）
+                            const space = document.createTextNode(' ');
+                            this.draggingVirtualObject.parentNode.insertBefore(space, this.draggingVirtualObject.nextSibling);
+
+                            // カーソルを仮身の後に移動
+                            const newRange = document.createRange();
+                            newRange.setStartAfter(space);
+                            newRange.collapse(true);
+                            selection.removeAllRanges();
+                            selection.addRange(newRange);
+
+                            // 仮身移動完了（表示属性保持）
+                            // ドロップ成功フラグを設定（dragendで元の仮身を削除しないように）
+                            // 注: 元の仮身要素を移動しているため、dragendで削除する必要はない
+                            this.virtualObjectDropSuccess = true;
+                        }
                     }
 
-                    // ドロップ成功フラグを設定（dragendで元の仮身を削除しないように）
-                    // 注: 元の仮身要素を移動しているため、dragendで削除する必要はない
-                    this.virtualObjectDropSuccess = true;
-                    
                     // ドラッグフラグをクリア（dragendでの削除を防ぐ）
                     this.isDraggingVirtualObject = false;
                     this.draggingVirtualObject = null;
@@ -576,7 +631,6 @@ class BasicTextEditor {
                 if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
                     const file = e.dataTransfer.files[0];
                     if (file.type.startsWith('image/')) {
-                        console.log('[EDITOR] 画像ファイルドロップ:', file.name);
                         await this.insertImageFile(file);
                         return;
                     }
@@ -591,8 +645,6 @@ class BasicTextEditor {
                         if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
                             // 原紙管理からのコピー - 親ウィンドウに処理を委譲
                             // 親ウィンドウが新規実身を生成し、仮身として挿入
-                            console.log('[EDITOR] 原紙箱からのドロップを親ウィンドウに委譲');
-
                             // ドロップ位置にカーソルを設定
                             this.setCursorAtDropPosition(e);
 
@@ -604,13 +656,12 @@ class BasicTextEditor {
                             });
                             return; // 処理を親ウィンドウに任せる
                         } else if (dragData.type === 'archive-file-extract' && dragData.source === 'unpack-file') {
-                            // 書庫管理からのファイル展開
+                            // 書庫解凍からのファイル展開
                             this.extractArchiveFile(dragData.file, dragData.fileIdMap);
                             return; // 処理完了
                         } else if (dragData.type === 'virtual-object-drag' && dragData.source === 'virtual-object-list') {
                             // 仮身一覧からの仮身ドロップ
                             const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
-                            console.log('[EDITOR] 仮身ドロップ受信:', virtualObjects.length, '個', 'ソース:', dragData.source, 'モード:', dragData.mode);
 
                             // ドロップ位置にカーソルを設定
                             this.setCursorAtDropPosition(e);
@@ -636,13 +687,13 @@ class BasicTextEditor {
                                 mode: dragData.mode,
                                 source: dragData.source,
                                 sourceWindowId: dragData.sourceWindowId,
-                                virtualObjectId: virtualObjects[0].link_id // 最初の仮身のIDを通知
+                                virtualObjects: virtualObjects, // 仮身一覧プラグインでの削除用
+                                virtualObjectId: virtualObjects[0].link_id // 最初の仮身のIDを通知（後方互換性）
                             });
                             return; // 処理完了
                         }
                     } catch (_jsonError) {
                         // JSON形式でない場合は通常のテキストとして扱う
-                        console.log('[EDITOR] 通常のテキストドロップ');
                     }
 
                     // 通常のテキストドロップの場合は、デフォルト動作を許可
@@ -650,6 +701,48 @@ class BasicTextEditor {
                 }
             } catch (error) {
                 console.error('[EDITOR] ドロップ処理エラー:', error);
+            }
+        });
+
+        // document全体でのmousedown（仮身ドラッグ中の右ボタン検出用）
+        document.addEventListener('mousedown', (e) => {
+            // 右ボタン（button === 2）の押下を検出
+            if (e.button === 2) {
+                this.virtualObjectDragState.isRightButtonPressed = true;
+                console.log('[EDITOR] 右ボタン押下検出');
+
+                // 左ボタンドラッグ中で既に移動している場合、即座にコピーモードに切り替え
+                if (this.isDraggingVirtualObject && this.virtualObjectDragState.hasMoved) {
+                    this.virtualObjectDragState.dragMode = 'copy';
+                    console.log('[EDITOR] 左ボタンドラッグ中（移動済み）に右ボタン押下 → コピーモードに変更');
+                }
+            }
+        }, { capture: true });
+
+        // document全体でのmouseup
+        document.addEventListener('mouseup', (e) => {
+            // 右ボタンのmouseupを検出してフラグをクリア
+            if (e.button === 2) {
+                this.virtualObjectDragState.isRightButtonPressed = false;
+                console.log('[EDITOR] 右ボタンアップ検出、フラグクリア');
+
+                // 右ボタンアップ時、ドラッグ中でコピーモードなら何もせずreturn（左ボタンのmouseupを待つ）
+                if (this.isDraggingVirtualObject && this.virtualObjectDragState.dragMode === 'copy') {
+                    console.log('[EDITOR] コピーモードのドラッグ中、左ボタンのmouseupを待つ');
+                    return;
+                }
+            }
+
+            // 左ボタンmouseup時の最終判定
+            if (this.isDraggingVirtualObject && e.button === 0) {
+                // e.buttons & 2 で右ボタンがまだ押されているか確認
+                const isRightStillPressed = (e.buttons & 2) !== 0 || this.virtualObjectDragState.isRightButtonPressed;
+
+                if (this.virtualObjectDragState.hasMoved && isRightStillPressed) {
+                    this.virtualObjectDragState.dragMode = 'copy';
+                    console.log('[EDITOR] 左ボタンアップ時に右ボタンがまだ押されている → コピーモードに変更');
+                    return; // 右ボタンのmouseupを待つ
+                }
             }
         });
     }
@@ -707,8 +800,6 @@ class BasicTextEditor {
      * 原紙ファイルの内容を挿入
      */
     async insertBaseFileContent(baseFile) {
-        console.log('[EDITOR] 原紙ファイル挿入:', baseFile.displayName);
-
         // XMLデータをHTMLに変換して挿入
         if (baseFile.xmlData) {
             const htmlContent = await this.renderTADXML(baseFile.xmlData);
@@ -727,7 +818,6 @@ class BasicTextEditor {
             }
 
             this.updateContentHeight();
-            console.log('[EDITOR] 原紙ファイル挿入完了');
         }
     }
 
@@ -736,7 +826,6 @@ class BasicTextEditor {
      * @param {Object} virtualObject - 仮身オブジェクト
      */
     insertVirtualObjectLink(virtualObject) {
-        console.log('[EDITOR] 仮身リンク挿入:', virtualObject.link_name);
 
         // VirtualObjectRendererを使って仮身要素を作成
         let vobjElement;
@@ -773,9 +862,8 @@ class BasicTextEditor {
             e.preventDefault();
             e.stopPropagation();
 
-            // 実身IDを抽出
-            let realId = virtualObject.link_id.replace(/\.(xtad|json)$/, '');
-            realId = realId.replace(/_\d+$/, '');
+            // 実身IDを抽出（共通メソッドを使用）
+            const realId = window.RealObjectSystem.extractRealId(virtualObject.link_id);
 
             this.contextMenuVirtualObject = {
                 virtualObj: virtualObject,
@@ -809,7 +897,6 @@ class BasicTextEditor {
         }
 
         this.updateContentHeight();
-        console.log('[EDITOR] 仮身リンク挿入完了');
 
         // 仮身のイベントハンドラをセットアップ（選択、移動、リサイズを可能にする）
         this.setupVirtualObjectEventHandlers();
@@ -822,7 +909,6 @@ class BasicTextEditor {
      * @param {Object} applist - アプリケーションリスト
      */
     addVirtualObjectFromRealId(realId, name, applist) {
-        console.log('[EDITOR] 原紙箱から仮身を追加:', name, 'realId:', realId);
 
         // 仮身オブジェクトを作成（デフォルト値で）
         const virtualObj = {
@@ -851,8 +937,6 @@ class BasicTextEditor {
 
         // 変更フラグを設定
         this.isModified = true;
-
-        console.log('[EDITOR] 原紙箱から仮身追加完了');
     }
 
     /**
@@ -860,7 +944,6 @@ class BasicTextEditor {
      * @param {File} file - 画像ファイル
      */
     async insertImageFile(file) {
-        console.log('[EDITOR] 画像ファイル挿入:', file.name);
 
         try {
             // 画像をロード
@@ -870,8 +953,6 @@ class BasicTextEditor {
             const imageData = await new Promise((resolve, reject) => {
                 reader.onload = (e) => {
                     img.onload = () => {
-                        console.log('[EDITOR] 画像ロード完了:', img.width, 'x', img.height);
-
                         // 画像が大きすぎる場合は縮小（最大600px）
                         const maxSize = 600;
                         let displayWidth = img.width;
@@ -916,13 +997,6 @@ class BasicTextEditor {
             const recordNo = 0;  // 常に0（実身の最初のレコード）
             const extension = file.name.split('.').pop().toLowerCase();
             const savedFileName = `${realId}_${recordNo}_${imgNo}.${extension}`;
-
-            console.log('[EDITOR] 画像ファイル名生成:', {
-                thisRealId: this.realId,
-                cleanedRealId: realId,
-                imgNo: imgNo,
-                savedFileName: savedFileName
-            });
 
             // 画像ファイルを保存
             await this.saveImageFile(file, savedFileName);
@@ -969,7 +1043,6 @@ class BasicTextEditor {
 
             this.updateContentHeight();
             this.setStatus(`画像「${file.name}」を挿入しました`);
-            console.log('[EDITOR] 画像ファイル挿入完了');
 
         } catch (error) {
             console.error('[EDITOR] 画像挿入エラー:', error);
@@ -989,11 +1062,9 @@ class BasicTextEditor {
         const vo = this.selectedVirtualObject;
         const linkId = vo.dataset.linkId;
         const linkName = vo.dataset.linkName;
-        console.log('[EDITOR] 選択中の仮身を開く:', linkName, linkId);
 
-        // 実身IDを抽出（拡張子とレコード番号を削除）
-        let realId = linkId.replace(/\.(xtad|json)$/, '');
-        realId = realId.replace(/_\d+$/, '');
+        // 実身IDを抽出（共通メソッドを使用）
+        const realId = window.RealObjectSystem.extractRealId(linkId);
 
         // realId.jsonを読み込んでdefaultOpenを取得
         try {
@@ -1039,8 +1110,6 @@ class BasicTextEditor {
             }
         }
 
-        console.log('[EDITOR] デフォルトプラグイン:', defaultPluginId);
-
         // 親ウィンドウにメッセージを送信して仮身リンク先を開く
         // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('open-virtual-object-real', {
@@ -1053,8 +1122,6 @@ class BasicTextEditor {
      * 書庫ファイルを展開して.xtadファイルとして生成
      */
     async extractArchiveFile(file, fileIdMap) {
-        console.log('[EDITOR] 書庫ファイル展開:', file.name);
-
         try {
             // fileオブジェクトから直接XMLデータを取得
             const xmlData = file.xmlData;
@@ -1065,11 +1132,8 @@ class BasicTextEditor {
 
                 // .xtadファイルとしてダウンロード
                 this.downloadAsXtad(xmlData, filename);
-
-                console.log(`[EDITOR] ファイル生成: ${filename}`);
             } else {
                 console.error('[EDITOR] XMLデータの取得に失敗 - fileオブジェクトにxmlDataが含まれていません');
-                console.log('[EDITOR] fileオブジェクト:', file);
             }
 
         } catch (error) {
@@ -1101,8 +1165,6 @@ class BasicTextEditor {
         const x = dropEvent.clientX;
         const y = dropEvent.clientY;
 
-        console.log('[EDITOR] ドロップ位置:', x, y);
-
         // ドロップ位置にカーソルを設定
         let range;
         if (document.caretRangeFromPoint) {
@@ -1122,9 +1184,6 @@ class BasicTextEditor {
             const selection = window.getSelection();
             selection.removeAllRanges();
             selection.addRange(range);
-            console.log('[EDITOR] カーソル位置を設定しました');
-        } else {
-            console.warn('[EDITOR] カーソル位置を設定できませんでした');
         }
     }
 
@@ -1181,12 +1240,6 @@ class BasicTextEditor {
             if (selection.rangeCount > 0) {
                 const range = selection.getRangeAt(0);
 
-                // デバッグ: DOM構造を確認
-                console.log('[EDITOR] Enter押下時のDOM:', this.editor.innerHTML);
-                console.log('[EDITOR] startContainer:', range.startContainer);
-                console.log('[EDITOR] startContainer.nodeName:', range.startContainer.nodeName);
-                console.log('[EDITOR] startContainer.nodeType:', range.startContainer.nodeType);
-                console.log('[EDITOR] startOffset:', range.startOffset);
 
                 // カーソル直前の文字サイズを取得
                 let fontSize = '14pt'; // デフォルト
@@ -1214,42 +1267,27 @@ class BasicTextEditor {
                     currentP = currentP.parentElement;
                 }
 
-                console.log('[EDITOR] currentP:', currentP);
-                console.log('[EDITOR] currentP.nodeName:', currentP ? currentP.nodeName : 'null');
-
                 if (currentP && currentP.nodeName === 'P') {
-                    console.log('[EDITOR] 段落要素が見つかりました');
 
                     // 現在の段落が空（<br>のみ）かチェック
                     const isEmpty = currentP.childNodes.length === 1 &&
                                    currentP.firstChild.nodeName === 'BR';
-
-                    console.log('[EDITOR] isEmpty:', isEmpty);
-                    console.log('[EDITOR] currentP.childNodes.length:', currentP.childNodes.length);
-                    console.log('[EDITOR] currentP.innerHTML:', currentP.innerHTML);
 
                     // 新しい段落を作成
                     const newP = document.createElement('p');
                     newP.innerHTML = '<br>';
 
                     if (!isEmpty) {
-                        console.log('[EDITOR] 段落を分割します');
-
                         // 空でない場合は、カーソル位置で段落を分割
                         const afterRange = range.cloneRange();
                         afterRange.setEndAfter(currentP.lastChild || currentP);
                         const afterContent = afterRange.extractContents();
 
-                        console.log('[EDITOR] afterContent.textContent:', afterContent.textContent);
-                        console.log('[EDITOR] afterContent.childNodes.length:', afterContent.childNodes.length);
-
                         // 分割後の内容を新しい段落に追加
                         if (afterContent.textContent.trim() === '') {
                             // テキストが空の場合は<br>を保持（既に設定済み）
-                            console.log('[EDITOR] afterContentが空なので<br>を保持');
                         } else {
                             // 実際の内容がある場合は追加
-                            console.log('[EDITOR] afterContentに内容があるので追加');
                             newP.innerHTML = ''; // 既存の<br>をクリア
                             newP.appendChild(afterContent);
                         }
@@ -1287,8 +1325,6 @@ class BasicTextEditor {
                     // 新しい段落をスクロール表示（カーソル位置をウィンドウ最下部に配置）
                     newP.scrollIntoView({ block: 'nearest' });
                 } else {
-                    console.log('[EDITOR] 段落要素が見つからなかったため、デフォルト処理を実行');
-
                     // 段落要素が見つからない場合はデフォルト処理
                     const p = document.createElement('p');
                     p.innerHTML = '<br>';
@@ -1346,8 +1382,8 @@ class BasicTextEditor {
                 selection.removeAllRanges();
                 selection.addRange(range);
 
-                // 改行位置をスクロール表示（カーソル位置をウィンドウ最下部に配置）
-                br.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                // 改行位置をスクロール表示（必要最小限のスクロール）
+                br.scrollIntoView({ block: 'nearest' });
             }
             return;
         }
@@ -1450,7 +1486,6 @@ class BasicTextEditor {
             // XMLデータが既に渡されている場合
             if (fileData.xmlData) {
                 console.log('[EDITOR] XMLデータを使用, 長さ:', fileData.xmlData.length);
-                console.log('[EDITOR] XMLプレビュー:', fileData.xmlData.substring(0, 200));
 
                 this.tadData = fileData.xmlData;
 
@@ -1588,27 +1623,33 @@ class BasicTextEditor {
         }
 
         // すべてのrealIdに対してアイコンを事前にロード
+        // readonly（開いた仮身表示）モードではアイコンロードをスキップ（高速化のため）
         const iconLoadPromises = [];
-        for (const linkMatch of linkMatches) {
-            const attrMap = {};
-            const attrRegex = /(\w+)="([^"]*)"/g;
-            let attrMatch;
+        const isReadonly = this.editor.contentEditable === 'false';
 
-            while ((attrMatch = attrRegex.exec(linkMatch.attributes)) !== null) {
-                attrMap[attrMatch[1]] = attrMatch[2];
+        if (!isReadonly) {
+            for (const linkMatch of linkMatches) {
+                const attrMap = {};
+                const attrRegex = /(\w+)="([^"]*)"/g;
+                let attrMatch;
+
+                while ((attrMatch = attrRegex.exec(linkMatch.attributes)) !== null) {
+                    attrMap[attrMatch[1]] = attrMatch[2];
+                }
+
+                if (attrMap.id) {
+                    // フルIDから実身IDのみを抽出（_0.xtadなどを削除）
+                    const realId = attrMap.id.replace(/_\d+\.xtad$/i, '');
+                    console.log('[EDITOR] アイコンを事前ロード:', attrMap.id, '実身ID:', realId);
+                    iconLoadPromises.push(this.loadIconFromParent(realId));
+                }
             }
 
-            if (attrMap.id) {
-                // フルIDから実身IDのみを抽出（_0.xtadなどを削除）
-                const realId = attrMap.id.replace(/_\d+\.xtad$/i, '');
-                console.log('[EDITOR] アイコンを事前ロード:', attrMap.id, '実身ID:', realId);
-                iconLoadPromises.push(this.loadIconFromParent(realId));
-            }
+            // すべてのアイコンをロード（並列実行）
+            await Promise.all(iconLoadPromises);
+        } else {
+            console.log('[EDITOR] readonlyモードのためアイコン事前ロードをスキップ');
         }
-
-        // すべてのアイコンをロード（並列実行）
-        await Promise.all(iconLoadPromises);
-        console.log('[EDITOR] すべてのアイコンのロード完了');
 
         // キャッシュからアイコンデータを取得してiconDataオブジェクトを作成
         const iconData = {};
@@ -1712,7 +1753,7 @@ class BasicTextEditor {
                 const chcol = attrMap.chcol || '#000000';
                 const tbcol = attrMap.tbcol || '#ffffff';
                 const chsz = attrMap.chsz ? parseFloat(attrMap.chsz) : null;
-                const fontSize = chsz ? `${chsz}px` : '0.9em';
+                const fontSize = chsz ? `${window.convertPtToPx(chsz)}px` : '0.9em';  // ポイント値をピクセル値に変換
                 const style = `display: inline-block; padding: 4px 8px; margin: 0 2px; background: ${tbcol}; border: 1px solid ${frcol}; cursor: pointer; color: ${chcol}; font-size: ${fontSize}; line-height: 1; vertical-align: middle; user-select: none; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`;
 
                 return `<span class="virtual-object"${dataAttrs} contenteditable="false" unselectable="on" style="${style}">${this.escapeHtml(displayName)}</span>`;
@@ -1725,14 +1766,6 @@ class BasicTextEditor {
      */
     async convertDecorationTagsToHTML(content) {
         let html = content;
-
-        // デバッグ: 変換前のタブ文字の有無を確認
-        const tabCountBefore = (html.match(/\t/g) || []).length;
-        console.log('[EDITOR] convertDecorationTagsToHTML 開始: タブ文字数=', tabCountBefore);
-        if (tabCountBefore > 0) {
-            const sample = html.substring(0, 300);
-            console.log('[EDITOR] 変換前サンプル(最初の300文字):', JSON.stringify(sample));
-        }
 
         // 最初に<link>タグを仮身に変換（他の処理で消されないように先に処理）
         html = await this.convertLinkTagsToVirtualObjects(html);
@@ -1767,26 +1800,12 @@ class BasicTextEditor {
         html = html.replace(/&#0*9;/g, '\t');
         html = html.replace(/&#[xX]0*9;/g, '\t');
 
-        // デバッグ: 改行削除後のタブ文字の有無を確認
-        const tabCountAfterNewlineRemoval = (html.match(/\t/g) || []).length;
-        console.log('[EDITOR] 改行削除後: タブ文字数=', tabCountAfterNewlineRemoval);
-
         // 固定サイズ（14pt）のタブ文字の特別処理（連続タブにも対応）
         // <font size="14"/>[タブ1つ以上]<font size="[元のサイズ]"/> → <span style="font-size: 14pt;">[タブ文字列]</span><font size="[元のサイズ]"/>
-        const beforeTabReplace = html;
         html = html.replace(/<font\s+size="14"\s*\/>([\t]+)<font\s+size="(\d+)"\s*\/>/g,
             (_match, tabs, size) => {
-                console.log('[EDITOR] タブ置換マッチ: tabs.length=', tabs.length, 'size=', size);
                 return `<span style="font-size: 14pt;">${tabs}</span><font size="${size}"/>`;
             });
-
-        if (beforeTabReplace === html && tabCountAfterNewlineRemoval > 0) {
-            console.warn('[EDITOR] タブ文字が存在するのに置換されませんでした。パターンを確認します。');
-            const fontSize14Match = html.match(/<font\s+size="14"\s*\/>[^<]*<font\s+size="\d+"\s*\/>/);
-            if (fontSize14Match) {
-                console.log('[EDITOR] マッチ候補:', JSON.stringify(fontSize14Match[0]));
-            }
-        }
 
         // <font>タグを処理（自己閉じタグのペア形式を処理）
         // 状態管理しながらスタック方式で処理
@@ -2002,8 +2021,6 @@ class BasicTextEditor {
         }
 
         try {
-            console.log('[EDITOR] XML解析開始');
-
             // <document>...</document>を抽出
             const docMatch = /<document>([\s\S]*?)<\/document>/i.exec(tadXML);
             if (!docMatch) {
@@ -2025,8 +2042,6 @@ class BasicTextEditor {
                 paragraphCount++;
                 let paragraphContent = pMatch[1];
                 lastIndex = paragraphRegex.lastIndex;  // 最後に処理した位置を記録
-
-                console.log(`[EDITOR] 段落${paragraphCount} 元の内容(最初の100文字):`, JSON.stringify(paragraphContent.substring(0, 100)));
 
                 // 段落の前後の空白文字（改行、タブ、スペース）をトリム
                 paragraphContent = paragraphContent.trim();
@@ -2107,18 +2122,12 @@ class BasicTextEditor {
                 paragraphContent = paragraphContent.replace(/<text[^>]*\/>/gi, '');
                 paragraphContent = paragraphContent.replace(/<text[^>]*>/gi, '').replace(/<\/text>/gi, '');
 
-                console.log(`[EDITOR] 段落${paragraphCount} スタイル削除後(最初の100文字):`, JSON.stringify(paragraphContent.substring(0, 100)));
-
                 // タグ間の余分な改行を正規化
                 // ただしテキストノード内の空白（タブ、スペース含む）は保持
                 paragraphContent = paragraphContent.replace(/>[\r\n]+</g, '><');
 
-                console.log(`[EDITOR] 段落${paragraphCount} 空白正規化後(最初の100文字):`, JSON.stringify(paragraphContent.substring(0, 100)));
-
                 // インライン<font>タグをHTMLに変換
                 paragraphContent = await this.convertDecorationTagsToHTML(paragraphContent);
-
-                console.log(`[EDITOR] 段落${paragraphCount} HTML変換後(最初の100文字):`, JSON.stringify(paragraphContent.substring(0, 100)));
 
                 // line-heightを最大フォントサイズに基づいて設定
                 const lineHeight = maxFontSize * 1.5;
@@ -2136,8 +2145,6 @@ class BasicTextEditor {
             if (openPMatch) {
                 paragraphCount++;
                 let paragraphContent = openPMatch[1].trim();
-
-                console.log(`[EDITOR] 段落${paragraphCount} (閉じタグなし) 元の内容(最初の100文字):`, JSON.stringify(paragraphContent.substring(0, 100)));
 
                 // 段落レベルのスタイルを抽出
                 let style = 'margin: 0.5em 0; white-space: pre-wrap;';
@@ -2221,8 +2228,6 @@ class BasicTextEditor {
                 // インライン<font>タグをHTMLに変換
                 paragraphContent = await this.convertDecorationTagsToHTML(paragraphContent);
 
-                console.log(`[EDITOR] 段落${paragraphCount} (閉じタグなし) HTML変換後(最初の100文字):`, JSON.stringify(paragraphContent.substring(0, 100)));
-
                 // line-heightを最大フォントサイズに基づいて設定
                 const lineHeight = maxFontSize * 1.5;
                 style += `line-height: ${lineHeight}px;`;
@@ -2235,7 +2240,6 @@ class BasicTextEditor {
 
             if (htmlContent) {
                 this.editor.innerHTML = htmlContent;
-                console.log('[EDITOR] TAD XMLコンテンツを設定しました, 段落数:', paragraphCount);
 
                 // 仮身要素にイベントハンドラを追加
                 this.setupVirtualObjectEventHandlers();
@@ -2266,7 +2270,6 @@ class BasicTextEditor {
      */
     setupVirtualObjectEventHandlers() {
         const virtualObjects = this.editor.querySelectorAll('.virtual-object');
-        console.log('[EDITOR] 仮身要素の数:', virtualObjects.length);
 
         virtualObjects.forEach(vo => {
             // 既にイベントハンドラーが登録されている場合はスキップ（重複登録を防ぐ）
@@ -2345,9 +2348,8 @@ class BasicTextEditor {
                 const linkName = vo.dataset.linkName;
                 console.log('[EDITOR] 仮身ダブルクリック:', linkName, linkId);
 
-                // 実身IDを抽出（拡張子とレコード番号を削除）
-                let realId = linkId.replace(/\.(xtad|json)$/, '');
-                realId = realId.replace(/_\d+$/, '');
+                // 実身IDを抽出（共通メソッドを使用）
+                const realId = window.RealObjectSystem.extractRealId(linkId);
 
                 // realId.jsonを読み込んでdefaultOpenを取得
                 try {
@@ -2396,9 +2398,20 @@ class BasicTextEditor {
             // ドラッグイベント: 仮身をドラッグ可能にする
             vo.draggable = true;
             vo.addEventListener('dragstart', (e) => {
-                // 通常のドラッグは移動、右クリック+ドラッグはコピー
-                // ただし、現時点では右クリック判定が難しいため、デフォルトは移動
-                e.dataTransfer.effectAllowed = 'move';
+                // ドラッグ状態を初期化
+                this.virtualObjectDragState.dragMode = 'move'; // デフォルトは移動
+                this.virtualObjectDragState.hasMoved = false;
+                this.virtualObjectDragState.startX = e.clientX;
+                this.virtualObjectDragState.startY = e.clientY;
+
+                // 右ボタンが既に押されている場合はコピーモード
+                if (this.virtualObjectDragState.isRightButtonPressed) {
+                    this.virtualObjectDragState.dragMode = 'copy';
+                    console.log('[EDITOR] dragstart時点で右ボタンが押されている → コピーモード');
+                }
+
+                // effectAllowedを設定（後で変更される可能性があるため初期値）
+                e.dataTransfer.effectAllowed = this.virtualObjectDragState.dragMode === 'copy' ? 'copy' : 'move';
                 this.isDraggingVirtualObject = true;
                 this.draggingVirtualObject = vo;
 
@@ -2430,13 +2443,38 @@ class BasicTextEditor {
                     type: 'virtual-object-drag',
                     source: 'basic-text-editor',
                     sourceWindowId: this.windowId, // 固定のウィンドウID
-                    mode: 'move',
+                    mode: this.virtualObjectDragState.dragMode, // 状態から取得
                     virtualObjects: [virtualObj],  // 配列形式（仮身一覧との互換性）
                     virtualObject: virtualObj
                 };
                 e.dataTransfer.setData('text/plain', JSON.stringify(dragData));
 
-                console.log('[EDITOR] 仮身ドラッグ開始（移動モード）:', vo.dataset.linkName, dragData);
+                console.log('[EDITOR] 仮身ドラッグ開始:', vo.dataset.linkName, 'モード:', this.virtualObjectDragState.dragMode);
+            });
+
+            // drag イベント: ドラッグ中の移動検知とコピーモード切り替え
+            vo.addEventListener('drag', (e) => {
+                // drag中の座標が0,0の場合はスキップ（ドラッグ終了時）
+                if (e.clientX === 0 && e.clientY === 0) {
+                    return;
+                }
+
+                const deltaX = e.clientX - this.virtualObjectDragState.startX;
+                const deltaY = e.clientY - this.virtualObjectDragState.startY;
+
+                // 5px以上移動したらドラッグとみなす
+                if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+                    if (!this.virtualObjectDragState.hasMoved) {
+                        console.log('[EDITOR] drag: 移動を検知 (hasMoved = true)', deltaX, deltaY);
+                        this.virtualObjectDragState.hasMoved = true;
+
+                        // 移動検知時に右ボタンが押されていればコピーモードに切り替え
+                        if (this.virtualObjectDragState.isRightButtonPressed) {
+                            this.virtualObjectDragState.dragMode = 'copy';
+                            console.log('[EDITOR] 移動検知時に右ボタンが押されている → コピーモードに変更');
+                        }
+                    }
+                }
             });
 
             vo.addEventListener('dragend', (e) => {
@@ -2455,25 +2493,43 @@ class BasicTextEditor {
                     return;
                 }
 
-                // dropEffectが'move'かつドロップが成功した場合のみ、元の仮身を削除
-                if (e.dataTransfer.dropEffect === 'move' && this.virtualObjectDropSuccess) {
-                    // 要素がまだDOMに存在するかチェック（dragendの重複発火対策）
-                    if (vo.parentNode) {
-                        console.log('[EDITOR] 元の仮身を削除（移動完了）');
-                        vo.remove();
-                        this.isModified = true;
-                        this.updateContentHeight();
-                    } else {
-                        console.log('[EDITOR] 仮身は既に削除済み、スキップ');
+                // cross-window-drop-successメッセージが到着する時間を待つ（500ms程度）
+                setTimeout(() => {
+                    // クロスウィンドウドロップ成功の場合は、既にcross-window-drop-successハンドラで処理済み
+                    if (this.crossWindowDropSuccess) {
+                        console.log('[EDITOR] クロスウィンドウドロップ成功、既に処理済み');
+                        this.crossWindowDropSuccess = false; // フラグをリセット
+                        return;
                     }
-                } else {
-                    console.log('[EDITOR] ドロップキャンセルまたは失敗、元の仮身を保持');
-                }
 
-                this.isDraggingVirtualObject = false;
-                this.draggingVirtualObject = null;
-                this.draggingVirtualObjectData = null;
-                this.virtualObjectDropSuccess = false; // フラグをリセット
+                    // 同じウィンドウ内でのドロップの場合
+                    if (e.dataTransfer.dropEffect === 'move' && this.virtualObjectDropSuccess) {
+                        // 要素がまだDOMに存在するかチェック（dragendの重複発火対策）
+                        if (vo.parentNode) {
+                            console.log('[EDITOR] 同じウィンドウ内で移動: 元の仮身を削除');
+                            vo.remove();
+                            this.isModified = true;
+                            this.updateContentHeight();
+                        } else {
+                            console.log('[EDITOR] 仮身は既に削除済み、スキップ');
+                        }
+                    } else {
+                        console.log('[EDITOR] ドロップキャンセルまたは失敗、元の仮身を保持');
+                    }
+
+                    // ドラッグ状態をクリア
+                    this.isDraggingVirtualObject = false;
+                    this.draggingVirtualObject = null;
+                    this.draggingVirtualObjectData = null;
+                    this.virtualObjectDropSuccess = false; // フラグをリセット
+
+                    // virtualObjectDragState をクリア
+                    this.virtualObjectDragState.dragMode = 'move';
+                    this.virtualObjectDragState.hasMoved = false;
+                    this.virtualObjectDragState.startX = 0;
+                    this.virtualObjectDragState.startY = 0;
+                    // 注: isRightButtonPressed は mouseup でクリアされるのでここでは触らない
+                }, 500);
             });
 
             // リサイズイベント: 仮身の右端・下端をドラッグしてサイズ変更
@@ -2654,9 +2710,8 @@ class BasicTextEditor {
                 });
                 vo.classList.add('selected');
 
-                // 実身IDを抽出して保存
-                let realId = linkId.replace(/\.(xtad|json)$/, '');
-                realId = realId.replace(/_\d+$/, '');
+                // 実身IDを抽出（共通メソッドを使用）
+                const realId = window.RealObjectSystem.extractRealId(linkId);
                 console.log('[EDITOR] 抽出されたrealId:', realId, 'from linkId:', linkId);
 
                 // 右クリックされた仮身の情報を保存（メニュー生成時に使用）
@@ -2739,68 +2794,7 @@ class BasicTextEditor {
     /**
      * 実身のJSON metadataからappListを取得
      */
-    async getAppListData(realId) {
-        try {
-            console.log('[EDITOR] getAppListData開始 realId:', realId);
-            const jsonFileName = `${realId}.json`;
-            console.log('[EDITOR] JSONファイル名:', jsonFileName);
-
-            // 親ウィンドウ経由でファイルを読み込む（仮身一覧プラグインと同じ方法）
-            const messageId = `load-json-${Date.now()}-${Math.random()}`;
-
-            // 親ウィンドウにファイル読み込みを要求
-            this.messageBus.send('load-data-file-request', {
-                fileName: jsonFileName,
-                messageId: messageId
-            });
-
-            console.log('[EDITOR] 親ウィンドウにファイル読み込み要求送信:', jsonFileName);
-
-            try {
-                // レスポンスを待つ（10秒タイムアウト）
-                const result = await this.messageBus.waitFor('load-data-file-response', 10000, (data) => {
-                    return data.messageId === messageId;
-                });
-
-                if (result.success) {
-                    console.log('[EDITOR] JSONファイル読み込み成功（親ウィンドウ経由）:', jsonFileName);
-
-                    // dataフィールド（Fileオブジェクト）またはcontentフィールド（テキスト）に対応
-                    let jsonText;
-                    if (result.data && result.data instanceof File) {
-                        console.log('[EDITOR] Fileオブジェクトをテキストとして読み込み');
-                        jsonText = await result.data.text();
-                    } else if (result.content) {
-                        jsonText = result.content;
-                    } else {
-                        console.error('[EDITOR] レスポンスにdataまたはcontentフィールドがありません');
-                        return null;
-                    }
-
-                    const jsonData = JSON.parse(jsonText);
-                    console.log('[EDITOR] JSONパース成功 keys:', Object.keys(jsonData));
-
-                    // applistセクションを返す（小文字）
-                    if (jsonData.applist) {
-                        console.log('[EDITOR] applist found:', Object.keys(jsonData.applist));
-                        return jsonData.applist;
-                    } else {
-                        console.warn('[EDITOR] applistが設定されていません jsonData:', jsonData);
-                        return null;
-                    }
-                } else {
-                    console.error('[EDITOR] JSONファイル読み込み失敗:', result.error);
-                    return null;
-                }
-            } catch (error) {
-                console.error('[EDITOR] JSONファイル読み込みタイムアウトまたはエラー:', jsonFileName, error);
-                return null;
-            }
-        } catch (error) {
-            console.error('[EDITOR] appList取得エラー:', error);
-            return null;
-        }
-    }
+    // getAppListData() は基底クラス PluginBase で定義
 
     /**
      * appListからdefaultOpenのプラグインIDを取得
@@ -2948,7 +2942,6 @@ class BasicTextEditor {
             xmlParts.push('\r\n</p>\r\n');
         } else {
             paragraphs.forEach((p, index) => {
-                console.log(`[EDITOR] 段落${index} HTML:`, p.innerHTML.substring(0, 200));
                 xmlParts.push('<p>\r\n');
 
                 // 段落のスタイルを解析してタグに変換
@@ -2957,8 +2950,6 @@ class BasicTextEditor {
                 const color = this.extractColor(p);
                 const textAlign = this.extractTextAlign(p);
                 const indentCharCount = this.extractIndentCharCount(p);
-
-                console.log(`[EDITOR] 段落${index} スタイル:`, { fontSize, fontFamily, color, textAlign, indentCharCount });
 
                 // text-align情報を自己閉じタグとして追加
                 if (textAlign && textAlign !== 'left') {
@@ -3008,7 +2999,6 @@ class BasicTextEditor {
 
         const xml = xmlParts.join('');
         console.log('[EDITOR] convertEditorToXML完了, XML長さ:', xml.length);
-        console.log('[EDITOR] XMLプレビュー:', xml.substring(0, 500));
 
         return xml;
     }
@@ -3033,7 +3023,7 @@ class BasicTextEditor {
                 xml += this.escapeXml(node.textContent);
             } else if (node.nodeName === 'BR') {
                 // 改行タグ
-                xml += '<br/>';
+                xml += '<br/>\r\n';
             } else if (node.nodeName === 'IMG') {
                 // 画像タグを<image>として出力（TAD形式: 自己閉じタグ）
                 const savedFileName = node.getAttribute('data-saved-filename') || '';
@@ -3583,7 +3573,7 @@ class BasicTextEditor {
             if (node.nodeType === Node.TEXT_NODE) {
                 text += this.escapeXml(node.textContent);
             } else if (node.nodeName === 'BR') {
-                text += '<br/>';
+                text += '<br/>\r\n';
             } else if (node.nodeType === Node.ELEMENT_NODE) {
                 const nodeName = node.nodeName.toUpperCase();
                 const innerText = this.convertHTMLToText(node);
@@ -3763,7 +3753,7 @@ class BasicTextEditor {
 
         try {
             // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
-            const result = await this.messageBus.waitFor('save-as-new-real-object-completed', 30000, (data) => {
+            const result = await this.messageBus.waitFor('save-as-new-real-object-completed', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
 
@@ -3900,33 +3890,7 @@ class BasicTextEditor {
      * @param {number} inputWidth - 入力欄の幅（文字数）
      * @returns {Promise<string|null>} - 入力値またはnull（キャンセル時）
      */
-    showInputDialog(message, defaultValue = '', inputWidth = 30) {
-        return new Promise((resolve, reject) => {
-            this.messageBus.sendWithCallback('show-input-dialog', {
-                message: message,
-                defaultValue: defaultValue,
-                inputWidth: inputWidth,
-                buttons: [
-                    { label: '取り消し', value: 'cancel' },
-                    { label: '設　定', value: 'ok' }
-                ],
-                defaultButton: 1
-            }, (result) => {
-                if (result.error) {
-                    console.warn('[EDITOR] Input dialog error:', result.error);
-                    resolve(null);
-                    return;
-                }
-
-                // 「取り消し」ボタンの場合はnullを返す
-                if (result.button === 'cancel') {
-                    resolve(null);
-                } else {
-                    resolve(result.value);
-                }
-            });
-        });
-    }
+    // showInputDialog() は基底クラス PluginBase で定義
 
     /**
      * メッセージダイアログを表示
@@ -3935,22 +3899,7 @@ class BasicTextEditor {
      * @param {number} defaultButton - デフォルトボタンのインデックス
      * @returns {Promise<any>} - 選択されたボタンの値
      */
-    showMessageDialog(message, buttons, defaultButton = 0) {
-        return new Promise((resolve, reject) => {
-            this.messageBus.sendWithCallback('show-message-dialog', {
-                message: message,
-                buttons: buttons,
-                defaultButton: defaultButton
-            }, (result) => {
-                if (result.error) {
-                    console.warn('[EDITOR] Message dialog error:', result.error);
-                    resolve({ button: 'cancel' });
-                    return;
-                }
-                resolve(result);
-            });
-        });
-    }
+    // showMessageDialog() は基底クラス PluginBase で定義
 
     /**
      * ウィンドウアクティベーションのセットアップ
@@ -3972,6 +3921,12 @@ class BasicTextEditor {
         document.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             e.stopPropagation();
+
+            // ドラッグ中は右クリックメニューを表示しない（コピーモード用の右ボタン操作として使用）
+            if (this.isDraggingVirtualObject) {
+                console.log('[EDITOR] ドラッグ中のため右クリックメニューを抑制');
+                return;
+            }
 
             // 親ウィンドウに右クリック位置を通知
             if (window.parent && window.parent !== window) {
@@ -4915,14 +4870,22 @@ class BasicTextEditor {
      * 背景色変更
      */
     async changeBgColor() {
+        console.log('[EDITOR] changeBgColor開始');
+
         // 現在の背景色を取得
         const currentBgColor = (this.currentFile && this.currentFile.windowConfig && this.currentFile.windowConfig.backgroundColor)
             ? this.currentFile.windowConfig.backgroundColor
             : '#ffffff';
 
+        console.log('[EDITOR] 現在の背景色:', currentBgColor);
+
         const color = await this.showInputDialog('背景色を入力してください（例: #ffffff, white）', currentBgColor, 20);
+        console.log('[EDITOR] showInputDialogの戻り値:', color);
+
         if (color) {
+            console.log('[EDITOR] 背景色を変更します:', color);
             this.editor.style.backgroundColor = color;
+            document.body.style.backgroundColor = color;
             this.setStatus(`背景色を${color}に変更しました`);
 
             // 親ウィンドウに背景色更新を通知（管理用セグメントに保存）
@@ -4942,6 +4905,8 @@ class BasicTextEditor {
                 }
                 this.currentFile.windowConfig.backgroundColor = color;
             }
+        } else {
+            console.log('[EDITOR] 背景色変更がキャンセルされました');
         }
     }
 
@@ -4961,7 +4926,7 @@ class BasicTextEditor {
         }
 
         // 折り返しモード変更後に高さを更新
-        setTimeout(() => this.updateContentHeight(), 100);
+        setTimeout(() => this.updateContentHeight(), window.UI_UPDATE_DELAY_MS);
     }
 
     /**
@@ -5209,7 +5174,7 @@ class BasicTextEditor {
 
         try {
             // レスポンスを待つ（5秒タイムアウト）
-            const result = await this.messageBus.waitFor('system-fonts-response', 5000, (data) => {
+            const result = await this.messageBus.waitFor('system-fonts-response', window.DEFAULT_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
             console.log('[EDITOR] 親ウィンドウからフォント一覧を受信:', result.fonts.length, '件');
@@ -5338,15 +5303,20 @@ class BasicTextEditor {
             }, (result) => {
                 console.log('[EDITOR] ダイアログ応答:', result);
 
-                if (result.error) {
-                    console.warn('[EDITOR] Custom dialog error:', result.error);
+                // Dialog result is wrapped in result.result
+                const dialogResult = result.result || result;
+
+                if (dialogResult.error) {
+                    console.warn('[EDITOR] Custom dialog error:', dialogResult.error);
                     resolve({ button: 'cancel' });
                     return;
                 }
 
-                if (result.button === 'ok') {
+                if (dialogResult.button === 'ok') {
+                    console.log('[EDITOR] OKボタンが押されました');
+
                     // 選択されたフォントのインデックスを取得
-                    const fontIndex = result.selectedFontIndex;
+                    const fontIndex = dialogResult.selectedFontIndex;
                     if (fontIndex !== null && fontIndex !== undefined && fontIndex >= 0 && fontIndex < fonts.length) {
                         const selectedFontObj = fonts[fontIndex];
                         console.log('[EDITOR] フォント選択:', selectedFontObj.displayName);
@@ -5368,6 +5338,8 @@ class BasicTextEditor {
                     } else {
                         console.log('[EDITOR] フォントが選択されていません');
                     }
+                } else {
+                    console.log('[EDITOR] OKボタンが押されませんでした。button:', dialogResult.button);
                 }
                 resolve(result);
             });
@@ -5781,42 +5753,71 @@ class BasicTextEditor {
     }
 
     /**
-     * 現在の段落のline-heightを最大フォントサイズに基づいて更新
+     * 現在の段落のline-heightと段落レベルのfont-sizeを最大フォントサイズに基づいて更新
+     * 複数行にまたがってフォントサイズを変更した場合、段落レベルのfont-sizeも更新する
      */
     updateParagraphLineHeight() {
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
             const range = selection.getRangeAt(0);
 
-            // 現在の段落要素を取得
-            let paragraph = range.commonAncestorContainer;
-            while (paragraph && paragraph.nodeName !== 'P' && paragraph !== this.editor) {
-                paragraph = paragraph.parentElement;
+            // 選択範囲内のすべての段落要素を取得
+            const paragraphs = new Set();
+
+            // 開始位置の段落を取得
+            let startParagraph = range.startContainer;
+            while (startParagraph && startParagraph.nodeName !== 'P' && startParagraph !== this.editor) {
+                startParagraph = startParagraph.parentElement;
+            }
+            if (startParagraph && startParagraph.nodeName === 'P') {
+                paragraphs.add(startParagraph);
             }
 
-            if (paragraph && paragraph.nodeName === 'P') {
-                // 段落内のすべてのフォントサイズを取得
-                let maxFontSize = 14; // デフォルト
+            // 終了位置の段落を取得
+            let endParagraph = range.endContainer;
+            while (endParagraph && endParagraph.nodeName !== 'P' && endParagraph !== this.editor) {
+                endParagraph = endParagraph.parentElement;
+            }
+            if (endParagraph && endParagraph.nodeName === 'P') {
+                paragraphs.add(endParagraph);
+            }
 
-                // 段落自体のフォントサイズ
-                const pStyle = window.getComputedStyle(paragraph);
-                if (pStyle.fontSize) {
-                    maxFontSize = parseFloat(pStyle.fontSize);
+            // 選択範囲内の段落をすべて取得
+            const allParagraphs = Array.from(this.editor.querySelectorAll('p'));
+            const startIndex = allParagraphs.indexOf(startParagraph);
+            const endIndex = allParagraphs.indexOf(endParagraph);
+            if (startIndex !== -1 && endIndex !== -1) {
+                for (let i = startIndex; i <= endIndex; i++) {
+                    paragraphs.add(allParagraphs[i]);
                 }
-
-                // 段落内のすべてのfont要素を確認
-                const fontElements = paragraph.querySelectorAll('font[style*="font-size"]');
-                fontElements.forEach(el => {
-                    const size = parseFloat(el.style.fontSize);
-                    if (!isNaN(size) && size > maxFontSize) {
-                        maxFontSize = size;
-                    }
-                });
-
-                // line-heightを設定
-                const lineHeight = maxFontSize * 1.5;
-                paragraph.style.lineHeight = `${lineHeight}px`;
             }
+
+            // 各段落について更新
+            paragraphs.forEach(paragraph => {
+                if (paragraph && paragraph.nodeName === 'P') {
+                    // 段落内のすべてのフォントサイズを取得
+                    let maxFontSize = 14; // デフォルト
+
+                    // 段落内のすべてのfont要素とspan要素を確認
+                    const fontElements = paragraph.querySelectorAll('font[style*="font-size"], span[style*="font-size"]');
+                    fontElements.forEach(el => {
+                        const style = el.style.fontSize;
+                        if (style) {
+                            const size = parseFloat(style);
+                            if (!isNaN(size) && size > maxFontSize) {
+                                maxFontSize = size;
+                            }
+                        }
+                    });
+
+                    // line-heightを設定
+                    const lineHeight = maxFontSize * 1.5;
+                    paragraph.style.lineHeight = `${lineHeight}px`;
+
+                    // 段落レベルのfont-sizeを更新（XML保存時にextractFontSize()が正しい値を返すように）
+                    paragraph.style.fontSize = `${maxFontSize}pt`;
+                }
+            });
         }
     }
 
@@ -6074,30 +6075,7 @@ class BasicTextEditor {
         }
     }
 
-    /**
-     * 保存確認ダイアログを表示
-     * @returns {Promise<string>} 'yes', 'no', 'cancel'
-     */
-    async showSaveConfirmDialog() {
-        return new Promise((resolve, reject) => {
-            this.messageBus.sendWithCallback('show-save-confirm-dialog', {
-                message: '保存してから閉じますか？',
-                buttons: [
-                    { label: '取消', value: 'cancel' },
-                    { label: '保存しない', value: 'no' },
-                    { label: '保存', value: 'yes' }
-                ]
-            }, (response) => {
-                if (response.error) {
-                    console.warn('[EDITOR] Save confirm dialog error:', response.error);
-                    resolve('cancel');
-                    return;
-                }
-                // response.result にボタンの value が入っている
-                resolve(response.result);
-            });
-        });
-    }
+    // showSaveConfirmDialog() は基底クラス PluginBase で定義
 
     /**
      * 次の画像番号を取得
@@ -6124,8 +6102,6 @@ class BasicTextEditor {
     async loadImagesFromParent() {
         // data-needs-load="true" 属性を持つすべての画像を取得
         const images = this.editor.querySelectorAll('img[data-needs-load="true"]');
-
-        console.log('[EDITOR] 読み込みが必要な画像数:', images.length);
 
         // 各画像を順番に読み込む
         for (const img of images) {
@@ -6885,7 +6861,7 @@ class BasicTextEditor {
 
         try {
             // タイムアウト5秒でレスポンスを待つ
-            const result = await this.messageBus.waitFor('clipboard-data', 5000, (data) => {
+            const result = await this.messageBus.waitFor('clipboard-data', window.DEFAULT_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
             return result.clipboardData;
@@ -7057,17 +7033,22 @@ class BasicTextEditor {
 
         // 実身IDを取得
         const linkId = vo.dataset.linkId;
-        console.log('[EDITOR] linkId:', linkId);
-        let realId = linkId.replace(/\.(xtad|json)$/, '');
-        console.log('[EDITOR] 拡張子削除後:', realId);
-        realId = realId.replace(/_\d+$/, '');
-        console.log('[EDITOR] レコード番号削除後（最終的な実身ID）:', realId);
+        // 実身IDを抽出（共通メソッドを使用）
+        const realId = window.RealObjectSystem.extractRealId(linkId);
 
         try {
             // appListからdefaultOpenを取得
             const appListData = await this.getAppListData(realId);
             if (!appListData) {
-                console.warn('[EDITOR] appListの取得に失敗しました, realId:', realId);
+                console.error('[EDITOR] ★★エラー: appListの取得に失敗しました:', {
+                    realId: realId,
+                    linkName: vo.dataset.linkName,
+                    dataset属性: {
+                        pictdisp: vo.dataset.linkPictdisp,
+                        namedisp: vo.dataset.linkNamedisp,
+                        framedisp: vo.dataset.linkFramedisp
+                    }
+                });
                 vo.classList.remove('expanded');
                 this.setStatus(`仮身の実身情報が見つかりません: ${realId}`);
                 return;
@@ -7075,7 +7056,11 @@ class BasicTextEditor {
 
             const defaultOpen = this.getDefaultOpenFromAppList(appListData);
             if (!defaultOpen) {
-                console.warn('[EDITOR] defaultOpenが設定されていません, realId:', realId);
+                console.error('[EDITOR] ★★エラー: defaultOpenが設定されていません:', {
+                    realId: realId,
+                    linkName: vo.dataset.linkName,
+                    appListData: appListData
+                });
                 vo.classList.remove('expanded');
                 this.setStatus(`仮身のデフォルト起動アプリが設定されていません: ${realId}`);
                 return;
@@ -7086,7 +7071,10 @@ class BasicTextEditor {
             // 実身データを読み込む
             const realObjectData = await this.loadRealObjectData(realId);
             if (!realObjectData) {
-                console.warn('[EDITOR] 実身データの読み込みに失敗しました, realId:', realId);
+                console.error('[EDITOR] ★★エラー: 実身データの読み込みに失敗しました:', {
+                    realId: realId,
+                    linkName: vo.dataset.linkName
+                });
                 vo.classList.remove('expanded');
                 this.setStatus(`実身データの読み込みに失敗しました: ${realId}`);
                 return;
@@ -7096,13 +7084,6 @@ class BasicTextEditor {
 
             // 仮身の内容を保存
             const originalText = vo.textContent;
-
-            // デバッグ：現在のvo要素のスタイルを確認
-            console.log('[EDITOR] 開く前のvo要素スタイル:', JSON.stringify({
-                fontSize: vo.style.fontSize,
-                computedFontSize: window.getComputedStyle(vo).fontSize,
-                textContent: originalText
-            }, null, 2));
 
             // 仮身の色属性を取得
             const frcol = vo.dataset.linkFrcol || '#000000';
@@ -7122,13 +7103,6 @@ class BasicTextEditor {
             // 全ての表示属性がオフかどうかを判定
             const showTitleBar = showPict || showName || showRole || showType || showUpdate;
 
-            console.log('[EDITOR] 仮身の色属性:', {
-                frcol, chcol, tbcol, bgcol, chsz,
-                showFrame, showName, showUpdate, showPict, showRole, showType, showTitleBar,
-                'vo.dataset.linkBgcol': vo.dataset.linkBgcol,
-                'dataset keys': Object.keys(vo.dataset)
-            });
-
             // タイトルバーの高さ = chsz + 16（上下パディング8pxずつ）
             const titleBarHeight = chsz + 16;
 
@@ -7142,7 +7116,7 @@ class BasicTextEditor {
             vo.style.boxSizing = 'border-box';
             vo.style.overflow = 'hidden';
             vo.style.display = 'inline-block';
-            vo.style.verticalAlign = 'top';
+            vo.style.verticalAlign = 'bottom';
             vo.style.fontSize = ''; // 閉じた仮身のfontSize設定をクリア
             vo.style.padding = ''; // 閉じた仮身のpadding設定をクリア
             vo.style.margin = ''; // 閉じた仮身のmargin設定をクリア
@@ -7174,73 +7148,98 @@ class BasicTextEditor {
                 }
                 titleBar.style.display = 'flex';
                 titleBar.style.alignItems = 'center';
-                titleBar.style.paddingLeft = '8px';  // 閉じた仮身と同じpaddingに設定
-                titleBar.style.paddingRight = '8px';  // 閉じた仮身と同じpaddingに設定
-                titleBar.style.fontSize = chsz + 'px';
-                titleBar.style.fontWeight = 'normal';  // 閉じた仮身と同じフォントウェイトに設定
+                titleBar.style.gap = '4px';  // VirtualObjectRendererと同じ
+                titleBar.style.paddingLeft = '8px';
+                titleBar.style.paddingRight = '8px';
+                titleBar.style.fontSize = window.convertPtToPx(chsz) + 'px';  // ポイント値をピクセル値に変換
+                titleBar.style.lineHeight = '1.2';  // VirtualObjectRendererと同じ
+                titleBar.style.fontWeight = 'normal';
                 titleBar.style.boxSizing = 'border-box';
                 titleBar.style.overflow = 'hidden';
                 titleBar.style.whiteSpace = 'nowrap';
                 titleBar.style.userSelect = 'none';
 
-                // タイトルテキストを作成（左から：ピクトグラム、名称、続柄、タイプ、更新日時）
-                let titleText = '';
+                // VirtualObjectRendererと同じ構造でタイトル要素を構築
+                const chszPx = window.convertPtToPx(chsz);
 
-                // ピクトグラム（今後実装予定）
+                // ピクトグラム（アイコン）
                 if (showPict) {
-                    // ピクトグラム実装は今後
+                    const iconImg = document.createElement('img');
+                    iconImg.className = 'virtual-object-icon';
+                    iconImg.style.width = chszPx + 'px';
+                    iconImg.style.height = chszPx + 'px';
+                    iconImg.style.objectFit = 'contain';
+                    iconImg.style.flexShrink = '0';
+                    iconImg.style.backgroundColor = 'transparent';
+
+                    // アイコンを読み込む
+                    this.loadIconFromParent(realId).then(iconData => {
+                        if (iconData) {
+                            iconImg.src = `data:image/x-icon;base64,${iconData}`;
+                        }
+                    }).catch(error => {
+                        console.error('[EDITOR] アイコン読み込みエラー:', realId, error);
+                    });
+
+                    titleBar.appendChild(iconImg);
                 }
+
+                // テキスト部分（VirtualObjectRendererと同じ構造）
+                const textSpan = document.createElement('span');
+                textSpan.style.overflow = 'hidden';
+                textSpan.style.textOverflow = 'ellipsis';
+                textSpan.style.whiteSpace = 'nowrap';
+                textSpan.style.flex = '1';
 
                 // 名称
                 if (showName) {
-                    titleText += originalText;
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = originalText;
+                    textSpan.appendChild(nameSpan);
                 }
 
-                // 続柄（今後実装予定）
-                if (showRole) {
-                    // 続柄実装は今後
+                // 続柄（VirtualObjectRendererと同じロジック）
+                if (showRole && realObjectData && realObjectData.metadata && realObjectData.metadata.relationship && realObjectData.metadata.relationship.length > 0) {
+                    const relationshipText = realObjectData.metadata.relationship.join(' ');
+                    const relationshipSpan = document.createElement('span');
+                    relationshipSpan.textContent = ' : ' + relationshipText;
+                    textSpan.appendChild(relationshipSpan);
                 }
 
-                // タイプ（今後実装予定）
-                if (showType) {
-                    // タイプ実装は今後
+                // タイプ（VirtualObjectRendererと同じロジック）
+                if (showType && realObjectData && realObjectData.applist) {
+                    let typeName = '';
+                    for (const [, config] of Object.entries(realObjectData.applist)) {
+                        if (config && config.defaultOpen === true && config.name) {
+                            typeName = config.name;
+                            break;
+                        }
+                    }
+
+                    if (typeName) {
+                        const typeSpan = document.createElement('span');
+                        typeSpan.textContent = ' (' + typeName + ')';
+                        textSpan.appendChild(typeSpan);
+                    }
                 }
 
                 // 更新日時
-                if (showUpdate && realObjectData.updateDate) {
-                    const updateDate = new Date(realObjectData.updateDate);
+                if (showUpdate && realObjectData && realObjectData.metadata && realObjectData.metadata.updateDate) {
+                    const updateDate = new Date(realObjectData.metadata.updateDate);
                     const dateStr = updateDate.getFullYear() + '/' +
                                   String(updateDate.getMonth() + 1).padStart(2, '0') + '/' +
                                   String(updateDate.getDate()).padStart(2, '0') + ' ' +
                                   String(updateDate.getHours()).padStart(2, '0') + ':' +
                                   String(updateDate.getMinutes()).padStart(2, '0') + ':' +
                                   String(updateDate.getSeconds()).padStart(2, '0');
-                    if (titleText) {
-                        titleText += ' ' + dateStr;
-                    } else {
-                        titleText = dateStr;
-                    }
+                    const updateSpan = document.createElement('span');
+                    updateSpan.textContent = ' ' + dateStr;
+                    textSpan.appendChild(updateSpan);
                 }
 
-                const titleSpan = document.createElement('span');
-                titleSpan.textContent = titleText;
-                titleSpan.style.overflow = 'hidden';
-                titleSpan.style.textOverflow = 'ellipsis';
-                titleSpan.style.whiteSpace = 'nowrap';
-                titleBar.appendChild(titleSpan);
+                titleBar.appendChild(textSpan);
 
                 vo.appendChild(titleBar);
-
-                // デバッグ：タイトルバーとtitleSpanのスタイルを確認
-                console.log('[EDITOR] タイトルバー作成後のスタイル:', JSON.stringify({
-                    'titleBar.fontSize': titleBar.style.fontSize,
-                    'titleBar.computedFontSize': window.getComputedStyle(titleBar).fontSize,
-                    'titleSpan.fontSize': titleSpan.style.fontSize,
-                    'titleSpan.computedFontSize': window.getComputedStyle(titleSpan).fontSize,
-                    'vo.fontSize': vo.style.fontSize,
-                    'vo.computedFontSize': window.getComputedStyle(vo).fontSize,
-                    'chsz': chsz
-                }, null, 2));
 
                 contentTop = titleBarHeight;
             }
@@ -7299,38 +7298,12 @@ class BasicTextEditor {
     /**
      * 実身データを読み込む
      */
-    async loadRealObjectData(realId) {
-        const messageId = `load-real-${Date.now()}-${Math.random()}`;
-
-        // 親ウィンドウに実身データ読み込みを要求
-        this.messageBus.send('load-real-object', {
-            realId: realId,
-            messageId: messageId
-        });
-
-        try {
-            // レスポンスを待つ（5秒タイムアウト）
-            const result = await this.messageBus.waitFor('real-object-loaded', 5000, (data) => {
-                return data.messageId === messageId;
-            });
-            return result.realObject;
-        } catch (error) {
-            // エラーレスポンスの可能性もチェック
-            try {
-                const errorResult = await this.messageBus.waitFor('real-object-error', 100, (data) => {
-                    return data.messageId === messageId;
-                });
-                throw new Error(errorResult.error);
-            } catch {
-                throw new Error('実身データ読み込みタイムアウト');
-            }
-        }
-    }
+    // loadRealObjectData() は基底クラス PluginBase で定義
 
     /**
      * 仮身を通常表示に戻す
      */
-    collapseVirtualObject(vo) {
+    async collapseVirtualObject(vo) {
         if (!vo.classList.contains('expanded')) {
             return;
         }
@@ -7352,16 +7325,46 @@ class BasicTextEditor {
         delete vo.dataset.linkVobjright;
         delete vo.dataset.linkVobjbottom;
 
-        // 元のテキスト表示に戻す
-        vo.textContent = titleText;
-
-        // 閉じた仮身のスタイルを復元
+        // 閉じた仮身のスタイルと内容を復元（VirtualObjectRendererと同じ構造）
         const frcol = vo.dataset.linkFrcol || '#000000';
         const chcol = vo.dataset.linkChcol || '#000000';
         const tbcol = vo.dataset.linkTbcol || '#ffffff';
         const chsz = parseFloat(vo.dataset.linkChsz) || 14;
+        const chszPx = window.convertPtToPx(chsz);
 
-        vo.style.display = 'inline-block';
+        // 表示設定を取得
+        const showPict = vo.dataset.linkPictdisp !== 'false';
+        const showName = vo.dataset.linkNamedisp !== 'false';
+        const showRole = vo.dataset.linkRoledisp === 'true';
+        const showType = vo.dataset.linkTypedisp === 'true';
+        const showUpdate = vo.dataset.linkUpdatedisp === 'true';
+
+        // 実身IDを取得
+        const linkId = vo.dataset.linkId;
+        const realId = linkId ? linkId.replace(/_\d+\.xtad$/i, '') : null;
+
+        // 実身データを読み込む（更新日時、続柄、タイプ表示用）
+        let realObjectData = null;
+        if (realId && (showRole || showType || showUpdate)) {
+            try {
+                realObjectData = await this.loadRealObjectData(realId);
+                console.log('[EDITOR] collapseVirtualObject - 実身データ読み込み成功:', realId);
+                console.log('[EDITOR] realObjectData:', JSON.stringify({
+                    hasMetadata: !!realObjectData?.metadata,
+                    hasUpdateDate: !!realObjectData?.metadata?.updateDate,
+                    updateDate: realObjectData?.metadata?.updateDate,
+                    hasApplist: !!realObjectData?.applist,
+                    hasRelationship: !!realObjectData?.metadata?.relationship
+                }, null, 2));
+            } catch (error) {
+                console.error('[EDITOR] 実身データの読み込みエラー:', realId, error);
+            }
+        }
+
+        // VirtualObjectRendererと同じスタイルを適用
+        vo.style.display = 'inline-flex';
+        vo.style.alignItems = 'center';
+        vo.style.gap = '4px';
         vo.style.position = 'relative';
         vo.style.verticalAlign = 'middle';
         vo.style.background = tbcol;
@@ -7369,24 +7372,113 @@ class BasicTextEditor {
         vo.style.padding = '4px 8px';
         vo.style.margin = '0 2px';
         vo.style.color = chcol;
-        vo.style.fontSize = chsz + 'px';
+        vo.style.fontSize = chszPx + 'px';
+        vo.style.lineHeight = '1.2';
         vo.style.cursor = 'pointer';
         vo.style.userSelect = 'none';
         vo.style.whiteSpace = 'nowrap';
-        vo.style.overflow = 'visible';
+        vo.style.overflow = 'hidden';
+        vo.style.textOverflow = 'ellipsis';
         vo.style.boxSizing = 'border-box';
         vo.style.width = 'auto';
         vo.style.height = 'auto';
         vo.style.minWidth = 'auto';
         vo.style.minHeight = 'auto';
 
-        // 閉じた時の高さをoriginalHeightとして保存（chszはポイント値なのでピクセルに変換）
-        const chszPx = window.convertPtToPx(chsz);
-        const lineHeight = 1.2;
-        const textHeight = Math.ceil(chszPx * lineHeight);
+        // 内容をクリアして再構築
+        vo.innerHTML = '';
+
+        // ピクトグラム（アイコン）
+        if (showPict) {
+            const iconImg = document.createElement('img');
+            iconImg.className = 'virtual-object-icon';
+            iconImg.style.width = chszPx + 'px';
+            iconImg.style.height = chszPx + 'px';
+            iconImg.style.objectFit = 'contain';
+            iconImg.style.flexShrink = '0';
+            iconImg.style.backgroundColor = 'transparent';
+
+            // アイコンを読み込む
+            if (realId) {
+                this.loadIconFromParent(realId).then(iconData => {
+                    if (iconData) {
+                        iconImg.src = `data:image/x-icon;base64,${iconData}`;
+                    }
+                }).catch(error => {
+                    console.error('[EDITOR] アイコン読み込みエラー:', realId, error);
+                });
+            }
+
+            vo.appendChild(iconImg);
+        }
+
+        // テキスト部分
+        const textSpan = document.createElement('span');
+        textSpan.style.overflow = 'hidden';
+        textSpan.style.textOverflow = 'ellipsis';
+        textSpan.style.whiteSpace = 'nowrap';
+        textSpan.style.flex = '1';
+
+        // 名称
+        if (showName) {
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = titleText || vo.dataset.linkName || '無題';
+            textSpan.appendChild(nameSpan);
+        }
+
+        // 続柄
+        if (showRole && realObjectData && realObjectData.metadata && realObjectData.metadata.relationship && realObjectData.metadata.relationship.length > 0) {
+            const relationshipText = realObjectData.metadata.relationship.join(' ');
+            const relationshipSpan = document.createElement('span');
+            relationshipSpan.textContent = ' : ' + relationshipText;
+            textSpan.appendChild(relationshipSpan);
+        }
+
+        // タイプ
+        if (showType && realObjectData && realObjectData.applist) {
+            let typeName = '';
+            for (const [, config] of Object.entries(realObjectData.applist)) {
+                if (config && config.defaultOpen === true && config.name) {
+                    typeName = config.name;
+                    break;
+                }
+            }
+
+            if (typeName) {
+                const typeSpan = document.createElement('span');
+                typeSpan.textContent = ' (' + typeName + ')';
+                textSpan.appendChild(typeSpan);
+            }
+        }
+
+        // 更新日時
+        if (showUpdate && realObjectData && realObjectData.metadata && realObjectData.metadata.updateDate) {
+            const updateDate = new Date(realObjectData.metadata.updateDate);
+            const dateStr = updateDate.getFullYear() + '/' +
+                          String(updateDate.getMonth() + 1).padStart(2, '0') + '/' +
+                          String(updateDate.getDate()).padStart(2, '0') + ' ' +
+                          String(updateDate.getHours()).padStart(2, '0') + ':' +
+                          String(updateDate.getMinutes()).padStart(2, '0') + ':' +
+                          String(updateDate.getSeconds()).padStart(2, '0');
+            const updateSpan = document.createElement('span');
+            updateSpan.textContent = ' ' + dateStr;
+            textSpan.appendChild(updateSpan);
+        }
+
+        vo.appendChild(textSpan);
+
+        // コンテンツを追加した後、実際の幅を測定して固定幅を設定（リサイズを防ぐため）
+        // DOMに反映させるために少し待つ
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const actualWidth = vo.offsetWidth;
+        vo.style.width = actualWidth + 'px';
+        vo.style.minWidth = actualWidth + 'px';
+
+        // 閉じた時の高さをoriginalHeightとして保存
+        const textHeight = Math.ceil(chszPx * 1.2);  // lineHeight = 1.2
         const closedHeight = textHeight + 8; // 閉じた仮身の高さ
         vo.dataset.originalHeight = closedHeight.toString();
-        console.log('[EDITOR] 仮身を閉じた時の originalHeight を更新:', vo.dataset.linkName, closedHeight);
+        console.log('[EDITOR] 仮身を閉じた時の originalHeight を更新:', vo.dataset.linkName, closedHeight, '幅:', actualWidth);
     }
 
     /**
@@ -7443,7 +7535,7 @@ class BasicTextEditor {
 
             try {
                 // ウィンドウが開いた通知を待つ（タイムアウト30秒）
-                const result = await this.messageBus.waitFor('window-opened', 30000, (data) => {
+                const result = await this.messageBus.waitFor('window-opened', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
                     return data.messageId === messageId;
                 });
 
@@ -7464,127 +7556,37 @@ class BasicTextEditor {
      * 選択中の仮身が指し示す開いている実身を閉じる
      */
     closeRealObject() {
-        if (!this.contextMenuVirtualObject) {
-            console.warn('[EDITOR] 選択中の仮身がありません');
-            return;
-        }
-
-        const realId = this.contextMenuVirtualObject.realId;
-        const windowId = this.openedRealObjects.get(realId);
-
-        if (!windowId) {
-            console.warn('[EDITOR] 実身が開いていません:', realId);
-            this.setStatus('実身が開いていません');
-            return;
-        }
-
-        // 親ウィンドウにウィンドウを閉じるよう要求
-        this.messageBus.send('close-window', {
-            windowId: windowId
-        });
-
-        console.log('[EDITOR] ウィンドウを閉じる要求:', windowId);
-        this.setStatus('実身を閉じました');
+        window.RealObjectSystem.closeRealObject(this);
     }
 
     /**
      * 仮身属性変更ダイアログを表示
      */
     async changeVirtualObjectAttributes() {
-        if (!this.contextMenuVirtualObject || !this.contextMenuVirtualObject.virtualObj) {
-            console.warn('[EDITOR] 選択中の仮身がありません');
-            return;
-        }
-
-        const vobj = this.contextMenuVirtualObject.virtualObj;
-        const element = this.contextMenuVirtualObject.element;
-
-        // 現在の属性値を取得（elementのdatasetから最新の値を読み取る）
-        const pictdisp = element.dataset.linkPictdisp !== undefined ? element.dataset.linkPictdisp : (vobj.pictdisp || 'true');
-        const namedisp = element.dataset.linkNamedisp !== undefined ? element.dataset.linkNamedisp : (vobj.namedisp || 'true');
-        const roledisp = element.dataset.linkRoledisp !== undefined ? element.dataset.linkRoledisp : (vobj.roledisp || 'false');
-        const typedisp = element.dataset.linkTypedisp !== undefined ? element.dataset.linkTypedisp : (vobj.typedisp || 'false');
-        const updatedisp = element.dataset.linkUpdatedisp !== undefined ? element.dataset.linkUpdatedisp : (vobj.updatedisp || 'false');
-        const framedisp = element.dataset.linkFramedisp !== undefined ? element.dataset.linkFramedisp : (vobj.framedisp || 'true');
-        const frcol = element.dataset.linkFrcol || vobj.frcol || '#000000';
-        const chcol = element.dataset.linkChcol || vobj.chcol || '#000000';
-        const tbcol = element.dataset.linkTbcol || vobj.tbcol || '#ffffff';
-        const bgcol = element.dataset.linkBgcol || vobj.bgcol || '#ffffff';
-        const autoopen = element.dataset.linkAutoopen !== undefined ? element.dataset.linkAutoopen : (vobj.autoopen || 'false');
-        const chsz = element.dataset.linkChsz ? parseFloat(element.dataset.linkChsz) : (parseFloat(vobj.chsz) || 14);
-
-        console.log('[EDITOR] 仮身属性ダイアログ用に現在の属性を取得:', {
-            pictdisp, namedisp, roledisp, typedisp, updatedisp, framedisp,
-            frcol, chcol, tbcol, bgcol, autoopen, chsz
-        });
-
-        const currentAttrs = {
-            pictdisp: pictdisp !== 'false',  // デフォルトtrue
-            namedisp: namedisp !== 'false',  // デフォルトtrue
-            roledisp: roledisp === 'true',   // デフォルトfalse
-            typedisp: typedisp === 'true',   // デフォルトfalse
-            updatedisp: updatedisp === 'true',  // デフォルトfalse
-            framedisp: framedisp !== 'false',  // デフォルトtrue
-            frcol: frcol,
-            chcol: chcol,
-            tbcol: tbcol,
-            bgcol: bgcol,
-            autoopen: autoopen === 'true',
-            chsz: chsz
-        };
-
-        // 文字サイズの倍率を計算
-        const baseFontSize = 14;
-        const ratio = currentAttrs.chsz / baseFontSize;
-        let selectedRatio = '標準';
-        const ratioMap = {
-            '1/2倍': 0.5,
-            '3/4倍': 0.75,
-            '標準': 1.0,
-            '3/2倍': 1.5,
-            '2倍': 2.0,
-            '3倍': 3.0,
-            '4倍': 4.0
-        };
-
-        for (const [label, value] of Object.entries(ratioMap)) {
-            if (Math.abs(ratio - value) < 0.01) {
-                selectedRatio = label;
-                break;
-            }
-        }
-
-        // 親ウィンドウにダイアログ表示を要求
-        const messageId = `change-vobj-attrs-${Date.now()}-${Math.random()}`;
-
-        this.messageBus.send('change-virtual-object-attributes', {
-            virtualObject: vobj,
-            currentAttributes: currentAttrs,
-            selectedRatio: selectedRatio,
-            messageId: messageId
-        });
-
-        console.log('[EDITOR] 仮身属性変更ダイアログ要求');
-
-        try {
-            // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
-            const result = await this.messageBus.waitFor('virtual-object-attributes-changed', 30000, (data) => {
-                return data.messageId === messageId;
-            });
-
-            if (result.success && result.attributes) {
-                this.applyVirtualObjectAttributes(result.attributes, vobj, element);
-            }
-        } catch (error) {
-            console.error('[EDITOR] 仮身属性変更エラー:', error);
-        }
+        await window.RealObjectSystem.changeVirtualObjectAttributes(this);
     }
 
     /**
      * 仮身に属性を適用
      */
-    applyVirtualObjectAttributes(attrs, vobj, element) {
+    async applyVirtualObjectAttributes(attrs, vobj, element) {
         if (!vobj || !element) return;
+
+        // datasetから現在の属性値を読み取って、vobjに設定（link_プレフィックスの有無に対応）
+        if (!vobj.pictdisp) vobj.pictdisp = vobj.link_pictdisp || element.dataset.linkPictdisp || 'true';
+        if (!vobj.namedisp) vobj.namedisp = vobj.link_namedisp || element.dataset.linkNamedisp || 'true';
+        if (!vobj.roledisp) vobj.roledisp = vobj.link_roledisp || element.dataset.linkRoledisp || 'false';
+        if (!vobj.typedisp) vobj.typedisp = vobj.link_typedisp || element.dataset.linkTypedisp || 'false';
+        if (!vobj.updatedisp) vobj.updatedisp = vobj.link_updatedisp || element.dataset.linkUpdatedisp || 'false';
+        if (!vobj.framedisp) vobj.framedisp = vobj.link_framedisp || element.dataset.linkFramedisp || 'true';
+        if (!vobj.frcol) vobj.frcol = vobj.link_frcol || element.dataset.linkFrcol || '#000000';
+        if (!vobj.chcol) vobj.chcol = vobj.link_chcol || element.dataset.linkChcol || '#000000';
+        if (!vobj.tbcol) vobj.tbcol = vobj.link_tbcol || element.dataset.linkTbcol || '#ffffff';
+        if (!vobj.bgcol) vobj.bgcol = vobj.link_bgcol || element.dataset.linkBgcol || '#ffffff';
+        if (!vobj.chsz) vobj.chsz = vobj.link_chsz || element.dataset.linkChsz || '14';
+        if (!vobj.autoopen) vobj.autoopen = vobj.link_autoopen || element.dataset.linkAutoopen || 'false';
+        if (!vobj.link_id) vobj.link_id = vobj.link_link_id || element.dataset.linkId || '';
+        if (!vobj.link_name) vobj.link_name = vobj.link_link_name || element.dataset.linkName || '';
 
         // 表示項目の設定
         if (attrs.pictdisp !== undefined) vobj.pictdisp = attrs.pictdisp ? 'true' : 'false';
@@ -7622,7 +7624,10 @@ class BasicTextEditor {
                 element.style.backgroundColor = attrs.tbcol;
             }
             // 文字サイズ（chszはポイント値なのでピクセルに変換）
-            if (attrs.chsz !== undefined) {
+            // 実際に変更された場合のみ処理
+            const currentChsz = parseFloat(vobj.chsz) || 14;
+            const newChsz = attrs.chsz !== undefined ? parseFloat(attrs.chsz) : currentChsz;
+            if (attrs.chsz !== undefined && newChsz !== currentChsz) {
                 const chszPx = window.convertPtToPx(attrs.chsz);
                 element.style.fontSize = chszPx + 'px';
 
@@ -7643,20 +7648,8 @@ class BasicTextEditor {
                 }
             }
 
-            // namedisp/pictdispの変更を閉じた仮身に反映
-            if (!element.classList.contains('expanded')) {
-                const showName = vobj.namedisp !== 'false';
-                const showPict = vobj.pictdisp !== 'false';
-
-                if (showName) {
-                    // 実身名称を表示
-                    element.textContent = vobj.link_name || element.dataset.linkName || '';
-                } else if (!showName && !showPict) {
-                    // 両方非表示の場合は空にする
-                    element.textContent = '';
-                }
-                // pictdispの処理は将来的に追加（現在はテキストのみ対応）
-            }
+            // 閉じた仮身の場合は、dataset更新後にcollapseVirtualObjectで再描画
+            // （pictdisp, namedisp等の表示属性を正しく反映させるため）
         }
 
         // XMLデータに反映するため、dataset属性を更新（data-link-*形式で保存）
@@ -7707,8 +7700,6 @@ class BasicTextEditor {
 
         // 展開済みの仮身の場合は再描画
         if (element && element.classList.contains('expanded')) {
-            console.log('[EDITOR] 展開済み仮身を再描画:', element.dataset.linkName);
-
             // datasetを更新
             element.dataset.linkChsz = completeVobj.chsz;
             element.dataset.linkFrcol = completeVobj.frcol;
@@ -7743,13 +7734,39 @@ class BasicTextEditor {
                 const currentWidth = parseFloat(element.style.width) || completeVobj.width || 150;
                 const currentHeight = parseFloat(element.style.height) || completeVobj.heightPx || 120;
 
-                // 一旦閉じてから再度開く
-                this.collapseVirtualObject(element);
+                // 一旦閉じてから再度開く（awaitで完了を待つ）
+                await this.collapseVirtualObject(element);
                 // 少し待ってから再展開（DOMの更新を待つ）
                 setTimeout(() => {
-                    this.expandVirtualObject(element, currentWidth, currentHeight);
+                    this.expandVirtualObject(element, currentWidth, currentHeight).catch(err => {
+                        console.error('[EDITOR] エラー: 仮身の再展開に失敗しました:', {
+                            error: err,
+                            linkName: element.dataset.linkName,
+                            linkId: element.dataset.linkId
+                        });
+                        this.setStatus('仮身属性変更後の再描画に失敗しました');
+                        // 失敗時は再度展開を試みる
+                        setTimeout(() => {
+                            this.expandVirtualObject(element, currentWidth, currentHeight).catch(retryErr => {
+                                console.error('[EDITOR] リトライも失敗しました:', retryErr);
+                            });
+                        }, 200);
+                    });
                 }, 50);
             }
+        } else if (element && !element.classList.contains('expanded')) {
+            // 閉じた仮身の場合、collapseVirtualObjectで再描画
+            // （pictdisp, namedispなどの表示属性を正しく反映させるため）
+            // 元の幅を保存
+            const originalWidth = parseFloat(element.style.width) || element.offsetWidth;
+
+            // 一度expandedクラスを追加してからcollapseすることで、collapseVirtualObjectの処理を実行
+            element.classList.add('expanded');
+            await this.collapseVirtualObject(element);
+
+            // 元の幅を復元（属性変更時は幅を変更しない）
+            element.style.width = originalWidth + 'px';
+            element.style.minWidth = originalWidth + 'px';
         }
 
         this.setStatus('仮身属性を変更しました');
@@ -7847,107 +7864,27 @@ class BasicTextEditor {
      * 選択中の仮身が指し示す実身の名前を変更
      */
     async renameRealObject() {
-        if (!this.contextMenuVirtualObject || !this.contextMenuVirtualObject.virtualObj) {
-            console.warn('[EDITOR] 選択中の仮身がありません');
-            return;
-        }
-
-        const realId = this.contextMenuVirtualObject.realId;
-        const virtualObj = this.contextMenuVirtualObject.virtualObj;
-        const currentName = virtualObj.link_name;
-
-        // 親ウィンドウにダイアログ表示を要求
-        const messageId = `rename-real-${Date.now()}-${Math.random()}`;
-
-        this.messageBus.send('rename-real-object', {
-            realId: realId,
-            currentName: currentName,
-            messageId: messageId
-        });
-
-        console.log('[EDITOR] 実身名変更要求:', realId, currentName);
-
-        try {
-            // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
-            const result = await this.messageBus.waitFor('real-object-renamed', 30000, (data) => {
-                return data.messageId === messageId;
-            });
-
-            if (result.success) {
-                // 仮身の表示名を更新（DOM要素を更新）
-                if (this.contextMenuVirtualObject.element) {
-                    const element = this.contextMenuVirtualObject.element;
-                    element.textContent = result.newName;
-                    element.dataset.linkName = result.newName;
-                }
-                console.log('[EDITOR] 実身名変更成功:', realId, result.newName);
-                this.setStatus(`実身名を「${result.newName}」に変更しました`);
-                this.isModified = true;
-            }
-        } catch (error) {
-            console.error('[EDITOR] 実身名変更エラー:', error);
-        }
+        await window.RealObjectSystem.renameRealObject(this);
     }
 
     /**
      * 選択中の仮身が指し示す実身を複製
      */
     async duplicateRealObject() {
-        if (!this.contextMenuVirtualObject || !this.contextMenuVirtualObject.virtualObj) {
-            console.warn('[EDITOR] 選択中の仮身がありません');
-            return;
-        }
-
-        const realId = this.contextMenuVirtualObject.realId;
-
-        // 親ウィンドウに実身複製を要求
-        const messageId = `duplicate-real-${Date.now()}-${Math.random()}`;
-
-        this.messageBus.send('duplicate-real-object', {
-            realId: realId,
-            messageId: messageId
-        });
-
-        console.log('[EDITOR] 実身複製要求:', realId);
-
-        try {
-            // レスポンスを待つ（デフォルトタイムアウト5秒）
-            const result = await this.messageBus.waitFor('real-object-duplicated', 5000, (data) => {
-                return data.messageId === messageId;
-            });
-
-            if (result.success) {
-                console.log('[EDITOR] 実身複製成功:', realId, '->', result.newRealId);
-                this.setStatus(`実身を複製しました: ${result.newName}`);
-            }
-        } catch (error) {
-            console.error('[EDITOR] 実身複製エラー:', error);
-            this.setStatus('実身の複製に失敗しました');
-        }
+        await window.RealObjectSystem.duplicateRealObject(this);
     }
 
     /**
      * 屑実身操作ウィンドウを開く
      */
     openTrashRealObjects() {
-        if (window.parent && window.parent !== window && window.parent.pluginManager) {
-            try {
-                window.parent.pluginManager.launchPlugin('trash-real-objects', null);
-                console.log('[EDITOR] 屑実身操作ウィンドウ起動');
-                this.setStatus('屑実身操作ウィンドウを起動しました');
-            } catch (error) {
-                console.error('[EDITOR] 屑実身操作ウィンドウ起動エラー:', error);
-                this.setStatus('屑実身操作ウィンドウの起動に失敗しました');
-            }
-        }
+        window.RealObjectSystem.openTrashRealObjects(this);
     }
 
     /**
      * ウィンドウが閉じたことを処理
      */
     handleWindowClosed(windowId, fileData) {
-        console.log('[EDITOR] ウィンドウクローズ通知:', windowId, fileData);
-
         // fileDataから実身IDを取得
         if (fileData && fileData.realId) {
             const realId = fileData.realId;
@@ -7984,7 +7921,7 @@ class BasicTextEditor {
 
         console.log('[EDITOR] アイコンキャッシュミス、親ウィンドウに要求:', realId);
 
-        // 親ウィンドウにアイコン読み込みを要求
+        // 親ウィンドウにアイコンパス取得を要求
         const messageId = `icon-${realId}-${Date.now()}`;
         this.messageBus.send('read-icon-file', {
             realId: realId,
@@ -7994,15 +7931,33 @@ class BasicTextEditor {
         try {
             // レスポンスを待つ（3秒タイムアウト）
             // フィルタを使用して、このリクエストに対応するレスポンスだけを受け取る
-            const result = await this.messageBus.waitFor('icon-file-loaded', 3000, (data) => {
+            const result = await this.messageBus.waitFor('icon-file-loaded', window.ICON_LOAD_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
 
-            if (result.success) {
-                // キャッシュに保存
-                this.iconCache.set(realId, result.data);
-                console.log('[EDITOR] アイコン読み込み成功（親から）:', realId, 'データ長:', result.data.length);
-                return result.data;
+            if (result.success && result.filePath) {
+                // Electron環境の場合、パスからファイルを読み込む
+                if (typeof require !== 'undefined') {
+                    try {
+                        const fs = require('fs');
+                        const buffer = fs.readFileSync(result.filePath);
+                        const base64 = buffer.toString('base64');
+                        // VirtualObjectRendererが data:image/x-icon;base64, を追加するので、ここでは Base64 のみ返す
+
+                        // キャッシュに保存
+                        this.iconCache.set(realId, base64);
+                        console.log('[EDITOR] アイコン読み込み成功（親から）:', realId, 'パス:', result.filePath);
+                        return base64;
+                    } catch (error) {
+                        console.error('[EDITOR] アイコンファイル読み込みエラー:', realId, error);
+                        this.iconCache.set(realId, null);
+                        return null;
+                    }
+                } else {
+                    console.error('[EDITOR] require not available (not in Electron environment)');
+                    this.iconCache.set(realId, null);
+                    return null;
+                }
             } else {
                 // アイコンが存在しない場合はnullを返す
                 this.iconCache.set(realId, null);

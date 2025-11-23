@@ -3,6 +3,7 @@
  *
  * 既存の外部ファイルをOSのデフォルトアプリで開くプラグイン
  * 実身のxtadファイルから拡張子情報を読み取り、実身名+拡張子のファイルを開く
+ * 外部ファイルを開いた後、ウィンドウを閉じる
  */
 
 class ExistingDataExec {
@@ -69,13 +70,8 @@ class ExistingDataExec {
         this.realName = data.fileData.name || data.fileData.realName || '';
         this.windowId = data.windowId;
 
-        // realIdから実身ID部分を抽出（_0.xtad などを除去）
-        let baseRealId = this.realId;
-        // .xtad, .json などの拡張子を除去
-        baseRealId = baseRealId.replace(/\.(xtad|json)$/, '');
-        // _recordNo の部分を除去（例: _0, _1, _10 など）
-        baseRealId = baseRealId.replace(/_\d+$/, '');
-        this.baseRealId = baseRealId;
+        // realIdから実身ID部分を抽出（共通メソッドを使用）
+        this.baseRealId = window.RealObjectSystem.extractRealId(this.realId);
 
         console.log('[ExistingDataExec] realId:', this.realId);
         console.log('[ExistingDataExec] baseRealId:', this.baseRealId);

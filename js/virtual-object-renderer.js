@@ -1,4 +1,12 @@
-import { convertPtToPx } from './util.js';
+import {
+    convertPtToPx,
+    DEFAULT_FRCOL,
+    DEFAULT_CHCOL,
+    DEFAULT_TBCOL,
+    DEFAULT_BGCOL,
+    DEFAULT_FONT_SIZE,
+    DEFAULT_LINE_HEIGHT
+} from './util.js';
 
 /**
  * VirtualObjectRenderer
@@ -9,11 +17,11 @@ export class VirtualObjectRenderer {
     constructor(options = {}) {
         // デフォルトスタイル設定
         this.defaultStyles = {
-            tbcol: '#ffffff',  // タイトル背景色
-            frcol: '#000000',  // 枠線色
-            chcol: '#000000',  // 文字色
-            bgcol: '#ffffff',  // 背景色
-            chsz: 14           // 文字サイズ(px)
+            tbcol: DEFAULT_TBCOL,  // タイトル背景色
+            frcol: DEFAULT_FRCOL,  // 枠線色
+            chcol: DEFAULT_CHCOL,  // 文字色
+            bgcol: DEFAULT_BGCOL,  // 背景色
+            chsz: DEFAULT_FONT_SIZE // 文字サイズ(px)
         };
 
         // オプションでデフォルトスタイルを上書き
@@ -119,7 +127,7 @@ export class VirtualObjectRenderer {
         vo.setAttribute('unselectable', 'on');
 
         // data属性を設定
-        this.attachDataAttributes(vo, virtualObject);
+        this.attachDataAttributes(vo, virtualObject, options.vobjIndex);
 
         // インラインスタイルを適用
         Object.assign(vo.style, {
@@ -280,7 +288,7 @@ export class VirtualObjectRenderer {
         const vobj = document.createElement('div');
 
         // 閉じた仮身の最小高さを計算
-        const lineHeight = 1.2;
+        const lineHeight = DEFAULT_LINE_HEIGHT;
         const textHeight = Math.ceil(styles.chszPx * lineHeight);
         const borderWidth = 2; // 上下の border: 1px + 1px
         const paddingVertical = 8; // 上下の padding: 4px + 4px
@@ -392,13 +400,14 @@ export class VirtualObjectRenderer {
         titleTextSpan.style.whiteSpace = 'nowrap';
         titleTextSpan.style.overflow = 'hidden';
         titleTextSpan.style.textOverflow = 'ellipsis';
-        titleTextSpan.style.lineHeight = '1.2';
+        titleTextSpan.style.lineHeight = String(DEFAULT_LINE_HEIGHT);
         titleTextSpan.style.flex = '1';
         titleTextSpan.style.textDecoration = 'none'; // アンダーラインを防止
 
         // 名称
         if (showName) {
             const nameSpan = document.createElement('span');
+            nameSpan.className = 'virtual-object-name'; // DOM更新用のクラスを追加
             nameSpan.textContent = virtualObject.link_name;
             nameSpan.style.textDecoration = 'none'; // アンダーラインを防止
             nameSpan.setAttribute('data-element-type', 'name');
@@ -474,7 +483,7 @@ export class VirtualObjectRenderer {
         vobj.appendChild(mainArea);
 
         // data属性を設定
-        this.attachDataAttributes(vobj, virtualObject);
+        this.attachDataAttributes(vobj, virtualObject, options.vobjIndex);
 
         return vobj;
     }
@@ -535,7 +544,7 @@ export class VirtualObjectRenderer {
         }
 
         // タイトルバーの高さを計算（閉じた仮身と同じ計算方法）
-        const lineHeight = 1.2;
+        const lineHeight = DEFAULT_LINE_HEIGHT;
         const textHeight = Math.ceil(styles.chszPx * lineHeight);
         const iconSize = Math.round(styles.chszPx * 1.0);
         const contentHeight = Math.max(iconSize, textHeight);
@@ -621,7 +630,7 @@ export class VirtualObjectRenderer {
             titleTextSpan.style.color = styles.chcol;
             titleTextSpan.style.fontSize = styles.chszPx + 'px';
             titleTextSpan.style.fontWeight = 'normal';
-            titleTextSpan.style.lineHeight = '1.2';
+            titleTextSpan.style.lineHeight = String(DEFAULT_LINE_HEIGHT);
             titleTextSpan.style.whiteSpace = 'nowrap';
             titleTextSpan.style.overflow = 'hidden';
             titleTextSpan.style.textOverflow = 'ellipsis';
@@ -630,6 +639,7 @@ export class VirtualObjectRenderer {
             // 名称
             if (showName) {
                 const nameSpan = document.createElement('span');
+                nameSpan.className = 'virtual-object-name'; // DOM更新用のクラスを追加
                 nameSpan.textContent = virtualObject.link_name || '無題';
                 titleTextSpan.appendChild(nameSpan);
             }
@@ -702,7 +712,7 @@ export class VirtualObjectRenderer {
         vobj.appendChild(contentArea);
 
         // data属性を設定
-        this.attachDataAttributes(vobj, virtualObject);
+        this.attachDataAttributes(vobj, virtualObject, options.vobjIndex);
 
         return vobj;
     }
@@ -763,7 +773,7 @@ export class VirtualObjectRenderer {
         const { showName = true, showUpdate = false, showFrame = true, showPict = false } = options;
 
         // タイトルエリアの高さを計算（アイコンサイズはchszPxと同じ1.0倍）
-        const lineHeight = 1.2;
+        const lineHeight = DEFAULT_LINE_HEIGHT;
         const iconSize = showPict ? Math.round(styles.chszPx * 1.0) : 0;
         const textHeight = Math.ceil(styles.chszPx * lineHeight);  // テキストの実際の高さ
         const titleHeight = textHeight + 8;  // パディングを含めた高さ
@@ -864,7 +874,7 @@ export class VirtualObjectRenderer {
         const showTitleBar = showPict || showName || showRole || showType || showUpdate;
 
         // タイトルバーの高さを計算（アイコンサイズはchszPxと同じ1.0倍）
-        const lineHeight = 1.2;
+        const lineHeight = DEFAULT_LINE_HEIGHT;
         const iconSize = showPict ? Math.round(styles.chszPx * 1.0) : 0;
         const textHeight = Math.ceil(styles.chszPx * lineHeight);  // テキストの実際の高さ
         const titleBarHeight = textHeight + 16;  // パディングを含めた高さ
@@ -988,7 +998,7 @@ export class VirtualObjectRenderer {
 
         // 閉じた仮身の最小高さを計算（chszはポイント値なのでピクセルに変換）
         const chszPx = convertPtToPx(chsz);
-        const lineHeight = 1.2;
+        const lineHeight = DEFAULT_LINE_HEIGHT;
         const textHeight = Math.ceil(chszPx * lineHeight);
         const minClosedHeight = textHeight + 8;
 
@@ -1001,13 +1011,18 @@ export class VirtualObjectRenderer {
      * @param {HTMLElement} element - DOM要素
      * @param {Object} virtualObject - 仮身オブジェクト
      */
-    attachDataAttributes(element, virtualObject) {
+    attachDataAttributes(element, virtualObject, vobjIndex) {
         element.setAttribute('data-link-id', virtualObject.link_id || '');
         element.setAttribute('data-link-name', virtualObject.link_name || '');
         element.setAttribute('data-link-tbcol', virtualObject.tbcol || this.defaultStyles.tbcol);
         element.setAttribute('data-link-frcol', virtualObject.frcol || this.defaultStyles.frcol);
         element.setAttribute('data-link-chcol', virtualObject.chcol || this.defaultStyles.chcol);
         element.setAttribute('data-link-bgcol', virtualObject.bgcol || this.defaultStyles.bgcol);
+
+        // 一意のインデックスを設定（複数の仮身が同じlink_idを持つ場合に識別するため）
+        if (vobjIndex !== undefined && vobjIndex !== null) {
+            element.setAttribute('data-vobj-index', vobjIndex);
+        }
 
         // レイアウト属性を設定
         if (virtualObject.width !== undefined) {

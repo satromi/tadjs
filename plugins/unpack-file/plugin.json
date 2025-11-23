@@ -1,9 +1,13 @@
 {
   "id": "unpack-file",
-  "name": "書庫管理",
+  "name": "書庫解凍",
   "version": "1.0.0",
   "type": "base",
-  "basefile": "0199eb7d-6e78-79fb-fe14-1865d0a23d0f_0.xtad",
+  "basefile":{
+    "json": "0199eb7d-6e78-79fb-fe14-1865d0a23d0f.json",
+    "xmltad": "0199eb7d-6e78-79fb-fe14-1865d0a23d0f_0.xtad",
+    "ico": "0199eb7d-6e78-79fb-fe14-1865d0a23d0f.ico"
+  },
   "description": "BPK書庫ファイルを解凍し、実身ファイルを生成します",
   "icon": "📦",
   "author": "satromi",
@@ -18,7 +22,7 @@
   },
   "contextMenu": [
     {
-      "label": "書庫管理",
+      "label": "書庫解凍",
       "fileTypes": ["bpk", "BPK"],
       "action": "open-unpack"
     }

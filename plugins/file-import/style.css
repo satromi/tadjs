@@ -1,0 +1,194 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 11px;
+    background: #dedede;
+    color: #000;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: #dedede;
+}
+
+.header {
+    padding: 8px 12px;
+    border-bottom: 1px solid #808080;
+    background: #e0e0e0;
+}
+
+.header h2 {
+    font-size: 11px;
+    font-weight: bold;
+    color: #000;
+}
+
+.content {
+    flex: 1;
+    padding: 12px;
+    overflow-y: auto;
+    background: #dedede;
+}
+
+/* ドロップゾーン */
+.drop-zone {
+    border: 2px inset #808080;
+    padding: 40px 20px;
+    text-align: center;
+    background: white;
+    cursor: pointer;
+}
+
+.drop-zone:hover {
+    background: #f0f0f0;
+}
+
+.drop-zone.drag-over {
+    background: #e0e0ff;
+    border-color: #0060ff;
+}
+
+.drop-zone-content .icon {
+    font-size: 32px;
+    margin-bottom: 12px;
+}
+
+.drop-zone-content p {
+    font-size: 11px;
+    color: #000;
+    margin-bottom: 6px;
+}
+
+.drop-zone-content .or-text {
+    font-size: 11px;
+    color: #808080;
+    margin: 12px 0 8px;
+}
+
+.select-button {
+    padding: 4px 12px;
+    font-size: 11px;
+    font-family: 'Noto Sans JP', sans-serif;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+    min-width: 80px;
+}
+
+.select-button:active {
+    border-style: inset;
+}
+
+/* ファイルリスト */
+.file-list {
+    margin-top: 12px;
+}
+
+.file-list h3 {
+    font-size: 11px;
+    font-weight: bold;
+    margin-bottom: 8px;
+    color: #000;
+}
+
+.file-items {
+    border: 1px inset #c0c0c0;
+    background: white;
+    max-height: 180px;
+    overflow-y: auto;
+}
+
+.file-item {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-bottom: 1px solid #c0c0c0;
+}
+
+.file-item:last-child {
+    border-bottom: none;
+}
+
+.file-item:hover {
+    background: #e0e0ff;
+}
+
+.file-item-icon {
+    font-size: 16px;
+    margin-right: 8px;
+}
+
+.file-item-info {
+    flex: 1;
+}
+
+.file-item-name {
+    font-size: 11px;
+    font-weight: normal;
+    color: #000;
+    margin-bottom: 2px;
+}
+
+.file-item-size {
+    font-size: 10px;
+    color: #808080;
+}
+
+.file-item-remove {
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: 'Noto Sans JP', sans-serif;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+    min-width: 50px;
+}
+
+.file-item-remove:active {
+    border-style: inset;
+}
+
+/* フッター */
+.footer {
+    padding: 8px;
+    border-top: 1px solid #808080;
+    background: #e0e0e0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.button {
+    padding: 4px 12px;
+    font-size: 11px;
+    font-family: 'Noto Sans JP', sans-serif;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+    min-width: 60px;
+}
+
+.button:active {
+    border-style: inset;
+}
+
+.button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.button-primary {
+    background: #c0c0c0;
+    border: 1px outset #c0c0c0;
+}
+
+.button-primary:active:not(:disabled) {
+    border-style: inset;
+}

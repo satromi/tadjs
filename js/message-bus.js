@@ -562,7 +562,8 @@ export class MessageBus {
             }
         }
 
-        this.warn('WindowId not found for the given iframe/window');
+        // windowIdが見つからない（openable: false のプラグインでは正常動作）
+        this.log('WindowId not found for the given iframe/window (may be openable: false plugin)');
         return null;
     }
 
@@ -604,11 +605,11 @@ export class MessageBus {
             this.sendToWindow(windowId, type, data);
             this.log(`Response sent via MessageBus: ${type}`, data);
         } else {
-            // フォールバック: 旧postMessage方式
+            // フォールバック: 旧postMessage方式（openable: false のプラグインでは正常動作）
             if (source && source.postMessage) {
                 try {
                     source.postMessage({ type, ...data }, '*');
-                    this.warn(`Response sent via fallback postMessage: ${type}`, data);
+                    this.log(`Response sent via fallback postMessage: ${type}`, data);
                 } catch (error) {
                     this.error(`Failed to send response via fallback: ${type}`, error);
                 }
