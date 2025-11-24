@@ -1,0 +1,113 @@
+<tad version="1.0" encoding="UTF-8">
+<document>
+<p>
+<font size="28"/><font color="rgb(81, 174, 251)"/><bold>□</bold>TADjs Desktop紹介
+</p>
+<p>
+<font size="14"/>TADjs Desktopは、BTRONの使用感を再現したデスクトップ環境です。<br/>
+TADjsはBTRON標準データフォーマットであるTADデータをブラウザで扱うための仕組みでしたが、よりBTRON仕様の再現度を上げたデスクトップ環境です。
+</p>
+<p>
+BTRONでは、<link id="019a6c9b-e67e-7a35-a461-0d199550e4cf_0.xtad" name="実身/仮身" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="30" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" applist="{&amp;quot;basic-text-editor&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;基本文章編集&amp;quot;,&amp;quot;defaultOpen&amp;quot;:true},&amp;quot;virtual-object-list&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;仮身一覧&amp;quot;,&amp;quot;defaultOpen&amp;quot;:false}}" autoopen="false" applist="{&quot;basic-text-editor&quot;:{&quot;name&quot;:&quot;基本文章編集&quot;,&quot;defaultOpen&quot;:true},&quot;virtual-object-list&quot;:{&quot;name&quot;:&quot;仮身一覧&quot;,&quot;defaultOpen&quot;:false}}"></link> という概念でハイパーテキストをOS自体に組み込んでいます。<br/>
+「実身」がファイル本体で、「仮身」がリンクだと捉えてください。上記の「実身/仮身」という箱形のテキストの「仮身」をダブルクリックすると、参照先の「実身」データを開くことができます。<br/>
+そのため、フォルダ、ファイルパス、アプリといったことを気にせず、自由に「実身」の中に「仮身」を配置できますし、1つの「実身」に対して、いくらでも「仮身」を自由に配置することができます。
+</p>
+<p>
+この柔軟性をElectronアプリとして再現したのが、TADjs Desktopです。<br/>
+全ての機能要素はプラグインアプリとして搭載しているため、プラグインアプリを独自に開発することでBTRONアプリを移植することも可能になっています。
+</p>
+<p>
+<font size="18"/>□プラグインアプリについて
+</p>
+<p>
+<font size="14"/>BTRONで基本となる、<link id="019aaf8c-3fb1-7c1a-b87e-748c9086b234_0.xtad" name="仮身一覧" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" applist="{}"></link> 、<link id="019aaf9c-0e6a-7b17-bfb6-a0f6a6067133" name="基本文章編集" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" applist="{}"></link>、<link id="019aaf9d-2b0d-79e8-bbe2-5baf847986dc" name="基本図形編集" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" applist="{}"></link>、<link id="019aafb3-2536-74e0-8f32-52673733bf21" name="書庫解凍" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" applist="{}"></link>といったアプリを参考に基本的なBTRON機能をプラグインアプリとして移植しているので、BTRONの基本的な考え方を元に使えるハイパーテキストエディタになっています。
+</p>
+<p>
+<font size="16"/>□アプリタイプ（原紙、小物）について
+</p>
+<p>
+<font size="14"/>BTRONでは、「実身/仮身」を主に扱う「原紙」タイプのアプリと、メニューから起動する「小物」タイプのアプリがあります。
+</p>
+<p>
+・「原紙」アプリ
+</p>
+<p>
+原紙箱というアプリ（TADjs Desktopでは初期ウインドウから自動起動）から、各アプリを実行可能な属性がついた「原紙」という仮身を別の表示中の実身にドラッグして、新たな実身をコピーして作成してから使うタイプのアプリです。主にTADデータを扱うアプリは「原紙」からコピーして使います。<br/>
+現状、<link id="019aafc1-0e79-7996-9739-53b8f6a25c8b" name="原紙箱" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" applist="{}"></link>、<link id="019aaf8c-3fb1-7c1a-b87e-748c9086b234_0.xtad" name="仮身一覧" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" applist="{}"></link> 、<link id="019aaf9c-0e6a-7b17-bfb6-a0f6a6067133" name="基本文章編集" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" applist="{}"></link>、<link id="019aaf9d-2b0d-79e8-bbe2-5baf847986dc" name="基本図形編集" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" applist="{}"></link> 、<link id="019aafb3-2536-74e0-8f32-52673733bf21" name="書庫解凍" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" applist="{}"></link>、<link id="019aafbf-ec6d-7cff-918b-b7e36ed637b2" name="URL仮身" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" applist="{}"></link>、<link id="019ab4b4-b635-7d5c-bd9c-5c6b761ead0d" name="既存データ起動" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{&amp;quot;basic-text-editor&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;基本文章編集&amp;quot;,&amp;quot;defaultOpen&amp;quot;:true},&amp;quot;virtual-object-list&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;仮身一覧&amp;quot;,&amp;quot;defaultOpen&amp;quot;:false}}" applist="{&quot;basic-text-editor&quot;:{&quot;name&quot;:&quot;基本文章編集&quot;,&quot;defaultOpen&quot;:true},&quot;virtual-object-list&quot;:{&quot;name&quot;:&quot;仮身一覧&quot;,&quot;defaultOpen&quot;:false}}"></link> というアプリがあります。
+</p>
+<p>
+・「小物」アプリ
+</p>
+<p>
+右クリックメニューから「小物」を選択して起動するタイプのアプリです。<br/>
+これらのアプリは基本現状、 <link id="019ab4b0-5083-7496-af93-7b89a5b7f8ee" name="ファイル取込" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{&amp;quot;basic-text-editor&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;基本文章編集&amp;quot;,&amp;quot;defaultOpen&amp;quot;:true},&amp;quot;virtual-object-list&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;仮身一覧&amp;quot;,&amp;quot;defaultOpen&amp;quot;:false}}" applist="{&quot;basic-text-editor&quot;:{&quot;name&quot;:&quot;基本文章編集&quot;,&quot;defaultOpen&quot;:true},&quot;virtual-object-list&quot;:{&quot;name&quot;:&quot;仮身一覧&quot;,&quot;defaultOpen&quot;:false}}"></link> 、<link id="019ab372-4302-7ae6-b537-1f100ceb335b" name="システム環境設定" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{&amp;quot;basic-text-editor&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;基本文章編集&amp;quot;,&amp;quot;defaultOpen&amp;quot;:true},&amp;quot;virtual-object-list&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;仮身一覧&amp;quot;,&amp;quot;defaultOpen&amp;quot;:false}}" applist="{&quot;basic-text-editor&quot;:{&quot;name&quot;:&quot;基本文章編集&quot;,&quot;defaultOpen&quot;:true},&quot;virtual-object-list&quot;:{&quot;name&quot;:&quot;仮身一覧&quot;,&quot;defaultOpen&quot;:false}}"></link>、<link id="019ab376-44fb-75a9-b4ac-fd05a52f8997" name="ユーザ環境設定" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{&amp;quot;basic-text-editor&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;基本文章編集&amp;quot;,&amp;quot;defaultOpen&amp;quot;:true},&amp;quot;virtual-object-list&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;仮身一覧&amp;quot;,&amp;quot;defaultOpen&amp;quot;:false}}" applist="{&quot;basic-text-editor&quot;:{&quot;name&quot;:&quot;基本文章編集&quot;,&quot;defaultOpen&quot;:true},&quot;virtual-object-list&quot;:{&quot;name&quot;:&quot;仮身一覧&quot;,&quot;defaultOpen&quot;:false}}"></link>、<link id="019ab4c0-8d40-7590-89a9-cde7934a6a2b" name="屑実身操作" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" pictdisp="true" namedisp="true" roledisp="false" typedisp="false" updatedisp="false" framedisp="true" autoopen="false" applist="{}"></link>というアプリ があります。 <br/>
+
+</p>
+<p>
+<font size="18"/>□TADとは
+</p>
+<p>
+<font size="14"/>BTRONでもう一 つ重要な概念として、標準データフォーマットである<link id="019a6c9a-fbc2-76c1-b965-4ac1f7e4dcb7_0.xtad" name="TAD" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="30" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" applist="{&amp;quot;basic-text-editor&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;基本文章編集&amp;quot;,&amp;quot;defaultOpen&amp;quot;:true},&amp;quot;virtual-object-list&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;仮身一覧&amp;quot;,&amp;quot;defaultOpen&amp;quot;:false}}" autoopen="false" applist="{&quot;basic-text-editor&quot;:{&quot;name&quot;:&quot;基本文章編集&quot;,&quot;defaultOpen&quot;:true},&quot;virtual-object-list&quot;:{&quot;name&quot;:&quot;仮身一覧&quot;,&quot;defaultOpen&quot;:false}}"></link> があります。実身/仮身という形でハイパーテキストを実現しているため、文章ファイル・画像ファイル・図形ファイルを分け隔てることなく統合的に扱うことができ、1つのデータを複数のアプリから使い分けることができます。
+</p>
+<p>
+<font size="18"/>□注意点
+</p>
+<p>
+<font size="14"/>TADjs Desktopはまだβ版なので、「実身」特に基本文章編集プラグインで編集した文章xmlTADの解釈や保存において不具合が出るケースがあります。 <br/>
+その場合、通常のテキストエディタで対象の実身の.xtadファイルを開いて、おかしな記載や連続した改段落・改行のようなxmlTADタグが無いか探して修正してください。
+</p>
+<p>
+<font size="28"/>□BTRONユーザ向け説明
+</p>
+<p>
+<font size="14"/>BTRON（超漢字シリーズ）で作成したデータは、BTRON書庫管理で圧縮した書庫形式のファイル（BPK）ファイルをTADjs Desktopに取り込めるようになっています。<br/>
+ちなみに、書庫以外のファイルも取 り込んで、「既存データ起動」でファイルを開けます。
+</p>
+<p>
+・書庫形式（BPK）のTADファイル、通常のファイルを取り込む「ファイル取込」の使い方
+</p>
+<p>
+<link id="019ab4b0-5083-7496-af93-7b89a5b7f8ee" name="ファイル取込" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{&amp;quot;basic-text-editor&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;基本文章編集&amp;quot;,&amp;quot;defaultOpen&amp;quot;:true},&amp;quot;virtual-object-list&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;仮身一覧&amp;quot;,&amp;quot;defaultOpen&amp;quot;:false}}" applist="{&quot;basic-text-editor&quot;:{&quot;name&quot;:&quot;基本文章編集&quot;,&quot;defaultOpen&quot;:true},&quot;virtual-object-list&quot;:{&quot;name&quot;:&quot;仮身一覧&quot;,&quot;defaultOpen&quot;:false}}"></link> を参照してください。
+</p>
+<p>
+・取込済ファイル（書庫形式以外）を起動する「既存データ起動」の使い方
+</p>
+<p>
+<link id="019ab4b4-b635-7d5c-bd9c-5c6b761ead0d" name="既存データ起動" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="31" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{&amp;quot;basic-text-editor&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;基本文章編集&amp;quot;,&amp;quot;defaultOpen&amp;quot;:true},&amp;quot;virtual-object-list&amp;quot;:{&amp;quot;name&amp;quot;:&amp;quot;仮身一覧&amp;quot;,&amp;quot;defaultOpen&amp;quot;:false}}" applist="{&quot;basic-text-editor&quot;:{&quot;name&quot;:&quot;基本文章編集&quot;,&quot;defaultOpen&quot;:true},&quot;virtual-object-list&quot;:{&quot;name&quot;:&quot;仮身一覧&quot;,&quot;defaultOpen&quot;:false}}"></link>を参照してください。
+</p>
+<p>
+<font size="14"/><font size="18"/>□現状の制約・不具合<br/>
+
+</p>
+<p>
+<font size="14"/>・図形TADを基本文章編集プラグインで開けない
+</p>
+<p>
+図形TADは基本文章編集プラグインで開けません。理由としては、xmlTADで図形TADを＜figure＞というxmlTADタグを解釈できないためです。これは、基本文章編集プラグインが採用しているHTMLベースのリッチテキストエディタによるところなので、対策方法を検討中です。いっそのこと開き直って、文章TAD中に図形TADが出てきたら開いた仮身のように基本図形編集プラグインで描画するという方法を採用するかもしれません。<br/>
+※TADjs Desktopの各プラグインアプリで開いたウインドウ、開いた仮身はiframeというブラウザ要素で描画されているため、iframeという領域を基本文章編集プラグインのウインドウ内に出現させて、そこだけは別のプラグインで描画するということも可能です。
+</p>
+<p>
+・文章TADを基本図形編集プラグインで開けない
+</p>
+<p>
+文章TADは基本図形編集プラグインで開けません。理由として同上です。<br/>
+※ただし、仮身一覧も図形TADデータで保持しています。<br/>
+・アプリの起動付箋編集が画面上ではできない<br/>
+アプリの起動付箋に関する情報はxmlTADの実身管理用セグメントjson（実身の.xtadファイルと同名の.jsonファイル）に記載されていますが、画面上から編集する機能はありません。そのため、原紙箱から実身を作成した際に起動可能なプラグインアプリ以外でその実身を開きたい場合は、実身管理用セグメントjsonの&quot;applist&quot;に追加してください。
+</p>
+<p>
+・字下げがいまいちうまくいかない
+</p>
+<p>
+字下げは、文章TADでタブ書式を用いる上で重要な機能ですが、いまいち上手く動作しません。
+</p>
+<p>
+<br/>
+
+</p>
+<p>
+<br/>
+
+</p>
+</document>
+</tad>

@@ -1,0 +1,39 @@
+{
+  "name": "TADjsについて",
+  "linktype": false,
+  "makeDate": "2025-11-10T07:06:59.063Z",
+  "updateDate": "2025-11-24T07:28:14.843Z",
+  "accessDate": "2025-11-24T07:22:28.052Z",
+  "periodDate": null,
+  "refCount": 2,
+  "editable": true,
+  "readable": true,
+  "maker": "TRON User",
+  "window": {
+    "pos": {
+      "x": 142,
+      "y": 135
+    },
+    "width": 917,
+    "height": 561,
+    "minWidth": 200,
+    "minHeight": 200,
+    "resizable": true,
+    "scrollable": true,
+    "maximize": false,
+    "maximizable": true,
+    "minimizable": true,
+    "closable": true,
+    "alwaysOnTop": false,
+    "skipTaskbar": false,
+    "frame": true,
+    "transparent": false,
+    "backgroundColor": "#ffffff"
+  },
+  "applist": {
+    "basic-text-editor": {
+      "name": "基本文章編集",
+      "defaultOpen": true
+    }
+  }
+}

@@ -272,16 +272,32 @@ export class RealObjectSystem {
             const sourceIcoPath = this.path.join(basePath, `${sourceRealId}.ico`);
             const newIcoPath = this.path.join(basePath, `${newRealId}.ico`);
 
+            console.log(`[RealObjectSystem] icoファイルコピー試行:`, {
+                isRootCall: isRootCall,
+                sourceRealId: sourceRealId,
+                newRealId: newRealId,
+                basePath: basePath,
+                sourceIcoPath: sourceIcoPath,
+                newIcoPath: newIcoPath,
+                sourceExists: this.fs.existsSync(sourceIcoPath)
+            });
+
             if (this.fs.existsSync(sourceIcoPath)) {
                 try {
                     this.fs.copyFileSync(sourceIcoPath, newIcoPath);
-                    console.log(`[RealObjectSystem] icoファイルコピー: ${sourceRealId}.ico -> ${newRealId}.ico`);
+                    const copySuccess = this.fs.existsSync(newIcoPath);
+                    console.log(`[RealObjectSystem] icoファイルコピー成功: ${sourceRealId}.ico -> ${newRealId}.ico`, {
+                        copySuccess: copySuccess,
+                        newIcoPath: newIcoPath
+                    });
                 } catch (error) {
-                    console.warn(`[RealObjectSystem] icoファイルのコピーに失敗:`, error);
+                    console.error(`[RealObjectSystem] icoファイルのコピーに失敗:`, error);
                 }
             } else {
-                console.log(`[RealObjectSystem] icoファイルが存在しないためスキップ: ${sourceIcoPath}`);
+                console.warn(`[RealObjectSystem] 元のicoファイルが存在しません: ${sourceIcoPath}`);
             }
+        } else {
+            console.log(`[RealObjectSystem] icoファイルコピーをスキップ（再帰呼び出しのため）: ${sourceRealId}`);
         }
 
         console.log(`[RealObjectSystem] 実身コピー完了: ${sourceRealId} -> ${newRealId}`);
@@ -338,13 +354,28 @@ export class RealObjectSystem {
         const sourceIcoPath = this.path.join(basePath, `${sourceRealId}.ico`);
         const newIcoPath = this.path.join(basePath, `${newRealId}.ico`);
 
+        console.log(`[RealObjectSystem] 非再帰的コピー: icoファイルコピー試行:`, {
+            sourceRealId: sourceRealId,
+            newRealId: newRealId,
+            basePath: basePath,
+            sourceIcoPath: sourceIcoPath,
+            newIcoPath: newIcoPath,
+            sourceExists: this.fs.existsSync(sourceIcoPath)
+        });
+
         if (this.fs.existsSync(sourceIcoPath)) {
             try {
                 this.fs.copyFileSync(sourceIcoPath, newIcoPath);
-                console.log(`[RealObjectSystem] icoファイルコピー: ${sourceRealId}.ico -> ${newRealId}.ico`);
+                const copySuccess = this.fs.existsSync(newIcoPath);
+                console.log(`[RealObjectSystem] 非再帰的コピー: icoファイルコピー成功: ${sourceRealId}.ico -> ${newRealId}.ico`, {
+                    copySuccess: copySuccess,
+                    newIcoPath: newIcoPath
+                });
             } catch (error) {
-                console.warn(`[RealObjectSystem] icoファイルのコピーに失敗:`, error);
+                console.error(`[RealObjectSystem] 非再帰的コピー: icoファイルのコピーに失敗:`, error);
             }
+        } else {
+            console.warn(`[RealObjectSystem] 非再帰的コピー: 元のicoファイルが存在しません: ${sourceIcoPath}`);
         }
 
         console.log(`[RealObjectSystem] 実身非再帰的コピー完了: ${sourceRealId} -> ${newRealId}`);

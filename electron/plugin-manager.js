@@ -621,17 +621,27 @@ class PluginManager {
             }, 50); // iframe作成を待つ
 
             // Phase 2: 親MessageBusに子を登録
+            // IMPORTANT: registerChildを早期に実行して、プラグインからのメッセージを確実に受信できるようにする
             if (window.tadjsDesktop.parentMessageBus) {
-                setTimeout(() => {
+                // 即座に登録を試みる（iframe要素が存在する場合）
+                const tryRegisterChild = (attemptNumber = 1) => {
                     const iframe = document.getElementById(iframeId);
                     if (iframe) {
                         window.tadjsDesktop.parentMessageBus.registerChild(windowId, iframe, {
                             windowId: windowId,
                             pluginId: plugin.id
                         });
-                        console.log(`[PluginManager] Phase 2: 子を登録 windowId=${windowId}, pluginId=${plugin.id}`);
+                        console.log(`[PluginManager] Phase 2: 子を登録 windowId=${windowId}, pluginId=${plugin.id} (attempt ${attemptNumber})`);
+                    } else if (attemptNumber < 5) {
+                        // iframeがまだ存在しない場合は、最大5回まで20msごとにリトライ
+                        setTimeout(() => tryRegisterChild(attemptNumber + 1), 20);
+                    } else {
+                        console.error(`[PluginManager] Phase 2: iframeが見つかりません windowId=${windowId}, iframeId=${iframeId}`);
                     }
-                }, 100); // iframe作成を待つ
+                };
+
+                // 同期的に1回目の登録を試み、失敗した場合は非同期でリトライ
+                setTimeout(() => tryRegisterChild(), 0);
             }
 
             // プラグインへのメッセージ送信を初期化

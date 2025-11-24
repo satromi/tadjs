@@ -39,6 +39,21 @@ class BasicTextEditor extends window.PluginBase {
             startY: 0                      // ドラッグ開始Y座標
         };
 
+        // ダブルクリック+ドラッグ（実身複製）用の状態管理
+        this.dblClickDragState = {
+            lastClickTime: 0,              // 最後のクリック時刻
+            lastClickedElement: null,      // 最後にクリックされた仮身要素
+            isDblClickDragCandidate: false, // ダブルクリック+ドラッグ候補
+            dblClickedElement: null,       // ダブルクリックされた仮身要素
+            startX: 0,                     // ドラッグ開始X座標
+            startY: 0,                     // ドラッグ開始Y座標
+            isDblClickDrag: false,         // ダブルクリック+ドラッグ確定フラグ
+            dragPreview: null,             // ドラッグ中のプレビュー要素
+            lastMouseX: 0,                 // 最新のマウスX座標
+            lastMouseY: 0,                 // 最新のマウスY座標
+            rafId: null                    // requestAnimationFrameのID
+        };
+
         this.recentFonts = []; // 最近使用したフォント（最大10個）
         this.systemFonts = []; // システムフォント一覧
         this.debug = window.TADjsConfig?.debug || false; // デバッグモード（config.jsで管理）
@@ -566,6 +581,9 @@ class BasicTextEditor extends window.PluginBase {
                             // 元の仮身要素をクローン
                             const clonedVo = this.draggingVirtualObject.cloneNode(true);
 
+                            // クローンのイベントハンドラフラグを削除（新しいハンドラを登録できるようにする）
+                            delete clonedVo.dataset.handlersAttached;
+
                             // クローンを挿入
                             range.insertNode(clonedVo);
 
@@ -745,6 +763,117 @@ class BasicTextEditor extends window.PluginBase {
                 }
             }
         });
+
+        // ダブルクリック+ドラッグ用のグローバルmousemoveハンドラー
+        document.addEventListener('mousemove', (e) => {
+            // ダブルクリック+ドラッグ候補の検出
+            if (this.dblClickDragState.isDblClickDragCandidate && !this.dblClickDragState.isDblClickDrag) {
+                const deltaX = e.clientX - this.dblClickDragState.startX;
+                const deltaY = e.clientY - this.dblClickDragState.startY;
+
+                // 5px以上移動したらダブルクリック+ドラッグ確定（mouseup時に実身複製処理を実行）
+                if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+                    console.log('[EDITOR] ダブルクリック+ドラッグを確定（ドラッグ完了待ち）');
+                    this.dblClickDragState.isDblClickDrag = true;
+                    // 候補フラグをクリア
+                    this.dblClickDragState.isDblClickDragCandidate = false;
+
+                    // 視覚的なフィードバック用の半透明仮身枠を作成
+                    const vo = this.dblClickDragState.dblClickedElement;
+                    if (vo && !this.dblClickDragState.dragPreview) {
+                        const preview = vo.cloneNode(true);
+                        preview.style.position = 'fixed';
+                        preview.style.opacity = '0.5';
+                        preview.style.pointerEvents = 'none';
+                        preview.style.zIndex = '10000';
+                        preview.style.willChange = 'transform'; // GPU最適化
+                        preview.style.transform = `translate(${e.clientX + 10}px, ${e.clientY + 10}px)`;
+                        preview.classList.add('drag-preview');
+                        document.body.appendChild(preview);
+                        this.dblClickDragState.dragPreview = preview;
+                    }
+                }
+            }
+
+            // ドラッグ中のプレビュー位置を更新（requestAnimationFrameで滑らかに）
+            if (this.dblClickDragState.isDblClickDrag && this.dblClickDragState.dragPreview) {
+                // 最新のマウス座標を保存
+                this.dblClickDragState.lastMouseX = e.clientX;
+                this.dblClickDragState.lastMouseY = e.clientY;
+
+                // requestAnimationFrameがまだ実行されていない場合のみ予約
+                if (!this.dblClickDragState.rafId) {
+                    this.dblClickDragState.rafId = requestAnimationFrame(() => {
+                        const preview = this.dblClickDragState.dragPreview;
+                        if (preview) {
+                            // transformを使用（レイアウト再計算を回避、GPU合成のみ）
+                            preview.style.transform = `translate(${this.dblClickDragState.lastMouseX + 10}px, ${this.dblClickDragState.lastMouseY + 10}px)`;
+                        }
+                        this.dblClickDragState.rafId = null;
+                    });
+                }
+            }
+        });
+
+        // ダブルクリック+ドラッグ用のグローバルmouseupハンドラー
+        document.addEventListener('mouseup', (e) => {
+            // ダブルクリック+ドラッグ確定後のmouseup処理（実身複製）
+            if (this.dblClickDragState.isDblClickDrag && e.button === 0) {
+                console.log('[EDITOR] ダブルクリック+ドラッグ完了、実身を複製');
+                const vo = this.dblClickDragState.dblClickedElement;
+
+                // requestAnimationFrameをキャンセル
+                if (this.dblClickDragState.rafId) {
+                    cancelAnimationFrame(this.dblClickDragState.rafId);
+                    this.dblClickDragState.rafId = null;
+                }
+
+                // プレビューを削除
+                if (this.dblClickDragState.dragPreview) {
+                    // GPU最適化を解除（メモリ節約）
+                    this.dblClickDragState.dragPreview.style.willChange = 'auto';
+                    this.dblClickDragState.dragPreview.remove();
+                    this.dblClickDragState.dragPreview = null;
+                }
+
+                if (vo) {
+                    // エディタ内での座標を計算
+                    const editorRect = this.editor.getBoundingClientRect();
+                    const dropX = e.clientX - editorRect.left + this.editor.scrollLeft;
+                    const dropY = e.clientY - editorRect.top + this.editor.scrollTop;
+
+                    this.handleDoubleClickDragDuplicate(vo, dropX, dropY);
+                }
+
+                // 状態をリセット
+                this.dblClickDragState.isDblClickDrag = false;
+                this.dblClickDragState.dblClickedElement = null;
+                return;
+            }
+
+            // ダブルクリック候補でドラッグしなかった場合
+            // 既存のdblclickイベントハンドラに処理を任せる（展開処理は不要）
+            if (this.dblClickDragState.isDblClickDragCandidate && e.button === 0) {
+                console.log('[EDITOR] ダブルクリック検出、既存のdblclickイベントに処理を委譲');
+
+                // requestAnimationFrameをキャンセル（念のため）
+                if (this.dblClickDragState.rafId) {
+                    cancelAnimationFrame(this.dblClickDragState.rafId);
+                    this.dblClickDragState.rafId = null;
+                }
+
+                // プレビューがあれば削除（念のため）
+                if (this.dblClickDragState.dragPreview) {
+                    this.dblClickDragState.dragPreview.style.willChange = 'auto';
+                    this.dblClickDragState.dragPreview.remove();
+                    this.dblClickDragState.dragPreview = null;
+                }
+
+                // 状態をリセット
+                this.dblClickDragState.isDblClickDragCandidate = false;
+                this.dblClickDragState.dblClickedElement = null;
+            }
+        });
     }
 
     /**
@@ -901,6 +1030,8 @@ class BasicTextEditor extends window.PluginBase {
         // 仮身のイベントハンドラをセットアップ（選択、移動、リサイズを可能にする）
         this.setupVirtualObjectEventHandlers();
     }
+
+    // 注: このメソッドは行2576で再定義されています（実際に使用されるのはそちら）
 
     /**
      * 原紙箱から仮身を追加
@@ -2304,6 +2435,56 @@ class BasicTextEditor extends window.PluginBase {
             // chszと実際のheightを比較して、自動的に開いた仮身にするか判定
             this.checkAndAutoExpandVirtualObject(vo);
 
+            // ダブルクリック+ドラッグ検出用のmousedownイベント（capturing phaseで優先実行）
+            vo.addEventListener('mousedown', (e) => {
+                console.log('[EDITOR-DBL] 仮身mousedown検出:', {
+                    button: e.button,
+                    linkName: vo.dataset.linkName,
+                    target: e.target.tagName,
+                    handlersAttached: vo.dataset.handlersAttached
+                });
+
+                // リサイズエリア以外でのクリックをダブルクリック判定の対象とする
+                const rect = vo.getBoundingClientRect();
+                const isRightEdge = e.clientX > rect.right - 8;
+                const isBottomEdge = e.clientY > rect.bottom - 8;
+
+                console.log('[EDITOR-DBL] リサイズエリアチェック:', {
+                    isRightEdge,
+                    isBottomEdge,
+                    button: e.button
+                });
+
+                // リサイズエリアではない場合のみダブルクリック判定を行う
+                if (!isRightEdge && !isBottomEdge && e.button === 0) {
+                    const now = Date.now();
+                    const timeSinceLastClick = now - this.dblClickDragState.lastClickTime;
+                    const isSameElement = this.dblClickDragState.lastClickedElement === vo;
+
+                    console.log('[EDITOR-DBL] ダブルクリック判定:', {
+                        timeSinceLastClick,
+                        isSameElement,
+                        lastClickTime: this.dblClickDragState.lastClickTime,
+                        now
+                    });
+
+                    // 前回のクリックから300ms以内かつ同じ要素の場合、ダブルクリック+ドラッグ候補
+                    if (timeSinceLastClick < 300 && isSameElement) {
+                        console.log('[EDITOR] ダブルクリック+ドラッグ候補を検出:', vo.dataset.linkName);
+                        this.dblClickDragState.isDblClickDragCandidate = true;
+                        this.dblClickDragState.dblClickedElement = vo;
+                        this.dblClickDragState.startX = e.clientX;
+                        this.dblClickDragState.startY = e.clientY;
+                        // NOTE: e.preventDefault()はここでは呼ばない（dragstartで処理）
+                    } else {
+                        // 通常のクリック：時刻と要素を記録
+                        console.log('[EDITOR-DBL] 通常のクリック、時刻と要素を記録');
+                        this.dblClickDragState.lastClickTime = now;
+                        this.dblClickDragState.lastClickedElement = vo;
+                    }
+                }
+            }, true); // capturing phaseで登録
+
             // シングルクリックイベント: 選択/非選択を切り替え
             vo.addEventListener('click', (e) => {
                 // リサイズエリア(右端8px、下端8px)のクリックは無視
@@ -2398,6 +2579,13 @@ class BasicTextEditor extends window.PluginBase {
             // ドラッグイベント: 仮身をドラッグ可能にする
             vo.draggable = true;
             vo.addEventListener('dragstart', (e) => {
+                // ダブルクリック+ドラッグ候補またはダブルクリック+ドラッグ確定の場合は、通常のドラッグをキャンセル
+                if (this.dblClickDragState.isDblClickDragCandidate || this.dblClickDragState.isDblClickDrag) {
+                    console.log('[EDITOR] ダブルクリック+ドラッグ中のため、通常のdragstartをキャンセル');
+                    e.preventDefault();
+                    return;
+                }
+
                 // ドラッグ状態を初期化
                 this.virtualObjectDragState.dragMode = 'move'; // デフォルトは移動
                 this.virtualObjectDragState.hasMoved = false;
@@ -2437,8 +2625,39 @@ class BasicTextEditor extends window.PluginBase {
                     style: vo.getAttribute('style')
                 };
 
+                // デバッグ: ドラッグ開始時のdatasetをログ出力
+                console.log('[EDITOR] dragstart時のvo.dataset:', {
+                    linkName: vo.dataset.linkName,
+                    linkBgcol: vo.dataset.linkBgcol,
+                    linkTbcol: vo.dataset.linkTbcol,
+                    linkFrcol: vo.dataset.linkFrcol,
+                    linkChcol: vo.dataset.linkChcol,
+                    linkChsz: vo.dataset.linkChsz,
+                    linkWidth: vo.dataset.linkWidth,
+                    linkHeightpx: vo.dataset.linkHeightpx,
+                    bgcol: vo.dataset.bgcol,
+                    tbcol: vo.dataset.tbcol
+                });
+
                 // 仮身一覧プラグインへのドロップ用にJSON形式のデータを設定
                 const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
+
+                // デバッグ: buildVirtualObjFromDataset結果をログ出力
+                console.log('[EDITOR] buildVirtualObjFromDataset結果:', {
+                    link_name: virtualObj.link_name,
+                    link_bgcol: virtualObj.link_bgcol,
+                    link_tbcol: virtualObj.link_tbcol,
+                    link_frcol: virtualObj.link_frcol,
+                    link_chcol: virtualObj.link_chcol,
+                    bgcol: virtualObj.bgcol,
+                    tbcol: virtualObj.tbcol,
+                    frcol: virtualObj.frcol,
+                    chcol: virtualObj.chcol,
+                    chsz: virtualObj.chsz,
+                    width: virtualObj.width,
+                    heightPx: virtualObj.heightPx
+                });
+
                 const dragData = {
                     type: 'virtual-object-drag',
                     source: 'basic-text-editor',
@@ -2813,12 +3032,80 @@ class BasicTextEditor extends window.PluginBase {
      */
     buildVirtualObjFromDataset(dataset) {
         const virtualObj = {};
+
+        // デバッグ: dataset内のすべてのキーをログ出力
+        console.log('[EDITOR] buildVirtualObjFromDataset: dataset内のすべてのキー:', Object.keys(dataset));
+
+        // data-link-* 形式の属性を抽出（dataset.linkXxx形式）
         for (const key in dataset) {
             if (key.startsWith('link')) {
                 const attrName = key.replace(/^link/, '').toLowerCase();
                 virtualObj['link_' + attrName] = dataset[key];
+                // デバッグ: 各link属性の変換をログ出力
+                console.log(`[EDITOR] buildVirtualObjFromDataset: ${key} → link_${attrName} = ${dataset[key]}`);
             }
         }
+
+        // 仮身属性を短い形式でも追加（仮身一覧プラグインとの互換性のため）
+        // data-link-* から変換されたlink_*属性を、短い形式にも展開
+        if (virtualObj.link_id) virtualObj.link_id = virtualObj.link_id;
+        if (virtualObj.link_name) virtualObj.link_name = virtualObj.link_name;
+
+        // 色属性（link_tbcol → tbcol）
+        console.log('[EDITOR] buildVirtualObjFromDataset: 色属性変換前:', {
+            link_tbcol: virtualObj.link_tbcol,
+            link_frcol: virtualObj.link_frcol,
+            link_chcol: virtualObj.link_chcol,
+            link_bgcol: virtualObj.link_bgcol
+        });
+
+        if (virtualObj.link_tbcol) virtualObj.tbcol = virtualObj.link_tbcol;
+        if (virtualObj.link_frcol) virtualObj.frcol = virtualObj.link_frcol;
+        if (virtualObj.link_chcol) virtualObj.chcol = virtualObj.link_chcol;
+        if (virtualObj.link_bgcol) virtualObj.bgcol = virtualObj.link_bgcol;
+
+        console.log('[EDITOR] buildVirtualObjFromDataset: 色属性変換後:', {
+            tbcol: virtualObj.tbcol,
+            frcol: virtualObj.frcol,
+            chcol: virtualObj.chcol,
+            bgcol: virtualObj.bgcol
+        });
+
+        // サイズ・レイアウト属性
+        if (virtualObj.link_chsz) virtualObj.chsz = parseFloat(virtualObj.link_chsz);
+        if (virtualObj.link_width) virtualObj.width = parseInt(virtualObj.link_width);
+        if (virtualObj.link_heightpx) virtualObj.heightPx = parseInt(virtualObj.link_heightpx);
+        if (virtualObj.link_dlen) virtualObj.dlen = parseInt(virtualObj.link_dlen);
+
+        // 座標属性
+        if (virtualObj.link_vobjleft) virtualObj.vobjleft = parseInt(virtualObj.link_vobjleft);
+        if (virtualObj.link_vobjtop) virtualObj.vobjtop = parseInt(virtualObj.link_vobjtop);
+        if (virtualObj.link_vobjright) virtualObj.vobjright = parseInt(virtualObj.link_vobjright);
+        if (virtualObj.link_vobjbottom) virtualObj.vobjbottom = parseInt(virtualObj.link_vobjbottom);
+
+        // 表示属性
+        if (virtualObj.link_framedisp) virtualObj.framedisp = virtualObj.link_framedisp;
+        if (virtualObj.link_namedisp) virtualObj.namedisp = virtualObj.link_namedisp;
+        if (virtualObj.link_pictdisp) virtualObj.pictdisp = virtualObj.link_pictdisp;
+        if (virtualObj.link_roledisp) virtualObj.roledisp = virtualObj.link_roledisp;
+        if (virtualObj.link_typedisp) virtualObj.typedisp = virtualObj.link_typedisp;
+        if (virtualObj.link_updatedisp) virtualObj.updatedisp = virtualObj.link_updatedisp;
+
+        // applist属性（data-applist形式で直接設定されている）
+        if (dataset.applist) {
+            try {
+                virtualObj.applist = JSON.parse(dataset.applist);
+            } catch (e) {
+                console.warn('[EDITOR] applistのパースに失敗:', e);
+                virtualObj.applist = {};
+            }
+        }
+
+        // autoopen属性
+        if (dataset.autoopen) {
+            virtualObj.autoopen = dataset.autoopen;
+        }
+
         return virtualObj;
     }
 
@@ -7872,6 +8159,112 @@ class BasicTextEditor extends window.PluginBase {
      */
     async duplicateRealObject() {
         await window.RealObjectSystem.duplicateRealObject(this);
+    }
+
+    /**
+     * ダブルクリック+ドラッグによる実身複製処理
+     * @param {HTMLElement} vo - 元の仮身要素
+     * @param {number} dropX - ドロップ位置のX座標（エディタ内座標）
+     * @param {number} dropY - ドロップ位置のY座標（エディタ内座標）
+     */
+    async handleDoubleClickDragDuplicate(vo, dropX, dropY) {
+        const realId = window.RealObjectSystem.extractRealId(vo.dataset.linkId);
+        console.log('[EDITOR] ダブルクリック+ドラッグによる実身複製:', realId, 'ドロップ位置:', dropX, dropY);
+
+        // 元の仮身のデータを保存
+        const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
+
+        const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
+
+        // MessageBus経由で実身複製を要求
+        this.messageBus.send('duplicate-real-object', {
+            realId: realId,
+            messageId: messageId
+        });
+
+        try {
+            // タイムアウト5秒で応答を待つ
+            const result = await this.messageBus.waitFor('real-object-duplicated', 5000, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.cancelled) {
+                console.log('[EDITOR] 実身複製がキャンセルされました');
+            } else if (result.success) {
+                // 複製成功: 新しい実身IDで仮身を作成
+                const newRealId = result.newRealId;
+                const newName = result.newName;
+                console.log('[EDITOR] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
+
+                // 新しい仮身オブジェクトを作成（元の仮身の属性を引き継ぐ）
+                const newVirtualObj = {
+                    link_id: `${newRealId}_0.xtad`,
+                    link_name: newName,
+                    width: virtualObj.width || 150,
+                    heightPx: virtualObj.heightPx || 30,
+                    chsz: virtualObj.chsz || 14,
+                    frcol: virtualObj.frcol || '#000000',
+                    chcol: virtualObj.chcol || '#000000',
+                    tbcol: virtualObj.tbcol || '#ffffff',
+                    bgcol: virtualObj.bgcol || '#ffffff',
+                    dlen: 0,
+                    applist: virtualObj.applist || {},
+                    pictdisp: virtualObj.pictdisp || 'true',
+                    namedisp: virtualObj.namedisp || 'true',
+                    roledisp: virtualObj.roledisp || 'false',
+                    typedisp: virtualObj.typedisp || 'false',
+                    updatedisp: virtualObj.updatedisp || 'false',
+                    framedisp: virtualObj.framedisp || 'true',
+                    autoopen: virtualObj.autoopen || 'false'
+                };
+
+                // ドロップ位置に新しい仮身を挿入
+                const selection = window.getSelection();
+                const editorRect = this.editor.getBoundingClientRect();
+
+                // スクロールを考慮したクライアント座標を計算
+                const clientX = dropX - this.editor.scrollLeft + editorRect.left;
+                const clientY = dropY - this.editor.scrollTop + editorRect.top;
+
+                // 座標からカーソル位置を取得（ブラウザ互換性のため両方試す）
+                let range = null;
+                if (document.caretRangeFromPoint) {
+                    range = document.caretRangeFromPoint(clientX, clientY);
+                } else if (document.caretPositionFromPoint) {
+                    const position = document.caretPositionFromPoint(clientX, clientY);
+                    if (position) {
+                        range = document.createRange();
+                        range.setStart(position.offsetNode, position.offset);
+                    }
+                }
+
+                // rangeが取得できない、またはエディタ外の場合は、エディタの最後に配置
+                if (!range || !this.editor.contains(range.startContainer)) {
+                    range = document.createRange();
+                    range.selectNodeContents(this.editor);
+                    range.collapse(false);
+                    console.log('[EDITOR] ドロップ位置が不正、エディタの最後に配置');
+                } else {
+                    console.log('[EDITOR] ドロップ位置にカーソルを設定:', dropX, dropY);
+                }
+
+                selection.removeAllRanges();
+                selection.addRange(range);
+
+                // 新しい仮身を挿入
+                this.insertVirtualObjectLink(newVirtualObj);
+
+                // 編集状態を記録
+                this.isModified = true;
+                this.updateContentHeight();
+
+                console.log('[EDITOR] 新しい仮身を配置:', newName);
+            } else {
+                console.error('[EDITOR] 実身複製失敗:', result.error);
+            }
+        } catch (error) {
+            console.error('[EDITOR] 実身複製エラー:', error);
+        }
     }
 
     /**

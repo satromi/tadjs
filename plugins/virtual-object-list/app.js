@@ -388,6 +388,18 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // 複数の仮身を順番に挿入
         virtualObjects.forEach((virtualObjectData, index) => {
+            // デバッグ: 受信した仮身データをログ出力
+            console.log('[VirtualObjectList] 受信した仮身データ:', {
+                link_name: virtualObjectData.link_name,
+                tbcol: virtualObjectData.tbcol,
+                frcol: virtualObjectData.frcol,
+                chcol: virtualObjectData.chcol,
+                bgcol: virtualObjectData.bgcol,
+                chsz: virtualObjectData.chsz,
+                width: virtualObjectData.width,
+                heightPx: virtualObjectData.heightPx
+            });
+
             // 相対位置オフセットを使用（元の空間的な関係を保持）
             const offsetX = virtualObjectData.offsetX || 0;
             const offsetY = virtualObjectData.offsetY || 0;
@@ -397,14 +409,14 @@ class VirtualObjectListApp extends window.PluginBase {
             // widthとheightPxを取得または計算
             let width = virtualObjectData.width;
             let heightPx = virtualObjectData.heightPx;
-            
+
             // widthまたはheightPxが無い場合は、vobjleft/right/top/bottomから計算
             if (!width || !heightPx) {
                 const vobjleft = parseInt(virtualObjectData.link_vobjleft) || 0;
                 const vobjright = parseInt(virtualObjectData.link_vobjright) || 0;
                 const vobjtop = parseInt(virtualObjectData.link_vobjtop) || 0;
                 const vobjbottom = parseInt(virtualObjectData.link_vobjbottom) || 0;
-                
+
                 width = width || (vobjright - vobjleft) || 150; // デフォルト150px
                 heightPx = heightPx || (vobjbottom - vobjtop) || 31; // デフォルト31px（閉じた仮身の標準高さ）
             }
@@ -432,6 +444,18 @@ class VirtualObjectListApp extends window.PluginBase {
                 originalRight: Math.max(0, x + (virtualObjectData.width / 2)),
                 originalBottom: Math.max(0, y + (virtualObjectData.heightPx / 2))
             };
+
+            // デバッグ: 作成された仮身オブジェクトをログ出力
+            console.log('[VirtualObjectList] 作成された仮身オブジェクト:', {
+                link_name: virtualObj.link_name,
+                tbcol: virtualObj.tbcol,
+                frcol: virtualObj.frcol,
+                chcol: virtualObj.chcol,
+                bgcol: virtualObj.bgcol,
+                chsz: virtualObj.chsz,
+                width: virtualObj.width,
+                heightPx: virtualObj.heightPx
+            });
 
             // 仮身リストに追加
             this.virtualObjects.push(virtualObj);

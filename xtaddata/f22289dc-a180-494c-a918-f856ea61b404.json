@@ -2,17 +2,17 @@
   "name": "原紙箱",
   "linktype": false,
   "makeDate": "2025-10-13T00:00:00Z",
-  "updateDate": "2025-10-13T00:00:00Z",
-  "accessDate": "2025-11-02T07:21:14.402Z",
+  "updateDate": "2025-11-23T08:06:25.338Z",
+  "accessDate": "2025-11-24T01:19:00.950Z",
   "periodDate": null,
-  "refCount": 1,
+  "refCount": 2,
   "editable": true,
   "readable": true,
-  "maker": "satromi",
+  "maker": "TRON User",
   "window": {
     "pos": {
-      "x": 600,
-      "y": 50
+      "x": 814,
+      "y": 68
     },
     "width": 200,
     "height": 600,
@@ -27,7 +27,7 @@
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
-    "backgroundColor": "#ffffff"
+    "backgroundColor": "#f3ffff"
   },
   "applist": {
     "base-file-manager": {

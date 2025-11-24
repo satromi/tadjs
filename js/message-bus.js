@@ -284,11 +284,20 @@ export class MessageBus {
         // waitersをチェック（複数のwaitForが同じメッセージタイプを待つ場合）
         if (this.waiters.has(data.type)) {
             const waitList = this.waiters.get(data.type);
+            this.log(`Checking waiters for: ${data.type}, waiter count: ${waitList.length}`, {
+                messageId: data.messageId,
+                success: data.success
+            });
             // フィルタに一致するwaiterを実行（後ろから処理して削除時にインデックスがずれないようにする）
             for (let i = waitList.length - 1; i >= 0; i--) {
                 const waiter = waitList[i];
                 // フィルタが無いか、フィルタを通過した場合
-                if (!waiter.filter || waiter.filter(data)) {
+                const filterPassed = !waiter.filter || waiter.filter(data);
+                this.log(`Waiter ${i}: filter passed = ${filterPassed}`, {
+                    hasFilter: !!waiter.filter,
+                    messageId: data.messageId
+                });
+                if (filterPassed) {
                     clearTimeout(waiter.timeoutId);
                     waitList.splice(i, 1);
                     waiter.resolve(data);
@@ -597,8 +606,24 @@ export class MessageBus {
             return;
         }
 
+        // sourceの検証を強化
+        if (!source) {
+            this.error(`Cannot send response: source is null/undefined for ${type}`, {
+                type: type,
+                hasData: !!data,
+                messageId: data.messageId
+            });
+            return;
+        }
+
         // e.sourceからwindowIdを取得
         const windowId = this.getWindowIdFromSource(source);
+
+        this.log(`respondTo: type=${type}, windowId=${windowId}, hasSource=${!!source}`, {
+            messageId: data.messageId,
+            success: data.success,
+            error: data.error
+        });
 
         if (windowId) {
             // MessageBus経由で送信
@@ -614,7 +639,11 @@ export class MessageBus {
                     this.error(`Failed to send response via fallback: ${type}`, error);
                 }
             } else {
-                this.error(`Cannot send response: invalid source for ${type}`);
+                this.error(`Cannot send response: invalid source for ${type}`, {
+                    hasSource: !!source,
+                    hasPostMessage: !!(source && source.postMessage),
+                    messageId: data.messageId
+                });
             }
         }
     }

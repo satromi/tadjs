@@ -1012,55 +1012,99 @@ export class VirtualObjectRenderer {
      * @param {Object} virtualObject - 仮身オブジェクト
      */
     attachDataAttributes(element, virtualObject, vobjIndex) {
+        // IMPORTANT: data属性名を dataset 形式（data-link-id → dataset.linkId）と
+        // 後方互換性のある形式（data-tbcol → dataset.tbcol）の両方で設定
+
+        // リンク基本情報
         element.setAttribute('data-link-id', virtualObject.link_id || '');
         element.setAttribute('data-link-name', virtualObject.link_name || '');
-        element.setAttribute('data-link-tbcol', virtualObject.tbcol || this.defaultStyles.tbcol);
-        element.setAttribute('data-link-frcol', virtualObject.frcol || this.defaultStyles.frcol);
-        element.setAttribute('data-link-chcol', virtualObject.chcol || this.defaultStyles.chcol);
-        element.setAttribute('data-link-bgcol', virtualObject.bgcol || this.defaultStyles.bgcol);
+
+        // 色属性（両方の形式で設定）
+        const tbcol = virtualObject.tbcol || this.defaultStyles.tbcol;
+        const frcol = virtualObject.frcol || this.defaultStyles.frcol;
+        const chcol = virtualObject.chcol || this.defaultStyles.chcol;
+        const bgcol = virtualObject.bgcol || this.defaultStyles.bgcol;
+
+        element.setAttribute('data-link-tbcol', tbcol);
+        element.setAttribute('data-link-frcol', frcol);
+        element.setAttribute('data-link-chcol', chcol);
+        element.setAttribute('data-link-bgcol', bgcol);
+
+        // 後方互換性のため、data-*形式も設定（dataset.tbcolでアクセス可能）
+        element.setAttribute('data-tbcol', tbcol);
+        element.setAttribute('data-frcol', frcol);
+        element.setAttribute('data-chcol', chcol);
+        element.setAttribute('data-bgcol', bgcol);
 
         // 一意のインデックスを設定（複数の仮身が同じlink_idを持つ場合に識別するため）
         if (vobjIndex !== undefined && vobjIndex !== null) {
             element.setAttribute('data-vobj-index', vobjIndex);
         }
 
-        // レイアウト属性を設定
+        // レイアウト属性を設定（両方の形式で）
         if (virtualObject.width !== undefined) {
             element.setAttribute('data-link-width', virtualObject.width);
+            element.setAttribute('data-width', virtualObject.width);
         }
         if (virtualObject.heightPx !== undefined) {
             element.setAttribute('data-link-heightpx', virtualObject.heightPx);
+            element.setAttribute('data-heightpx', virtualObject.heightPx);
         }
         if (virtualObject.dlen !== undefined) {
             element.setAttribute('data-link-dlen', virtualObject.dlen);
+            element.setAttribute('data-dlen', virtualObject.dlen);
         }
 
         if (virtualObject.chsz) {
             element.setAttribute('data-link-chsz', virtualObject.chsz);
+            element.setAttribute('data-chsz', virtualObject.chsz);
+        }
+
+        // 座標属性を設定（両方の形式で）
+        if (virtualObject.vobjleft !== undefined) {
+            element.setAttribute('data-link-vobjleft', virtualObject.vobjleft);
+        }
+        if (virtualObject.vobjtop !== undefined) {
+            element.setAttribute('data-link-vobjtop', virtualObject.vobjtop);
+        }
+        if (virtualObject.vobjright !== undefined) {
+            element.setAttribute('data-link-vobjright', virtualObject.vobjright);
+        }
+        if (virtualObject.vobjbottom !== undefined) {
+            element.setAttribute('data-link-vobjbottom', virtualObject.vobjbottom);
         }
 
         if (virtualObject.applist) {
             element.setAttribute('data-applist', JSON.stringify(virtualObject.applist));
         }
 
-        // 表示属性を設定
+        // 表示属性を設定（両方の形式で）
         if (virtualObject.framedisp !== undefined) {
             element.setAttribute('data-link-framedisp', virtualObject.framedisp);
+            element.setAttribute('data-framedisp', virtualObject.framedisp);
         }
         if (virtualObject.namedisp !== undefined) {
             element.setAttribute('data-link-namedisp', virtualObject.namedisp);
+            element.setAttribute('data-namedisp', virtualObject.namedisp);
         }
         if (virtualObject.pictdisp !== undefined) {
             element.setAttribute('data-link-pictdisp', virtualObject.pictdisp);
+            element.setAttribute('data-pictdisp', virtualObject.pictdisp);
         }
         if (virtualObject.roledisp !== undefined) {
             element.setAttribute('data-link-roledisp', virtualObject.roledisp);
+            element.setAttribute('data-roledisp', virtualObject.roledisp);
         }
         if (virtualObject.typedisp !== undefined) {
             element.setAttribute('data-link-typedisp', virtualObject.typedisp);
+            element.setAttribute('data-typedisp', virtualObject.typedisp);
         }
         if (virtualObject.updatedisp !== undefined) {
             element.setAttribute('data-link-updatedisp', virtualObject.updatedisp);
+            element.setAttribute('data-updatedisp', virtualObject.updatedisp);
+        }
+        if (virtualObject.autoopen !== undefined) {
+            element.setAttribute('data-autoopen', virtualObject.autoopen);
         }
     }
 }

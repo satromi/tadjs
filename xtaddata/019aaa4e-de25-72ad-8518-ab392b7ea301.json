@@ -1,0 +1,47 @@
+{
+  "name": "基本図形編集サンプル",
+  "makeDate": "2025-11-22T06:44:46.783Z",
+  "updateDate": "2025-11-22T08:27:30.281Z",
+  "accessDate": "2025-11-23T08:54:27.578Z",
+  "periodDate": null,
+  "refCount": 2,
+  "editable": true,
+  "readable": true,
+  "maker": "TRON User",
+  "window": {
+    "pos": {
+      "x": -2,
+      "y": 226
+    },
+    "panel": true,
+    "panelpos": {
+      "x": 364,
+      "y": 129
+    },
+    "width": 800,
+    "height": 600,
+    "minWidth": 200,
+    "minHeight": 200,
+    "resizable": true,
+    "scrollable": true,
+    "maximize": false,
+    "maximizable": true,
+    "minimizable": true,
+    "closable": true,
+    "alwaysOnTop": false,
+    "skipTaskbar": false,
+    "frame": true,
+    "transparent": false,
+    "backgroundColor": "#ffffff"
+  },
+  "applist": {
+    "basic-figure-editor": {
+      "name": "基本図形編集",
+      "defaultOpen": true
+    },
+    "virtual-object-list": {
+      "name": "仮身一覧",
+      "defaultOpen": false
+    }
+  }
+}

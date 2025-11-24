@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Desktop Ver 0.15
+ * TADjs Ver 0.14
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -1507,6 +1507,12 @@ class TADjsDesktop {
                 });
             } else if (e.data && e.data.type === 'duplicate-real-object') {
                 // 実身複製
+                console.log('[TADjs] duplicate-real-objectメッセージ受信:', {
+                    messageId: e.data.messageId,
+                    realId: e.data.realId,
+                    hasSource: !!e.source,
+                    sourceType: e.source ? typeof e.source : 'undefined'
+                });
                 this.handleDuplicateRealObject(e).catch(err => {
                     console.error('[TADjs] 実身複製エラー:', err);
                 });
@@ -8086,10 +8092,23 @@ class TADjsDesktop {
             // MessageBus経由: 第1引数がdata, 第2引数がevent
             data = dataOrEvent;
             source = event.source;
+            console.log('[TADjs] handleDuplicateRealObject: MessageBus経由で呼び出されました');
         } else {
             // postMessage経由: 第1引数がevent
             data = dataOrEvent.data;
             source = dataOrEvent.source;
+            console.log('[TADjs] handleDuplicateRealObject: postMessage経由で呼び出されました');
+        }
+
+        // sourceの検証
+        if (!source) {
+            console.error('[TADjs] handleDuplicateRealObject: sourceが取得できませんでした', {
+                hasEvent: !!event,
+                hasEventSource: !!(event && event.source),
+                hasDataOrEventSource: !!(dataOrEvent && dataOrEvent.source),
+                dataOrEventType: typeof dataOrEvent
+            });
+            return;
         }
 
         const { realId: fullRealId, messageId } = data;
@@ -8099,7 +8118,7 @@ class TADjsDesktop {
         if (realId.match(/_\d+\.xtad$/i)) {
             realId = realId.replace(/_\d+\.xtad$/i, '');
         }
-        console.log('[TADjs] 実身ID抽出:', realId, 'フルID:', fullRealId);
+        console.log('[TADjs] 実身ID抽出:', realId, 'フルID:', fullRealId, 'messageId:', messageId, 'source:', !!source);
 
         try {
             // 元の実身のメタデータを取得

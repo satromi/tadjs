@@ -1,0 +1,39 @@
+{
+  "name": "TAD",
+  "linktype": false,
+  "makeDate": "2025-11-10T07:11:27.702Z",
+  "updateDate": "2025-11-14T06:25:21.414Z",
+  "accessDate": "2025-11-23T08:54:36.521Z",
+  "periodDate": null,
+  "refCount": 1,
+  "editable": true,
+  "readable": true,
+  "maker": "TRON User",
+  "window": {
+    "pos": {
+      "x": 100,
+      "y": 87
+    },
+    "width": 774,
+    "height": 502,
+    "minWidth": 200,
+    "minHeight": 200,
+    "resizable": true,
+    "scrollable": true,
+    "maximize": false,
+    "maximizable": true,
+    "minimizable": true,
+    "closable": true,
+    "alwaysOnTop": false,
+    "skipTaskbar": false,
+    "frame": true,
+    "transparent": false,
+    "backgroundColor": "#ffffff"
+  },
+  "applist": {
+    "basic-text-editor": {
+      "name": "基本文章編集",
+      "defaultOpen": true
+    }
+  }
+}
