@@ -2,6 +2,7 @@
  * 基本文章編集プラグイン
  * TADファイルをリッチテキストエディタで編集
  */
+const logger = window.getLogger('BasicTextEditor');
 
 class BasicTextEditor extends window.PluginBase {
     constructor() {
@@ -40,27 +41,17 @@ class BasicTextEditor extends window.PluginBase {
         };
 
         // ダブルクリック+ドラッグ（実身複製）用の状態管理
-        this.dblClickDragState = {
-            lastClickTime: 0,              // 最後のクリック時刻
-            lastClickedElement: null,      // 最後にクリックされた仮身要素
-            isDblClickDragCandidate: false, // ダブルクリック+ドラッグ候補
-            dblClickedElement: null,       // ダブルクリックされた仮身要素
-            startX: 0,                     // ドラッグ開始X座標
-            startY: 0,                     // ドラッグ開始Y座標
-            isDblClickDrag: false,         // ダブルクリック+ドラッグ確定フラグ
-            dragPreview: null,             // ドラッグ中のプレビュー要素
-            lastMouseX: 0,                 // 最新のマウスX座標
-            lastMouseY: 0,                 // 最新のマウスY座標
-            rafId: null                    // requestAnimationFrameのID
-        };
+        // PluginBaseで共通プロパティ（lastClickTime, isDblClickDragCandidate, isDblClickDrag, dblClickedElement, startX, startY）を初期化済み
+        // プラグイン固有のプロパティのみ追加
+        this.dblClickDragState.lastClickedElement = null;  // 最後にクリックされた仮身要素
+        this.dblClickDragState.dragPreview = null;         // ドラッグ中のプレビュー要素
+        this.dblClickDragState.lastMouseX = 0;             // 最新のマウスX座標
+        this.dblClickDragState.lastMouseY = 0;             // 最新のマウスY座標
+        this.dblClickDragState.rafId = null;               // requestAnimationFrameのID
 
         this.recentFonts = []; // 最近使用したフォント（最大10個）
         this.systemFonts = []; // システムフォント一覧
-        this.debug = window.TADjsConfig?.debug || false; // デバッグモード（config.jsで管理）
-        this.openedRealObjects = new Map(); // 開いている実身を追跡（realId -> windowId）
-        this.virtualObjectRenderer = null; // VirtualObjectRendererインスタンス（初期化後に設定）
         this.virtualObjectDropSuccess = false; // 仮身ドロップ成功フラグ
-        this.iconCache = new Map(); // アイコンキャッシュ（realId -> Base64データ）
         this.windowId = 'editor-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9); // 一意なウィンドウID
         this.imagePathCallbacks = {}; // 画像パス取得コールバック（messageId -> callback）
         this.imagePathMessageId = 0; // 画像パス取得メッセージID
@@ -76,24 +67,21 @@ class BasicTextEditor extends window.PluginBase {
                 pluginName: 'BasicTextEditor'
             });
             this.messageBus.start();
-            console.log('[EDITOR] MessageBus initialized');
+            logger.debug('[EDITOR] MessageBus initialized');
         } else {
-            console.warn('[EDITOR] MessageBus not available');
+            logger.warn('[EDITOR] MessageBus not available');
         }
 
         this.init();
     }
 
     init() {
-        // VirtualObjectRendererの初期化
-        if (window.VirtualObjectRenderer) {
-            this.virtualObjectRenderer = new window.VirtualObjectRenderer();
-            console.log('[EDITOR] VirtualObjectRenderer initialized');
-        }
+        // 共通コンポーネントの初期化
+        this.initializeCommonComponents('[EDITOR]');
 
         // パフォーマンス最適化関数の初期化
         if (window.throttle) {
-            console.log('[EDITOR] Performance optimization initialized');
+            logger.debug('[EDITOR] Performance optimization initialized');
         }
 
         // デフォルトの折り返しスタイルを設定
@@ -109,7 +97,7 @@ class BasicTextEditor extends window.PluginBase {
             this.setupMessageBusHandlers();
         }
 
-        console.log('[基本文章編集] 準備完了');
+        logger.debug('[基本文章編集] 準備完了');
     }
 
     /**
@@ -212,58 +200,12 @@ class BasicTextEditor extends window.PluginBase {
             }
         });
 
-        // window-moved メッセージ
-        this.messageBus.on('window-moved', (data) => {
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-        });
-
-        // window-resized-end メッセージ
-        this.messageBus.on('window-resized-end', (data) => {
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-            // リサイズで折り返しが変わる可能性があるため、スクロールバーを更新
-            this.updateContentHeight();
-        });
-
-        // window-maximize-toggled メッセージ
-        this.messageBus.on('window-maximize-toggled', (data) => {
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height,
-                maximize: data.maximize
-            });
-            // 全画面切り替えで折り返しが変わる可能性があるため、スクロールバーを更新
-            this.updateContentHeight();
-        });
-
-        // menu-action メッセージ
-        this.messageBus.on('menu-action', (data) => {
-            this.executeMenuAction(data.action, data.additionalData);
-        });
-
-        // get-menu-definition メッセージ
-        this.messageBus.on('get-menu-definition', async (data) => {
-            const menuDefinition = await this.getMenuDefinition();
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: menuDefinition
-            });
-        });
+        // 共通MessageBusハンドラを登録（PluginBaseで定義）
+        // window-moved, window-resized-end, window-maximize-toggled,
+        // menu-action, get-menu-definition, window-close-request
+        this.setupCommonMessageBusHandlers();
 
         // ダイアログレスポンスはMessageBusが自動的に処理するため、ハンドラ不要
-
-        // window-close-request メッセージ
-        this.messageBus.on('window-close-request', (data) => {
-            this.handleCloseRequest(data.windowId);
-        });
 
         // window-closed メッセージ
         this.messageBus.on('window-closed', (data) => {
@@ -362,42 +304,52 @@ class BasicTextEditor extends window.PluginBase {
 
         // load-image-file メッセージ（開いた仮身内のプラグインからの画像読み込み要求を親ウィンドウに転送）
         this.messageBus.on('load-image-file', (data) => {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send(data.type, data);
+            // 親ウィンドウに転送（型名を明示的に指定）
+            this.messageBus.send('load-image-file', data);
         });
 
         // load-image-response メッセージ（親ウィンドウからのレスポンスを開いた仮身内のプラグインに転送）
         this.messageBus.on('load-image-response', (data) => {
-            // すべての子iframeに転送（messageIdで識別されるので問題ない）
+            // すべての子iframeに転送（MessageBus形式で送信）
             const iframes = document.querySelectorAll('iframe');
             iframes.forEach(iframe => {
                 if (iframe.contentWindow) {
-                    iframe.contentWindow.postMessage(data, '*');
+                    iframe.contentWindow.postMessage({
+                        type: 'load-image-response',
+                        ...data,
+                        _messageBus: true,
+                        _from: 'BasicTextEditor'
+                    }, '*');
                 }
             });
         });
 
         // save-image-file メッセージ（開いた仮身内のプラグインからの画像保存要求を親ウィンドウに転送）
         this.messageBus.on('save-image-file', (data) => {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send(data.type, data);
+            // 親ウィンドウに転送（型名を明示的に指定）
+            this.messageBus.send('save-image-file', data);
         });
 
         // save-image-response メッセージ（親ウィンドウからのレスポンスを開いた仮身内のプラグインに転送）
         this.messageBus.on('save-image-response', (data) => {
-            // すべての子iframeに転送（messageIdで識別されるので問題ない）
+            // すべての子iframeに転送（MessageBus形式で送信）
             const iframes = document.querySelectorAll('iframe');
             iframes.forEach(iframe => {
                 if (iframe.contentWindow) {
-                    iframe.contentWindow.postMessage(data, '*');
+                    iframe.contentWindow.postMessage({
+                        type: 'save-image-response',
+                        ...data,
+                        _messageBus: true,
+                        _from: 'BasicTextEditor'
+                    }, '*');
                 }
             });
         });
 
         // get-image-file-path メッセージ（開いた仮身内のプラグインからの画像パス取得要求を親ウィンドウに転送）
         this.messageBus.on('get-image-file-path', (data) => {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send(data.type, data);
+            // 親ウィンドウに転送（型名を明示的に指定）
+            this.messageBus.send('get-image-file-path', data);
         });
 
         // image-file-path-response メッセージ（親ウィンドウからのレスポンス）
@@ -409,11 +361,16 @@ class BasicTextEditor extends window.PluginBase {
                 delete this.imagePathCallbacks[data.messageId];
             }
 
-            // 開いた仮身内のプラグインにも転送
+            // 開いた仮身内のプラグインにも転送（MessageBus形式で送信）
             const iframes = document.querySelectorAll('iframe');
             iframes.forEach(iframe => {
                 if (iframe.contentWindow) {
-                    iframe.contentWindow.postMessage(data, '*');
+                    iframe.contentWindow.postMessage({
+                        type: 'image-file-path-response',
+                        ...data,
+                        _messageBus: true,
+                        _from: 'BasicTextEditor'
+                    }, '*');
                 }
             });
         });
@@ -436,7 +393,7 @@ class BasicTextEditor extends window.PluginBase {
                     this.updateContentHeight();
                 } else if (dragMode === 'copy') {
                     // コピーモードの場合は元の仮身の透明度を元に戻す
-                    console.log('[EDITOR] コピーモードでクロスウィンドウドロップ: 元の仮身を保持');
+                    logger.debug('[EDITOR] コピーモードでクロスウィンドウドロップ: 元の仮身を保持');
                     if (this.draggingVirtualObject) {
                         this.draggingVirtualObject.style.opacity = '1';
                     }
@@ -452,7 +409,7 @@ class BasicTextEditor extends window.PluginBase {
             }
         });
 
-        console.log('[EDITOR] MessageBusハンドラ登録完了');
+        logger.debug('[EDITOR] MessageBusハンドラ登録完了');
     }
 
     setupEventListeners() {
@@ -557,7 +514,7 @@ class BasicTextEditor extends window.PluginBase {
             try {
                 // 選択中の画像を移動する場合
                 if (this.isDraggingImage && this.draggingImage) {
-                    console.log('[EDITOR] 画像を移動');
+                    logger.debug('[EDITOR] 画像を移動');
                     await this.moveImageToCursor(e, this.draggingImage);
                     this.isDraggingImage = false;
                     this.draggingImage = null;
@@ -573,7 +530,7 @@ class BasicTextEditor extends window.PluginBase {
                     if (selection.rangeCount > 0 && this.draggingVirtualObject && this.draggingVirtualObject.parentNode) {
                         // コピーモードの場合は元の仮身を残し、新しい仮身を作成
                         if (this.virtualObjectDragState.dragMode === 'copy') {
-                            console.log('[EDITOR] コピーモードでドロップ: 元の仮身を保持し、新しい仮身を作成');
+                            logger.debug('[EDITOR] コピーモードでドロップ: 元の仮身を保持し、新しい仮身を作成');
 
                             const range = selection.getRangeAt(0);
                             range.deleteContents();
@@ -609,7 +566,7 @@ class BasicTextEditor extends window.PluginBase {
                             this.virtualObjectDropSuccess = true;
                         } else {
                             // 移動モード（既存の処理）
-                            console.log('[EDITOR] 移動モードでドロップ');
+                            logger.debug('[EDITOR] 移動モードでドロップ');
 
                             const range = selection.getRangeAt(0);
                             range.deleteContents();
@@ -718,7 +675,7 @@ class BasicTextEditor extends window.PluginBase {
                     // （ブラウザのデフォルトテキスト挿入が動作する）
                 }
             } catch (error) {
-                console.error('[EDITOR] ドロップ処理エラー:', error);
+                logger.error('[EDITOR] ドロップ処理エラー:', error);
             }
         });
 
@@ -727,12 +684,12 @@ class BasicTextEditor extends window.PluginBase {
             // 右ボタン（button === 2）の押下を検出
             if (e.button === 2) {
                 this.virtualObjectDragState.isRightButtonPressed = true;
-                console.log('[EDITOR] 右ボタン押下検出');
+                logger.debug('[EDITOR] 右ボタン押下検出');
 
                 // 左ボタンドラッグ中で既に移動している場合、即座にコピーモードに切り替え
                 if (this.isDraggingVirtualObject && this.virtualObjectDragState.hasMoved) {
                     this.virtualObjectDragState.dragMode = 'copy';
-                    console.log('[EDITOR] 左ボタンドラッグ中（移動済み）に右ボタン押下 → コピーモードに変更');
+                    logger.debug('[EDITOR] 左ボタンドラッグ中（移動済み）に右ボタン押下 → コピーモードに変更');
                 }
             }
         }, { capture: true });
@@ -742,11 +699,11 @@ class BasicTextEditor extends window.PluginBase {
             // 右ボタンのmouseupを検出してフラグをクリア
             if (e.button === 2) {
                 this.virtualObjectDragState.isRightButtonPressed = false;
-                console.log('[EDITOR] 右ボタンアップ検出、フラグクリア');
+                logger.debug('[EDITOR] 右ボタンアップ検出、フラグクリア');
 
                 // 右ボタンアップ時、ドラッグ中でコピーモードなら何もせずreturn（左ボタンのmouseupを待つ）
                 if (this.isDraggingVirtualObject && this.virtualObjectDragState.dragMode === 'copy') {
-                    console.log('[EDITOR] コピーモードのドラッグ中、左ボタンのmouseupを待つ');
+                    logger.debug('[EDITOR] コピーモードのドラッグ中、左ボタンのmouseupを待つ');
                     return;
                 }
             }
@@ -758,7 +715,7 @@ class BasicTextEditor extends window.PluginBase {
 
                 if (this.virtualObjectDragState.hasMoved && isRightStillPressed) {
                     this.virtualObjectDragState.dragMode = 'copy';
-                    console.log('[EDITOR] 左ボタンアップ時に右ボタンがまだ押されている → コピーモードに変更');
+                    logger.debug('[EDITOR] 左ボタンアップ時に右ボタンがまだ押されている → コピーモードに変更');
                     return; // 右ボタンのmouseupを待つ
                 }
             }
@@ -767,31 +724,23 @@ class BasicTextEditor extends window.PluginBase {
         // ダブルクリック+ドラッグ用のグローバルmousemoveハンドラー
         document.addEventListener('mousemove', (e) => {
             // ダブルクリック+ドラッグ候補の検出
-            if (this.dblClickDragState.isDblClickDragCandidate && !this.dblClickDragState.isDblClickDrag) {
-                const deltaX = e.clientX - this.dblClickDragState.startX;
-                const deltaY = e.clientY - this.dblClickDragState.startY;
+            // 共通メソッドでドラッグ開始判定
+            if (this.shouldStartDblClickDrag(e)) {
+                logger.debug('[EDITOR] ダブルクリック+ドラッグを確定（ドラッグ完了待ち）');
 
-                // 5px以上移動したらダブルクリック+ドラッグ確定（mouseup時に実身複製処理を実行）
-                if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
-                    console.log('[EDITOR] ダブルクリック+ドラッグを確定（ドラッグ完了待ち）');
-                    this.dblClickDragState.isDblClickDrag = true;
-                    // 候補フラグをクリア
-                    this.dblClickDragState.isDblClickDragCandidate = false;
-
-                    // 視覚的なフィードバック用の半透明仮身枠を作成
-                    const vo = this.dblClickDragState.dblClickedElement;
-                    if (vo && !this.dblClickDragState.dragPreview) {
-                        const preview = vo.cloneNode(true);
-                        preview.style.position = 'fixed';
-                        preview.style.opacity = '0.5';
-                        preview.style.pointerEvents = 'none';
-                        preview.style.zIndex = '10000';
-                        preview.style.willChange = 'transform'; // GPU最適化
-                        preview.style.transform = `translate(${e.clientX + 10}px, ${e.clientY + 10}px)`;
-                        preview.classList.add('drag-preview');
-                        document.body.appendChild(preview);
-                        this.dblClickDragState.dragPreview = preview;
-                    }
+                // 視覚的なフィードバック用の半透明仮身枠を作成（プラグイン固有）
+                const vo = this.dblClickDragState.dblClickedElement;
+                if (vo && !this.dblClickDragState.dragPreview) {
+                    const preview = vo.cloneNode(true);
+                    preview.style.position = 'fixed';
+                    preview.style.opacity = '0.5';
+                    preview.style.pointerEvents = 'none';
+                    preview.style.zIndex = '10000';
+                    preview.style.willChange = 'transform'; // GPU最適化
+                    preview.style.transform = `translate(${e.clientX + 10}px, ${e.clientY + 10}px)`;
+                    preview.classList.add('drag-preview');
+                    document.body.appendChild(preview);
+                    this.dblClickDragState.dragPreview = preview;
                 }
             }
 
@@ -819,7 +768,7 @@ class BasicTextEditor extends window.PluginBase {
         document.addEventListener('mouseup', (e) => {
             // ダブルクリック+ドラッグ確定後のmouseup処理（実身複製）
             if (this.dblClickDragState.isDblClickDrag && e.button === 0) {
-                console.log('[EDITOR] ダブルクリック+ドラッグ完了、実身を複製');
+                logger.debug('[EDITOR] ダブルクリック+ドラッグ完了、実身を複製');
                 const vo = this.dblClickDragState.dblClickedElement;
 
                 // requestAnimationFrameをキャンセル
@@ -845,16 +794,15 @@ class BasicTextEditor extends window.PluginBase {
                     this.handleDoubleClickDragDuplicate(vo, dropX, dropY);
                 }
 
-                // 状態をリセット
-                this.dblClickDragState.isDblClickDrag = false;
-                this.dblClickDragState.dblClickedElement = null;
+                // 状態をリセット（共通メソッド使用）
+                this.cleanupDblClickDragState();
                 return;
             }
 
             // ダブルクリック候補でドラッグしなかった場合
             // 既存のdblclickイベントハンドラに処理を任せる（展開処理は不要）
             if (this.dblClickDragState.isDblClickDragCandidate && e.button === 0) {
-                console.log('[EDITOR] ダブルクリック検出、既存のdblclickイベントに処理を委譲');
+                logger.debug('[EDITOR] ダブルクリック検出、既存のdblclickイベントに処理を委譲');
 
                 // requestAnimationFrameをキャンセル（念のため）
                 if (this.dblClickDragState.rafId) {
@@ -869,9 +817,8 @@ class BasicTextEditor extends window.PluginBase {
                     this.dblClickDragState.dragPreview = null;
                 }
 
-                // 状態をリセット
-                this.dblClickDragState.isDblClickDragCandidate = false;
-                this.dblClickDragState.dblClickedElement = null;
+                // 状態をリセット（共通メソッド使用）
+                this.cleanupDblClickDragState();
             }
         });
     }
@@ -910,8 +857,8 @@ class BasicTextEditor extends window.PluginBase {
             // プレーンテキスト版も作成（仮身は名前のみ）
             const plainText = tempDiv.textContent;
 
-            console.log('[EDITOR] コピー内容（XML）:', xmlContent);
-            console.log('[EDITOR] コピー内容（プレーンテキスト）:', plainText);
+            logger.debug('[EDITOR] コピー内容（XML）:', xmlContent);
+            logger.debug('[EDITOR] コピー内容（プレーンテキスト）:', plainText);
 
             // クリップボードに両方の形式でコピー
             e.clipboardData.setData('text/plain', plainText);
@@ -920,7 +867,7 @@ class BasicTextEditor extends window.PluginBase {
 
             this.setStatus('クリップボードへコピーしました（仮身を含む）');
         } catch (error) {
-            console.error('[EDITOR] コピーエラー:', error);
+            logger.error('[EDITOR] コピーエラー:', error);
             // エラー時はデフォルト動作を許可
         }
     }
@@ -961,12 +908,12 @@ class BasicTextEditor extends window.PluginBase {
         if (this.virtualObjectRenderer) {
             // アイコンパス直接指定（プラグインフォルダ内のアイコンファイル）
             const options = {
-                loadIconCallback: (realId) => this.loadIconFromParent(realId)
+                loadIconCallback: (realId) => this.iconManager.loadIcon(realId)
             };
             vobjElement = this.virtualObjectRenderer.createInlineElement(virtualObject, options);
         } else {
             // フォールバック: VirtualObjectRendererが利用できない場合
-            console.warn('[EDITOR] VirtualObjectRenderer not available, using fallback');
+            logger.warn('[EDITOR] VirtualObjectRenderer not available, using fallback');
             vobjElement = document.createElement('span');
             vobjElement.className = 'virtual-object';
             vobjElement.contentEditable = 'false';
@@ -1176,7 +1123,7 @@ class BasicTextEditor extends window.PluginBase {
             this.setStatus(`画像「${file.name}」を挿入しました`);
 
         } catch (error) {
-            console.error('[EDITOR] 画像挿入エラー:', error);
+            logger.error('[EDITOR] 画像挿入エラー:', error);
             this.setStatus('画像の挿入に失敗しました');
         }
     }
@@ -1186,7 +1133,7 @@ class BasicTextEditor extends window.PluginBase {
      */
     async openSelectedVirtualObject() {
         if (!this.selectedVirtualObject) {
-            console.warn('[EDITOR] 選択中の仮身がありません');
+            logger.warn('[EDITOR] 選択中の仮身がありません');
             return;
         }
 
@@ -1218,7 +1165,7 @@ class BasicTextEditor extends window.PluginBase {
                 this.setStatus('defaultOpenが設定されていません');
             }
         } catch (error) {
-            console.error('[EDITOR] defaultOpen取得エラー:', error);
+            logger.error('[EDITOR] defaultOpen取得エラー:', error);
             this.setStatus('defaultOpenの取得に失敗しました');
         }
     }
@@ -1228,7 +1175,7 @@ class BasicTextEditor extends window.PluginBase {
      * @param {Object} virtualObject - 仮身オブジェクト
      */
     openVirtualObject(virtualObject) {
-        console.log('[EDITOR] 仮身を開く:', virtualObject.link_name, virtualObject.link_id);
+        logger.debug('[EDITOR] 仮身を開く:', virtualObject.link_name, virtualObject.link_id);
 
         // applistからデフォルトプラグインを取得
         let defaultPluginId = null;
@@ -1264,11 +1211,11 @@ class BasicTextEditor extends window.PluginBase {
                 // .xtadファイルとしてダウンロード
                 this.downloadAsXtad(xmlData, filename);
             } else {
-                console.error('[EDITOR] XMLデータの取得に失敗 - fileオブジェクトにxmlDataが含まれていません');
+                logger.error('[EDITOR] XMLデータの取得に失敗 - fileオブジェクトにxmlDataが含まれていません');
             }
 
         } catch (error) {
-            console.error('[EDITOR] 書庫ファイル展開エラー:', error);
+            logger.error('[EDITOR] 書庫ファイル展開エラー:', error);
         }
     }
 
@@ -1316,6 +1263,24 @@ class BasicTextEditor extends window.PluginBase {
             selection.removeAllRanges();
             selection.addRange(range);
         }
+    }
+
+    /**
+     * ウィンドウリサイズ完了時のフック（PluginBase共通ハンドラから呼ばれる）
+     * リサイズで折り返しが変わる可能性があるため、スクロールバーを更新
+     * @param {Object} data - リサイズデータ { pos, width, height }
+     */
+    onWindowResizedEnd(data) {
+        this.updateContentHeight();
+    }
+
+    /**
+     * ウィンドウ最大化切り替え時のフック（PluginBase共通ハンドラから呼ばれる）
+     * 全画面切り替えで折り返しが変わる可能性があるため、スクロールバーを更新
+     * @param {Object} data - 最大化データ { pos, width, height, maximize }
+     */
+    onWindowMaximizeToggled(data) {
+        this.updateContentHeight();
     }
 
     /**
@@ -1601,14 +1566,14 @@ class BasicTextEditor extends window.PluginBase {
      */
     async loadFile(fileData) {
         try {
-            console.log('[EDITOR] loadFile呼び出し, fileData:', fileData);
+            logger.debug('[EDITOR] loadFile呼び出し, fileData:', fileData);
             this.setStatus('ファイル読み込み中...');
             this.currentFile = fileData;
             // _数字.xtad の形式を除去して実身IDのみを取得
             let rawId = fileData ? fileData.realId : null;
             this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
 
-            console.log('[EDITOR] fileDataチェック:', {
+            logger.debug('[EDITOR] fileDataチェック:', {
                 hasXmlData: !!fileData.xmlData,
                 hasRawData: !!fileData.rawData,
                 fileName: fileData.fileName
@@ -1616,7 +1581,7 @@ class BasicTextEditor extends window.PluginBase {
 
             // XMLデータが既に渡されている場合
             if (fileData.xmlData) {
-                console.log('[EDITOR] XMLデータを使用, 長さ:', fileData.xmlData.length);
+                logger.debug('[EDITOR] XMLデータを使用, 長さ:', fileData.xmlData.length);
 
                 this.tadData = fileData.xmlData;
 
@@ -1630,7 +1595,7 @@ class BasicTextEditor extends window.PluginBase {
             }
             // rawDataがある場合は変換を試みる
             else if (fileData.rawData) {
-                console.log('rawDataからXMLに変換中...');
+                logger.debug('rawDataからXMLに変換中...');
                 const xmlData = await this.parseTADToXML(fileData.rawData);
                 if (xmlData) {
                     this.tadData = xmlData;
@@ -1651,8 +1616,8 @@ class BasicTextEditor extends window.PluginBase {
             }
 
         } catch (error) {
-            console.error('ファイル読み込みエラー:', error);
-            console.error('エラースタック:', error.stack);
+            logger.error('ファイル読み込みエラー:', error);
+            logger.error('エラースタック:', error.stack);
             this.editor.innerHTML = '<p>ファイル読み込みエラー</p><pre>' + this.escapeHtml(error.message + '\n' + error.stack) + '</pre>';
             this.setStatus('ファイルの読み込みに失敗しました');
         }
@@ -1663,12 +1628,12 @@ class BasicTextEditor extends window.PluginBase {
      */
     async loadVirtualObjectData(virtualObj, realObject) {
         try {
-            console.log('[EDITOR] loadVirtualObjectData呼び出し:', { virtualObj, realObject });
+            logger.debug('[EDITOR] loadVirtualObjectData呼び出し:', { virtualObj, realObject });
             this.setStatus('実身データ読み込み中...');
 
             // realObjectからXTADデータを取得
             if (!realObject || !realObject.records || realObject.records.length === 0) {
-                console.error('[EDITOR] レコードが存在しません:', realObject);
+                logger.error('[EDITOR] レコードが存在しません:', realObject);
                 this.editor.innerHTML = '<p>実身データが見つかりません</p>';
                 this.setStatus('エラー: 実身データがありません');
                 return;
@@ -1676,7 +1641,7 @@ class BasicTextEditor extends window.PluginBase {
 
             const firstRecord = realObject.records[0];
             if (!firstRecord || !firstRecord.xtad) {
-                console.error('[EDITOR] XTADデータが存在しません:', firstRecord);
+                logger.error('[EDITOR] XTADデータが存在しません:', firstRecord);
                 this.editor.innerHTML = '<p>データが見つかりません</p>';
                 this.setStatus('エラー: XTADデータがありません');
                 return;
@@ -1692,10 +1657,10 @@ class BasicTextEditor extends window.PluginBase {
             };
 
             // XTADデータ（XML形式）をそのまま使用
-            console.log('[EDITOR] XTAD読み込み成功, 長さ:', firstRecord.xtad.length);
+            logger.debug('[EDITOR] XTAD読み込み成功, 長さ:', firstRecord.xtad.length);
             const xmlData = firstRecord.xtad;
             if (xmlData) {
-                console.log('[EDITOR] XML変換成功, 長さ:', xmlData.length);
+                logger.debug('[EDITOR] XML変換成功, 長さ:', xmlData.length);
                 this.tadData = xmlData;
                 await this.renderTADXML(xmlData);
                 this.setStatus(`実身読み込み完了: ${this.currentFile.fileName}`);
@@ -1703,13 +1668,13 @@ class BasicTextEditor extends window.PluginBase {
                 // DOM更新後にスクロールバーを更新
                 setTimeout(() => this.updateContentHeight(), 0);
             } else {
-                console.error('[EDITOR] XML変換失敗');
+                logger.error('[EDITOR] XML変換失敗');
                 this.editor.innerHTML = '<p>XTADデータの解析に失敗しました</p>';
                 this.setStatus('エラー: XMLの生成に失敗しました');
             }
         } catch (error) {
-            console.error('[EDITOR] 仮身データ読み込みエラー:', error);
-            console.error('[EDITOR] エラースタック:', error.stack);
+            logger.error('[EDITOR] 仮身データ読み込みエラー:', error);
+            logger.error('[EDITOR] エラースタック:', error.stack);
             this.editor.innerHTML = '<p>実身データ読み込みエラー</p><pre>' + this.escapeHtml(error.message + '\n' + error.stack) + '</pre>';
             this.setStatus('実身データの読み込みに失敗しました');
         }
@@ -1724,14 +1689,14 @@ class BasicTextEditor extends window.PluginBase {
             try {
                 const uint8Array = rawData instanceof Uint8Array ? rawData : new Uint8Array(rawData);
                 const xmlResult = await window.parent.parseTADToXML(uint8Array, 0);
-                console.log('XML変換完了:', xmlResult ? xmlResult.substring(0, 100) : 'null');
+                logger.debug('XML変換完了:', xmlResult ? xmlResult.substring(0, 100) : 'null');
                 return xmlResult;
             } catch (error) {
-                console.error('TAD→XML変換エラー:', error);
+                logger.error('TAD→XML変換エラー:', error);
                 return null;
             }
         }
-        console.warn('parseTADToXML関数が見つかりません');
+        logger.warn('parseTADToXML関数が見つかりません');
         return null;
     }
 
@@ -1771,15 +1736,15 @@ class BasicTextEditor extends window.PluginBase {
                 if (attrMap.id) {
                     // フルIDから実身IDのみを抽出（_0.xtadなどを削除）
                     const realId = attrMap.id.replace(/_\d+\.xtad$/i, '');
-                    console.log('[EDITOR] アイコンを事前ロード:', attrMap.id, '実身ID:', realId);
-                    iconLoadPromises.push(this.loadIconFromParent(realId));
+                    logger.debug('[EDITOR] アイコンを事前ロード:', attrMap.id, '実身ID:', realId);
+                    iconLoadPromises.push(this.iconManager.loadIcon(realId));
                 }
             }
 
             // すべてのアイコンをロード（並列実行）
             await Promise.all(iconLoadPromises);
         } else {
-            console.log('[EDITOR] readonlyモードのためアイコン事前ロードをスキップ');
+            logger.debug('[EDITOR] readonlyモードのためアイコン事前ロードをスキップ');
         }
 
         // キャッシュからアイコンデータを取得してiconDataオブジェクトを作成
@@ -1796,12 +1761,12 @@ class BasicTextEditor extends window.PluginBase {
             if (attrMap.id) {
                 // フルIDから実身IDのみを抽出（_0.xtadなどを削除）
                 const realId = attrMap.id.replace(/_\d+\.xtad$/i, '');
-                if (this.iconCache.has(realId)) {
-                    const cachedData = this.iconCache.get(realId);
+                if (this.iconManager.hasInCache(realId)) {
+                    const cachedData = this.iconManager.getFromCache(realId);
                     if (cachedData) {
                         // iconDataは実身IDをキーにする
                         iconData[realId] = cachedData;
-                        console.log('[EDITOR] キャッシュからアイコンデータ取得:', attrMap.id, '実身ID:', realId, 'データ長:', cachedData.length);
+                        logger.debug('[EDITOR] キャッシュからアイコンデータ取得:', attrMap.id, '実身ID:', realId, 'データ長:', cachedData.length);
                     }
                 }
             }
@@ -1902,16 +1867,17 @@ class BasicTextEditor extends window.PluginBase {
         html = await this.convertLinkTagsToVirtualObjects(html);
 
         // <image>タグを<img>タグに変換（TAD形式: 自己閉じタグ）
-        html = html.replace(/<image\s+src="([^"]*)"\s+width="([^"]*)"\s+height="([^"]*)"\s+planes="([^"]*)"\s+pixbits="([^"]*)"\s*\/>/gi,
+        // zIndex等の追加属性がある場合も対応
+        html = html.replace(/<image\s+src="([^"]*)"\s+width="([^"]*)"\s+height="([^"]*)"\s+planes="([^"]*)"\s+pixbits="([^"]*)"(?:\s+[^>]*)?\s*\/>/gi,
             (match, src, width, height, planes, pixbits) => {
                 // srcから画像ファイルのパスを取得
-                // ファイル名のみの場合は、親ウィンドウから画像データを取得する必要がある
-                let imagePath = src;
+                // 画像は loadImagesFromParent() で正しいパスを設定するため、
+                // 初期srcは常に空にする（ブラウザの即時読み込みを防止）
+                let imagePath = '';
 
-                // ファイル名のみでパスが含まれていない場合
-                // loadImagesFromParent()で読み込むため、初期srcは空にする
-                if (!src.includes('/') && !src.includes('\\') && !src.startsWith('data:')) {
-                    imagePath = '';
+                // data: URL の場合のみ直接設定
+                if (src.startsWith('data:')) {
+                    imagePath = src;
                 }
 
                 // data-img-noを抽出（ファイル名から）
@@ -2050,19 +2016,19 @@ class BasicTextEditor extends window.PluginBase {
      * <text>タグはレイアウト情報なので無視し、<document>内の<p>タグから直接テキストを抽出
      */
     async parseTextElements(tadXML) {
-        console.log('[EDITOR] parseTextElements開始');
+        logger.debug('[EDITOR] parseTextElements開始');
         const textElements = [];
 
         // <document>...</document>を抽出
         const docMatch = /<document>([\s\S]*?)<\/document>/i.exec(tadXML);
 
         if (!docMatch) {
-            console.warn('[EDITOR] <document>タグが見つかりません');
+            logger.warn('[EDITOR] <document>タグが見つかりません');
             return textElements;
         }
 
         const docContent = docMatch[1];
-        console.log('[EDITOR] <document>内容抽出完了, 長さ:', docContent.length);
+        logger.debug('[EDITOR] <document>内容抽出完了, 長さ:', docContent.length);
 
         // <p>タグで段落に分割
         const paragraphRegex = /<p>([\s\S]*?)<\/p>/gi;
@@ -2072,7 +2038,7 @@ class BasicTextEditor extends window.PluginBase {
         while ((pMatch = paragraphRegex.exec(docContent)) !== null) {
             const paragraphContent = pMatch[1];
             paragraphCount++;
-            console.log(`[EDITOR] 段落${paragraphCount}:`, paragraphContent.substring(0, 100));
+            logger.debug(`[EDITOR] 段落${paragraphCount}:`, paragraphContent.substring(0, 100));
 
             // <text>タグは無視（レイアウト情報）
             // <font>タグからフォント情報を抽出（自己閉じタグ形式に対応）
@@ -2110,10 +2076,10 @@ class BasicTextEditor extends window.PluginBase {
                 .trim();
 
             if (plainText) {
-                console.log(`[EDITOR]   テキスト抽出:`, plainText.substring(0, 50));
-                if (fontColor) console.log(`[EDITOR]   カラー: ${fontColor}`);
-                if (fontSize !== '14') console.log(`[EDITOR]   サイズ: ${fontSize}pt`);
-                if (fontFamily) console.log(`[EDITOR]   フォント: ${fontFamily.substring(0, 30)}`);
+                logger.debug(`[EDITOR]   テキスト抽出:`, plainText.substring(0, 50));
+                if (fontColor) logger.debug(`[EDITOR]   カラー: ${fontColor}`);
+                if (fontSize !== '14') logger.debug(`[EDITOR]   サイズ: ${fontSize}pt`);
+                if (fontFamily) logger.debug(`[EDITOR]   フォント: ${fontFamily.substring(0, 30)}`);
 
                 textElements.push({
                     fontSize: fontSize,
@@ -2126,7 +2092,7 @@ class BasicTextEditor extends window.PluginBase {
                 });
             } else {
                 // 空の段落も保持（改行として）
-                console.log(`[EDITOR]   空段落`);
+                logger.debug(`[EDITOR]   空段落`);
                 textElements.push({
                     fontSize: '14',
                     fontFamily: '',
@@ -2138,7 +2104,7 @@ class BasicTextEditor extends window.PluginBase {
             }
         }
 
-        console.log('[EDITOR] parseTextElements完了, 要素数:', textElements.length);
+        logger.debug('[EDITOR] parseTextElements完了, 要素数:', textElements.length);
         return textElements;
     }
 
@@ -2155,7 +2121,7 @@ class BasicTextEditor extends window.PluginBase {
             // <document>...</document>を抽出
             const docMatch = /<document>([\s\S]*?)<\/document>/i.exec(tadXML);
             if (!docMatch) {
-                console.warn('[EDITOR] <document>タグが見つかりません');
+                logger.warn('[EDITOR] <document>タグが見つかりません');
                 this.editor.innerHTML = '<p>Document要素が見つかりません</p>';
                 return;
             }
@@ -2174,19 +2140,19 @@ class BasicTextEditor extends window.PluginBase {
                 let paragraphContent = pMatch[1];
                 lastIndex = paragraphRegex.lastIndex;  // 最後に処理した位置を記録
 
-                // 段落の前後の空白文字（改行、タブ、スペース）をトリム
-                paragraphContent = paragraphContent.trim();
+                // 段落の前後の空白文字（改行、スペースのみ）をトリム（タブは保持）
+                paragraphContent = paragraphContent.replace(/^[\r\n ]+|[\r\n ]+$/g, '');
 
                 // <font>と<text>タグから段落レベルのスタイルを抽出
                 let style = 'margin: 0.5em 0; white-space: pre-wrap;';
                 let maxFontSize = 14; // デフォルトのフォントサイズ
 
-                // フォントサイズ（段落の最初のもののみ）
+                // フォントサイズ（段落の最初のもののみ）- スタイル抽出のみ、タグは残す
                 const fontSizeMatch = /<font\s+size="([^"]*)"\s*\/>/i.exec(paragraphContent);
                 if (fontSizeMatch) {
                     style += `font-size: ${fontSizeMatch[1]}pt;`;
                     maxFontSize = parseFloat(fontSizeMatch[1]);
-                    paragraphContent = paragraphContent.replace(/<font\s+size="[^"]*"\s*\/>/i, '');
+                    // タグは削除せず残す（convertDecorationTagsToHTMLで処理される）
                 }
 
                 // 段落内の最大フォントサイズを探す（行の高さを決定するため）
@@ -2205,18 +2171,18 @@ class BasicTextEditor extends window.PluginBase {
                     });
                 }
 
-                // フォントファミリー（段落の最初のもののみ）
+                // フォントファミリー（段落の最初のもののみ）- スタイル抽出のみ、タグは残す
                 const fontFaceMatch = /<font\s+face="([^"]*)"\s*\/>/i.exec(paragraphContent);
                 if (fontFaceMatch) {
                     style += `font-family: ${fontFaceMatch[1]};`;
-                    paragraphContent = paragraphContent.replace(/<font\s+face="[^"]*"\s*\/>/i, '');
+                    // タグは削除せず残す（convertDecorationTagsToHTMLで処理される）
                 }
 
-                // フォントカラー（段落の最初のもののみ）
+                // フォントカラー（段落の最初のもののみ）- スタイル抽出のみ、タグは残す
                 const fontColorMatch = /<font\s+color="([^"]*)"\s*\/>/i.exec(paragraphContent);
                 if (fontColorMatch) {
                     style += `color: ${fontColorMatch[1]};`;
-                    paragraphContent = paragraphContent.replace(/<font\s+color="[^"]*"\s*\/>/i, '');
+                    // タグは削除せず残す（convertDecorationTagsToHTMLで処理される）
                 }
 
                 // テキスト配置
@@ -2383,7 +2349,7 @@ class BasicTextEditor extends window.PluginBase {
                     this.checkAllVirtualObjectsForAutoExpand();
                 }, 200);
             } else {
-                console.warn('[EDITOR] 段落要素が見つかりませんでした');
+                logger.warn('[EDITOR] 段落要素が見つかりませんでした');
                 // 空のエディタを表示
                 this.editor.innerHTML = '<p><br></p>';
             }
@@ -2391,7 +2357,7 @@ class BasicTextEditor extends window.PluginBase {
             // ビューモードを清書モードに設定
             this.viewMode = 'formatted';
         } catch (error) {
-            console.error('[EDITOR] XML描画エラー:', error);
+            logger.error('[EDITOR] XML描画エラー:', error);
             this.editor.innerHTML = '<p>XMLの描画に失敗しました</p><pre>' + this.escapeHtml(error.message) + '</pre>';
         }
     }
@@ -2428,7 +2394,7 @@ class BasicTextEditor extends window.PluginBase {
 
                 if (height > 0) {
                     vo.dataset.originalHeight = height.toString();
-                    console.log('[EDITOR] 仮身の元の高さを保存:', vo.dataset.linkName, height);
+                    logger.debug('[EDITOR] 仮身の元の高さを保存:', vo.dataset.linkName, height);
                 }
             }
 
@@ -2437,7 +2403,7 @@ class BasicTextEditor extends window.PluginBase {
 
             // ダブルクリック+ドラッグ検出用のmousedownイベント（capturing phaseで優先実行）
             vo.addEventListener('mousedown', (e) => {
-                console.log('[EDITOR-DBL] 仮身mousedown検出:', {
+                logger.debug('[EDITOR-DBL] 仮身mousedown検出:', {
                     button: e.button,
                     linkName: vo.dataset.linkName,
                     target: e.target.tagName,
@@ -2449,7 +2415,7 @@ class BasicTextEditor extends window.PluginBase {
                 const isRightEdge = e.clientX > rect.right - 8;
                 const isBottomEdge = e.clientY > rect.bottom - 8;
 
-                console.log('[EDITOR-DBL] リサイズエリアチェック:', {
+                logger.debug('[EDITOR-DBL] リサイズエリアチェック:', {
                     isRightEdge,
                     isBottomEdge,
                     button: e.button
@@ -2461,7 +2427,7 @@ class BasicTextEditor extends window.PluginBase {
                     const timeSinceLastClick = now - this.dblClickDragState.lastClickTime;
                     const isSameElement = this.dblClickDragState.lastClickedElement === vo;
 
-                    console.log('[EDITOR-DBL] ダブルクリック判定:', {
+                    logger.debug('[EDITOR-DBL] ダブルクリック判定:', {
                         timeSinceLastClick,
                         isSameElement,
                         lastClickTime: this.dblClickDragState.lastClickTime,
@@ -2470,17 +2436,14 @@ class BasicTextEditor extends window.PluginBase {
 
                     // 前回のクリックから300ms以内かつ同じ要素の場合、ダブルクリック+ドラッグ候補
                     if (timeSinceLastClick < 300 && isSameElement) {
-                        console.log('[EDITOR] ダブルクリック+ドラッグ候補を検出:', vo.dataset.linkName);
-                        this.dblClickDragState.isDblClickDragCandidate = true;
-                        this.dblClickDragState.dblClickedElement = vo;
-                        this.dblClickDragState.startX = e.clientX;
-                        this.dblClickDragState.startY = e.clientY;
+                        logger.debug('[EDITOR] ダブルクリック+ドラッグ候補を検出:', vo.dataset.linkName);
+                        this.setDoubleClickDragCandidate(vo, e);  // 共通メソッド使用
                         // NOTE: e.preventDefault()はここでは呼ばない（dragstartで処理）
                     } else {
                         // 通常のクリック：時刻と要素を記録
-                        console.log('[EDITOR-DBL] 通常のクリック、時刻と要素を記録');
-                        this.dblClickDragState.lastClickTime = now;
-                        this.dblClickDragState.lastClickedElement = vo;
+                        logger.debug('[EDITOR-DBL] 通常のクリック、時刻と要素を記録');
+                        this.resetDoubleClickTimer();  // 共通メソッド使用
+                        this.dblClickDragState.lastClickedElement = vo;  // プラグイン固有
                     }
                 }
             }, true); // capturing phaseで登録
@@ -2511,11 +2474,11 @@ class BasicTextEditor extends window.PluginBase {
                 const linkName = vo.dataset.linkName || vo.textContent;
                 if (vo.classList.contains('selected')) {
                     this.selectedVirtualObject = vo;
-                    console.log('[EDITOR] 仮身選択:', linkName);
+                    logger.debug('[EDITOR] 仮身選択:', linkName);
                     this.setStatus(`仮身選択: ${linkName}`);
                 } else {
                     this.selectedVirtualObject = null;
-                    console.log('[EDITOR] 仮身選択解除:', linkName);
+                    logger.debug('[EDITOR] 仮身選択解除:', linkName);
                     this.setStatus('');
                 }
             });
@@ -2527,7 +2490,7 @@ class BasicTextEditor extends window.PluginBase {
 
                 const linkId = vo.dataset.linkId;
                 const linkName = vo.dataset.linkName;
-                console.log('[EDITOR] 仮身ダブルクリック:', linkName, linkId);
+                logger.debug('[EDITOR] 仮身ダブルクリック:', linkName, linkId);
 
                 // 実身IDを抽出（共通メソッドを使用）
                 const realId = window.RealObjectSystem.extractRealId(linkId);
@@ -2542,7 +2505,7 @@ class BasicTextEditor extends window.PluginBase {
 
                     const defaultOpen = this.getDefaultOpenFromAppList(appListData);
                     if (defaultOpen) {
-                        console.log('[EDITOR] defaultOpenアプリで起動:', defaultOpen);
+                        logger.debug('[EDITOR] defaultOpenアプリで起動:', defaultOpen);
 
                         // 親ウィンドウに実身を開くよう要求
                         const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
@@ -2556,7 +2519,7 @@ class BasicTextEditor extends window.PluginBase {
                         this.setStatus('defaultOpenが設定されていません');
                     }
                 } catch (error) {
-                    console.error('[EDITOR] defaultOpen取得エラー:', error);
+                    logger.error('[EDITOR] defaultOpen取得エラー:', error);
                     this.setStatus('defaultOpenの取得に失敗しました');
                 }
             });
@@ -2581,7 +2544,7 @@ class BasicTextEditor extends window.PluginBase {
             vo.addEventListener('dragstart', (e) => {
                 // ダブルクリック+ドラッグ候補またはダブルクリック+ドラッグ確定の場合は、通常のドラッグをキャンセル
                 if (this.dblClickDragState.isDblClickDragCandidate || this.dblClickDragState.isDblClickDrag) {
-                    console.log('[EDITOR] ダブルクリック+ドラッグ中のため、通常のdragstartをキャンセル');
+                    logger.debug('[EDITOR] ダブルクリック+ドラッグ中のため、通常のdragstartをキャンセル');
                     e.preventDefault();
                     return;
                 }
@@ -2595,7 +2558,7 @@ class BasicTextEditor extends window.PluginBase {
                 // 右ボタンが既に押されている場合はコピーモード
                 if (this.virtualObjectDragState.isRightButtonPressed) {
                     this.virtualObjectDragState.dragMode = 'copy';
-                    console.log('[EDITOR] dragstart時点で右ボタンが押されている → コピーモード');
+                    logger.debug('[EDITOR] dragstart時点で右ボタンが押されている → コピーモード');
                 }
 
                 // effectAllowedを設定（後で変更される可能性があるため初期値）
@@ -2608,7 +2571,7 @@ class BasicTextEditor extends window.PluginBase {
                 allIframes.forEach(iframe => {
                     iframe.style.pointerEvents = 'none';
                 });
-                console.log('[EDITOR] ドラッグ中: iframe pointer-events無効化 (', allIframes.length, '個)');
+                logger.debug('[EDITOR] ドラッグ中: iframe pointer-events無効化 (', allIframes.length, '個)');
 
                 // 仮身の情報を保存（エディタ内での移動用）
                 // 注: 現在は元の仮身要素をそのまま移動するため、このデータは使用されない
@@ -2626,7 +2589,7 @@ class BasicTextEditor extends window.PluginBase {
                 };
 
                 // デバッグ: ドラッグ開始時のdatasetをログ出力
-                console.log('[EDITOR] dragstart時のvo.dataset:', {
+                logger.debug('[EDITOR] dragstart時のvo.dataset:', {
                     linkName: vo.dataset.linkName,
                     linkBgcol: vo.dataset.linkBgcol,
                     linkTbcol: vo.dataset.linkTbcol,
@@ -2643,7 +2606,7 @@ class BasicTextEditor extends window.PluginBase {
                 const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
 
                 // デバッグ: buildVirtualObjFromDataset結果をログ出力
-                console.log('[EDITOR] buildVirtualObjFromDataset結果:', {
+                logger.debug('[EDITOR] buildVirtualObjFromDataset結果:', {
                     link_name: virtualObj.link_name,
                     link_bgcol: virtualObj.link_bgcol,
                     link_tbcol: virtualObj.link_tbcol,
@@ -2668,7 +2631,7 @@ class BasicTextEditor extends window.PluginBase {
                 };
                 e.dataTransfer.setData('text/plain', JSON.stringify(dragData));
 
-                console.log('[EDITOR] 仮身ドラッグ開始:', vo.dataset.linkName, 'モード:', this.virtualObjectDragState.dragMode);
+                logger.debug('[EDITOR] 仮身ドラッグ開始:', vo.dataset.linkName, 'モード:', this.virtualObjectDragState.dragMode);
             });
 
             // drag イベント: ドラッグ中の移動検知とコピーモード切り替え
@@ -2684,31 +2647,31 @@ class BasicTextEditor extends window.PluginBase {
                 // 5px以上移動したらドラッグとみなす
                 if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
                     if (!this.virtualObjectDragState.hasMoved) {
-                        console.log('[EDITOR] drag: 移動を検知 (hasMoved = true)', deltaX, deltaY);
+                        logger.debug('[EDITOR] drag: 移動を検知 (hasMoved = true)', deltaX, deltaY);
                         this.virtualObjectDragState.hasMoved = true;
 
                         // 移動検知時に右ボタンが押されていればコピーモードに切り替え
                         if (this.virtualObjectDragState.isRightButtonPressed) {
                             this.virtualObjectDragState.dragMode = 'copy';
-                            console.log('[EDITOR] 移動検知時に右ボタンが押されている → コピーモードに変更');
+                            logger.debug('[EDITOR] 移動検知時に右ボタンが押されている → コピーモードに変更');
                         }
                     }
                 }
             });
 
             vo.addEventListener('dragend', (e) => {
-                console.log('[EDITOR] 仮身ドラッグ終了:', e.dataTransfer.dropEffect, 'isDragging:', this.isDraggingVirtualObject, 'dropSuccess:', this.virtualObjectDropSuccess);
+                logger.debug('[EDITOR] 仮身ドラッグ終了:', e.dataTransfer.dropEffect, 'isDragging:', this.isDraggingVirtualObject, 'dropSuccess:', this.virtualObjectDropSuccess);
 
                 // ドラッグ終了時にすべてのiframeのpointer-eventsを再有効化
                 const allIframes = this.editor.querySelectorAll('.virtual-object-content');
                 allIframes.forEach(iframe => {
                     iframe.style.pointerEvents = 'auto';
                 });
-                console.log('[EDITOR] ドラッグ終了: iframe pointer-events再有効化 (', allIframes.length, '個)');
+                logger.debug('[EDITOR] ドラッグ終了: iframe pointer-events再有効化 (', allIframes.length, '個)');
 
                 // ドラッグ中フラグがfalseの場合は既に処理済みなのでスキップ（dragendの重複発火対策）
                 if (!this.isDraggingVirtualObject) {
-                    console.log('[EDITOR] 既に処理済み、スキップ');
+                    logger.debug('[EDITOR] 既に処理済み、スキップ');
                     return;
                 }
 
@@ -2716,7 +2679,7 @@ class BasicTextEditor extends window.PluginBase {
                 setTimeout(() => {
                     // クロスウィンドウドロップ成功の場合は、既にcross-window-drop-successハンドラで処理済み
                     if (this.crossWindowDropSuccess) {
-                        console.log('[EDITOR] クロスウィンドウドロップ成功、既に処理済み');
+                        logger.debug('[EDITOR] クロスウィンドウドロップ成功、既に処理済み');
                         this.crossWindowDropSuccess = false; // フラグをリセット
                         return;
                     }
@@ -2725,15 +2688,15 @@ class BasicTextEditor extends window.PluginBase {
                     if (e.dataTransfer.dropEffect === 'move' && this.virtualObjectDropSuccess) {
                         // 要素がまだDOMに存在するかチェック（dragendの重複発火対策）
                         if (vo.parentNode) {
-                            console.log('[EDITOR] 同じウィンドウ内で移動: 元の仮身を削除');
+                            logger.debug('[EDITOR] 同じウィンドウ内で移動: 元の仮身を削除');
                             vo.remove();
                             this.isModified = true;
                             this.updateContentHeight();
                         } else {
-                            console.log('[EDITOR] 仮身は既に削除済み、スキップ');
+                            logger.debug('[EDITOR] 仮身は既に削除済み、スキップ');
                         }
                     } else {
-                        console.log('[EDITOR] ドロップキャンセルまたは失敗、元の仮身を保持');
+                        logger.debug('[EDITOR] ドロップキャンセルまたは失敗、元の仮身を保持');
                     }
 
                     // ドラッグ状態をクリア
@@ -2777,7 +2740,7 @@ class BasicTextEditor extends window.PluginBase {
                     const expandThreshold = originalHeight * 1.5; // 1.5倍以上で開いた仮身表示
 
                     vo.classList.add('resizing');
-                    console.log('[EDITOR] 仮身リサイズ開始:', vo.dataset.linkName, 'startWidth:', startWidth, 'startHeight:', startHeight, 'originalHeight:', originalHeight);
+                    logger.debug('[EDITOR] 仮身リサイズ開始:', vo.dataset.linkName, 'startWidth:', startWidth, 'startHeight:', startHeight, 'originalHeight:', originalHeight);
 
                     // リサイズ中はすべてのiframeのポインターイベントを無効化（マウスイベントがiframeに吸収されるのを防ぐ）
                     const allIframes = this.editor.querySelectorAll('.virtual-object-content');
@@ -2816,7 +2779,7 @@ class BasicTextEditor extends window.PluginBase {
                                 isExpanding = true;
                                 wasExpanded = true;
                                 this.expandVirtualObject(vo, newWidth, newHeight).catch(err => {
-                                    console.error('[EDITOR] 展開エラー:', err);
+                                    logger.error('[EDITOR] 展開エラー:', err);
                                 }).finally(() => {
                                     isExpanding = false;
                                 });
@@ -2901,13 +2864,13 @@ class BasicTextEditor extends window.PluginBase {
                         // 閉じた仮身の場合のみ更新（開いた仮身の場合は元の閉じた状態の高さを保持）
                         if (!vo.classList.contains('expanded')) {
                             vo.dataset.originalHeight = currentHeight.toString();
-                            console.log('[EDITOR] リサイズにより originalHeight を更新:', vo.dataset.linkName, currentHeight);
+                            logger.debug('[EDITOR] リサイズにより originalHeight を更新:', vo.dataset.linkName, currentHeight);
                         }
 
                         // XMLに保存
                         this.updateVirtualObjectInXml(virtualObj);
 
-                        console.log('[EDITOR] 仮身リサイズ終了、XMLに保存:', currentWidth, 'x', currentHeight, '座標:', vobjleft, vobjtop, vobjright, vobjbottom);
+                        logger.debug('[EDITOR] 仮身リサイズ終了、XMLに保存:', currentWidth, 'x', currentHeight, '座標:', vobjleft, vobjtop, vobjright, vobjbottom);
                         this.isModified = true;
                     };
 
@@ -2921,7 +2884,7 @@ class BasicTextEditor extends window.PluginBase {
                 // 右クリックされた仮身の情報を保存
                 const linkId = vo.dataset.linkId;
                 const linkName = vo.dataset.linkName;
-                console.log('[EDITOR] 仮身右クリック:', linkName, linkId);
+                logger.debug('[EDITOR] 仮身右クリック:', linkName, linkId);
 
                 // 仮身を選択状態にする
                 this.editor.querySelectorAll('.virtual-object.selected').forEach(other => {
@@ -2931,7 +2894,7 @@ class BasicTextEditor extends window.PluginBase {
 
                 // 実身IDを抽出（共通メソッドを使用）
                 const realId = window.RealObjectSystem.extractRealId(linkId);
-                console.log('[EDITOR] 抽出されたrealId:', realId, 'from linkId:', linkId);
+                logger.debug('[EDITOR] 抽出されたrealId:', realId, 'from linkId:', linkId);
 
                 // 右クリックされた仮身の情報を保存（メニュー生成時に使用）
                 this.contextMenuVirtualObject = {
@@ -2939,7 +2902,7 @@ class BasicTextEditor extends window.PluginBase {
                     realId: realId,
                     virtualObj: this.buildVirtualObjFromDataset(vo.dataset)
                 };
-                console.log('[EDITOR] contextMenuVirtualObject設定完了:', this.contextMenuVirtualObject);
+                logger.debug('[EDITOR] contextMenuVirtualObject設定完了:', this.contextMenuVirtualObject);
 
                 // イベントを伝播させて通常の右クリックメニューを表示
             });
@@ -2976,7 +2939,7 @@ class BasicTextEditor extends window.PluginBase {
         // 最小必要高さを計算（chsz + パディング）
         const minRequiredHeight = chsz + 16; // 上下パディング8pxずつ
 
-        console.log('[EDITOR] 仮身自動展開チェック:', {
+        logger.debug('[EDITOR] 仮身自動展開チェック:', {
             name: vo.dataset.linkName || vo.textContent,
             chsz,
             height,
@@ -2986,11 +2949,11 @@ class BasicTextEditor extends window.PluginBase {
 
         // 実際の高さが必要最小高さより大きい場合は自動展開
         if (height > minRequiredHeight && width > 0 && height > 0) {
-            console.log('[EDITOR] 仮身を自動展開します:', vo.dataset.linkName || vo.textContent);
+            logger.debug('[EDITOR] 仮身を自動展開します:', vo.dataset.linkName || vo.textContent);
             // 次のイベントループで展開（DOMが完全に準備されてから）
             setTimeout(() => {
                 this.expandVirtualObject(vo, width, height).catch(err => {
-                    console.error('[EDITOR] 自動展開エラー:', err);
+                    logger.error('[EDITOR] 自動展開エラー:', err);
                 });
             }, 100);
         }
@@ -3000,12 +2963,12 @@ class BasicTextEditor extends window.PluginBase {
      * すべての仮身に対して自動展開チェックを実行
      */
     checkAllVirtualObjectsForAutoExpand() {
-        console.log('[EDITOR] すべての仮身の自動展開チェックを開始');
+        logger.debug('[EDITOR] すべての仮身の自動展開チェックを開始');
         const virtualObjects = this.editor.querySelectorAll('.virtual-object');
-        console.log('[EDITOR] 検出された仮身数:', virtualObjects.length);
+        logger.debug('[EDITOR] 検出された仮身数:', virtualObjects.length);
 
         virtualObjects.forEach((vo, index) => {
-            console.log(`[EDITOR] 仮身[${index}]をチェック:`, vo.dataset.linkName || vo.textContent);
+            logger.debug(`[EDITOR] 仮身[${index}]をチェック:`, vo.dataset.linkName || vo.textContent);
             this.checkAndAutoExpandVirtualObject(vo);
         });
     }
@@ -3034,7 +2997,7 @@ class BasicTextEditor extends window.PluginBase {
         const virtualObj = {};
 
         // デバッグ: dataset内のすべてのキーをログ出力
-        console.log('[EDITOR] buildVirtualObjFromDataset: dataset内のすべてのキー:', Object.keys(dataset));
+        logger.debug('[EDITOR] buildVirtualObjFromDataset: dataset内のすべてのキー:', Object.keys(dataset));
 
         // data-link-* 形式の属性を抽出（dataset.linkXxx形式）
         for (const key in dataset) {
@@ -3042,7 +3005,7 @@ class BasicTextEditor extends window.PluginBase {
                 const attrName = key.replace(/^link/, '').toLowerCase();
                 virtualObj['link_' + attrName] = dataset[key];
                 // デバッグ: 各link属性の変換をログ出力
-                console.log(`[EDITOR] buildVirtualObjFromDataset: ${key} → link_${attrName} = ${dataset[key]}`);
+                logger.debug(`[EDITOR] buildVirtualObjFromDataset: ${key} → link_${attrName} = ${dataset[key]}`);
             }
         }
 
@@ -3052,7 +3015,7 @@ class BasicTextEditor extends window.PluginBase {
         if (virtualObj.link_name) virtualObj.link_name = virtualObj.link_name;
 
         // 色属性（link_tbcol → tbcol）
-        console.log('[EDITOR] buildVirtualObjFromDataset: 色属性変換前:', {
+        logger.debug('[EDITOR] buildVirtualObjFromDataset: 色属性変換前:', {
             link_tbcol: virtualObj.link_tbcol,
             link_frcol: virtualObj.link_frcol,
             link_chcol: virtualObj.link_chcol,
@@ -3064,7 +3027,7 @@ class BasicTextEditor extends window.PluginBase {
         if (virtualObj.link_chcol) virtualObj.chcol = virtualObj.link_chcol;
         if (virtualObj.link_bgcol) virtualObj.bgcol = virtualObj.link_bgcol;
 
-        console.log('[EDITOR] buildVirtualObjFromDataset: 色属性変換後:', {
+        logger.debug('[EDITOR] buildVirtualObjFromDataset: 色属性変換後:', {
             tbcol: virtualObj.tbcol,
             frcol: virtualObj.frcol,
             chcol: virtualObj.chcol,
@@ -3096,7 +3059,7 @@ class BasicTextEditor extends window.PluginBase {
             try {
                 virtualObj.applist = JSON.parse(dataset.applist);
             } catch (e) {
-                console.warn('[EDITOR] applistのパースに失敗:', e);
+                logger.warn('[EDITOR] applistのパースに失敗:', e);
                 virtualObj.applist = {};
             }
         }
@@ -3113,7 +3076,7 @@ class BasicTextEditor extends window.PluginBase {
      * 仮身の右クリックメニューを表示
      */
     showVirtualObjectContextMenu(e, vo, appListData) {
-        console.log('[EDITOR] 仮身の右クリックメニュー表示', appListData);
+        logger.debug('[EDITOR] 仮身の右クリックメニュー表示', appListData);
 
         // 親ウィンドウにメニュー表示を要求
         const rect = window.frameElement.getBoundingClientRect();
@@ -3194,7 +3157,7 @@ class BasicTextEditor extends window.PluginBase {
                 this.setStatus('ダウンロードしました');
             }
         } catch (error) {
-            console.error('保存エラー:', error);
+            logger.error('保存エラー:', error);
             this.setStatus('保存に失敗しました');
         }
     }
@@ -3202,19 +3165,19 @@ class BasicTextEditor extends window.PluginBase {
     /**
      * エディタの内容をTAD XML形式に変換（TAD XMLタグをそのまま抽出）
      */
-    convertEditorToXML() {
-        console.log('[EDITOR] convertEditorToXML開始');
-        console.log('[EDITOR] エディタHTML:', this.editor.innerHTML.substring(0, 500));
+    async convertEditorToXML() {
+        logger.debug('[EDITOR] convertEditorToXML開始');
+        logger.debug('[EDITOR] エディタHTML:', this.editor.innerHTML.substring(0, 500));
 
         const xmlParts = ['<tad version="1.0" encoding="UTF-8">\r\n'];
         xmlParts.push('<document>\r\n');
 
         // エディタの各段落（<p>タグ）を処理
         const paragraphs = this.editor.querySelectorAll('p');
-        console.log('[EDITOR] 段落数:', paragraphs.length);
+        logger.debug('[EDITOR] 段落数:', paragraphs.length);
 
         if (paragraphs.length === 0) {
-            console.warn('[EDITOR] 段落が見つかりません。エディタの全内容を1段落として処理します');
+            logger.warn('[EDITOR] 段落が見つかりません。エディタの全内容を1段落として処理します');
             // 段落がない場合、エディタ全体を1つの段落として扱う
             xmlParts.push('<p>\r\n');
 
@@ -3228,7 +3191,8 @@ class BasicTextEditor extends window.PluginBase {
             this.extractTADXMLFromElement(this.editor, xmlParts, defaultFontState);
             xmlParts.push('\r\n</p>\r\n');
         } else {
-            paragraphs.forEach((p, index) => {
+            // async/awaitを使用するためfor...ofループを使用
+            for (const p of paragraphs) {
                 xmlParts.push('<p>\r\n');
 
                 // 段落のスタイルを解析してタグに変換
@@ -3236,7 +3200,7 @@ class BasicTextEditor extends window.PluginBase {
                 const fontFamily = this.extractFontFamily(p);
                 const color = this.extractColor(p);
                 const textAlign = this.extractTextAlign(p);
-                const indentCharCount = this.extractIndentCharCount(p);
+                const indentPx = this.extractIndentPx(p);
 
                 // text-align情報を自己閉じタグとして追加
                 if (textAlign && textAlign !== 'left') {
@@ -3273,19 +3237,23 @@ class BasicTextEditor extends window.PluginBase {
                 // 追加された内容を一旦削除
                 xmlParts.length = xmlPartsLengthBefore;
 
-                // インデントタグを適切な位置に挿入
-                const finalContent = this.insertIndentTagAtPosition(paragraphContent, indentCharCount);
+                // インデントタグを適切な位置に挿入（実測による文字位置特定）
+                let finalContent = paragraphContent;
+                if (indentPx > 0) {
+                    const indentCharCount = await this.findIndentCharPositionByWidth(paragraphContent, indentPx);
+                    finalContent = this.insertIndentTagAtPosition(paragraphContent, indentCharCount);
+                }
                 xmlParts.push(finalContent);
 
                 xmlParts.push('\r\n</p>\r\n');
-            });
+            }
         }
 
         xmlParts.push('</document>\r\n');
         xmlParts.push('</tad>\r\n');
 
         const xml = xmlParts.join('');
-        console.log('[EDITOR] convertEditorToXML完了, XML長さ:', xml.length);
+        logger.debug('[EDITOR] convertEditorToXML完了, XML長さ:', xml.length);
 
         return xml;
     }
@@ -3716,13 +3684,33 @@ class BasicTextEditor extends window.PluginBase {
     /**
      * <indent/>タグより前のXMLコンテンツの実際の文字幅を計算
      * DOMに実際に配置して実測することで正確な幅を取得
+     * <br/>がある場合は、<indent/>と同じ行のテキストのみを測定
      * @param {string} xmlContent - <indent/>タグより前のXMLコンテンツ
      * @param {string} paragraphStyle - 段落全体のスタイル文字列
      * @returns {Promise<number>} 計算された文字幅（ピクセル）
      */
     async calculateTextWidthBeforeIndent(xmlContent, paragraphStyle = '') {
         // 改行コードや余分な空白を削除
-        const cleanedXml = xmlContent.replace(/\r\n|\r|\n/g, '');
+        let cleanedXml = xmlContent.replace(/\r\n|\r|\n/g, '');
+
+        // <br/>がある場合は、最後の<br/>以降のテキストのみを測定
+        // （<indent/>と同じ行にあるテキストの幅が必要）
+        const brMatch = cleanedXml.match(/^([\s\S]*)<br\s*\/?>/i);
+        if (brMatch) {
+            // 最後の<br/>以降のコンテンツを取得
+            const lastBrIndex = cleanedXml.lastIndexOf('<br');
+            if (lastBrIndex !== -1) {
+                // <br/>タグの終了位置を見つける
+                const brEndIndex = cleanedXml.indexOf('>', lastBrIndex);
+                if (brEndIndex !== -1) {
+                    cleanedXml = cleanedXml.substring(brEndIndex + 1);
+                }
+            }
+        }
+
+        // タブ文字を14ptのspanに包む（BTRONではタブは常に14pt）
+        // 複数のタブ文字も一括で処理
+        cleanedXml = cleanedXml.replace(/(\t+)/g, '<span style="font-size: 14pt;">$1</span>');
 
         // エディタの計算済みスタイルを取得
         const editorStyle = window.getComputedStyle(this.editor);
@@ -3769,26 +3757,110 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
-     * 段落からインデント文字数を抽出（<indent/>タグ用）
+     * 段落からインデント幅（ピクセル）を抽出（<indent/>タグ用）
      */
-    extractIndentCharCount(element) {
+    extractIndentPx(element) {
         const paddingLeft = parseFloat(element.style.paddingLeft) || 0;
         const textIndent = parseFloat(element.style.textIndent) || 0;
 
         // padding-leftとtext-indentが設定されていて、text-indentが負の値の場合
         if (paddingLeft > 0 && textIndent < 0 && Math.abs(textIndent) === paddingLeft) {
-            // インデント量から文字数を計算
-            const fontSize = parseFloat(window.getComputedStyle(element).fontSize) || 14;
-            const spaceWidth = fontSize * 0.5;
-            const charCount = Math.round(paddingLeft / spaceWidth);
-            return charCount;
+            return paddingLeft;
         }
 
         return 0;
     }
 
     /**
+     * XMLコンテンツから指定ピクセル幅に対応する文字位置を実測で特定
+     * @param {string} xmlContent - XMLコンテンツ
+     * @param {number} targetWidth - 目標のピクセル幅
+     * @returns {Promise<number>} 文字位置（0始まり）
+     */
+    async findIndentCharPositionByWidth(xmlContent, targetWidth) {
+        if (targetWidth <= 0) {
+            return 0;
+        }
+
+        // XMLからタグを除いた実際の文字列を取得
+        let charPositions = []; // [{xmlIndex: XMLでの位置, char: 文字}]
+        let i = 0;
+
+        while (i < xmlContent.length) {
+            if (xmlContent[i] === '<') {
+                // タグをスキップ
+                const tagEnd = xmlContent.indexOf('>', i);
+                if (tagEnd === -1) break;
+                i = tagEnd + 1;
+            } else if (xmlContent[i] === '&') {
+                // エンティティ
+                const entityEnd = xmlContent.indexOf(';', i);
+                if (entityEnd === -1) break;
+                const entity = xmlContent.substring(i, entityEnd + 1);
+                // エンティティを実際の文字に変換
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = entity;
+                charPositions.push({ xmlIndex: i, char: tempDiv.textContent });
+                i = entityEnd + 1;
+            } else {
+                // 通常の文字
+                charPositions.push({ xmlIndex: i, char: xmlContent[i] });
+                i++;
+            }
+        }
+
+        // 1文字ずつ追加しながら幅を測定し、targetWidthに最も近い位置を探す
+        let bestPosition = 0;
+        let bestDiff = targetWidth;
+
+        for (let pos = 1; pos <= charPositions.length; pos++) {
+            const testText = charPositions.slice(0, pos).map(p => p.char).join('');
+            const width = await this.measureXmlTextWidth(testText);
+
+            const diff = Math.abs(width - targetWidth);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestPosition = pos;
+            }
+
+            // 目標幅を超えたら終了（最も近い位置は見つかっている）
+            if (width >= targetWidth) {
+                break;
+            }
+        }
+
+        return bestPosition;
+    }
+
+    /**
+     * テキストの実際の幅を測定（エディタのスタイルを使用）
+     */
+    async measureXmlTextWidth(text) {
+        const measureElement = document.createElement('span');
+        const editorStyle = window.getComputedStyle(this.editor);
+
+        measureElement.style.fontFamily = editorStyle.fontFamily;
+        measureElement.style.fontSize = editorStyle.fontSize;
+        measureElement.style.fontWeight = editorStyle.fontWeight;
+        measureElement.style.fontStyle = editorStyle.fontStyle;
+        measureElement.style.letterSpacing = editorStyle.letterSpacing;
+        measureElement.style.whiteSpace = 'pre';
+        measureElement.style.position = 'absolute';
+        measureElement.style.visibility = 'hidden';
+        measureElement.style.top = '-9999px';
+        measureElement.textContent = text;
+
+        this.editor.appendChild(measureElement);
+        const width = measureElement.getBoundingClientRect().width;
+        this.editor.removeChild(measureElement);
+
+        return width;
+    }
+
+    /**
      * XMLコンテンツの特定の文字位置に<indent/>タグを挿入
+     * charCountは「インデント位置より前の文字数」を表す
+     * つまり、charCount文字の後に<indent/>を挿入する
      */
     insertIndentTagAtPosition(xmlContent, charCount) {
         if (charCount <= 0) {
@@ -3822,28 +3894,33 @@ class BasicTextEditor extends window.PluginBase {
                     break;
                 }
 
+                // インデントタグを挿入（文字を追加する前にチェック）
+                if (!indentInserted && charCounter === charCount) {
+                    result += '<indent/>';
+                    indentInserted = true;
+                }
+
                 const entity = xmlContent.substring(i, entityEnd + 1);
                 result += entity;
                 charCounter++; // エンティティは1文字としてカウント
                 i = entityEnd + 1;
-
-                // インデントタグを挿入
+            } else {
+                // インデントタグを挿入（文字を追加する前にチェック）
                 if (!indentInserted && charCounter === charCount) {
                     result += '<indent/>';
                     indentInserted = true;
                 }
-            } else {
+
                 // 通常の文字
                 result += xmlContent[i];
                 charCounter++;
                 i++;
-
-                // インデントタグを挿入
-                if (!indentInserted && charCounter === charCount) {
-                    result += '<indent/>';
-                    indentInserted = true;
-                }
             }
+        }
+
+        // 最後まで挿入されなかった場合（charCountがコンテンツ長と一致）
+        if (!indentInserted && charCounter === charCount) {
+            result += '<indent/>';
         }
 
         return result;
@@ -3965,12 +4042,12 @@ class BasicTextEditor extends window.PluginBase {
             this.setStatus('エクスポート中...');
 
             // エディタの内容をTAD XML形式に変換
-            const xmlContent = this.convertEditorToXML();
+            const xmlContent = await this.convertEditorToXML();
 
             // 変換後のXMLをtadDataに保存（原稿モード表示用）
             this.tadData = xmlContent;
 
-            console.log('[EDITOR] XMLエクスポート, 長さ:', xmlContent.length);
+            logger.debug('[EDITOR] XMLエクスポート, 長さ:', xmlContent.length);
 
             // Electron環境の場合
             if (typeof window.electronAPI !== 'undefined') {
@@ -3993,7 +4070,7 @@ class BasicTextEditor extends window.PluginBase {
                 this.setStatus('XMLダウンロードしました');
             }
         } catch (error) {
-            console.error('[EDITOR] エクスポートエラー:', error);
+            logger.error('[EDITOR] エクスポートエラー:', error);
             this.setStatus('エクスポートに失敗しました');
         }
     }
@@ -4001,10 +4078,10 @@ class BasicTextEditor extends window.PluginBase {
     /**
      * 親ウインドウにXMLデータの変更を通知（自動保存用）
      */
-    notifyXmlDataChanged() {
+    async notifyXmlDataChanged() {
         if (window.parent && window.parent !== window) {
             // エディタの内容をTAD XML形式に変換
-            const xmlContent = this.convertEditorToXML();
+            const xmlContent = await this.convertEditorToXML();
 
             // tadDataを更新
             this.tadData = xmlContent;
@@ -4014,7 +4091,7 @@ class BasicTextEditor extends window.PluginBase {
                 fileId: this.realId,
                 xmlData: xmlContent
             });
-            console.log('[EDITOR] xmlTAD変更を通知, realId:', this.realId);
+            logger.debug('[EDITOR] xmlTAD変更を通知, realId:', this.realId);
         }
     }
 
@@ -4022,7 +4099,7 @@ class BasicTextEditor extends window.PluginBase {
      * 新たな実身に保存（非再帰的コピー）
      */
     async saveAsNewRealObject() {
-        console.log('[EDITOR] saveAsNewRealObject - realId:', this.realId);
+        logger.debug('[EDITOR] saveAsNewRealObject - realId:', this.realId);
 
         // まず現在のデータを保存
         this.notifyXmlDataChanged();
@@ -4036,7 +4113,7 @@ class BasicTextEditor extends window.PluginBase {
             messageId: messageId
         });
 
-        console.log('[EDITOR] 新たな実身への保存要求:', this.realId);
+        logger.debug('[EDITOR] 新たな実身への保存要求:', this.realId);
 
         try {
             // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
@@ -4045,10 +4122,10 @@ class BasicTextEditor extends window.PluginBase {
             });
 
             if (result.cancelled) {
-                console.log('[EDITOR] 新たな実身への保存がキャンセルされました');
+                logger.debug('[EDITOR] 新たな実身への保存がキャンセルされました');
                 this.setStatus('保存がキャンセルされました');
             } else if (result.success) {
-                console.log('[EDITOR] 新たな実身への保存成功:', result.newRealId, '名前:', result.newName);
+                logger.debug('[EDITOR] 新たな実身への保存成功:', result.newRealId, '名前:', result.newName);
 
                 // 既存の仮身から属性を取得（存在する場合）
                 const existingVobjs = this.editor.querySelectorAll('.virtual-object');
@@ -4097,9 +4174,9 @@ class BasicTextEditor extends window.PluginBase {
                         if (linkTypedisp) vobjAttributes.typedisp = linkTypedisp;
                         if (linkUpdatedisp) vobjAttributes.updatedisp = linkUpdatedisp;
 
-                        console.log('[EDITOR] 既存仮身から属性を取得:', vobjAttributes);
+                        logger.debug('[EDITOR] 既存仮身から属性を取得:', vobjAttributes);
                     } catch (e) {
-                        console.warn('[EDITOR] 既存仮身の属性取得失敗、デフォルト値を使用:', e);
+                        logger.warn('[EDITOR] 既存仮身の属性取得失敗、デフォルト値を使用:', e);
                     }
                 }
 
@@ -4123,7 +4200,7 @@ class BasicTextEditor extends window.PluginBase {
                     updatedisp: vobjAttributes.updatedisp
                 };
 
-                console.log('[EDITOR] 新しい仮身の属性:', newVirtualObject);
+                logger.debug('[EDITOR] 新しい仮身の属性:', newVirtualObject);
 
                 // insertVirtualObjectLinkを使って仮身を挿入
                 this.insertVirtualObjectLink(newVirtualObject);
@@ -4132,13 +4209,13 @@ class BasicTextEditor extends window.PluginBase {
                 this.notifyXmlDataChanged();
 
                 this.setStatus('新しい実身に保存しました: ' + result.newName);
-                console.log('[EDITOR] 新しい仮身をエディタに挿入しました');
+                logger.debug('[EDITOR] 新しい仮身をエディタに挿入しました');
             } else {
-                console.error('[EDITOR] 新たな実身への保存失敗:', result.error);
+                logger.error('[EDITOR] 新たな実身への保存失敗:', result.error);
                 this.setStatus('保存に失敗しました');
             }
         } catch (error) {
-            console.error('[EDITOR] 新たな実身への保存エラー:', error);
+            logger.error('[EDITOR] 新たな実身への保存エラー:', error);
             this.setStatus('保存に失敗しました');
         }
     }
@@ -4161,7 +4238,7 @@ class BasicTextEditor extends window.PluginBase {
      * tadjs-desktop.htmlのステータスバーにメッセージを送信
      */
     setStatus(message) {
-        console.log(`[基本文章編集] ${message}`);
+        logger.debug(`[基本文章編集] ${message}`);
 
         // 親ウィンドウにステータスメッセージを送信
         // MessageBus Phase 2: messageBus.send()を使用
@@ -4211,7 +4288,7 @@ class BasicTextEditor extends window.PluginBase {
 
             // ドラッグ中は右クリックメニューを表示しない（コピーモード用の右ボタン操作として使用）
             if (this.isDraggingVirtualObject) {
-                console.log('[EDITOR] ドラッグ中のため右クリックメニューを抑制');
+                logger.debug('[EDITOR] ドラッグ中のため右クリックメニューを抑制');
                 return;
             }
 
@@ -4365,10 +4442,10 @@ class BasicTextEditor extends window.PluginBase {
         ];
 
         // 仮身が選択されている場合は仮身操作メニューを追加
-        console.log('[EDITOR] getMenuDefinition: contextMenuVirtualObject:', this.contextMenuVirtualObject);
+        logger.debug('[EDITOR] getMenuDefinition: contextMenuVirtualObject:', this.contextMenuVirtualObject);
         if (this.contextMenuVirtualObject) {
             try {
-                console.log('[EDITOR] getMenuDefinition: 仮身が選択されています realId:', this.contextMenuVirtualObject.realId);
+                logger.debug('[EDITOR] getMenuDefinition: 仮身が選択されています realId:', this.contextMenuVirtualObject.realId);
 
                 // 仮身操作メニュー
                 const realId = this.contextMenuVirtualObject.realId;
@@ -4405,11 +4482,11 @@ class BasicTextEditor extends window.PluginBase {
 
                 // 実行メニュー
                 const applistData = await this.getAppListData(this.contextMenuVirtualObject.realId);
-                console.log('[EDITOR] getMenuDefinition: applistData:', applistData);
+                logger.debug('[EDITOR] getMenuDefinition: applistData:', applistData);
                 if (applistData && Object.keys(applistData).length > 0) {
                     const executeSubmenu = [];
                     for (const [pluginId, appInfo] of Object.entries(applistData)) {
-                        console.log('[EDITOR] getMenuDefinition: 実行メニュー項目追加:', pluginId, appInfo);
+                        logger.debug('[EDITOR] getMenuDefinition: 実行メニュー項目追加:', pluginId, appInfo);
                         executeSubmenu.push({
                             label: appInfo.name || pluginId,
                             action: `execute-with-${pluginId}`
@@ -4420,15 +4497,15 @@ class BasicTextEditor extends window.PluginBase {
                         label: '実行',
                         submenu: executeSubmenu
                     });
-                    console.log('[EDITOR] getMenuDefinition: 実行メニュー追加完了 項目数:', executeSubmenu.length);
+                    logger.debug('[EDITOR] getMenuDefinition: 実行メニュー追加完了 項目数:', executeSubmenu.length);
                 } else {
-                    console.warn('[EDITOR] getMenuDefinition: applistDataが空またはnull');
+                    logger.warn('[EDITOR] getMenuDefinition: applistDataが空またはnull');
                 }
             } catch (error) {
-                console.error('[EDITOR] applist取得エラー:', error);
+                logger.error('[EDITOR] applist取得エラー:', error);
             }
         } else {
-            console.log('[EDITOR] getMenuDefinition: 仮身が選択されていません');
+            logger.debug('[EDITOR] getMenuDefinition: 仮身が選択されていません');
         }
 
         return menuDef;
@@ -4496,12 +4573,12 @@ class BasicTextEditor extends window.PluginBase {
      * メニューアクションを実行
      */
     executeMenuAction(action, additionalData) {
-        console.log('[EDITOR] メニューアクション:', action, additionalData);
+        logger.debug('[EDITOR] メニューアクション:', action, additionalData);
 
         // 仮身の実行メニューからのアクション
         if (action.startsWith('execute-with-')) {
             const pluginId = action.replace('execute-with-', '');
-            console.log('[EDITOR] 仮身を指定アプリで起動:', pluginId);
+            logger.debug('[EDITOR] 仮身を指定アプリで起動:', pluginId);
 
             // contextMenuVirtualObjectから仮身情報を取得
             if (this.contextMenuVirtualObject && this.contextMenuVirtualObject.virtualObj) {
@@ -4834,7 +4911,7 @@ class BasicTextEditor extends window.PluginBase {
                         this.applyFont(this.recentFonts[index]);
                     }
                 } else {
-                    console.log('[EDITOR] 未実装のアクション:', action);
+                    logger.debug('[EDITOR] 未実装のアクション:', action);
                     this.setStatus(`未実装: ${action}`);
                 }
         }
@@ -4843,10 +4920,10 @@ class BasicTextEditor extends window.PluginBase {
     /**
      * XML直接表示モード
      */
-    viewXMLMode() {
+    async viewXMLMode() {
         // XMLモードでない場合（清書モードまたは初期状態）、エディタの内容をXMLに変換
         if (this.viewMode !== 'xml') {
-            this.tadData = this.convertEditorToXML();
+            this.tadData = await this.convertEditorToXML();
         }
 
         if (this.tadData) {
@@ -4862,7 +4939,7 @@ class BasicTextEditor extends window.PluginBase {
      * 清書モード
      */
     async viewFormattedMode() {
-        console.log('[EDITOR] viewFormattedMode開始, 現在のモード:', this.viewMode);
+        logger.debug('[EDITOR] viewFormattedMode開始, 現在のモード:', this.viewMode);
         
         // XMLモードの場合、エディタの内容をXMLに変換してtadDataを更新
         if (this.viewMode === 'xml') {
@@ -4870,29 +4947,29 @@ class BasicTextEditor extends window.PluginBase {
             const preElement = this.editor.querySelector('pre');
             if (preElement) {
                 const rawText = preElement.textContent;
-                console.log('[EDITOR] preElement.textContent取得, 長さ:', rawText.length);
-                console.log('[EDITOR] 最初の200文字:', rawText.substring(0, 200));
+                logger.debug('[EDITOR] preElement.textContent取得, 長さ:', rawText.length);
+                logger.debug('[EDITOR] 最初の200文字:', rawText.substring(0, 200));
                 
                 this.tadData = rawText;  // textContentは既にデコード済みなのでdecodeHtmlは不要
                 
-                console.log('[EDITOR] tadData更新完了, 長さ:', this.tadData.length);
-                console.log('[EDITOR] tadDataプレビュー:', this.tadData.substring(0, 200));
+                logger.debug('[EDITOR] tadData更新完了, 長さ:', this.tadData.length);
+                logger.debug('[EDITOR] tadDataプレビュー:', this.tadData.substring(0, 200));
             } else {
-                console.error('[EDITOR] pre要素が見つかりません');
+                logger.error('[EDITOR] pre要素が見つかりません');
             }
         } else {
             // 清書モードまたは初期状態の場合、エディタの内容をXMLに変換
-            console.log('[EDITOR] 清書モードから変換');
-            this.tadData = this.convertEditorToXML();
+            logger.debug('[EDITOR] 清書モードから変換');
+            this.tadData = await this.convertEditorToXML();
         }
 
         if (this.tadData) {
-            console.log('[EDITOR] renderTADXML呼び出し, tadData長さ:', this.tadData.length);
-            this.renderTADXML(this.tadData);
+            logger.debug('[EDITOR] renderTADXML呼び出し, tadData長さ:', this.tadData.length);
+            await this.renderTADXML(this.tadData);
             this.viewMode = 'formatted';
             this.setStatus('清書モード');
         } else {
-            console.error('[EDITOR] tadDataが空です');
+            logger.error('[EDITOR] tadDataが空です');
             this.editor.innerHTML = '<p>XMLデータがありません</p>';
         }
     }
@@ -4908,34 +4985,6 @@ class BasicTextEditor extends window.PluginBase {
 
             this.isFullscreen = !this.isFullscreen;
             this.setStatus(this.isFullscreen ? '全画面表示ON' : '全画面表示OFF');
-        } else if (window.parent && window.parent !== window) {
-            // フォールバック: MessageBus未利用時
-            window.parent.postMessage({
-                type: 'toggle-maximize'
-            }, '*');
-
-            this.isFullscreen = !this.isFullscreen;
-            this.setStatus(this.isFullscreen ? '全画面表示ON' : '全画面表示OFF');
-        } else {
-            // 親ウィンドウがない場合は従来のフルスクリーンAPIを使用
-            const container = document.querySelector('.editor-container');
-            if (!this.isFullscreen) {
-                if (container.requestFullscreen) {
-                    container.requestFullscreen();
-                } else if (container.webkitRequestFullscreen) {
-                    container.webkitRequestFullscreen();
-                }
-                this.isFullscreen = true;
-                this.setStatus('全画面表示ON');
-            } else {
-                if (document.exitFullscreen) {
-                    document.exitFullscreen();
-                } else if (document.webkitExitFullscreen) {
-                    document.webkitExitFullscreen();
-                }
-                this.isFullscreen = false;
-                this.setStatus('全画面表示OFF');
-            }
         }
     }
 
@@ -5018,7 +5067,7 @@ class BasicTextEditor extends window.PluginBase {
         });
         this.editor.dispatchEvent(inputEvent);
 
-        console.log('[EDITOR] タブ挿入 (フォントサイズ: 14pt固定)');
+        logger.debug('[EDITOR] タブ挿入 (フォントサイズ: 14pt固定)');
     }
 
     /**
@@ -5038,7 +5087,7 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         if (!paragraph || paragraph.nodeName !== 'P') {
-            console.warn('[EDITOR] 段落要素が見つかりません');
+            logger.warn('[EDITOR] 段落要素が見つかりません');
             return;
         }
 
@@ -5046,7 +5095,7 @@ class BasicTextEditor extends window.PluginBase {
         const indentPx = this.measureIndentWidth(paragraph, range.startContainer, range.startOffset);
 
         if (indentPx === 0) {
-            console.log('[EDITOR] カーソルが段落の先頭にあるため、字下げを適用しません');
+            logger.debug('[EDITOR] カーソルが段落の先頭にあるため、字下げを適用しません');
             return;
         }
 
@@ -5057,7 +5106,7 @@ class BasicTextEditor extends window.PluginBase {
         // 変更フラグ
         this.isModified = true;
 
-        console.log(`[EDITOR] 字下げ適用: ${indentPx}px`);
+        logger.debug(`[EDITOR] 字下げ適用: ${indentPx}px`);
         this.setStatus(`字下げしました (${Math.round(indentPx)}px)`);
     }
 
@@ -5157,20 +5206,20 @@ class BasicTextEditor extends window.PluginBase {
      * 背景色変更
      */
     async changeBgColor() {
-        console.log('[EDITOR] changeBgColor開始');
+        logger.debug('[EDITOR] changeBgColor開始');
 
         // 現在の背景色を取得
         const currentBgColor = (this.currentFile && this.currentFile.windowConfig && this.currentFile.windowConfig.backgroundColor)
             ? this.currentFile.windowConfig.backgroundColor
             : '#ffffff';
 
-        console.log('[EDITOR] 現在の背景色:', currentBgColor);
+        logger.debug('[EDITOR] 現在の背景色:', currentBgColor);
 
         const color = await this.showInputDialog('背景色を入力してください（例: #ffffff, white）', currentBgColor, 20);
-        console.log('[EDITOR] showInputDialogの戻り値:', color);
+        logger.debug('[EDITOR] showInputDialogの戻り値:', color);
 
         if (color) {
-            console.log('[EDITOR] 背景色を変更します:', color);
+            logger.debug('[EDITOR] 背景色を変更します:', color);
             this.editor.style.backgroundColor = color;
             document.body.style.backgroundColor = color;
             this.setStatus(`背景色を${color}に変更しました`);
@@ -5182,7 +5231,7 @@ class BasicTextEditor extends window.PluginBase {
                     fileId: this.realId,
                     backgroundColor: color
                 });
-                console.log('[EDITOR] 背景色更新を親ウィンドウに通知:', this.realId, color);
+                logger.debug('[EDITOR] 背景色更新を親ウィンドウに通知:', this.realId, color);
             }
 
             // this.currentFileを更新（再表示時に正しい色を適用するため）
@@ -5193,7 +5242,7 @@ class BasicTextEditor extends window.PluginBase {
                 this.currentFile.windowConfig.backgroundColor = color;
             }
         } else {
-            console.log('[EDITOR] 背景色変更がキャンセルされました');
+            logger.debug('[EDITOR] 背景色変更がキャンセルされました');
         }
     }
 
@@ -5334,7 +5383,7 @@ class BasicTextEditor extends window.PluginBase {
     async getSystemFonts() {
         // 一時的にキャッシュを無効化してテスト
         // if (this.systemFonts.length > 0) {
-        //     console.log('[EDITOR] キャッシュからフォント一覧を返す:', this.systemFonts.length);
+        //     logger.debug('[EDITOR] キャッシュからフォント一覧を返す:', this.systemFonts.length);
         //     return this.systemFonts;
         // }
 
@@ -5348,7 +5397,7 @@ class BasicTextEditor extends window.PluginBase {
             // Electron環境では常に親ウィンドウ（レジストリベース）から取得
             // Font Access API (queryLocalFonts) が使える場合でもブラウザのみ
             if ('queryLocalFonts' in window && !isElectron) {
-                console.log('[EDITOR] Font Access APIを使用してフォント一覧を取得');
+                logger.debug('[EDITOR] Font Access APIを使用してフォント一覧を取得');
                 const fontData = await window.queryLocalFonts();
 
                 // フォント名を抽出（重複を除く）
@@ -5373,16 +5422,16 @@ class BasicTextEditor extends window.PluginBase {
 
                 // 表示名でソート
                 fonts = this.sortFontObjects(fontObjects);
-                console.log('[EDITOR] Font Access APIで取得したフォント数:', fonts.length);
+                logger.debug('[EDITOR] Font Access APIで取得したフォント数:', fonts.length);
             } else {
-                console.log('[EDITOR] 親ウィンドウに要求します（Electron環境またはFont Access API不可）');
+                logger.debug('[EDITOR] 親ウィンドウに要求します（Electron環境またはFont Access API不可）');
 
                 // 親ウィンドウにフォント一覧を要求（APIから日本語名付きで取得）
                 const systemFonts = await this.requestSystemFontsFromParent();
 
                 // 親ウィンドウから取得できなかった場合はフォールバック
                 if (systemFonts.length === 0) {
-                    console.log('[EDITOR] 親ウィンドウからフォント取得失敗、フォールバックを使用');
+                    logger.debug('[EDITOR] 親ウィンドウからフォント取得失敗、フォールバックを使用');
                     const fallbackFonts = await this.detectFontsFromCommonList();
                     // フォールバックも文字列配列なのでオブジェクト配列に変換
                     fonts = fallbackFonts.map(systemName => ({
@@ -5418,14 +5467,14 @@ class BasicTextEditor extends window.PluginBase {
 
                     }
                     fonts = this.sortFontObjects(fonts);
-                    console.log('[EDITOR] 親ウィンドウから取得したフォント数:', fonts.length);
+                    logger.debug('[EDITOR] 親ウィンドウから取得したフォント数:', fonts.length);
                 }
             }
         } catch (error) {
-            console.error('[EDITOR] フォント取得エラー:', error);
+            logger.error('[EDITOR] フォント取得エラー:', error);
 
             // フォールバック: 一般的なフォントリストをテスト
-            console.log('[EDITOR] フォールバック: 一般的なフォントリストを使用');
+            logger.debug('[EDITOR] フォールバック: 一般的なフォントリストを使用');
             const fallbackFonts = await this.detectFontsFromCommonList();
             const fontObjects = fallbackFonts.map(systemName => ({
                 systemName: systemName,
@@ -5436,7 +5485,7 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         this.systemFonts = fonts;
-        console.log('[EDITOR] 最終的に検出されたフォント数:', fonts.length);
+        logger.debug('[EDITOR] 最終的に検出されたフォント数:', fonts.length);
         return fonts;
     }
 
@@ -5445,29 +5494,29 @@ class BasicTextEditor extends window.PluginBase {
      */
     async requestSystemFontsFromParent() {
         const messageId = `get_fonts_${Date.now()}_${Math.random()}`;
-        console.log('[EDITOR] 親ウィンドウにフォント要求を送信開始 messageId:', messageId);
+        logger.debug('[EDITOR] 親ウィンドウにフォント要求を送信開始 messageId:', messageId);
 
         // 親ウィンドウに要求
         if (!window.parent || window.parent === window) {
-            console.warn('[EDITOR] 親ウィンドウが存在しない');
+            logger.warn('[EDITOR] 親ウィンドウが存在しない');
             return [];
         }
 
-        console.log('[EDITOR] 親ウィンドウにpostMessage送信: type=get-system-fonts');
+        logger.debug('[EDITOR] 親ウィンドウにpostMessage送信: type=get-system-fonts');
         this.messageBus.send('get-system-fonts', {
             messageId: messageId
         });
-        console.log('[EDITOR] postMessage送信完了');
+        logger.debug('[EDITOR] postMessage送信完了');
 
         try {
             // レスポンスを待つ（5秒タイムアウト）
             const result = await this.messageBus.waitFor('system-fonts-response', window.DEFAULT_TIMEOUT_MS, (data) => {
                 return data.messageId === messageId;
             });
-            console.log('[EDITOR] 親ウィンドウからフォント一覧を受信:', result.fonts.length, '件');
+            logger.debug('[EDITOR] 親ウィンドウからフォント一覧を受信:', result.fonts.length, '件');
             return result.fonts || [];
         } catch (error) {
-            console.warn('[EDITOR] フォント一覧取得タイムアウト（5秒経過）、フォールバックを使用');
+            logger.warn('[EDITOR] フォント一覧取得タイムアウト（5秒経過）、フォールバックを使用');
             return [];
         }
     }
@@ -5527,9 +5576,9 @@ class BasicTextEditor extends window.PluginBase {
      */
     async showFontList() {
         // システムフォント一覧を取得（完全に取得完了するまで待機）
-        console.log('[EDITOR] システムフォント取得開始');
+        logger.debug('[EDITOR] システムフォント取得開始');
         const fonts = await this.getSystemFonts();
-        console.log('[EDITOR] システムフォント取得完了:', fonts.length, 'フォント');
+        logger.debug('[EDITOR] システムフォント取得完了:', fonts.length, 'フォント');
 
         if (fonts.length === 0) {
             alert('利用可能なフォントが見つかりませんでした。');
@@ -5588,26 +5637,26 @@ class BasicTextEditor extends window.PluginBase {
                 ],
                 defaultButton: 1
             }, (result) => {
-                console.log('[EDITOR] ダイアログ応答:', result);
+                logger.debug('[EDITOR] ダイアログ応答:', result);
 
                 // Dialog result is wrapped in result.result
                 const dialogResult = result.result || result;
 
                 if (dialogResult.error) {
-                    console.warn('[EDITOR] Custom dialog error:', dialogResult.error);
+                    logger.warn('[EDITOR] Custom dialog error:', dialogResult.error);
                     resolve({ button: 'cancel' });
                     return;
                 }
 
                 if (dialogResult.button === 'ok') {
-                    console.log('[EDITOR] OKボタンが押されました');
+                    logger.debug('[EDITOR] OKボタンが押されました');
 
                     // 選択されたフォントのインデックスを取得
                     const fontIndex = dialogResult.selectedFontIndex;
                     if (fontIndex !== null && fontIndex !== undefined && fontIndex >= 0 && fontIndex < fonts.length) {
                         const selectedFontObj = fonts[fontIndex];
-                        console.log('[EDITOR] フォント選択:', selectedFontObj.displayName);
-                        console.log('[EDITOR] 利用可能な全ての名前:', selectedFontObj.allNames);
+                        logger.debug('[EDITOR] フォント選択:', selectedFontObj.displayName);
+                        logger.debug('[EDITOR] 利用可能な全ての名前:', selectedFontObj.allNames);
 
                         // allNamesがあれば全ての名前を使用、なければdisplayNameのみ
                         let fontFamilyCSS;
@@ -5620,18 +5669,18 @@ class BasicTextEditor extends window.PluginBase {
                             fontFamilyCSS = `"${selectedFontObj.displayName}"`;
                         }
 
-                        console.log('[EDITOR] CSS font-family:', fontFamilyCSS);
+                        logger.debug('[EDITOR] CSS font-family:', fontFamilyCSS);
                         this.applyFont(fontFamilyCSS);
                     } else {
-                        console.log('[EDITOR] フォントが選択されていません');
+                        logger.debug('[EDITOR] フォントが選択されていません');
                     }
                 } else {
-                    console.log('[EDITOR] OKボタンが押されませんでした。button:', dialogResult.button);
+                    logger.debug('[EDITOR] OKボタンが押されませんでした。button:', dialogResult.button);
                 }
                 resolve(result);
             });
 
-            console.log('[EDITOR] 書体一覧ダイアログ要求:', fonts.length, 'フォント');
+            logger.debug('[EDITOR] 書体一覧ダイアログ要求:', fonts.length, 'フォント');
         });
     }
 
@@ -5639,7 +5688,7 @@ class BasicTextEditor extends window.PluginBase {
      * フォント適用
      */
     applyFont(fontFamily) {
-        console.log('[EDITOR] applyFont呼び出し:', fontFamily);
+        logger.debug('[EDITOR] applyFont呼び出し:', fontFamily);
 
         // フォントの可用性をチェック
         this.checkFontAvailability(fontFamily);
@@ -5648,25 +5697,25 @@ class BasicTextEditor extends window.PluginBase {
 
         // 選択範囲がある場合
         if (selection && selection.rangeCount > 0 && !selection.isCollapsed) {
-            console.log('[EDITOR] 選択範囲にフォント適用');
+            logger.debug('[EDITOR] 選択範囲にフォント適用');
             document.execCommand('fontName', false, fontFamily);
 
             // 適用後の確認
             const container = selection.getRangeAt(0).commonAncestorContainer;
             const element = container.nodeType === 3 ? container.parentElement : container;
-            console.log('[EDITOR] 適用後のfont-family:', window.getComputedStyle(element).fontFamily);
+            logger.debug('[EDITOR] 適用後のfont-family:', window.getComputedStyle(element).fontFamily);
         } else {
             // 選択範囲がない場合、エディタ全体に適用
-            console.log('[EDITOR] エディタ全体にフォント適用');
+            logger.debug('[EDITOR] エディタ全体にフォント適用');
             const paragraphs = this.editor.querySelectorAll('p');
             if (paragraphs.length > 0) {
                 paragraphs.forEach(p => {
                     p.style.fontFamily = fontFamily;
-                    console.log('[EDITOR] 段落にfont-family設定:', p.style.fontFamily, '→ computed:', window.getComputedStyle(p).fontFamily);
+                    logger.debug('[EDITOR] 段落にfont-family設定:', p.style.fontFamily, '→ computed:', window.getComputedStyle(p).fontFamily);
                 });
             } else {
                 this.editor.style.fontFamily = fontFamily;
-                console.log('[EDITOR] エディタにfont-family設定:', this.editor.style.fontFamily);
+                logger.debug('[EDITOR] エディタにfont-family設定:', this.editor.style.fontFamily);
             }
         }
 
@@ -5687,13 +5736,13 @@ class BasicTextEditor extends window.PluginBase {
         // document.fonts APIが利用可能な場合
         if (document.fonts && document.fonts.check) {
             const isAvailable = document.fonts.check(`12px ${fontFamily}`);
-            console.log(`[EDITOR] フォント可用性チェック: ${cleanFontName} →`, isAvailable);
+            logger.debug(`[EDITOR] フォント可用性チェック: ${cleanFontName} →`, isAvailable);
 
             if (!isAvailable) {
-                console.warn(`[EDITOR] フォント "${cleanFontName}" はシステムで利用できない可能性があります`);
+                logger.warn(`[EDITOR] フォント "${cleanFontName}" はシステムで利用できない可能性があります`);
             }
         } else {
-            console.log('[EDITOR] document.fonts APIが利用できません');
+            logger.debug('[EDITOR] document.fonts APIが利用できません');
         }
 
         // Canvas APIを使った代替チェック
@@ -5716,7 +5765,7 @@ class BasicTextEditor extends window.PluginBase {
         const testWidth = context.measureText('abcdefghijklmnopqrstuvwxyz').width;
 
         const isAvailable = baselineWidth !== testWidth;
-        console.log(`[EDITOR] Canvas APIチェック: ${fontName} →`, isAvailable, `(baseline: ${baselineWidth}, test: ${testWidth})`);
+        logger.debug(`[EDITOR] Canvas APIチェック: ${fontName} →`, isAvailable, `(baseline: ${baselineWidth}, test: ${testWidth})`);
 
         return isAvailable;
     }
@@ -6294,71 +6343,32 @@ class BasicTextEditor extends window.PluginBase {
                 windowConfig: windowConfig
             });
 
-            console.log('[EDITOR] ウィンドウ設定を更新:', windowConfig);
+            logger.debug('[EDITOR] ウィンドウ設定を更新:', windowConfig);
         }
     }
 
     /**
-     * ウィンドウクローズ要求を処理
-     * 編集中の場合は保存確認ダイアログを表示
-     * @param {string} windowId - ウィンドウID
+     * クローズ前の保存処理フック（PluginBase共通ハンドラから呼ばれる）
+     * 「保存」が選択された時にXMLデータの変更を通知
      */
-    async handleCloseRequest(windowId) {
-        console.log('[EDITOR] クローズ要求受信, isModified:', this.isModified);
-
-        if (this.isModified) {
-            // 編集中の場合、保存確認ダイアログを表示
-            const result = await this.showSaveConfirmDialog();
-            console.log('[EDITOR] 保存確認ダイアログ結果:', result);
-
-            if (result === 'cancel') {
-                // 取消: クローズをキャンセル
-                this.respondCloseRequest(windowId, false);
-            } else if (result === 'no') {
-                // 保存しない: そのままクローズ
-                this.respondCloseRequest(windowId, true);
-            } else if (result === 'yes') {
-                // 保存: 保存してからクローズ
-                this.notifyXmlDataChanged();
-                this.isModified = false;
-                this.respondCloseRequest(windowId, true);
-            }
-        } else {
-            // 未編集の場合、そのままクローズ
-            this.respondCloseRequest(windowId, true);
-        }
+    async onSaveBeforeClose() {
+        this.notifyXmlDataChanged();
     }
 
-    /**
-     * クローズ要求に応答
-     * @param {string} windowId - ウィンドウID
-     * @param {boolean} allowClose - クローズを許可するか
-     */
-    respondCloseRequest(windowId, allowClose) {
-        if (window.parent && window.parent !== window) {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('window-close-response', {
-                windowId: windowId,
-                allowClose: allowClose
-            });
-        }
-    }
+    // handleCloseRequest() と respondCloseRequest() は PluginBase で定義
 
     /**
      * ウィンドウを閉じるリクエストを送信
      */
     requestCloseWindow() {
-        if (window.parent && window.parent !== window) {
-            // 親ウィンドウのiframe要素からwindowIdを取得
-            const windowElement = window.frameElement ? window.frameElement.closest('.window') : null;
-            const windowId = windowElement ? windowElement.id : null;
+        // 親ウィンドウのiframe要素からwindowIdを取得
+        const windowElement = window.frameElement ? window.frameElement.closest('.window') : null;
+        const windowId = windowElement ? windowElement.id : null;
 
-            if (windowId) {
-                window.parent.postMessage({
-                    type: 'close-window',
-                    windowId: windowId
-                }, '*');
-            }
+        if (windowId && this.messageBus) {
+            this.messageBus.send('close-window', {
+                windowId: windowId
+            });
         }
     }
 
@@ -6394,7 +6404,7 @@ class BasicTextEditor extends window.PluginBase {
         for (const img of images) {
             const fileName = img.getAttribute('data-saved-filename');
             if (fileName && !fileName.startsWith('data:')) {
-                console.log('[EDITOR] 画像読み込み要求:', fileName);
+                logger.debug('[EDITOR] 画像読み込み要求:', fileName);
 
                 // 親ウィンドウに画像ファイルパスを依頼
                 const messageId = `img_${this.imagePathMessageId++}`;
@@ -6455,29 +6465,38 @@ class BasicTextEditor extends window.PluginBase {
                                         if (!img.getAttribute('data-original-width')) {
                                             img.setAttribute('data-original-width', img.naturalWidth);
                                             img.setAttribute('data-original-height', img.naturalHeight);
-                                            console.log('[EDITOR] 元のサイズを設定:', img.naturalWidth, 'x', img.naturalHeight);
+                                            logger.debug('[EDITOR] 元のサイズを設定:', img.naturalWidth, 'x', img.naturalHeight);
                                         }
                                     };
 
-                                    console.log('[EDITOR] 画像読み込み成功:', fileName);
+                                    logger.debug('[EDITOR] 画像読み込み成功:', fileName);
                                 };
                                 reader.readAsDataURL(blob);
                             } catch (error) {
-                                console.error('[EDITOR] ファイル読み込みエラー:', fileName, error);
+                                logger.error('[EDITOR] ファイル読み込みエラー:', fileName, error);
                                 img.alt = `画像が見つかりません: ${fileName}`;
                             }
                         } else {
-                            // ブラウザ環境の場合は相対パスを使用
-                            img.src = filePath;
+                            // ブラウザ/iframe環境の場合
+                            // 絶対パスをfile:// URLに変換
+                            let fileUrl = filePath;
+                            if (filePath.match(/^[A-Za-z]:\\/)) {
+                                // Windows絶対パス (C:\...) を file:// URLに変換
+                                fileUrl = 'file:///' + filePath.replace(/\\/g, '/');
+                            } else if (filePath.startsWith('/')) {
+                                // Unix絶対パス
+                                fileUrl = 'file://' + filePath;
+                            }
+                            img.src = fileUrl;
                             img.removeAttribute('data-needs-load');
-                            console.log('[EDITOR] 画像パスを設定:', filePath);
+                            logger.debug('[EDITOR] 画像URLを設定:', fileUrl);
                         }
                     } else {
-                        console.error('[EDITOR] 画像パス取得失敗:', fileName);
+                        logger.error('[EDITOR] 画像パス取得失敗:', fileName);
                         img.alt = `画像が見つかりません: ${fileName}`;
                     }
                 } catch (error) {
-                    console.error('[EDITOR] 画像読み込みタイムアウトまたはエラー:', fileName, error);
+                    logger.error('[EDITOR] 画像読み込みタイムアウトまたはエラー:', fileName, error);
                     img.alt = `画像が見つかりません: ${fileName}`;
                 }
             }
@@ -6498,9 +6517,9 @@ class BasicTextEditor extends window.PluginBase {
                 mimeType: file.type
             });
 
-            console.log('[EDITOR] 画像ファイル保存完了:', fileName);
+            logger.debug('[EDITOR] 画像ファイル保存完了:', fileName);
         } catch (error) {
-            console.error('[EDITOR] 画像ファイル保存エラー:', error);
+            logger.error('[EDITOR] 画像ファイル保存エラー:', error);
             throw error;
         }
     }
@@ -6535,9 +6554,9 @@ class BasicTextEditor extends window.PluginBase {
             const currentHeight = img.style.height || (img.height + 'px');
             img.setAttribute('data-current-width', currentWidth);
             img.setAttribute('data-current-height', currentHeight);
-            console.log('[EDITOR] ドラッグ開始時のサイズを保存:', currentWidth, currentHeight);
+            logger.debug('[EDITOR] ドラッグ開始時のサイズを保存:', currentWidth, currentHeight);
 
-            console.log('[EDITOR] 画像ドラッグ開始');
+            logger.debug('[EDITOR] 画像ドラッグ開始');
         });
 
         // 画像の右クリックイベントを設定
@@ -6545,7 +6564,7 @@ class BasicTextEditor extends window.PluginBase {
             e.preventDefault();
             // 右クリックされた画像の情報を保存（メニュー生成時に使用）
             this.contextMenuSelectedImage = img;
-            console.log('[EDITOR] 画像右クリック:', img.getAttribute('data-saved-filename'));
+            logger.debug('[EDITOR] 画像右クリック:', img.getAttribute('data-saved-filename'));
 
             // 親ウィンドウに右クリック位置を通知してメニューを表示
             const rect = window.frameElement.getBoundingClientRect();
@@ -6558,7 +6577,7 @@ class BasicTextEditor extends window.PluginBase {
         // リサイズハンドルを作成
         this.createResizeHandle(img);
 
-        console.log('[EDITOR] 画像を選択:', img.getAttribute('data-saved-filename'));
+        logger.debug('[EDITOR] 画像を選択:', img.getAttribute('data-saved-filename'));
     }
 
     /**
@@ -6574,7 +6593,7 @@ class BasicTextEditor extends window.PluginBase {
             // リサイズハンドルを削除
             this.removeResizeHandle();
 
-            console.log('[EDITOR] 画像の選択を解除');
+            logger.debug('[EDITOR] 画像の選択を解除');
             this.selectedImage = null;
         }
     }
@@ -6639,7 +6658,7 @@ class BasicTextEditor extends window.PluginBase {
         const originalHeight = parseFloat(img.getAttribute('data-original-height')) || img.naturalHeight;
         this.imageAspectRatio = originalWidth / originalHeight;
 
-        console.log('[EDITOR] リサイズ開始:', this.resizeStartWidth, 'x', this.resizeStartHeight, 'ratio:', this.imageAspectRatio);
+        logger.debug('[EDITOR] リサイズ開始:', this.resizeStartWidth, 'x', this.resizeStartHeight, 'ratio:', this.imageAspectRatio);
 
         // マウス移動とマウスアップのイベントリスナー
         const handleMouseMove = (e) => {
@@ -6659,7 +6678,7 @@ class BasicTextEditor extends window.PluginBase {
             img.setAttribute('data-current-width', currentWidth);
             img.setAttribute('data-current-height', currentHeight);
 
-            console.log('[EDITOR] リサイズ終了、サイズを保存:', currentWidth, currentHeight);
+            logger.debug('[EDITOR] リサイズ終了、サイズを保存:', currentWidth, currentHeight);
         };
 
         document.addEventListener('mousemove', handleMouseMove);
@@ -6705,7 +6724,7 @@ class BasicTextEditor extends window.PluginBase {
      * 画像をカーソル位置に移動
      */
     async moveImageToCursor(e, img) {
-        console.log('[EDITOR] 画像移動開始');
+        logger.debug('[EDITOR] 画像移動開始');
 
         // ドロップ位置のカーソル位置を取得
         const x = e.clientX;
@@ -6721,7 +6740,7 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         if (!range) {
-            console.error('[EDITOR] カーソル位置を取得できませんでした');
+            logger.error('[EDITOR] カーソル位置を取得できませんでした');
             return;
         }
 
@@ -6729,7 +6748,7 @@ class BasicTextEditor extends window.PluginBase {
         const currentWidth = img.getAttribute('data-current-width') || img.style.width || (img.width + 'px');
         const currentHeight = img.getAttribute('data-current-height') || img.style.height || (img.height + 'px');
 
-        console.log('[EDITOR] 移動時のサイズを復元:', currentWidth, currentHeight);
+        logger.debug('[EDITOR] 移動時のサイズを復元:', currentWidth, currentHeight);
 
         // 画像を現在の位置から削除（必要な属性を先に取得）
         const savedFilename = img.getAttribute('data-saved-filename');
@@ -6783,7 +6802,7 @@ class BasicTextEditor extends window.PluginBase {
         // 編集状態を記録
         this.isModified = true;
 
-        console.log('[EDITOR] 画像移動完了:', savedFilename);
+        logger.debug('[EDITOR] 画像移動完了:', savedFilename);
     }
 
     /**
@@ -6853,7 +6872,7 @@ class BasicTextEditor extends window.PluginBase {
      * 画像をクリップボードへコピー
      */
     copyImage(img) {
-        console.log('[EDITOR] 画像をコピー:', img.getAttribute('data-saved-filename'));
+        logger.debug('[EDITOR] 画像をコピー:', img.getAttribute('data-saved-filename'));
 
         // 画像の全ての属性を保存
         this.imageClipboard = {
@@ -6873,14 +6892,14 @@ class BasicTextEditor extends window.PluginBase {
             isCut: false  // コピーモード
         };
 
-        console.log('[EDITOR] 画像クリップボード:', this.imageClipboard);
+        logger.debug('[EDITOR] 画像クリップボード:', this.imageClipboard);
     }
 
     /**
      * 画像をクリップボードへ移動（カット）
      */
     cutImage(img) {
-        console.log('[EDITOR] 画像を移動:', img.getAttribute('data-saved-filename'));
+        logger.debug('[EDITOR] 画像を移動:', img.getAttribute('data-saved-filename'));
 
         // 画像の全ての属性を保存
         this.imageClipboard = {
@@ -6904,7 +6923,7 @@ class BasicTextEditor extends window.PluginBase {
         this.deselectImage();
         img.remove();
 
-        console.log('[EDITOR] 画像を削除し、クリップボードに保存:', this.imageClipboard);
+        logger.debug('[EDITOR] 画像を削除し、クリップボードに保存:', this.imageClipboard);
 
         // 編集状態を記録
         this.isModified = true;
@@ -6915,16 +6934,16 @@ class BasicTextEditor extends window.PluginBase {
      */
     pasteImage() {
         if (!this.imageClipboard) {
-            console.warn('[EDITOR] クリップボードに画像がありません');
+            logger.warn('[EDITOR] クリップボードに画像がありません');
             return;
         }
 
-        console.log('[EDITOR] 画像を貼り付け:', this.imageClipboard);
+        logger.debug('[EDITOR] 画像を貼り付け:', this.imageClipboard);
 
         // カーソル位置を取得
         const selection = window.getSelection();
         if (selection.rangeCount === 0) {
-            console.warn('[EDITOR] カーソル位置が取得できません');
+            logger.warn('[EDITOR] カーソル位置が取得できません');
             return;
         }
 
@@ -6976,10 +6995,10 @@ class BasicTextEditor extends window.PluginBase {
         // 移動モードの場合はクリップボードをクリア
         if (this.imageClipboard.isCut) {
             this.imageClipboard = null;
-            console.log('[EDITOR] 移動モードのためクリップボードをクリア');
+            logger.debug('[EDITOR] 移動モードのためクリップボードをクリア');
         }
 
-        console.log('[EDITOR] 画像貼り付け完了');
+        logger.debug('[EDITOR] 画像貼り付け完了');
 
         // 編集状態を記録
         this.isModified = true;
@@ -6989,7 +7008,7 @@ class BasicTextEditor extends window.PluginBase {
      * 仮身をクリップボードへコピー
      */
     copyVirtualObject(vo) {
-        console.log('[EDITOR] 仮身をコピー:', vo.dataset.linkName);
+        logger.debug('[EDITOR] 仮身をコピー:', vo.dataset.linkName);
 
         // 仮身の全ての属性を保存
         const attributes = {};
@@ -7006,14 +7025,14 @@ class BasicTextEditor extends window.PluginBase {
             isCut: false  // コピーモード
         };
 
-        console.log('[EDITOR] 仮身クリップボード:', this.virtualObjectClipboard);
+        logger.debug('[EDITOR] 仮身クリップボード:', this.virtualObjectClipboard);
     }
 
     /**
      * 仮身をクリップボードへ移動（カット）
      */
     cutVirtualObject(vo) {
-        console.log('[EDITOR] 仮身を移動:', vo.dataset.linkName);
+        logger.debug('[EDITOR] 仮身を移動:', vo.dataset.linkName);
 
         // 仮身の全ての属性を保存
         const attributes = {};
@@ -7035,7 +7054,7 @@ class BasicTextEditor extends window.PluginBase {
         this.selectedVirtualObject = null;
         vo.remove();
 
-        console.log('[EDITOR] 仮身を削除し、クリップボードに保存:', this.virtualObjectClipboard);
+        logger.debug('[EDITOR] 仮身を削除し、クリップボードに保存:', this.virtualObjectClipboard);
 
         // 編集状態を記録
         this.isModified = true;
@@ -7046,16 +7065,16 @@ class BasicTextEditor extends window.PluginBase {
      */
     pasteVirtualObject() {
         if (!this.virtualObjectClipboard) {
-            console.warn('[EDITOR] クリップボードに仮身がありません');
+            logger.warn('[EDITOR] クリップボードに仮身がありません');
             return;
         }
 
-        console.log('[EDITOR] 仮身を貼り付け:', this.virtualObjectClipboard);
+        logger.debug('[EDITOR] 仮身を貼り付け:', this.virtualObjectClipboard);
 
         // カーソル位置を取得
         const selection = window.getSelection();
         if (selection.rangeCount === 0) {
-            console.warn('[EDITOR] カーソル位置が取得できません');
+            logger.warn('[EDITOR] カーソル位置が取得できません');
             return;
         }
 
@@ -7101,10 +7120,10 @@ class BasicTextEditor extends window.PluginBase {
         // 移動モードの場合はクリップボードをクリア
         if (this.virtualObjectClipboard.isCut) {
             this.virtualObjectClipboard = null;
-            console.log('[EDITOR] 移動モードのためクリップボードをクリア');
+            logger.debug('[EDITOR] 移動モードのためクリップボードをクリア');
         }
 
-        console.log('[EDITOR] 仮身貼り付け完了');
+        logger.debug('[EDITOR] 仮身貼り付け完了');
 
         // 編集状態を記録
         this.isModified = true;
@@ -7114,14 +7133,14 @@ class BasicTextEditor extends window.PluginBase {
      * グローバルクリップボードから仮身をペースト
      */
     async pasteFromGlobalClipboard() {
-        console.log('[EDITOR] グローバルクリップボードをチェック中...');
+        logger.debug('[EDITOR] グローバルクリップボードをチェック中...');
 
         // 親ウィンドウからグローバルクリップボードを取得
         const globalClipboard = await this.getGlobalClipboard();
 
         if (globalClipboard && globalClipboard.link_id) {
             // 仮身データがある場合
-            console.log('[EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
+            logger.debug('[EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
             this.insertVirtualObjectLink(globalClipboard);
             this.setStatus('仮身をクリップボードから貼り付けました');
         } else {
@@ -7153,7 +7172,7 @@ class BasicTextEditor extends window.PluginBase {
             });
             return result.clipboardData;
         } catch (error) {
-            console.warn('[EDITOR] クリップボード取得タイムアウト:', error);
+            logger.warn('[EDITOR] クリップボード取得タイムアウト:', error);
             return null;
         }
     }
@@ -7163,16 +7182,16 @@ class BasicTextEditor extends window.PluginBase {
      */
     async copyVirtualObjectToCursor(e) {
         if (!this.draggingVirtualObjectData) {
-            console.warn('[EDITOR] ドラッグ中の仮身データがありません');
+            logger.warn('[EDITOR] ドラッグ中の仮身データがありません');
             return;
         }
 
-        console.log('[EDITOR] 仮身をドロップ位置にコピー:', this.draggingVirtualObjectData);
+        logger.debug('[EDITOR] 仮身をドロップ位置にコピー:', this.draggingVirtualObjectData);
 
         // ドロップ位置にカーソルを移動
         const range = document.caretRangeFromPoint(e.clientX, e.clientY);
         if (!range) {
-            console.warn('[EDITOR] ドロップ位置が取得できません');
+            logger.warn('[EDITOR] ドロップ位置が取得できません');
             return;
         }
 
@@ -7217,7 +7236,7 @@ class BasicTextEditor extends window.PluginBase {
         // 新しい仮身にイベントハンドラを設定
         this.setupVirtualObjectEventHandlers();
 
-        console.log('[EDITOR] 仮身ドロップコピー完了');
+        logger.debug('[EDITOR] 仮身ドロップコピー完了');
 
         // 編集状態を記録
         this.isModified = true;
@@ -7232,15 +7251,15 @@ class BasicTextEditor extends window.PluginBase {
      */
     async insertVirtualObjectFromData(virtualObjectData) {
         if (!virtualObjectData) {
-            console.warn('[EDITOR] 仮身データがありません');
+            logger.warn('[EDITOR] 仮身データがありません');
             return;
         }
 
-        console.log('[EDITOR] 仮身をカーソル位置に挿入:', virtualObjectData);
+        logger.debug('[EDITOR] 仮身をカーソル位置に挿入:', virtualObjectData);
 
         const selection = window.getSelection();
         if (selection.rangeCount === 0) {
-            console.warn('[EDITOR] カーソル位置が設定されていません');
+            logger.warn('[EDITOR] カーソル位置が設定されていません');
             return;
         }
 
@@ -7285,7 +7304,7 @@ class BasicTextEditor extends window.PluginBase {
         // 新しい仮身にイベントハンドラを設定
         this.setupVirtualObjectEventHandlers();
 
-        console.log('[EDITOR] 仮身挿入完了');
+        logger.debug('[EDITOR] 仮身挿入完了');
 
         // 編集状態を記録
         this.isModified = true;
@@ -7316,7 +7335,7 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         vo.classList.add('expanded');
-        console.log('[EDITOR] 仮身を開いた表示に展開:', vo.dataset.linkName);
+        logger.debug('[EDITOR] 仮身を開いた表示に展開:', vo.dataset.linkName);
 
         // 実身IDを取得
         const linkId = vo.dataset.linkId;
@@ -7327,7 +7346,7 @@ class BasicTextEditor extends window.PluginBase {
             // appListからdefaultOpenを取得
             const appListData = await this.getAppListData(realId);
             if (!appListData) {
-                console.error('[EDITOR] ★★エラー: appListの取得に失敗しました:', {
+                logger.error('[EDITOR] ★★エラー: appListの取得に失敗しました:', {
                     realId: realId,
                     linkName: vo.dataset.linkName,
                     dataset属性: {
@@ -7343,7 +7362,7 @@ class BasicTextEditor extends window.PluginBase {
 
             const defaultOpen = this.getDefaultOpenFromAppList(appListData);
             if (!defaultOpen) {
-                console.error('[EDITOR] ★★エラー: defaultOpenが設定されていません:', {
+                logger.error('[EDITOR] ★★エラー: defaultOpenが設定されていません:', {
                     realId: realId,
                     linkName: vo.dataset.linkName,
                     appListData: appListData
@@ -7353,12 +7372,12 @@ class BasicTextEditor extends window.PluginBase {
                 return;
             }
 
-            console.log('[EDITOR] defaultOpenプラグイン:', defaultOpen);
+            logger.debug('[EDITOR] defaultOpenプラグイン:', defaultOpen);
 
             // 実身データを読み込む
             const realObjectData = await this.loadRealObjectData(realId);
             if (!realObjectData) {
-                console.error('[EDITOR] ★★エラー: 実身データの読み込みに失敗しました:', {
+                logger.error('[EDITOR] ★★エラー: 実身データの読み込みに失敗しました:', {
                     realId: realId,
                     linkName: vo.dataset.linkName
                 });
@@ -7367,7 +7386,7 @@ class BasicTextEditor extends window.PluginBase {
                 return;
             }
 
-            console.log('[EDITOR] 実身データ読み込み完了:', realObjectData);
+            logger.debug('[EDITOR] 実身データ読み込み完了:', realObjectData);
 
             // 仮身の内容を保存
             const originalText = vo.textContent;
@@ -7460,12 +7479,12 @@ class BasicTextEditor extends window.PluginBase {
                     iconImg.style.backgroundColor = 'transparent';
 
                     // アイコンを読み込む
-                    this.loadIconFromParent(realId).then(iconData => {
+                    this.iconManager.loadIcon(realId).then(iconData => {
                         if (iconData) {
                             iconImg.src = `data:image/x-icon;base64,${iconData}`;
                         }
                     }).catch(error => {
-                        console.error('[EDITOR] アイコン読み込みエラー:', realId, error);
+                        logger.error('[EDITOR] アイコン読み込みエラー:', realId, error);
                     });
 
                     titleBar.appendChild(iconImg);
@@ -7567,11 +7586,11 @@ class BasicTextEditor extends window.PluginBase {
                     noScrollbar: true      // スクロールバー非表示モード（仮身一覧プラグインと同様）
                 }, '*');
 
-                console.log('[EDITOR] 開いた仮身表示にデータを送信:', { virtualObj, realObject: realObjectData, bgcol, readonly: true, noScrollbar: true });
+                logger.debug('[EDITOR] 開いた仮身表示にデータを送信:', { virtualObj, realObject: realObjectData, bgcol, readonly: true, noScrollbar: true });
             };
 
         } catch (error) {
-            console.error('[EDITOR] 開いた仮身表示エラー:', error);
+            logger.error('[EDITOR] 開いた仮身表示エラー:', error);
             // エラーが発生した場合は展開状態を解除
             vo.classList.remove('expanded');
             // 元のテキスト表示に戻す
@@ -7596,7 +7615,7 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         vo.classList.remove('expanded');
-        console.log('[EDITOR] 仮身を通常表示に戻す:', vo.dataset.linkName);
+        logger.debug('[EDITOR] 仮身を通常表示に戻す:', vo.dataset.linkName);
 
         // iframeとタイトルバーを削除
         const iframe = vo.querySelector('.virtual-object-content');
@@ -7635,8 +7654,8 @@ class BasicTextEditor extends window.PluginBase {
         if (realId && (showRole || showType || showUpdate)) {
             try {
                 realObjectData = await this.loadRealObjectData(realId);
-                console.log('[EDITOR] collapseVirtualObject - 実身データ読み込み成功:', realId);
-                console.log('[EDITOR] realObjectData:', JSON.stringify({
+                logger.debug('[EDITOR] collapseVirtualObject - 実身データ読み込み成功:', realId);
+                logger.debug('[EDITOR] realObjectData:', JSON.stringify({
                     hasMetadata: !!realObjectData?.metadata,
                     hasUpdateDate: !!realObjectData?.metadata?.updateDate,
                     updateDate: realObjectData?.metadata?.updateDate,
@@ -7644,7 +7663,7 @@ class BasicTextEditor extends window.PluginBase {
                     hasRelationship: !!realObjectData?.metadata?.relationship
                 }, null, 2));
             } catch (error) {
-                console.error('[EDITOR] 実身データの読み込みエラー:', realId, error);
+                logger.error('[EDITOR] 実身データの読み込みエラー:', realId, error);
             }
         }
 
@@ -7687,12 +7706,12 @@ class BasicTextEditor extends window.PluginBase {
 
             // アイコンを読み込む
             if (realId) {
-                this.loadIconFromParent(realId).then(iconData => {
+                this.iconManager.loadIcon(realId).then(iconData => {
                     if (iconData) {
                         iconImg.src = `data:image/x-icon;base64,${iconData}`;
                     }
                 }).catch(error => {
-                    console.error('[EDITOR] アイコン読み込みエラー:', realId, error);
+                    logger.error('[EDITOR] アイコン読み込みエラー:', realId, error);
                 });
             }
 
@@ -7765,7 +7784,7 @@ class BasicTextEditor extends window.PluginBase {
         const textHeight = Math.ceil(chszPx * 1.2);  // lineHeight = 1.2
         const closedHeight = textHeight + 8; // 閉じた仮身の高さ
         vo.dataset.originalHeight = closedHeight.toString();
-        console.log('[EDITOR] 仮身を閉じた時の originalHeight を更新:', vo.dataset.linkName, closedHeight, '幅:', actualWidth);
+        logger.debug('[EDITOR] 仮身を閉じた時の originalHeight を更新:', vo.dataset.linkName, closedHeight, '幅:', actualWidth);
     }
 
     /**
@@ -7773,7 +7792,7 @@ class BasicTextEditor extends window.PluginBase {
      */
     openRealObjectWithDefaultApp() {
         if (!this.contextMenuVirtualObject || !this.contextMenuVirtualObject.virtualObj) {
-            console.warn('[EDITOR] 選択中の仮身がありません');
+            logger.warn('[EDITOR] 選択中の仮身がありません');
             return;
         }
 
@@ -7783,7 +7802,7 @@ class BasicTextEditor extends window.PluginBase {
         // applistを取得
         this.getAppListData(realId).then(async (applist) => {
             if (!applist || typeof applist !== 'object') {
-                console.warn('[EDITOR] applistが存在しません');
+                logger.warn('[EDITOR] applistが存在しません');
                 this.setStatus('実身を開くアプリケーションが見つかりません');
                 return;
             }
@@ -7803,7 +7822,7 @@ class BasicTextEditor extends window.PluginBase {
             }
 
             if (!defaultPluginId) {
-                console.warn('[EDITOR] 開くためのプラグインが見つかりません');
+                logger.warn('[EDITOR] 開くためのプラグインが見つかりません');
                 this.setStatus('実身を開くアプリケーションが見つかりません');
                 return;
             }
@@ -7818,7 +7837,7 @@ class BasicTextEditor extends window.PluginBase {
                 messageId: messageId
             });
 
-            console.log('[EDITOR] 実身を開く:', realId, 'with', defaultPluginId);
+            logger.debug('[EDITOR] 実身を開く:', realId, 'with', defaultPluginId);
 
             try {
                 // ウィンドウが開いた通知を待つ（タイムアウト30秒）
@@ -7829,11 +7848,11 @@ class BasicTextEditor extends window.PluginBase {
                 if (result.success && result.windowId) {
                     // 開いたウィンドウを追跡
                     this.openedRealObjects.set(realId, result.windowId);
-                    console.log('[EDITOR] ウィンドウが開きました:', result.windowId, 'realId:', realId);
+                    logger.debug('[EDITOR] ウィンドウが開きました:', result.windowId, 'realId:', realId);
                     this.setStatus(`実身を${defaultPluginId}で開きました`);
                 }
             } catch (error) {
-                console.error('[EDITOR] ウィンドウを開く際のエラー:', error);
+                logger.error('[EDITOR] ウィンドウを開く際のエラー:', error);
                 this.setStatus('実身を開くのに失敗しました');
             }
         });
@@ -7924,14 +7943,14 @@ class BasicTextEditor extends window.PluginBase {
                     const textHeight = Math.ceil(chszPx * lineHeight);
                     const newHeight = textHeight + 8; // 閉じた仮身の高さ
                     element.dataset.originalHeight = newHeight.toString();
-                    console.log('[EDITOR] chsz変更により originalHeight を再計算:', element.dataset.linkName, newHeight);
+                    logger.debug('[EDITOR] chsz変更により originalHeight を再計算:', element.dataset.linkName, newHeight);
 
                     // 文字サイズに合わせて仮身の幅を再計算
                     const textWidth = this.measureTextWidth(element.dataset.linkName || '', chszPx);
                     const newWidth = textWidth + 16 + 2; // テキスト幅 + padding(16px) + border(2px)
                     element.style.width = newWidth + 'px';
                     element.style.minWidth = newWidth + 'px';
-                    console.log('[EDITOR] chsz変更により仮身幅を再計算:', element.dataset.linkName, newWidth);
+                    logger.debug('[EDITOR] chsz変更により仮身幅を再計算:', element.dataset.linkName, newWidth);
                 }
             }
 
@@ -7983,7 +8002,7 @@ class BasicTextEditor extends window.PluginBase {
         // XMLを更新
         this.updateVirtualObjectInXml(completeVobj);
 
-        console.log('[EDITOR] 仮身属性を適用:', attrs, '完全なvobj:', completeVobj);
+        logger.debug('[EDITOR] 仮身属性を適用:', attrs, '完全なvobj:', completeVobj);
 
         // 展開済みの仮身の場合は再描画
         if (element && element.classList.contains('expanded')) {
@@ -8014,7 +8033,7 @@ class BasicTextEditor extends window.PluginBase {
                         type: 'update-background-color',
                         bgcol: completeVobj.bgcol
                     }, '*');
-                    console.log('[EDITOR] 開いた仮身のiframeに背景色変更を通知:', completeVobj.bgcol);
+                    logger.debug('[EDITOR] 開いた仮身のiframeに背景色変更を通知:', completeVobj.bgcol);
                 }
             } else {
                 // その他の属性変更がある場合は、再展開
@@ -8026,7 +8045,7 @@ class BasicTextEditor extends window.PluginBase {
                 // 少し待ってから再展開（DOMの更新を待つ）
                 setTimeout(() => {
                     this.expandVirtualObject(element, currentWidth, currentHeight).catch(err => {
-                        console.error('[EDITOR] エラー: 仮身の再展開に失敗しました:', {
+                        logger.error('[EDITOR] エラー: 仮身の再展開に失敗しました:', {
                             error: err,
                             linkName: element.dataset.linkName,
                             linkId: element.dataset.linkId
@@ -8035,7 +8054,7 @@ class BasicTextEditor extends window.PluginBase {
                         // 失敗時は再度展開を試みる
                         setTimeout(() => {
                             this.expandVirtualObject(element, currentWidth, currentHeight).catch(retryErr => {
-                                console.error('[EDITOR] リトライも失敗しました:', retryErr);
+                                logger.error('[EDITOR] リトライも失敗しました:', retryErr);
                             });
                         }, 200);
                     });
@@ -8130,7 +8149,7 @@ class BasicTextEditor extends window.PluginBase {
                         linkElement.textContent = virtualObj.link_name;
                     }
 
-                    console.log('[EDITOR] <link>要素を更新:', virtualObj.link_id);
+                    logger.debug('[EDITOR] <link>要素を更新:', virtualObj.link_id);
                     break;
                 }
             }
@@ -8143,7 +8162,7 @@ class BasicTextEditor extends window.PluginBase {
             this.notifyXmlDataChanged();
 
         } catch (error) {
-            console.error('[EDITOR] xmlTAD更新エラー:', error);
+            logger.error('[EDITOR] xmlTAD更新エラー:', error);
         }
     }
 
@@ -8169,7 +8188,7 @@ class BasicTextEditor extends window.PluginBase {
      */
     async handleDoubleClickDragDuplicate(vo, dropX, dropY) {
         const realId = window.RealObjectSystem.extractRealId(vo.dataset.linkId);
-        console.log('[EDITOR] ダブルクリック+ドラッグによる実身複製:', realId, 'ドロップ位置:', dropX, dropY);
+        logger.debug('[EDITOR] ダブルクリック+ドラッグによる実身複製:', realId, 'ドロップ位置:', dropX, dropY);
 
         // 元の仮身のデータを保存
         const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
@@ -8189,12 +8208,12 @@ class BasicTextEditor extends window.PluginBase {
             });
 
             if (result.cancelled) {
-                console.log('[EDITOR] 実身複製がキャンセルされました');
+                logger.debug('[EDITOR] 実身複製がキャンセルされました');
             } else if (result.success) {
                 // 複製成功: 新しい実身IDで仮身を作成
                 const newRealId = result.newRealId;
                 const newName = result.newName;
-                console.log('[EDITOR] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
+                logger.debug('[EDITOR] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
 
                 // 新しい仮身オブジェクトを作成（元の仮身の属性を引き継ぐ）
                 const newVirtualObj = {
@@ -8243,9 +8262,9 @@ class BasicTextEditor extends window.PluginBase {
                     range = document.createRange();
                     range.selectNodeContents(this.editor);
                     range.collapse(false);
-                    console.log('[EDITOR] ドロップ位置が不正、エディタの最後に配置');
+                    logger.debug('[EDITOR] ドロップ位置が不正、エディタの最後に配置');
                 } else {
-                    console.log('[EDITOR] ドロップ位置にカーソルを設定:', dropX, dropY);
+                    logger.debug('[EDITOR] ドロップ位置にカーソルを設定:', dropX, dropY);
                 }
 
                 selection.removeAllRanges();
@@ -8258,12 +8277,12 @@ class BasicTextEditor extends window.PluginBase {
                 this.isModified = true;
                 this.updateContentHeight();
 
-                console.log('[EDITOR] 新しい仮身を配置:', newName);
+                logger.debug('[EDITOR] 新しい仮身を配置:', newName);
             } else {
-                console.error('[EDITOR] 実身複製失敗:', result.error);
+                logger.error('[EDITOR] 実身複製失敗:', result.error);
             }
         } catch (error) {
-            console.error('[EDITOR] 実身複製エラー:', error);
+            logger.error('[EDITOR] 実身複製エラー:', error);
         }
     }
 
@@ -8285,7 +8304,7 @@ class BasicTextEditor extends window.PluginBase {
             // openedRealObjectsから削除
             if (this.openedRealObjects.has(realId)) {
                 this.openedRealObjects.delete(realId);
-                console.log('[EDITOR] 実身の追跡を削除:', realId);
+                logger.debug('[EDITOR] 実身の追跡を削除:', realId);
             }
         }
 
@@ -8293,77 +8312,9 @@ class BasicTextEditor extends window.PluginBase {
         for (const [realId, wId] of this.openedRealObjects.entries()) {
             if (wId === windowId) {
                 this.openedRealObjects.delete(realId);
-                console.log('[EDITOR] windowIdから実身の追跡を削除:', realId, windowId);
+                logger.debug('[EDITOR] windowIdから実身の追跡を削除:', realId, windowId);
                 break;
             }
-        }
-    }
-
-    /**
-     * アイコンファイルを親ウィンドウ経由で読み込む
-     * @param {string} realId - 実身ID
-     * @returns {Promise<string|null>} Base64エンコードされたアイコンデータ、またはnull
-     */
-    async loadIconFromParent(realId) {
-        // キャッシュをチェック
-        if (this.iconCache.has(realId)) {
-            const cachedData = this.iconCache.get(realId);
-            console.log('[EDITOR] アイコンキャッシュヒット:', realId, 'データあり:', !!cachedData);
-            return cachedData;
-        }
-
-        console.log('[EDITOR] アイコンキャッシュミス、親ウィンドウに要求:', realId);
-
-        // 親ウィンドウにアイコンパス取得を要求
-        const messageId = `icon-${realId}-${Date.now()}`;
-        this.messageBus.send('read-icon-file', {
-            realId: realId,
-            messageId: messageId
-        });
-
-        try {
-            // レスポンスを待つ（3秒タイムアウト）
-            // フィルタを使用して、このリクエストに対応するレスポンスだけを受け取る
-            const result = await this.messageBus.waitFor('icon-file-loaded', window.ICON_LOAD_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-
-            if (result.success && result.filePath) {
-                // Electron環境の場合、パスからファイルを読み込む
-                if (typeof require !== 'undefined') {
-                    try {
-                        const fs = require('fs');
-                        const buffer = fs.readFileSync(result.filePath);
-                        const base64 = buffer.toString('base64');
-                        // VirtualObjectRendererが data:image/x-icon;base64, を追加するので、ここでは Base64 のみ返す
-
-                        // キャッシュに保存
-                        this.iconCache.set(realId, base64);
-                        console.log('[EDITOR] アイコン読み込み成功（親から）:', realId, 'パス:', result.filePath);
-                        return base64;
-                    } catch (error) {
-                        console.error('[EDITOR] アイコンファイル読み込みエラー:', realId, error);
-                        this.iconCache.set(realId, null);
-                        return null;
-                    }
-                } else {
-                    console.error('[EDITOR] require not available (not in Electron environment)');
-                    this.iconCache.set(realId, null);
-                    return null;
-                }
-            } else {
-                // アイコンが存在しない場合はnullを返す
-                this.iconCache.set(realId, null);
-                console.log('[EDITOR] アイコン読み込み失敗（親から）:', realId);
-                return null;
-            }
-        } catch (error) {
-            // タイムアウト（アイコンがない場合も多いのでnullを返す）
-            if (!this.iconCache.has(realId)) {
-                this.iconCache.set(realId, null);
-            }
-            console.log('[EDITOR] アイコン読み込みタイムアウト:', realId);
-            return null;
         }
     }
 
@@ -8372,7 +8323,7 @@ class BasicTextEditor extends window.PluginBase {
      */
     log(...args) {
         if (this.debug) {
-            console.log('[EDITOR]', ...args);
+            logger.debug('[EDITOR]', ...args);
         }
     }
 
@@ -8380,14 +8331,14 @@ class BasicTextEditor extends window.PluginBase {
      * エラーログ出力（常に出力）
      */
     error(...args) {
-        console.error('[EDITOR]', ...args);
+        logger.error('[EDITOR]', ...args);
     }
 
     /**
      * 警告ログ出力（常に出力）
      */
     warn(...args) {
-        console.warn('[EDITOR]', ...args);
+        logger.warn('[EDITOR]', ...args);
     }
 
 }

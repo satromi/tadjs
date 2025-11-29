@@ -2,6 +2,8 @@
  * 原紙箱プラグイン
  * 原紙ファイルを仮身形式で一覧表示し、ドラッグ&ドロップでコピー配置を実現
  */
+const logger = window.getLogger('BaseFileManager');
+
 class BaseFileManager {
     constructor() {
         this.baseFiles = [];
@@ -22,7 +24,7 @@ class BaseFileManager {
             });
             this.messageBus.start();
         } else {
-            console.warn('[BaseFileManager] MessageBus not available');
+            logger.warn('[BaseFileManager] MessageBus not available');
         }
 
         this.init();
@@ -52,7 +54,7 @@ class BaseFileManager {
         if (this.messageBus) {
             this.setupMessageBusHandlers();
         } else {
-            console.error('[BaseFileManager] MessageBus not available - cannot setup message handlers');
+            logger.error('[BaseFileManager] MessageBus not available - cannot setup message handlers');
         }
     }
 
@@ -164,7 +166,7 @@ class BaseFileManager {
                 this.toggleFullscreen();
                 break;
             default:
-                console.warn('[BaseFileManager] 未知のアクション:', action);
+                logger.warn('[BaseFileManager] 未知のアクション:', action);
         }
     }
 
@@ -235,11 +237,11 @@ class BaseFileManager {
                 // 原紙ファイルを読み込んで表示
                 await this.loadAndDisplayBaseFiles(response.plugins);
             } else {
-                console.warn('[BaseFileManager] 原紙プラグインが見つかりません');
+                logger.warn('[BaseFileManager] 原紙プラグインが見つかりません');
             }
 
         } catch (error) {
-            console.error('[BaseFileManager] 原紙ファイル読み込みエラー:', error);
+            logger.error('[BaseFileManager] 原紙ファイル読み込みエラー:', error);
         }
     }
 
@@ -264,7 +266,7 @@ class BaseFileManager {
                     // ファイルを読み込む
                     const response = await fetch(basefilePath);
                     if (!response.ok) {
-                        console.warn(`[BaseFileManager] ファイルが見つかりません: ${basefilePath}`);
+                        logger.warn(`[BaseFileManager] ファイルが見つかりません: ${basefilePath}`);
                         continue;
                     }
 
@@ -303,7 +305,7 @@ class BaseFileManager {
                     }
 
                 } catch (error) {
-                    console.error(`[BaseFileManager] ファイル読み込みエラー (${plugin.name}):`, error);
+                    logger.error(`[BaseFileManager] ファイル読み込みエラー (${plugin.name}):`, error);
                 }
             }
         }
@@ -332,11 +334,11 @@ class BaseFileManager {
                 const xmlResult = await window.parent.parseTADToXML(rawData, 0);
                 return xmlResult;
             } catch (error) {
-                console.error('[BaseFileManager] XML変換エラー:', error);
+                logger.error('[BaseFileManager] XML変換エラー:', error);
                 return null;
             }
         }
-        console.warn('[BaseFileManager] parseTADToXML関数が見つかりません');
+        logger.warn('[BaseFileManager] parseTADToXML関数が見つかりません');
         return null;
     }
 
@@ -488,7 +490,7 @@ class BaseFileManager {
             // アイコンファイルを読み込む
             const response = await fetch(iconPath);
             if (!response.ok) {
-                console.warn('[BaseFileManager] アイコンファイルが見つかりません:', iconPath);
+                logger.warn('[BaseFileManager] アイコンファイルが見つかりません:', iconPath);
                 return null;
             }
 
@@ -508,7 +510,7 @@ class BaseFileManager {
 
             return base64;
         } catch (error) {
-            console.error('[BaseFileManager] アイコン読み込みエラー:', realId, error);
+            logger.error('[BaseFileManager] アイコン読み込みエラー:', realId, error);
             return null;
         }
     }
@@ -588,7 +590,7 @@ class BaseFileManager {
                 if (list) {
                     list.style.background = bgColor;
                 } else {
-                    console.warn('[BaseFileManager] .base-file-list 要素が見つかりません');
+                    logger.warn('[BaseFileManager] .base-file-list 要素が見つかりません');
                 }
             }, 100);
         }
@@ -615,13 +617,13 @@ class BaseFileManager {
             `;
 
             const handleResponse = (result) => {
-                console.log('[BaseFileManager] 背景色変更ダイアログコールバック実行:', result);
+                logger.info('[BaseFileManager] 背景色変更ダイアログコールバック実行:', result);
 
                 // Dialog result is wrapped in result.result
                 const dialogResult = result.result || result;
 
                 if (dialogResult.button === 'ok') {
-                    console.log('[BaseFileManager] OKボタンが押されました');
+                    logger.info('[BaseFileManager] OKボタンが押されました');
                     const inputColor = dialogResult.input;
 
                     // 入力された色を検証
@@ -637,7 +639,7 @@ class BaseFileManager {
                         if (list) {
                             list.style.background = newBgColor;
                         } else {
-                            console.error('[BaseFileManager] .base-file-listが見つかりません');
+                            logger.error('[BaseFileManager] .base-file-listが見つかりません');
                         }
 
                         // 実身管理用セグメントのbackgroundColorを更新
@@ -651,7 +653,7 @@ class BaseFileManager {
 
                         // this.fileDataを更新（再表示時に正しい色を適用するため）
                         if (!this.fileData) {
-                            console.warn('[BaseFileManager] fileDataが未定義、初期化します');
+                            logger.warn('[BaseFileManager] fileDataが未定義、初期化します');
                             this.fileData = {};
                         }
                         if (!this.fileData.windowConfig) {
@@ -659,10 +661,10 @@ class BaseFileManager {
                         }
                         this.fileData.windowConfig.backgroundColor = newBgColor;
                     } else {
-                        console.warn('[BaseFileManager] 無効な色形式:', inputColor);
+                        logger.warn('[BaseFileManager] 無効な色形式:', inputColor);
                     }
                 } else {
-                    console.log('[BaseFileManager] OKボタンが押されませんでした。button:', dialogResult.button);
+                    logger.info('[BaseFileManager] OKボタンが押されませんでした。button:', dialogResult.button);
                 }
                 resolve(result);
             };
@@ -706,7 +708,7 @@ class BaseFileManager {
      */
     log(...args) {
         if (this.debug) {
-            console.log('[BaseFileManager]', ...args);
+            logger.info('[BaseFileManager]', ...args);
         }
     }
 
@@ -714,14 +716,14 @@ class BaseFileManager {
      * エラーログ出力（常に出力）
      */
     error(...args) {
-        console.error('[BaseFileManager]', ...args);
+        logger.error('[BaseFileManager]', ...args);
     }
 
     /**
      * 警告ログ出力（常に出力）
      */
     warn(...args) {
-        console.warn('[BaseFileManager]', ...args);
+        logger.warn('[BaseFileManager]', ...args);
     }
 }
 

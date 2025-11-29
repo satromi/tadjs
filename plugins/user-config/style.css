@@ -209,3 +209,30 @@ body {
 .size-button:active {
     border-style: inset;
 }
+
+/* データ配置フォルダセレクター */
+.folder-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+}
+
+.folder-path-display {
+    padding: 8px;
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: 'Courier New', monospace;
+    color: #333;
+    word-break: break-all;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+}
+
+.folder-path-display.not-set {
+    color: #999;
+    font-style: italic;
+}

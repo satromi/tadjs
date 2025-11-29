@@ -13,8 +13,18 @@
         </div>
     </div>
 
+    <!-- ロガーをグローバル変数として読み込み（最初に読み込む必要がある） -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
     <!-- グローバル設定 -->
-    <script src="../../js/config.js"></script>
+    <script type="module">
+        import { CONFIG } from '../../js/config.js';
+        window.TADjsConfig = CONFIG;
+    </script>
 
     <!-- VirtualObjectRendererをグローバル変数として読み込み -->
     <script type="module">
@@ -32,6 +42,6 @@
         import { MessageBus } from '../../js/message-bus.js';
         window.MessageBus = MessageBus;
     </script>
-    <script defer src="app.js"></script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>

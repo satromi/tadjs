@@ -84,6 +84,13 @@
         </div>
     </div>
 
-    <script src="tool-panel.js?v=20251023"></script>
+    <!-- ロガーをグローバル変数として読み込み（最初に読み込む必要がある） -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <script type="module" src="tool-panel.js?v=20251023"></script>
 </body>
 </html>

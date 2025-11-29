@@ -1,0 +1,524 @@
+/**
+ * スクロールバー管理クラス
+ * ウィンドウとプラグインのスクロールバー初期化・更新を担当
+ * @module ScrollbarManager
+ */
+
+import { getLogger } from './logger.js';
+
+const logger = getLogger('ScrollbarManager');
+
+export class ScrollbarManager {
+    constructor() {
+        // このクラスはステートレスなので、特にプロパティは不要
+    }
+
+    /**
+     * 通常ウィンドウ用のスクロールバー初期化
+     * @param {HTMLElement} content - スクロール対象のコンテンツ要素
+     * @param {HTMLElement} scrollbar - スクロールバー要素
+     * @param {string} direction - スクロール方向（'vertical'または'horizontal'）
+     * @returns {Function} クリーンアップ関数
+     */
+    initScrollbar(content, scrollbar, direction) {
+        const thumb = scrollbar.querySelector('.scroll-thumb');
+        const track = scrollbar.querySelector('.scroll-track');
+
+        let isDragging = false;
+        let startPos = 0;
+        let startScroll = 0;
+
+        // コンテンツのスクロール状態を更新
+        const updateScrollbar = () => {
+            // まずtrack要素の実際のサイズを取得
+            const trackRect = track.getBoundingClientRect();
+
+            if (direction === 'vertical') {
+                const scrollHeight = content.scrollHeight;
+                const clientHeight = content.clientHeight;
+
+                // 常時表示
+                scrollbar.style.display = 'block';
+
+                if (scrollHeight <= clientHeight) {
+                    // スクロール不要の場合
+                    thumb.style.height = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height - 4) + 'px';
+                    thumb.style.top = '2px';
+                    thumb.style.background = window.SCROLLBAR_THUMB_COLOR;
+                    thumb.style.cursor = 'default';
+                } else {
+                    // スクロール可能な場合
+                    const viewportRatio = clientHeight / scrollHeight;
+                    const thumbHeight = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height * viewportRatio);
+                    const scrollRatio = content.scrollTop / (scrollHeight - clientHeight);
+                    const maxThumbTop = trackRect.height - thumbHeight;
+                    const thumbTop = scrollRatio * maxThumbTop;
+
+                    thumb.style.height = thumbHeight + 'px';
+                    thumb.style.top = thumbTop + 'px';
+                    thumb.style.background = 'var(--window-titlebar-active)';
+                    thumb.style.cursor = 'pointer';
+                }
+            } else {
+                const scrollWidth = content.scrollWidth;
+                const clientWidth = content.clientWidth;
+
+                // 常時表示
+                scrollbar.style.display = 'block';
+
+                if (scrollWidth <= clientWidth) {
+                    // スクロール不要の場合
+                    thumb.style.width = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width - 4) + 'px';
+                    thumb.style.left = '2px';
+                    thumb.style.background = window.SCROLLBAR_THUMB_COLOR;
+                    thumb.style.cursor = 'default';
+                } else {
+                    // スクロール可能な場合
+                    const viewportRatio = clientWidth / scrollWidth;
+                    const thumbWidth = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width * viewportRatio);
+                    const scrollRatio = content.scrollLeft / (scrollWidth - clientWidth);
+                    const maxThumbLeft = trackRect.width - thumbWidth;
+                    const thumbLeft = scrollRatio * maxThumbLeft;
+
+                    thumb.style.width = thumbWidth + 'px';
+                    thumb.style.left = thumbLeft + 'px';
+                    thumb.style.background = 'var(--window-titlebar-active)';
+                    thumb.style.cursor = 'pointer';
+                }
+            }
+        };
+
+        // ドラッグ開始
+        thumb.addEventListener('mousedown', (e) => {
+            // スクロール不要な場合はドラッグ無効
+            if (direction === 'vertical' && content.scrollHeight <= content.clientHeight) return;
+            if (direction === 'horizontal' && content.scrollWidth <= content.clientWidth) return;
+
+            isDragging = true;
+            if (direction === 'vertical') {
+                startPos = e.clientY;
+                startScroll = content.scrollTop;
+            } else {
+                startPos = e.clientX;
+                startScroll = content.scrollLeft;
+            }
+            thumb.classList.add('dragging');
+            e.preventDefault();
+        });
+
+        // ドラッグ中
+        const handleMouseMove = (e) => {
+            if (!isDragging) return;
+
+            const trackRect = track.getBoundingClientRect();
+
+            if (direction === 'vertical') {
+                const delta = e.clientY - startPos;
+                const thumbHeight = parseFloat(thumb.style.height);
+                const maxThumbMove = trackRect.height - thumbHeight;
+                const scrollHeight = content.scrollHeight - content.clientHeight;
+
+                if (maxThumbMove > 0) {
+                    const scrollDelta = (delta / maxThumbMove) * scrollHeight;
+                    content.scrollTop = Math.max(0, Math.min(scrollHeight, startScroll + scrollDelta));
+                }
+            } else {
+                const delta = e.clientX - startPos;
+                const thumbWidth = parseFloat(thumb.style.width);
+                const maxThumbMove = trackRect.width - thumbWidth;
+                const scrollWidth = content.scrollWidth - content.clientWidth;
+
+                if (maxThumbMove > 0) {
+                    const scrollDelta = (delta / maxThumbMove) * scrollWidth;
+                    content.scrollLeft = Math.max(0, Math.min(scrollWidth, startScroll + scrollDelta));
+                }
+            }
+        };
+
+        // ドラッグ終了
+        const handleMouseUp = () => {
+            if (isDragging) {
+                isDragging = false;
+                thumb.classList.remove('dragging');
+            }
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+
+        // トラッククリック
+        track.addEventListener('click', (e) => {
+            if (e.target === thumb || thumb.contains(e.target)) return;
+
+            // スクロール不要な場合はクリック無効
+            if (direction === 'vertical' && content.scrollHeight <= content.clientHeight) return;
+            if (direction === 'horizontal' && content.scrollWidth <= content.clientWidth) return;
+
+            const trackRect = track.getBoundingClientRect();
+
+            if (direction === 'vertical') {
+                const clickPos = e.clientY - trackRect.top;
+                const thumbHeight = parseFloat(thumb.style.height);
+                const targetRatio = (clickPos - thumbHeight / 2) / (trackRect.height - thumbHeight);
+                const clampedRatio = Math.max(0, Math.min(1, targetRatio));
+                content.scrollTop = clampedRatio * (content.scrollHeight - content.clientHeight);
+            } else {
+                const clickPos = e.clientX - trackRect.left;
+                const thumbWidth = parseFloat(thumb.style.width);
+                const targetRatio = (clickPos - thumbWidth / 2) / (trackRect.width - thumbWidth);
+                const clampedRatio = Math.max(0, Math.min(1, targetRatio));
+                content.scrollLeft = clampedRatio * (content.scrollWidth - content.clientWidth);
+            }
+        });
+
+        // スクロールイベントをリッスン
+        content.addEventListener('scroll', updateScrollbar);
+
+        // リサイズ監視（ウィンドウサイズ変更時など）
+        const resizeObserver = new ResizeObserver(() => {
+            // 少し遅延させてから更新（レンダリング完了を待つ）
+            setTimeout(updateScrollbar, window.QUICK_UI_UPDATE_DELAY_MS);
+        });
+        resizeObserver.observe(content);
+
+        // 初期更新（少し遅延させる）
+        setTimeout(updateScrollbar, window.UI_UPDATE_DELAY_MS);
+
+        // クリーンアップ関数を返す
+        return () => {
+            content.removeEventListener('scroll', updateScrollbar);
+            resizeObserver.disconnect();
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+    }
+
+    /**
+     * 通常ウィンドウのスクロールバーを強制的に更新
+     * @param {HTMLElement} content - スクロール対象のコンテンツ要素
+     * @param {HTMLElement} scrollbar - スクロールバー要素
+     * @param {string} direction - スクロール方向（'vertical'または'horizontal'）
+     */
+    forceUpdateScrollbar(content, scrollbar, direction) {
+        const thumb = scrollbar.querySelector('.scroll-thumb');
+        const track = scrollbar.querySelector('.scroll-track');
+
+        if (!thumb || !track || !content) return;
+
+        // trackの実際のサイズを取得
+        const trackRect = track.getBoundingClientRect();
+
+        if (direction === 'vertical') {
+            const scrollHeight = content.scrollHeight;
+            const clientHeight = content.clientHeight;
+
+            if (scrollHeight <= clientHeight) {
+                // スクロール不要
+                thumb.style.height = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height - 4) + 'px';
+                thumb.style.top = '2px';
+                thumb.style.background = '#d0d0d0';
+                thumb.style.cursor = 'default';
+            } else {
+                // スクロール可能
+                const viewportRatio = clientHeight / scrollHeight;
+                const thumbHeight = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height * viewportRatio);
+                const scrollRatio = content.scrollTop / (scrollHeight - clientHeight);
+                const maxThumbTop = trackRect.height - thumbHeight;
+                const thumbTop = scrollRatio * maxThumbTop;
+
+                thumb.style.height = thumbHeight + 'px';
+                thumb.style.top = thumbTop + 'px';
+                thumb.style.background = 'var(--window-titlebar-active)';
+                thumb.style.cursor = 'pointer';
+            }
+        } else {
+            const scrollWidth = content.scrollWidth;
+            const clientWidth = content.clientWidth;
+
+            if (scrollWidth <= clientWidth) {
+                // スクロール不要
+                thumb.style.width = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width - 4) + 'px';
+                thumb.style.left = '2px';
+                thumb.style.background = '#d0d0d0';
+                thumb.style.cursor = 'default';
+            } else {
+                // スクロール可能
+                const viewportRatio = clientWidth / scrollWidth;
+                const thumbWidth = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width * viewportRatio);
+                const scrollRatio = content.scrollLeft / (scrollWidth - clientWidth);
+                const maxThumbLeft = trackRect.width - thumbWidth;
+                const thumbLeft = scrollRatio * maxThumbLeft;
+
+                thumb.style.width = thumbWidth + 'px';
+                thumb.style.left = thumbLeft + 'px';
+                thumb.style.background = 'var(--window-titlebar-active)';
+                thumb.style.cursor = 'pointer';
+            }
+        }
+    }
+
+    /**
+     * プラグインウィンドウのスクロールバーを更新（iframe内のコンテンツサイズを参照）
+     * @param {HTMLIFrameElement} iframe - プラグインのiframe要素
+     * @param {HTMLElement} content - スクロール対象のコンテンツ要素（.window-content）
+     * @param {HTMLElement} scrollbar - スクロールバー要素
+     * @param {string} direction - スクロール方向（'vertical'または'horizontal'）
+     */
+    forceUpdateScrollbarForPlugin(iframe, content, scrollbar, direction) {
+        const thumb = scrollbar.querySelector('.scroll-thumb');
+        const track = scrollbar.querySelector('.scroll-track');
+
+        if (!thumb || !track || !content || !iframe) return;
+
+        try {
+            // iframe内の.plugin-contentまたはbodyを取得
+            const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+            const pluginContent = iframeDoc.querySelector('.plugin-content') || iframeDoc.body;
+
+            if (!pluginContent) return;
+
+            // trackの実際のサイズを取得
+            const trackRect = track.getBoundingClientRect();
+
+            if (direction === 'vertical') {
+                const scrollHeight = pluginContent.scrollHeight;
+                const clientHeight = pluginContent.clientHeight;
+
+                if (scrollHeight <= clientHeight) {
+                    // スクロール不要
+                    thumb.style.height = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height - 4) + 'px';
+                    thumb.style.top = '2px';
+                    thumb.style.background = window.SCROLLBAR_THUMB_COLOR;
+                    thumb.style.cursor = 'default';
+                } else {
+                    // スクロール可能
+                    const viewportRatio = clientHeight / scrollHeight;
+                    const thumbHeight = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height * viewportRatio);
+                    // pluginContentの現在のscrollTopを使用
+                    const scrollRatio = pluginContent.scrollTop / (scrollHeight - clientHeight);
+                    const maxThumbTop = trackRect.height - thumbHeight;
+                    const thumbTop = scrollRatio * maxThumbTop;
+
+                    thumb.style.height = thumbHeight + 'px';
+                    thumb.style.top = thumbTop + 'px';
+                    thumb.style.background = 'var(--window-titlebar-active)';
+                    thumb.style.cursor = 'pointer';
+                }
+            } else {
+                const scrollWidth = pluginContent.scrollWidth;
+                const clientWidth = pluginContent.clientWidth;
+
+                if (scrollWidth <= clientWidth) {
+                    // スクロール不要
+                    thumb.style.width = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width - 4) + 'px';
+                    thumb.style.left = '2px';
+                    thumb.style.background = window.SCROLLBAR_THUMB_COLOR;
+                    thumb.style.cursor = 'default';
+                } else {
+                    // スクロール可能
+                    const viewportRatio = clientWidth / scrollWidth;
+                    const thumbWidth = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width * viewportRatio);
+                    // pluginContentの現在のscrollLeftを使用
+                    const scrollRatio = pluginContent.scrollLeft / (scrollWidth - clientWidth);
+                    const maxThumbLeft = trackRect.width - thumbWidth;
+                    const thumbLeft = scrollRatio * maxThumbLeft;
+
+                    thumb.style.width = thumbWidth + 'px';
+                    thumb.style.left = thumbLeft + 'px';
+                    thumb.style.background = 'var(--window-titlebar-active)';
+                    thumb.style.cursor = 'pointer';
+                }
+            }
+        } catch (error) {
+            logger.error('スクロールバー更新エラー:', error);
+        }
+    }
+
+    /**
+     * プラグインウィンドウ用のスクロールバー初期化（iframe内のbodyをスクロール）
+     * @param {HTMLIFrameElement} iframe - プラグインのiframe要素
+     * @param {HTMLElement} content - ウィンドウコンテンツ要素（.window-content）
+     * @param {HTMLElement} scrollbar - スクロールバー要素
+     * @param {string} direction - スクロール方向（'vertical'または'horizontal'）
+     */
+    initScrollbarForPlugin(iframe, content, scrollbar, direction) {
+        const thumb = scrollbar.querySelector('.scroll-thumb');
+        const track = scrollbar.querySelector('.scroll-track');
+
+        logger.info('initScrollbarForPlugin呼び出し:', {
+            direction,
+            thumb: !!thumb,
+            track: !!track,
+            iframe: !!iframe
+        });
+
+        if (!thumb || !track || !iframe) {
+            logger.warn('スクロールバー要素が見つかりません');
+            return;
+        }
+
+        let isDragging = false;
+        let startPos = 0;
+        let startScroll = 0;
+        let scrollElement = null; // スクロール要素をキャッシュ
+
+        // スクロール要素を取得する関数
+        const getScrollElement = () => {
+            if (scrollElement) return scrollElement;
+            const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+            scrollElement = iframeDoc.querySelector('.plugin-content') || iframeDoc.body;
+            return scrollElement;
+        };
+
+        // ドラッグ開始
+        thumb.addEventListener('mousedown', (e) => {
+            try {
+                const pluginContent = getScrollElement();
+
+                if (!pluginContent) {
+                    logger.warn('スクロール要素が見つかりません');
+                    return;
+                }
+
+                logger.info('スクロール情報:', {
+                    direction,
+                    scrollHeight: pluginContent.scrollHeight,
+                    scrollWidth: pluginContent.scrollWidth,
+                    clientHeight: pluginContent.clientHeight,
+                    clientWidth: pluginContent.clientWidth
+                });
+
+                // スクロール不要な場合はドラッグ無効
+                if (direction === 'vertical' && pluginContent.scrollHeight <= pluginContent.clientHeight) {
+                    logger.info('垂直スクロール不要、ドラッグ無効');
+                    return;
+                }
+                if (direction === 'horizontal' && pluginContent.scrollWidth <= pluginContent.clientWidth) {
+                    logger.info('水平スクロール不要、ドラッグ無効');
+                    return;
+                }
+
+                isDragging = true;
+
+                if (direction === 'vertical') {
+                    startPos = e.clientY;
+                    startScroll = pluginContent.scrollTop;
+                } else {
+                    startPos = e.clientX;
+                    startScroll = pluginContent.scrollLeft;
+                }
+                thumb.classList.add('dragging');
+                e.preventDefault();
+                logger.info('ドラッグ開始:', { isDragging, startPos, startScroll });
+            } catch (error) {
+                logger.error('スクロールバードラッグ開始エラー:', error);
+            }
+        });
+
+        // ドラッグ中
+        const handleMouseMove = (e) => {
+            if (!isDragging) return;
+
+            try {
+                const pluginContent = getScrollElement();
+
+                if (!pluginContent) return;
+
+                const trackRect = track.getBoundingClientRect();
+
+                if (direction === 'vertical') {
+                    const delta = e.clientY - startPos;
+                    const thumbHeight = parseFloat(thumb.style.height);
+                    const maxThumbMove = trackRect.height - thumbHeight;
+                    const scrollHeight = pluginContent.scrollHeight - pluginContent.clientHeight;
+
+                    logger.info('垂直スクロール計算:', {
+                        delta,
+                        thumbHeight,
+                        maxThumbMove,
+                        scrollHeight
+                    });
+
+                    if (maxThumbMove > 0) {
+                        const scrollDelta = (delta / maxThumbMove) * scrollHeight;
+                        const newScrollTop = Math.max(0, Math.min(scrollHeight, startScroll + scrollDelta));
+                        pluginContent.scrollTop = newScrollTop;
+                        logger.info('scrollTop設定:', newScrollTop);
+                    }
+                } else {
+                    const delta = e.clientX - startPos;
+                    const thumbWidth = parseFloat(thumb.style.width);
+                    const maxThumbMove = trackRect.width - thumbWidth;
+                    const scrollWidth = pluginContent.scrollWidth - pluginContent.clientWidth;
+
+                    if (maxThumbMove > 0) {
+                        const scrollDelta = (delta / maxThumbMove) * scrollWidth;
+                        const newScrollLeft = Math.max(0, Math.min(scrollWidth, startScroll + scrollDelta));
+                        pluginContent.scrollLeft = newScrollLeft;
+                        logger.info('scrollLeft設定:', newScrollLeft);
+                    }
+                }
+
+                // スクロールバー表示を更新
+                this.forceUpdateScrollbarForPlugin(iframe, content, scrollbar, direction);
+            } catch (error) {
+                logger.error('スクロールバードラッグ中エラー:', error);
+            }
+        };
+
+        // ドラッグ終了
+        const handleMouseUp = () => {
+            if (isDragging) {
+                logger.info('スクロールバードラッグ終了:', direction);
+                isDragging = false;
+                thumb.classList.remove('dragging');
+            }
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+
+        // iframe内の.plugin-contentまたはbodyにscrollイベントリスナーを登録
+        // iframeの読み込みを待ってから登録
+        const setupScrollListener = (retryCount = 0) => {
+            try {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                // .plugin-contentがあればそれを使用、なければbodyを使用
+                let pluginContent = iframeDoc.querySelector('.plugin-content');
+
+                if (!pluginContent && retryCount < 5) {
+                    // .plugin-contentが見つからない場合、少し待ってから再試行
+                    setTimeout(() => setupScrollListener(retryCount + 1), window.RETRY_DELAY_MS);
+                    return;
+                }
+
+                // 5回試してもなければbodyを使用
+                if (!pluginContent) {
+                    pluginContent = iframeDoc.body;
+                    if (!pluginContent) {
+                        logger.warn('iframe内のスクロール要素が見つかりません');
+                        return;
+                    }
+                }
+
+                pluginContent.addEventListener('scroll', () => {
+                    this.forceUpdateScrollbarForPlugin(iframe, content, scrollbar, direction);
+                });
+
+                // 初期表示時のスクロールバーを更新
+                this.forceUpdateScrollbarForPlugin(iframe, content, scrollbar, direction);
+            } catch (error) {
+                logger.error('scrollリスナー登録エラー:', error);
+            }
+        };
+
+        // iframeがすでに読み込まれているかチェック
+        if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
+            setupScrollListener();
+        } else {
+            iframe.addEventListener('load', setupScrollListener, { once: true });
+        }
+
+        logger.info('スクロールバーイベントハンドラ登録完了:', direction);
+    }
+}

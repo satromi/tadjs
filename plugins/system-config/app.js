@@ -1,11 +1,17 @@
 /**
  * システム環境設定プラグイン
  */
-class SystemConfigApp {
+const logger = window.getLogger('SystemConfig');
+
+class SystemConfigApp extends window.PluginBase {
     constructor() {
+        super('SystemConfig');
+        logger.info('[SystemConfig] 初期化開始');
+
         this.selectedBackground = null;
-        this.realId = null; // 実身ID
-        this.messageBus = null;
+        // this.realId, this.messageBus は PluginBase で定義済み
+
+        // MessageBus初期化
         if (window.MessageBus) {
             this.messageBus = new window.MessageBus({
                 debug: false,
@@ -17,7 +23,7 @@ class SystemConfigApp {
     }
 
     init() {
-        console.log('[SystemConfig] 初期化開始');
+        logger.info('[SystemConfig] 初期化開始');
 
         // MessageBusのハンドラを登録
         if (this.messageBus) {
@@ -56,7 +62,7 @@ class SystemConfigApp {
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;
                 this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
-                console.log('[SystemConfig] fileId設定:', this.realId, '(元:', rawId, ')');
+                logger.info('[SystemConfig] fileId設定:', this.realId, '(元:', rawId, ')');
             }
         });
 
@@ -129,7 +135,7 @@ class SystemConfigApp {
                 break;
             case 'find-replace':
                 // 検索/置換は未実装
-                console.log('[SystemConfig] 検索/置換は未実装です');
+                logger.info('[SystemConfig] 検索/置換は未実装です');
                 break;
         }
     }
@@ -248,7 +254,7 @@ class SystemConfigApp {
             // リストに追加
             this.addBackgroundOption(bgId, file.name, dataUrl);
 
-            console.log('[SystemConfig] 背景画像を追加しました:', file.name);
+            logger.info('[SystemConfig] 背景画像を追加しました:', file.name);
         };
 
         reader.readAsDataURL(file);
@@ -256,7 +262,7 @@ class SystemConfigApp {
 
     loadBackgroundList() {
         const backgrounds = JSON.parse(localStorage.getItem('systemBackgrounds') || '[]');
-        console.log('[SystemConfig] 背景リスト読み込み:', backgrounds.length);
+        logger.info('[SystemConfig] 背景リスト読み込み:', backgrounds.length);
 
         // 「なし」オプションのクリックイベント
         const noneOption = document.querySelector('[data-bg="none"]');
@@ -307,13 +313,24 @@ class SystemConfigApp {
     }
 
     async deleteBackground(id) {
-        const result = await this.messageBus.sendWithCallback('show-message-dialog', {
-            message: 'この背景画像を削除しますか？',
-            buttons: [
-                { label: '取り消し', value: 'cancel' },
-                { label: '削　除', value: 'delete' }
-            ],
-            defaultButton: 0
+        const result = await new Promise((resolve) => {
+            this.messageBus.sendWithCallback('show-message-dialog', {
+                message: 'この背景画像を削除しますか？',
+                buttons: [
+                    { label: '取り消し', value: 'cancel' },
+                    { label: '削　除', value: 'delete' }
+                ],
+                defaultButton: 0
+            }, (response) => {
+                // Dialog result is wrapped in response.result
+                const dialogResult = response.result || response;
+                if (dialogResult.error) {
+                    logger.warn('[SystemConfig] ダイアログエラー:', dialogResult.error);
+                    resolve('cancel');
+                    return;
+                }
+                resolve(dialogResult);
+            }, 30000);
         });
 
         if (result !== 'delete') {
@@ -336,7 +353,7 @@ class SystemConfigApp {
             this.selectBackground('none');
         }
 
-        console.log('[SystemConfig] 背景画像を削除しました:', id);
+        logger.info('[SystemConfig] 背景画像を削除しました:', id);
     }
 
     selectBackground(id) {
@@ -384,7 +401,7 @@ class SystemConfigApp {
                 });
             }
 
-            console.log('[SystemConfig] 設定を適用しました');
+            logger.info('[SystemConfig] 設定を適用しました');
         }
 
         // ウィンドウを閉じる
@@ -404,7 +421,7 @@ class SystemConfigApp {
     }
 
     async loadVersionList() {
-        console.log('[SystemConfig] バージョンリスト読み込み');
+        logger.info('[SystemConfig] バージョンリスト読み込み');
 
         // 親ウィンドウからプラグイン情報を取得
         this.messageBus.send('get-plugin-list', {});
@@ -432,7 +449,7 @@ class SystemConfigApp {
             list.appendChild(item);
         });
 
-        console.log('[SystemConfig] バージョンリスト表示完了:', sortedPlugins.length);
+        logger.info('[SystemConfig] バージョンリスト表示完了:', sortedPlugins.length);
     }
 
     /**
@@ -446,7 +463,7 @@ class SystemConfigApp {
                 windowConfig: windowConfig
             });
 
-            console.log('[SystemConfig] ウィンドウ設定を更新:', windowConfig);
+            logger.info('[SystemConfig] ウィンドウ設定を更新:', windowConfig);
         }
     }
 }

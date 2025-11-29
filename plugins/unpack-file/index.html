@@ -13,6 +13,13 @@
         </div>
     </div>
 
+    <!-- ロガーをグローバル変数として読み込み（最初に読み込む必要がある） -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
     <!-- 文字コード変換ライブラリ -->
     <script src="encoding.js?v=20251109"></script>
     <!-- TAD解析ライブラリ -->
@@ -25,6 +32,6 @@
         window.MessageBus = MessageBus;
     </script>
     <!-- アプリケーションロジック -->
-    <script defer src="app.js?v=20251109"></script>
+    <script type="module" src="app.js?v=20251109"></script>
 </body>
 </html>

@@ -14,9 +14,24 @@
         </div>
     </div>
 
+    <!-- ロガーをグローバル変数として読み込み（最初に読み込む必要がある） -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <!-- アイコンキャッシュマネージャー -->
+    <script type="module">
+        import { IconCacheManager } from '../../js/icon-cache-manager.js';
+        window.IconCacheManager = IconCacheManager;
+    </script>
     <!-- グローバル設定 -->
-    <script src="../../js/config.js"></script>
-    <script src="../../tad.js?v=20251023"></script>
+    <script type="module">
+        import { CONFIG } from '../../js/config.js';
+        window.TADjsConfig = CONFIG;
+    </script>
+    <script type="module" src="../../tad.js?v=20251023"></script>
     <!-- VirtualObjectRendererをグローバル変数として読み込み -->
     <script type="module">
         import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
@@ -63,6 +78,6 @@
         import { PluginBase } from '../../js/plugin-base.js';
         window.PluginBase = PluginBase;
     </script>
-    <script defer src="editor.js?v=20251023"></script>
+    <script type="module" src="editor.js?v=20251023"></script>
 </body>
 </html>

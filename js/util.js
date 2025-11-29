@@ -43,10 +43,76 @@ export const UI_UPDATE_DELAY_MS = 100; // 100ミリ秒
 export const QUICK_UI_UPDATE_DELAY_MS = 10; // 10ミリ秒
 
 /**
+ * アイコン設定遅延時間（ミリ秒）
+ * ウィンドウ作成後のアイコン設定待ち等に適用
+ */
+export const ICON_SET_DELAY_MS = 200; // 200ミリ秒
+
+/**
+ * スクロールバー更新遅延時間（ミリ秒）
+ * ウィンドウリサイズ後のスクロールバー更新待ち等に適用
+ */
+export const SCROLL_UPDATE_DELAY_MS = 300; // 300ミリ秒
+
+/**
+ * メニュー取得タイムアウト時間（ミリ秒）
+ * プラグインからのメニュー定義取得に適用
+ */
+export const MENU_FETCH_TIMEOUT_MS = 1000; // 1秒
+
+/**
+ * ステータス更新間隔（ミリ秒）
+ * ステータスバーの時刻表示更新間隔等に適用
+ */
+export const STATUS_UPDATE_INTERVAL_MS = 1000; // 1秒
+
+/**
+ * ステータスメッセージ表示時間（ミリ秒）
+ * 一時的なステータスメッセージの表示時間
+ */
+export const STATUS_MESSAGE_DURATION_MS = 5000; // 5秒
+
+/**
+ * コンテキストメニューフラグのクリア遅延（ミリ秒）
+ * コンテキストメニュー開閉の即座検出防止用
+ */
+export const CONTEXT_MENU_FLAG_CLEAR_MS = 100; // 100ミリ秒
+
+/**
+ * ダブルクリック判定時間（ミリ秒）
+ * 連続クリックをダブルクリックとみなす時間間隔
+ */
+export const DOUBLE_CLICK_TIME_MS = 1000; // 1秒
+
+/**
  * エラーチェック用短期タイムアウト（ミリ秒）
  * エラーレスポンスの即座チェックに適用
  */
 export const ERROR_CHECK_TIMEOUT_MS = 100; // 100ミリ秒
+
+/**
+ * リトライ遅延時間（ミリ秒）
+ * 要素の検出リトライ等に適用
+ */
+export const RETRY_DELAY_MS = 50; // 50ミリ秒
+
+/**
+ * クリック判定遅延時間（ミリ秒）
+ * シングルクリックとダブルクリックの判定待機時間
+ */
+export const CLICK_DEBOUNCE_DELAY_MS = 250; // 250ミリ秒
+
+/**
+ * ウィンドウクローズ後のクリーンアップ遅延（ミリ秒）
+ * ウィンドウ削除とフォーカス移動の処理待ち
+ */
+export const WINDOW_CLOSE_CLEANUP_DELAY_MS = 150; // 150ミリ秒
+
+/**
+ * アニメーション完了待機時間（ミリ秒）
+ * CSSアニメーション完了後の処理待ち（アニメーション0.2s + 余裕）
+ */
+export const ANIMATION_COMPLETE_DELAY_MS = 250; // 250ミリ秒
 
 /**
  * データファイル読み込みのタイムアウト時間（ミリ秒）

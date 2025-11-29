@@ -50,12 +50,59 @@
     <!-- スクリプト -->
     <script src="encoding.min.js?v=20251024"></script>
     <script src="lh5.js"></script>
-    <script src="tad.js?v=20251024"></script>
+    <!-- ロガーをグローバル変数として読み込み（tad.js等で使用） -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from './js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <script type="module" src="tad.js?v=20251024"></script>
     <script src="electron/plugin-manager.js"></script>
     <!-- MessageBus Phase 2: 親モード用にMessageBusをグローバル変数として読み込み -->
     <script type="module">
         import { MessageBus } from './js/message-bus.js';
         window.MessageBus = MessageBus;
+    </script>
+    <!-- MessageRouter Phase 1: メッセージルーティング機構 -->
+    <script type="module">
+        import { MessageRouter } from './js/message-router.js';
+        window.MessageRouter = MessageRouter;
+    </script>
+    <!-- ScrollbarManager: スクロールバー管理 -->
+    <script type="module">
+        import { ScrollbarManager } from './js/scrollbar-manager.js';
+        window.ScrollbarManager = ScrollbarManager;
+    </script>
+    <!-- DialogManager: ダイアログ管理 -->
+    <script type="module">
+        import { DialogManager } from './js/dialog-manager.js';
+        window.DialogManager = DialogManager;
+    </script>
+    <!-- WindowManager: ウィンドウ管理 -->
+    <script type="module">
+        import { WindowManager } from './js/window-manager.js';
+        window.WindowManager = WindowManager;
+    </script>
+    <!-- ContextMenuManager: コンテキストメニュー管理 -->
+    <script type="module">
+        import { ContextMenuManager } from './js/context-menu-manager.js';
+        window.ContextMenuManager = ContextMenuManager;
+    </script>
+    <!-- ToolPanelManager: ツールパネル管理 -->
+    <script type="module">
+        import { ToolPanelManager } from './js/tool-panel-manager.js';
+        window.ToolPanelManager = ToolPanelManager;
+    </script>
+    <!-- FileManager: ファイル操作管理 -->
+    <script type="module">
+        import { FileManager } from './js/file-manager.js';
+        window.FileManager = FileManager;
+    </script>
+    <!-- UISettingsManager: UI設定管理 -->
+    <script type="module">
+        import { UISettingsManager } from './js/ui-settings-manager.js';
+        window.UISettingsManager = UISettingsManager;
     </script>
     <!-- 実身仮身システムをグローバル変数として読み込み -->
     <script type="module">
@@ -76,6 +123,18 @@
             HOVER_BG_COLOR,
             DIALOG_BG_COLOR,
             BORDER_COLOR,
+            ICON_SET_DELAY_MS,
+            SCROLL_UPDATE_DELAY_MS,
+            MENU_FETCH_TIMEOUT_MS,
+            STATUS_UPDATE_INTERVAL_MS,
+            STATUS_MESSAGE_DURATION_MS,
+            CONTEXT_MENU_FLAG_CLEAR_MS,
+            DOUBLE_CLICK_TIME_MS,
+            RETRY_DELAY_MS,
+            CLICK_DEBOUNCE_DELAY_MS,
+            WINDOW_CLOSE_CLEANUP_DELAY_MS,
+            ANIMATION_COMPLETE_DELAY_MS,
+            DIALOG_TIMEOUT_MS,
             escapeHtml
         } from './js/util.js';
         window.UI_UPDATE_DELAY_MS = UI_UPDATE_DELAY_MS;
@@ -89,11 +148,23 @@
         window.HOVER_BG_COLOR = HOVER_BG_COLOR;
         window.DIALOG_BG_COLOR = DIALOG_BG_COLOR;
         window.BORDER_COLOR = BORDER_COLOR;
+        window.ICON_SET_DELAY_MS = ICON_SET_DELAY_MS;
+        window.SCROLL_UPDATE_DELAY_MS = SCROLL_UPDATE_DELAY_MS;
+        window.MENU_FETCH_TIMEOUT_MS = MENU_FETCH_TIMEOUT_MS;
+        window.STATUS_UPDATE_INTERVAL_MS = STATUS_UPDATE_INTERVAL_MS;
+        window.STATUS_MESSAGE_DURATION_MS = STATUS_MESSAGE_DURATION_MS;
+        window.CONTEXT_MENU_FLAG_CLEAR_MS = CONTEXT_MENU_FLAG_CLEAR_MS;
+        window.DOUBLE_CLICK_TIME_MS = DOUBLE_CLICK_TIME_MS;
+        window.RETRY_DELAY_MS = RETRY_DELAY_MS;
+        window.CLICK_DEBOUNCE_DELAY_MS = CLICK_DEBOUNCE_DELAY_MS;
+        window.WINDOW_CLOSE_CLEANUP_DELAY_MS = WINDOW_CLOSE_CLEANUP_DELAY_MS;
+        window.ANIMATION_COMPLETE_DELAY_MS = ANIMATION_COMPLETE_DELAY_MS;
+        window.DIALOG_TIMEOUT_MS = DIALOG_TIMEOUT_MS;
         window.escapeHtml = escapeHtml;
     </script>
     <!-- ファイルインポートマネージャーを読み込み -->
-    <script src="./js/fileimport.js"></script>
-    <script src="tadjs-desktop.js"></script>
+    <script type="module" src="./js/fileimport.js"></script>
+    <script type="module" src="tadjs-desktop.js"></script>
     <script>
         // プラグインマネージャーとTADjsDesktopを順番に初期化
         document.addEventListener('DOMContentLoaded', async () => {

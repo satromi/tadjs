@@ -1,17 +1,20 @@
 /**
  * ファイル取込プラグイン
  * 外部ファイルを実身として取り込むためのプラグイン
+ *
+ * PluginBase継承版
  */
+const logger = window.getLogger('FileImport');
 
-class FileImportApp {
+class FileImportApp extends window.PluginBase {
     constructor() {
-        console.log('[FileImport] 初期化開始');
+        super('FileImport');
+        logger.info('[FileImport] 初期化開始');
 
         this.selectedFiles = [];
-        this.windowId = null;
+        // this.windowId は PluginBase で定義済み
 
         // MessageBus初期化
-        this.messageBus = null;
         if (window.MessageBus) {
             this.messageBus = new window.MessageBus({
                 debug: false,
@@ -33,7 +36,7 @@ class FileImportApp {
         // イベントリスナーの設定
         this.setupEventListeners();
 
-        console.log('[FileImport] 初期化完了');
+        logger.info('[FileImport] 初期化完了');
     }
 
     /**
@@ -42,18 +45,28 @@ class FileImportApp {
     setupMessageBusHandlers() {
         // 初期化メッセージ
         this.messageBus.on('init', (data) => {
-            console.log('[FileImport] init受信', data);
+            logger.info('[FileImport] init受信', data);
             this.windowId = data.windowId;
+        });
+
+        // メニュー定義要求（空のメニューを返す）
+        this.messageBus.on('get-menu-definition', (data) => {
+            logger.info('[FileImport] get-menu-definition受信', data);
+            // ファイル取込プラグインは右クリックメニューを使用しないため、空の配列を返す
+            this.messageBus.send('menu-definition-response', {
+                messageId: data.messageId,
+                menuDefinition: []
+            });
         });
 
         // ファイル取り込み完了メッセージ
         this.messageBus.on('files-imported', (data) => {
-            console.log('[FileImport] files-imported受信', data);
+            logger.info('[FileImport] files-imported受信', data);
             if (data.success) {
                 // 成功したらウィンドウを閉じる
                 this.closeWindow();
             } else {
-                console.error('[FileImport] ファイル取り込みに失敗しました:', data.error);
+                logger.error('[FileImport] ファイル取り込みに失敗しました:', data.error);
                 // エラーメッセージを表示（簡易実装）
                 alert('ファイル取り込みに失敗しました: ' + (data.error || '不明なエラー'));
             }
@@ -112,7 +125,7 @@ class FileImportApp {
      * @param {FileList} files - 選択されたファイル
      */
     handleFilesSelected(files) {
-        console.log('[FileImport] ファイル選択:', files.length, '個');
+        logger.info('[FileImport] ファイル選択:', files.length, '個');
 
         // FileListを配列に変換して追加
         const filesArray = Array.from(files);
@@ -268,16 +281,29 @@ class FileImportApp {
      */
     importFiles() {
         if (this.selectedFiles.length === 0) {
-            console.warn('[FileImport] ファイルが選択されていません');
+            logger.warn('[FileImport] ファイルが選択されていません');
             return;
         }
 
-        console.log('[FileImport] ファイルを取り込みます:', this.selectedFiles.length, '個');
+        logger.info('[FileImport] ファイルを取り込みます:', this.selectedFiles.length, '個');
 
         // 親ウィンドウにファイルを送信
+        // File オブジェクトはpostMessageでシリアライズできないため、
+        // 必要なプロパティを抽出して送信する
         if (this.messageBus) {
+            const fileInfos = this.selectedFiles.map(file => ({
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                // Electron環境ではfile.pathでファイルパスにアクセス可能
+                path: file.path || null,
+                lastModified: file.lastModified
+            }));
+
+            logger.info('[FileImport] ファイル情報を送信:', fileInfos);
+
             this.messageBus.send('import-files', {
-                files: this.selectedFiles,
+                files: fileInfos,
                 windowId: this.windowId
             });
         }
@@ -287,7 +313,7 @@ class FileImportApp {
      * ウィンドウを閉じる
      */
     closeWindow() {
-        console.log('[FileImport] ウィンドウを閉じます');
+        logger.info('[FileImport] ウィンドウを閉じます');
 
         if (this.messageBus) {
             this.messageBus.send('close-window', {

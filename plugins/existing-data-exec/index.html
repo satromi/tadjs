@@ -10,6 +10,13 @@
     <div class="plugin-content">
         <div class="message">既存データをデフォルト起動アプリで開いています...</div>
     </div>
+    <!-- ロガーをグローバル変数として読み込み（最初に読み込む必要がある） -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">
         import { MessageBus } from '../../js/message-bus.js';
@@ -20,6 +27,11 @@
         import { RealObjectSystem } from '../../js/real-object-system.js';
         window.RealObjectSystem = RealObjectSystem;
     </script>
-    <script defer src="app.js"></script>
+    <!-- PluginBaseをグローバル変数として読み込み -->
+    <script type="module">
+        import { PluginBase } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+    </script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>

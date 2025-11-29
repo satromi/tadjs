@@ -2,6 +2,7 @@
  * 基本図形編集プラグイン
  * TADファイルの図形セグメントを編集
  */
+const logger = window.getLogger('BasicFigureEditor');
 
 class BasicFigureEditor extends window.PluginBase {
     constructor() {
@@ -10,6 +11,14 @@ class BasicFigureEditor extends window.PluginBase {
 
         this.canvas = document.getElementById('figureCanvas');
         this.ctx = this.canvas.getContext('2d');
+
+        // Canvas要素のz-index管理のため、positionをabsoluteに設定
+        // これにより、仮身（DOM要素）とのz-order制御が可能になる
+        this.canvas.style.position = 'absolute';
+        this.canvas.style.top = '0';
+        this.canvas.style.left = '0';
+        // width, height, backgroundはCSSの設定を維持（上書きしない）
+
         this.currentFile = null;
         this.tadData = null;
         this.isFullscreen = false;
@@ -20,8 +29,6 @@ class BasicFigureEditor extends window.PluginBase {
         this.originalContent = ''; // 保存時の内容
         this.imagePathCallbacks = {}; // 画像パス取得コールバック（messageId -> callback）
         this.imagePathMessageId = 0; // 画像パスメッセージID
-        this.iconCache = new Map(); // アイコンキャッシュ
-        this.debug = window.TADjsConfig?.debug || false; // デバッグモード（config.jsで管理）
 
         // 図形編集用のプロパティ
         this.currentTool = 'select'; // 現在選択中のツール
@@ -116,25 +123,16 @@ class BasicFigureEditor extends window.PluginBase {
         this.pixelmapTool = 'pencil'; // 現在のピクセルマップツール
         this.pixelmapBrushSize = 1; // ブラシサイズ（ピクセル単位）
 
-        // 開いている実身を追跡するためのMap (realId -> windowId)
-        this.openedRealObjects = new Map();
-
         // ドラッグクールダウン（連続ドラッグ防止）
         this.dragCooldown = false;
         this.dragCooldownTimeout = null;
 
         // ダブルクリック+ドラッグ用の状態管理
-        this.dblClickDragState = {
-            lastClickTime: 0,
-            lastClickedShape: null,
-            isDblClickDragCandidate: false,
-            isDblClickDrag: false,
-            dblClickedShape: null,
-            dblClickedElement: null,
-            previewElement: null,
-            startX: 0,
-            startY: 0
-        };
+        // PluginBaseで共通プロパティ（lastClickTime, isDblClickDragCandidate, isDblClickDrag, dblClickedElement, startX, startY）を初期化済み
+        // プラグイン固有のプロパティのみ追加
+        this.dblClickDragState.lastClickedShape = null;  // 最後にクリックされた図形
+        this.dblClickDragState.dblClickedShape = null;   // ダブルクリックされた図形
+        this.dblClickDragState.previewElement = null;    // ドラッグ中のプレビュー要素
 
         // 通常のドラッグ用の状態管理
         this.dragState = {
@@ -142,9 +140,6 @@ class BasicFigureEditor extends window.PluginBase {
             isDragging: false,
             hasMoved: false // 5px以上移動したかどうか
         };
-
-        // VirtualObjectRenderer
-        this.virtualObjectRenderer = null; // 初期化後に設定
 
         // ユーザ環境設定（選択枠）
         this.selectionWidth = 2; // 選択枠太さ
@@ -161,9 +156,9 @@ class BasicFigureEditor extends window.PluginBase {
                 pluginName: 'BasicFigureEditor'
             });
             this.messageBus.start();
-            console.log('[BasicFigureEditor] MessageBus initialized');
+            logger.debug('[BasicFigureEditor] MessageBus initialized');
         } else {
-            console.warn('[BasicFigureEditor] MessageBus not available');
+            logger.warn('[BasicFigureEditor] MessageBus not available');
         }
 
         this.init();
@@ -176,42 +171,42 @@ class BasicFigureEditor extends window.PluginBase {
     setupMessageBusHandlers() {
         // init メッセージ
         this.messageBus.on('init', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] init受信');
+            logger.debug('[FIGURE EDITOR] [MessageBus] init受信');
 
             // ウィンドウIDを保存（親から渡されたIDを使用）
             if (data.windowId) {
                 this.windowId = data.windowId;
-                console.log('[FIGURE EDITOR] [MessageBus] windowId更新:', this.windowId);
+                logger.debug('[FIGURE EDITOR] [MessageBus] windowId更新:', this.windowId);
             }
 
             // fileIdを保存（拡張子を除去）
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;
                 this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
-                console.log('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId);
+                logger.debug('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId);
 
                 // 背景色の設定
                 if (data.fileData.windowConfig && data.fileData.windowConfig.backgroundColor) {
                     this.bgColor = data.fileData.windowConfig.backgroundColor;
-                    console.log('[FIGURE EDITOR] [MessageBus] ウィンドウ背景色を適用:', this.bgColor);
+                    logger.debug('[FIGURE EDITOR] [MessageBus] ウィンドウ背景色を適用:', this.bgColor);
                 }
             }
 
             // 全画面表示状態を復元
             if (data.fileData && data.fileData.realObject && data.fileData.realObject.window) {
                 this.isFullscreen = data.fileData.realObject.window.maximize || false;
-                console.log('[FIGURE EDITOR] [MessageBus] 全画面表示状態を復元:', this.isFullscreen);
+                logger.debug('[FIGURE EDITOR] [MessageBus] 全画面表示状態を復元:', this.isFullscreen);
 
                 // 道具パネル位置を復元
                 if (data.fileData.realObject.window.panelpos) {
                     this.panelpos = data.fileData.realObject.window.panelpos;
-                    console.log('[FIGURE EDITOR] [MessageBus] 道具パネル位置を復元:', this.panelpos);
+                    logger.debug('[FIGURE EDITOR] [MessageBus] 道具パネル位置を復元:', this.panelpos);
                 }
 
                 // 道具パネル表示状態を復元
                 if (data.fileData.realObject.window.panel !== undefined) {
                     this.toolPanelVisible = data.fileData.realObject.window.panel;
-                    console.log('[FIGURE EDITOR] [MessageBus] 道具パネル表示状態を復元:', this.toolPanelVisible);
+                    logger.debug('[FIGURE EDITOR] [MessageBus] 道具パネル表示状態を復元:', this.toolPanelVisible);
                 }
             }
 
@@ -225,93 +220,40 @@ class BasicFigureEditor extends window.PluginBase {
             }, 500);
         });
 
-        // window-moved メッセージ
-        this.messageBus.on('window-moved', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] window-moved受信');
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-        });
-
-        // window-resized-end メッセージ
-        this.messageBus.on('window-resized-end', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] window-resized-end受信');
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-            this.resizeCanvas();
-        });
-
-        // window-maximize-toggled メッセージ
-        this.messageBus.on('window-maximize-toggled', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] window-maximize-toggled受信');
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height,
-                maximize: data.maximize
-            });
-            // 全画面表示状態を同期
-            this.isFullscreen = data.maximize;
-            console.log('[FIGURE EDITOR] [MessageBus] 全画面表示状態を同期:', this.isFullscreen);
-            this.resizeCanvas();
-        });
+        // 共通MessageBusハンドラを登録（PluginBaseで定義）
+        // window-moved, window-resized-end, window-maximize-toggled,
+        // menu-action, get-menu-definition, window-close-request
+        this.setupCommonMessageBusHandlers();
 
         // scroll メッセージ
         this.messageBus.on('scroll', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] scroll受信:', data);
+            logger.debug('[FIGURE EDITOR] [MessageBus] scroll受信:', data);
             this.handleScroll(data.scrollLeft, data.scrollTop);
-        });
-
-        // menu-action メッセージ
-        this.messageBus.on('menu-action', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] menu-action受信:', data.action);
-            this.executeMenuAction(data.action, data.additionalData);
-        });
-
-        // get-menu-definition メッセージ
-        this.messageBus.on('get-menu-definition', async (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] get-menu-definition受信');
-            const menuDefinition = await this.getMenuDefinition();
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: menuDefinition
-            });
         });
 
         // input-dialog-response メッセージ（MessageBusが自動処理）
         this.messageBus.on('input-dialog-response', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] input-dialog-response受信:', data.messageId);
+            logger.debug('[FIGURE EDITOR] [MessageBus] input-dialog-response受信:', data.messageId);
             // sendWithCallback使用時は自動的にコールバックが実行される
         });
 
         // message-dialog-response メッセージ（MessageBusが自動処理）
         this.messageBus.on('message-dialog-response', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] message-dialog-response受信:', data.messageId);
+            logger.debug('[FIGURE EDITOR] [MessageBus] message-dialog-response受信:', data.messageId);
             // sendWithCallback使用時は自動的にコールバックが実行される
-        });
-
-        // window-close-request メッセージ
-        this.messageBus.on('window-close-request', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] window-close-request受信');
-            this.handleCloseRequest(data.windowId);
         });
 
         // ===== 道具パネル関連メッセージ =====
 
         // tool-panel-window-created メッセージ
         this.messageBus.on('tool-panel-window-created', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] 道具パネルウィンドウ作成完了:', data.windowId);
+            logger.debug('[FIGURE EDITOR] [MessageBus] 道具パネルウィンドウ作成完了:', data.windowId);
             this.toolPanelWindowId = data.windowId;
         });
 
         // tool-panel-window-moved メッセージ
         this.messageBus.on('tool-panel-window-moved', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] tool-panel-window-moved受信:', data.pos);
+            logger.debug('[FIGURE EDITOR] [MessageBus] tool-panel-window-moved受信:', data.pos);
             this.updatePanelPosition(data.pos);
         });
 
@@ -335,7 +277,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         // update-stroke-color メッセージ
         this.messageBus.on('update-stroke-color', (data) => {
-            console.log('[FIGURE EDITOR] update-stroke-color受信:', data.strokeColor, '選択図形数:', this.selectedShapes.length);
+            logger.debug('[FIGURE EDITOR] update-stroke-color受信:', data.strokeColor, '選択図形数:', this.selectedShapes.length);
             this.strokeColor = data.strokeColor;
             this.applyStrokeColorToSelected(data.strokeColor);
         });
@@ -391,13 +333,13 @@ class BasicFigureEditor extends window.PluginBase {
         // update-pixelmap-tool メッセージ
         this.messageBus.on('update-pixelmap-tool', (data) => {
             this.pixelmapTool = data.pixelmapTool;
-            console.log('[FIGURE EDITOR] [MessageBus] ピクセルマップツール変更:', this.pixelmapTool);
+            logger.debug('[FIGURE EDITOR] [MessageBus] ピクセルマップツール変更:', this.pixelmapTool);
         });
 
         // update-pixelmap-brush-size メッセージ
         this.messageBus.on('update-pixelmap-brush-size', (data) => {
             this.pixelmapBrushSize = data.pixelmapBrushSize;
-            console.log('[FIGURE EDITOR] [MessageBus] ブラシサイズ変更:', this.pixelmapBrushSize);
+            logger.debug('[FIGURE EDITOR] [MessageBus] ブラシサイズ変更:', this.pixelmapBrushSize);
         });
 
         // update-font-size メッセージ
@@ -448,25 +390,25 @@ class BasicFigureEditor extends window.PluginBase {
 
         // window-opened メッセージ
         this.messageBus.on('window-opened', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] window-opened受信, windowId:', data.windowId);
+            logger.debug('[FIGURE EDITOR] [MessageBus] window-opened受信, windowId:', data.windowId);
             // このイベントは各メッセージハンドラーで個別に処理されます
         });
 
         // window-closed メッセージ
         this.messageBus.on('window-closed', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] window-closed受信, windowId:', data.windowId);
+            logger.debug('[FIGURE EDITOR] [MessageBus] window-closed受信, windowId:', data.windowId);
             // openedRealObjectsから削除
             for (const [realId, windowId] of this.openedRealObjects.entries()) {
                 if (windowId === data.windowId) {
                     this.openedRealObjects.delete(realId);
-                    console.log('[FIGURE EDITOR] [MessageBus] 実身ウィンドウを追跡から削除:', realId);
+                    logger.debug('[FIGURE EDITOR] [MessageBus] 実身ウィンドウを追跡から削除:', realId);
                     break;
                 }
             }
             // 道具パネルウィンドウが閉じられた場合
             if (data.windowId === this.toolPanelWindowId) {
                 this.toolPanelWindowId = null;
-                console.log('[FIGURE EDITOR] [MessageBus] 道具パネルウィンドウIDをクリア');
+                logger.debug('[FIGURE EDITOR] [MessageBus] 道具パネルウィンドウIDをクリア');
             }
         });
 
@@ -476,13 +418,13 @@ class BasicFigureEditor extends window.PluginBase {
         this.messageBus.on('check-window-id', (data) => {
             // 親ウィンドウからwindowIdチェック要求
             if (data.targetWindowId === this.windowId) {
-                console.log('[FIGURE EDITOR] [MessageBus] check-window-id一致、ドロップ成功として処理');
+                logger.debug('[FIGURE EDITOR] [MessageBus] check-window-id一致、ドロップ成功として処理');
                 // 自分宛のメッセージなので、cross-window-drop-successとして処理
                 if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
                     const shape = this.draggingVirtualObjectShape;
                     const dragMode = this.dragState.dragMode;
 
-                    console.log(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
+                    logger.debug(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
 
                     // タイムアウトをキャンセル
                     if (this.virtualObjectDragTimeout) {
@@ -498,12 +440,12 @@ class BasicFigureEditor extends window.PluginBase {
                             ? selectedVirtualObjectShapes
                             : [shape];
 
-                        console.log('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
+                        logger.debug('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
 
                         // 共通メソッドで仮身を削除
                         this.deleteVirtualObjectShapes(shapesToDelete);
                     } else {
-                        console.log('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
+                        logger.debug('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
                     }
 
                     // フラグをリセット
@@ -516,11 +458,11 @@ class BasicFigureEditor extends window.PluginBase {
         // cross-window-drop-success メッセージ
         this.messageBus.on('cross-window-drop-success', (data) => {
             // 他のウィンドウへのドロップが成功した通知（直接受信した場合）
-            console.log('[FIGURE EDITOR] [MessageBus] cross-window-drop-success受信:', data);
+            logger.debug('[FIGURE EDITOR] [MessageBus] cross-window-drop-success受信:', data);
 
             // 同じウィンドウ内でのドロップの場合は無視
             if (data.sourceWindowId === this.windowId) {
-                console.log('[FIGURE EDITOR] 同じウィンドウ内でのドロップ: 処理をスキップ');
+                logger.debug('[FIGURE EDITOR] 同じウィンドウ内でのドロップ: 処理をスキップ');
                 return;
             }
 
@@ -528,7 +470,7 @@ class BasicFigureEditor extends window.PluginBase {
                 const shape = this.draggingVirtualObjectShape;
                 const dragMode = data.mode || this.dragState.dragMode;
 
-                console.log(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
+                logger.debug(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
 
                 // タイムアウトをキャンセル
                 if (this.virtualObjectDragTimeout) {
@@ -544,17 +486,21 @@ class BasicFigureEditor extends window.PluginBase {
                         ? selectedVirtualObjectShapes
                         : [shape];
 
-                    console.log('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
+                    logger.debug('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
 
                     // 共通メソッドで仮身を削除
                     this.deleteVirtualObjectShapes(shapesToDelete);
                 } else {
-                    console.log('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
+                    logger.debug('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
                 }
 
                 // フラグをリセット
                 this.isDraggingVirtualObjectShape = false;
                 this.draggingVirtualObjectShape = null;
+
+                // ドラッグモードをリセット（次のドラッグのため）
+                this.dragState.dragMode = 'move';
+                logger.debug('[FIGURE EDITOR] cross-window-drop-success: dragModeをmoveにリセット');
             }
         });
 
@@ -562,19 +508,19 @@ class BasicFigureEditor extends window.PluginBase {
 
         // load-data メッセージ
         this.messageBus.on('load-data', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] load-data受信:', data);
+            logger.debug('[FIGURE EDITOR] [MessageBus] load-data受信:', data);
 
             // readonlyモードの設定
             if (data.readonly) {
                 this.readonly = true;
                 document.body.classList.add('readonly-mode');
-                console.log('[FIGURE EDITOR] [MessageBus] 読み取り専用モードを適用');
+                logger.debug('[FIGURE EDITOR] [MessageBus] 読み取り専用モードを適用');
             }
 
             // noScrollbarモードの設定
             if (data.noScrollbar) {
                 document.body.style.overflow = 'hidden';
-                console.log('[FIGURE EDITOR] [MessageBus] スクロールバー非表示モードを適用');
+                logger.debug('[FIGURE EDITOR] [MessageBus] スクロールバー非表示モードを適用');
             }
 
             // 実身データを読み込む
@@ -583,7 +529,7 @@ class BasicFigureEditor extends window.PluginBase {
                 // fileIdを保存（_数字.xtad の形式を除去して実身IDのみを取得）
                 let rawId = data.realId;
                 this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
-                console.log('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId, '(元:', rawId, ')');
+                logger.debug('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId, '(元:', rawId, ')');
 
                 // データを読み込む
                 this.loadFile({
@@ -595,19 +541,19 @@ class BasicFigureEditor extends window.PluginBase {
 
         // load-virtual-object メッセージ
         this.messageBus.on('load-virtual-object', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] load-virtual-object受信:', data);
+            logger.debug('[FIGURE EDITOR] [MessageBus] load-virtual-object受信:', data);
 
             // readonlyモードの設定
             if (data.readonly) {
                 this.readonly = true;
                 document.body.classList.add('readonly-mode');
-                console.log('[FIGURE EDITOR] [MessageBus] 読み取り専用モードを適用');
+                logger.debug('[FIGURE EDITOR] [MessageBus] 読み取り専用モードを適用');
             }
 
             // noScrollbarモードの設定
             if (data.noScrollbar) {
                 document.body.style.overflow = 'hidden';
-                console.log('[FIGURE EDITOR] [MessageBus] スクロールバー非表示モードを適用');
+                logger.debug('[FIGURE EDITOR] [MessageBus] スクロールバー非表示モードを適用');
             }
 
             // 実身データを読み込む
@@ -619,7 +565,7 @@ class BasicFigureEditor extends window.PluginBase {
                 if (rawId) {
                     // _数字.xtad の形式を除去して実身IDのみを取得
                     this.realId = rawId.replace(/_\d+\.xtad$/i, '');
-                    console.log('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId, '(元:', rawId, ')');
+                    logger.debug('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId, '(元:', rawId, ')');
                 }
 
                 // データを読み込む
@@ -632,7 +578,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         // add-virtual-object-from-base メッセージ
         this.messageBus.on('add-virtual-object-from-base', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] 原紙箱から仮身追加:', data.realId, data.name);
+            logger.debug('[FIGURE EDITOR] [MessageBus] 原紙箱から仮身追加:', data.realId, data.name);
             this.addVirtualObjectFromRealId(data.realId, data.name, data.dropPosition, data.applist);
         });
 
@@ -640,7 +586,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         // image-file-path-response メッセージ（レスポンス受信）
         this.messageBus.on('image-file-path-response', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] image-file-path-response受信:', data.messageId);
+            logger.debug('[FIGURE EDITOR] [MessageBus] image-file-path-response受信:', data.messageId);
 
             // 自分宛のコールバックがあれば呼び出す
             if (this.imagePathCallbacks && this.imagePathCallbacks[data.messageId]) {
@@ -648,58 +594,65 @@ class BasicFigureEditor extends window.PluginBase {
                 delete this.imagePathCallbacks[data.messageId];
             }
 
-            // 開いた仮身内のプラグインにも転送
+            // 開いた仮身内のプラグインにも転送（MessageBus形式で送信）
             const iframes = document.querySelectorAll('iframe');
             iframes.forEach(iframe => {
                 if (iframe.contentWindow) {
-                    iframe.contentWindow.postMessage(data, '*');
+                    iframe.contentWindow.postMessage({
+                        type: 'image-file-path-response',
+                        ...data,
+                        _messageBus: true,
+                        _from: 'BasicFigureEditor'
+                    }, '*');
                 }
             });
         });
 
         // user-config-updated メッセージ
         this.messageBus.on('user-config-updated', () => {
-            console.log('[FIGURE EDITOR] [MessageBus] ユーザ環境設定更新通知を受信');
+            logger.debug('[FIGURE EDITOR] [MessageBus] ユーザ環境設定更新通知を受信');
             this.loadUserConfig();
         });
 
         // load-data-file-request メッセージ
         this.messageBus.on('load-data-file-request', (data) => {
             // 開いた仮身内のプラグインからのファイル読み込み要求を親ウィンドウに転送
-            console.log('[FIGURE EDITOR] [MessageBus] load-data-file-request受信、親ウィンドウに転送:', data.fileName);
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send(data.type, data);
+            logger.debug('[FIGURE EDITOR] [MessageBus] load-data-file-request受信、親ウィンドウに転送:', data.fileName);
+            // 親ウィンドウに転送（型名を明示的に指定）
+            this.messageBus.send('load-data-file-request', data);
         });
 
         // load-data-file-response メッセージ
         this.messageBus.on('load-data-file-response', (data) => {
             // 親ウィンドウからのファイル読み込みレスポンスを開いた仮身内のプラグインに転送
-            console.log('[FIGURE EDITOR] [MessageBus] load-data-file-response受信、子iframeに転送:', data.fileName);
-            // すべての子iframeに転送（requestIdで識別されるので問題ない）
+            logger.debug('[FIGURE EDITOR] [MessageBus] load-data-file-response受信、子iframeに転送:', data.fileName);
+            // すべての子iframeに転送（MessageBus形式で送信）
             const iframes = document.querySelectorAll('iframe');
             iframes.forEach(iframe => {
                 if (iframe.contentWindow) {
-                    iframe.contentWindow.postMessage(data, '*');
+                    iframe.contentWindow.postMessage({
+                        type: 'load-data-file-response',
+                        ...data,
+                        _messageBus: true,
+                        _from: 'BasicFigureEditor'
+                    }, '*');
                 }
             });
         });
 
         // get-image-file-path メッセージ（開いた仮身内のプラグインからの画像パス取得要求を親ウィンドウに転送）
         this.messageBus.on('get-image-file-path', (data) => {
-            console.log('[FIGURE EDITOR] [MessageBus] get-image-file-path受信、親ウィンドウに転送:', data.fileName);
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send(data.type, data);
+            logger.debug('[FIGURE EDITOR] [MessageBus] get-image-file-path受信、親ウィンドウに転送:', data.fileName);
+            // 親ウィンドウに転送（型名を明示的に指定）
+            this.messageBus.send('get-image-file-path', data);
         });
 
-        console.log('[FIGURE EDITOR] MessageBusハンドラ登録完了');
+        logger.debug('[FIGURE EDITOR] MessageBusハンドラ登録完了');
     }
 
     init() {
-        // VirtualObjectRendererの初期化
-        if (window.VirtualObjectRenderer) {
-            this.virtualObjectRenderer = new window.VirtualObjectRenderer();
-            this.log('VirtualObjectRenderer initialized');
-        }
+        // 共通コンポーネントの初期化
+        this.initializeCommonComponents('[FIGURE EDITOR]');
 
         // パフォーマンス最適化関数の初期化
         if (window.throttleRAF && window.debounce) {
@@ -718,7 +671,7 @@ class BasicFigureEditor extends window.PluginBase {
                 this.notifyScrollbarUpdateImmediate();
             }, 300);
 
-            console.log('[FIGURE EDITOR] Performance optimization initialized');
+            logger.debug('[FIGURE EDITOR] Performance optimization initialized');
         }
 
         // ユーザ環境設定を読み込み
@@ -738,7 +691,7 @@ class BasicFigureEditor extends window.PluginBase {
             this.setupMessageBusHandlers();
         }
 
-        console.log('[基本図形編集] 準備完了');
+        logger.debug('[基本図形編集] 準備完了');
     }
 
     /**
@@ -755,7 +708,7 @@ class BasicFigureEditor extends window.PluginBase {
             .getPropertyValue('--selection-blink-interval')) || 600;
         this.selectionBlinkInterval = selectionBlinkInterval;
 
-        console.log('[FIGURE EDITOR] ユーザ環境設定読み込み:', {
+        logger.debug('[FIGURE EDITOR] ユーザ環境設定読み込み:', {
             selectionWidth: this.selectionWidth,
             selectionBlinkInterval: this.selectionBlinkInterval
         });
@@ -784,7 +737,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         // アニメーション開始
         this.animationFrameId = requestAnimationFrame(animate);
-        console.log('[FIGURE EDITOR] 選択枠点滅アニメーション開始');
+        logger.debug('[FIGURE EDITOR] 選択枠点滅アニメーション開始');
     }
 
     setupCanvas() {
@@ -794,6 +747,25 @@ class BasicFigureEditor extends window.PluginBase {
         // 背景色を設定
         this.ctx.fillStyle = this.bgColor;
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+
+    /**
+     * ウィンドウリサイズ完了時のフック（PluginBase共通ハンドラから呼ばれる）
+     * @param {Object} data - リサイズデータ { pos, width, height }
+     */
+    onWindowResizedEnd(data) {
+        this.resizeCanvas();
+    }
+
+    /**
+     * ウィンドウ最大化切り替え時のフック（PluginBase共通ハンドラから呼ばれる）
+     * @param {Object} data - 最大化データ { pos, width, height, maximize }
+     */
+    onWindowMaximizeToggled(data) {
+        // 全画面表示状態を同期
+        this.isFullscreen = data.maximize;
+        logger.debug('[FIGURE EDITOR] 全画面表示状態を同期:', this.isFullscreen);
+        this.resizeCanvas();
     }
 
     resizeCanvas() {
@@ -816,7 +788,7 @@ class BasicFigureEditor extends window.PluginBase {
             this.canvas.style.width = finalWidth + 'px';
             this.canvas.style.height = finalHeight + 'px';
 
-            console.log('[FIGURE EDITOR] キャンバスサイズ更新:', finalWidth, 'x', finalHeight, '(コンテンツ:', contentSize.width, 'x', contentSize.height, ', ウィンドウ:', windowWidth, 'x', windowHeight, ')');
+            logger.debug('[FIGURE EDITOR] キャンバスサイズ更新:', finalWidth, 'x', finalHeight, '(コンテンツ:', contentSize.width, 'x', contentSize.height, ', ウィンドウ:', windowWidth, 'x', windowHeight, ')');
 
             this.redraw();
 
@@ -897,7 +869,7 @@ class BasicFigureEditor extends window.PluginBase {
                         const rect = this.canvas.getBoundingClientRect();
                         const x = e.clientX - rect.left;
                         const y = e.clientY - rect.top;
-                        console.log('[FIGURE EDITOR] 画像ファイルドロップ:', file.name);
+                        logger.debug('[FIGURE EDITOR] 画像ファイルドロップ:', file.name);
                         await this.insertImage(x, y, file);
                         return;
                     }
@@ -916,7 +888,7 @@ class BasicFigureEditor extends window.PluginBase {
                             const y = e.clientY - rect.top;
 
                             const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
-                            console.log('[FIGURE EDITOR] 仮身ドロップ受信:', virtualObjects.length, '個');
+                            logger.debug('[FIGURE EDITOR] 仮身ドロップ受信:', virtualObjects.length, '個');
 
                             // 複数の仮身を配置（相対位置オフセットを使用して元の空間的な関係を保持）
                             virtualObjects.forEach((virtualObject, index) => {
@@ -948,7 +920,7 @@ class BasicFigureEditor extends window.PluginBase {
                             return;
                         } else if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
                             // 原紙箱からのコピー
-                            console.log('[FIGURE EDITOR] 原紙箱からのドロップを親ウィンドウに委譲');
+                            logger.debug('[FIGURE EDITOR] 原紙箱からのドロップを親ウィンドウに委譲');
 
                             // ドロップ位置を取得
                             const rect = this.canvas.getBoundingClientRect();
@@ -956,24 +928,23 @@ class BasicFigureEditor extends window.PluginBase {
                             const y = e.clientY - rect.top;
 
                             // 親ウィンドウにメッセージを送信
-                            if (window.parent && window.parent !== window) {
-                                window.parent.postMessage({
-                                    type: 'base-file-drop-request',
+                            if (this.messageBus) {
+                                this.messageBus.send('base-file-drop-request', {
                                     dragData: dragData,
                                     dropPosition: { x, y },
                                     clientX: e.clientX,
                                     clientY: e.clientY
-                                }, '*');
+                                });
                             }
                             return;
                         }
                     } catch (_jsonError) {
                         // JSON形式でない場合は無視
-                        console.log('[FIGURE EDITOR] 通常のテキストドロップ（無視）');
+                        logger.debug('[FIGURE EDITOR] 通常のテキストドロップ（無視）');
                     }
                 }
             } catch (error) {
-                console.error('[FIGURE EDITOR] ドロップ処理エラー:', error);
+                logger.error('[FIGURE EDITOR] ドロップ処理エラー:', error);
             }
         });
 
@@ -988,7 +959,7 @@ class BasicFigureEditor extends window.PluginBase {
             const globalClipboard = await this.getGlobalClipboard();
             if (globalClipboard && globalClipboard.link_id) {
                 e.preventDefault();
-                console.log('[FIGURE EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
+                logger.debug('[FIGURE EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
                 // キャンバス中央に配置
                 const x = this.canvas.width / 2;
                 const y = this.canvas.height / 2;
@@ -1003,7 +974,7 @@ class BasicFigureEditor extends window.PluginBase {
                 if (items[i].type.startsWith('image/')) {
                     e.preventDefault();
                     const blob = items[i].getAsFile();
-                    console.log('[FIGURE EDITOR] 画像をクリップボードからペースト');
+                    logger.debug('[FIGURE EDITOR] 画像をクリップボードからペースト');
                     // キャンバス中央に配置
                     const x = this.canvas.width / 2;
                     const y = this.canvas.height / 2;
@@ -1018,7 +989,7 @@ class BasicFigureEditor extends window.PluginBase {
      * グローバルマウスイベントハンドラーを設定（仮身一覧プラグインと同じパターン）
      */
     setupGlobalMouseHandlers() {
-        console.log('[FIGURE EDITOR] ★★★ setupGlobalMouseHandlers 呼び出し ★★★');
+        logger.debug('[FIGURE EDITOR] ★★★ setupGlobalMouseHandlers 呼び出し ★★★');
 
         // ドラッグ用のmousemoveハンドラ
         const handleDragMouseMove = (e) => {
@@ -1036,43 +1007,35 @@ class BasicFigureEditor extends window.PluginBase {
             }
 
             // ダブルクリック+ドラッグ候補の検出
-            if (this.dblClickDragState.isDblClickDragCandidate && !this.dblClickDragState.isDblClickDrag) {
-                const deltaX = e.clientX - this.dblClickDragState.startX;
-                const deltaY = e.clientY - this.dblClickDragState.startY;
-                console.log('[FIGURE EDITOR] handleDragMouseMove: isDblClickDragCandidate=true, delta=(' + deltaX + ',' + deltaY + ')');
+            // 共通メソッドでドラッグ開始判定
+            if (this.shouldStartDblClickDrag(e)) {
+                logger.debug('[FIGURE EDITOR] ダブルクリック+ドラッグを確定（ドラッグ完了待ち）、プレビュー作成');
 
-                // 5px以上移動したらダブルクリック+ドラッグ確定
-                if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
-                    console.log('[FIGURE EDITOR] ダブルクリック+ドラッグを確定（ドラッグ完了待ち）、プレビュー作成');
-                    this.dblClickDragState.isDblClickDrag = true;
-                    this.dblClickDragState.isDblClickDragCandidate = false;
+                // プレビュー要素を作成（プラグイン固有）
+                const shape = this.dblClickDragState.dblClickedShape;
+                if (shape && shape.type === 'vobj') {
+                    const width = Math.abs(shape.endX - shape.startX);
+                    const height = Math.abs(shape.endY - shape.startY);
 
-                    // プレビュー要素を作成
-                    const shape = this.dblClickDragState.dblClickedShape;
-                    if (shape && shape.type === 'vobj') {
-                        const width = Math.abs(shape.endX - shape.startX);
-                        const height = Math.abs(shape.endY - shape.startY);
+                    const preview = document.createElement('div');
+                    preview.className = 'dblclick-drag-preview';
+                    preview.style.position = 'absolute';
+                    preview.style.border = '2px solid #0078d4';
+                    preview.style.backgroundColor = 'rgba(0, 120, 212, 0.1)';
+                    preview.style.pointerEvents = 'none';
+                    preview.style.zIndex = '10000';
+                    preview.style.width = width + 'px';
+                    preview.style.height = height + 'px';
+                    preview.style.left = shape.startX + 'px';
+                    preview.style.top = shape.startY + 'px';
 
-                        const preview = document.createElement('div');
-                        preview.className = 'dblclick-drag-preview';
-                        preview.style.position = 'absolute';
-                        preview.style.border = '2px solid #0078d4';
-                        preview.style.backgroundColor = 'rgba(0, 120, 212, 0.1)';
-                        preview.style.pointerEvents = 'none';
-                        preview.style.zIndex = '10000';
-                        preview.style.width = width + 'px';
-                        preview.style.height = height + 'px';
-                        preview.style.left = shape.startX + 'px';
-                        preview.style.top = shape.startY + 'px';
-
-                        const container = document.querySelector('.editor-container');
-                        if (container) {
-                            container.appendChild(preview);
-                            this.dblClickDragState.previewElement = preview;
-                        }
+                    const container = document.querySelector('.editor-container');
+                    if (container) {
+                        container.appendChild(preview);
+                        this.dblClickDragState.previewElement = preview;
                     }
-                    return;
                 }
+                return;
             }
 
             // ダブルクリック+ドラッグ中のプレビュー位置更新
@@ -1091,7 +1054,7 @@ class BasicFigureEditor extends window.PluginBase {
 
             // デバッグ: isDblClickDrag状態の確認
             if (this.dblClickDragState.isDblClickDrag) {
-                console.log('[FIGURE EDITOR] handleDragMouseMove: isDblClickDrag=true, previewElement=' + (this.dblClickDragState.previewElement ? 'あり' : 'なし'));
+                logger.debug('[FIGURE EDITOR] handleDragMouseMove: isDblClickDrag=true, previewElement=' + (this.dblClickDragState.previewElement ? 'あり' : 'なし'));
             }
         };
 
@@ -1104,7 +1067,7 @@ class BasicFigureEditor extends window.PluginBase {
             const vobjElement = e.target.closest('.virtual-object');
             if (vobjElement) {
                 // 基本図形編集プラグインではiframe無効化は不要
-                console.log('[FIGURE EDITOR] document mousedown: 仮身要素内');
+                logger.debug('[FIGURE EDITOR] document mousedown: 仮身要素内');
             }
         }, { capture: true });
 
@@ -1113,8 +1076,8 @@ class BasicFigureEditor extends window.PluginBase {
 
         // document全体でのmouseup
         document.addEventListener('mouseup', (e) => {
-            console.log('[FIGURE EDITOR] ★★★ document mouseup検知 ★★★');
-            console.log('[FIGURE EDITOR] document mouseup: isDblClickDrag=' + this.dblClickDragState.isDblClickDrag + ', isDblClickDragCandidate=' + this.dblClickDragState.isDblClickDragCandidate + ', button=' + e.button);
+            logger.debug('[FIGURE EDITOR] ★★★ document mouseup検知 ★★★');
+            logger.debug('[FIGURE EDITOR] document mouseup: isDblClickDrag=' + this.dblClickDragState.isDblClickDrag + ', isDblClickDragCandidate=' + this.dblClickDragState.isDblClickDragCandidate + ', button=' + e.button);
 
             // ダブルクリック+ドラッグのプレビュー要素を削除
             const preview = this.dblClickDragState.previewElement;
@@ -1125,7 +1088,7 @@ class BasicFigureEditor extends window.PluginBase {
 
             // ダブルクリック+ドラッグ確定後のmouseup処理（実身複製）
             if (this.dblClickDragState.isDblClickDrag) {
-                console.log('[FIGURE EDITOR] ダブルクリック+ドラッグ完了、実身を複製');
+                logger.debug('[FIGURE EDITOR] ダブルクリック+ドラッグ完了、実身を複製');
 
                 const dblClickedShape = this.dblClickDragState.dblClickedShape;
                 const dblClickedElement = this.dblClickDragState.dblClickedElement;
@@ -1146,16 +1109,16 @@ class BasicFigureEditor extends window.PluginBase {
                     dblClickedElement.setAttribute('draggable', 'true');
                 }
 
-                // 状態をクリア
-                this.dblClickDragState.isDblClickDrag = false;
+                // 状態をクリア（共通メソッド使用）
+                this.cleanupDblClickDragState();
+                // プラグイン固有のクリーンアップ
                 this.dblClickDragState.dblClickedShape = null;
-                this.dblClickDragState.dblClickedElement = null;
                 return;
             }
 
             // ダブルクリック候補でドラッグしなかった場合、仮身を開く
             if (this.dblClickDragState.isDblClickDragCandidate) {
-                console.log('[FIGURE EDITOR] ダブルクリック検出、仮身を開く');
+                logger.debug('[FIGURE EDITOR] ダブルクリック検出、仮身を開く');
 
                 const dblClickedShape = this.dblClickDragState.dblClickedShape;
                 const dblClickedElement = this.dblClickDragState.dblClickedElement;
@@ -1175,10 +1138,10 @@ class BasicFigureEditor extends window.PluginBase {
                     dblClickedElement.setAttribute('draggable', 'true');
                 }
 
-                // 状態をクリア
-                this.dblClickDragState.isDblClickDragCandidate = false;
+                // 状態をクリア（共通メソッド使用）
+                this.cleanupDblClickDragState();
+                // プラグイン固有のクリーンアップ
                 this.dblClickDragState.dblClickedShape = null;
-                this.dblClickDragState.dblClickedElement = null;
             }
         });
     }
@@ -1281,13 +1244,13 @@ class BasicFigureEditor extends window.PluginBase {
             // コンテナをスクロール
             container.scrollLeft = scrollLeft;
             container.scrollTop = scrollTop;
-            console.log('[FIGURE EDITOR] スクロール位置更新:', scrollLeft, scrollTop);
+            logger.debug('[FIGURE EDITOR] スクロール位置更新:', scrollLeft, scrollTop);
         }
     }
 
     selectTool(tool) {
         this.currentTool = tool;
-        console.log('[FIGURE EDITOR] ツール選択:', tool);
+        logger.debug('[FIGURE EDITOR] ツール選択:', tool);
 
         // キャンバスツール以外が選択された場合、ピクセルマップモードを抜ける
         if (tool !== 'canvas' && this.isPixelmapMode) {
@@ -1312,7 +1275,7 @@ class BasicFigureEditor extends window.PluginBase {
      * 道具パネルウィンドウを開く
      */
     openToolPanelWindow() {
-        console.log('[FIGURE EDITOR] 道具パネルウィンドウを開く');
+        logger.debug('[FIGURE EDITOR] 道具パネルウィンドウを開く');
 
         // 親ウィンドウに道具パネルウィンドウの作成を要求
         if (window.parent && window.parent !== window) {
@@ -1449,7 +1412,7 @@ class BasicFigureEditor extends window.PluginBase {
                 // 保護されている図形かチェック
                 if (resizeHandle.shape.locked || resizeHandle.shape.isBackground) {
                     const protectionType = resizeHandle.shape.isBackground ? '背景化' : '固定化';
-                    console.log('[FIGURE EDITOR] 保護されている図形のためリサイズできません:', protectionType);
+                    logger.debug('[FIGURE EDITOR] 保護されている図形のためリサイズできません:', protectionType);
                     this.setStatus(`保護されている図形のためリサイズできません (${protectionType})`);
                     return;
                 }
@@ -1516,7 +1479,7 @@ class BasicFigureEditor extends window.PluginBase {
                         return '';
                     }).filter(t => t).join('、');
 
-                    console.log('[FIGURE EDITOR] 保護されている図形が含まれているため移動できません:', protectionTypes);
+                    logger.debug('[FIGURE EDITOR] 保護されている図形が含まれているため移動できません:', protectionTypes);
                     this.setStatus(`保護されている図形が含まれているため移動できません (${protectionTypes})`);
                     return;
                 }
@@ -1592,21 +1555,21 @@ class BasicFigureEditor extends window.PluginBase {
             };
         } else if (this.currentTool === 'canvas') {
             // ピクセルマップモード
-            console.log('[FIGURE EDITOR] キャンバスツールクリック - isPixelmapMode:', this.isPixelmapMode, '座標:', this.startX, this.startY);
+            logger.debug('[FIGURE EDITOR] キャンバスツールクリック - isPixelmapMode:', this.isPixelmapMode, '座標:', this.startX, this.startY);
 
             if (!this.isPixelmapMode) {
                 // ピクセルマップ枠作成モード - クリック位置の既存ピクセルマップをチェック
                 const clickedPixelmap = this.findShapeAt(this.startX, this.startY, 'pixelmap');
-                console.log('[FIGURE EDITOR] clickedPixelmap:', clickedPixelmap);
+                logger.debug('[FIGURE EDITOR] clickedPixelmap:', clickedPixelmap);
 
                 if (clickedPixelmap) {
                     // 既存のピクセルマップをクリック -> 編集モードに入る
-                    console.log('[FIGURE EDITOR] 既存ピクセルマップをクリック、編集モードに入ります');
+                    logger.debug('[FIGURE EDITOR] 既存ピクセルマップをクリック、編集モードに入ります');
                     this.enterPixelmapMode(clickedPixelmap);
                     this.isDrawing = false;
                 } else {
                     // 新規ピクセルマップ枠を作成
-                    console.log('[FIGURE EDITOR] 新規ピクセルマップ枠を作成開始');
+                    logger.debug('[FIGURE EDITOR] 新規ピクセルマップ枠を作成開始');
                     this.currentShape = {
                         type: 'pixelmap',
                         startX: this.startX,
@@ -1619,7 +1582,7 @@ class BasicFigureEditor extends window.PluginBase {
                 }
             } else {
                 // ピクセルマップモード内での描画
-                console.log('[FIGURE EDITOR] ピクセルマップモード内でのクリック - 描画処理を実行');
+                logger.debug('[FIGURE EDITOR] ピクセルマップモード内でのクリック - 描画処理を実行');
 
                 // ピクセルマップ枠内かチェック
                 if (this.editingPixelmap && this.isPointInShape(this.startX, this.startY, this.editingPixelmap)) {
@@ -1627,7 +1590,7 @@ class BasicFigureEditor extends window.PluginBase {
                     this.handlePixelmapDraw(this.startX, this.startY);
                 } else {
                     // 枠外でのクリック -> 編集モードを終了
-                    console.log('[FIGURE EDITOR] ピクセルマップ枠外をクリック - 編集モードを終了');
+                    logger.debug('[FIGURE EDITOR] ピクセルマップ枠外をクリック - 編集モードを終了');
                     this.exitPixelmapMode();
                     this.isDrawing = false;
                 }
@@ -2177,6 +2140,11 @@ class BasicFigureEditor extends window.PluginBase {
                 delete this.currentShape.tempEndConnection;
             }
 
+            // z-indexを設定（未設定の場合のみ）
+            if (this.currentShape.zIndex === null || this.currentShape.zIndex === undefined) {
+                this.currentShape.zIndex = this.getNextZIndex();
+            }
+
             // 図形を確定
             this.shapes.push(this.currentShape);
 
@@ -2310,13 +2278,13 @@ class BasicFigureEditor extends window.PluginBase {
      */
     applyFormatToSelection(styleName, value) {
         if (!this.textEditorElement) {
-            console.warn('[EDITOR] テキストエディタが開いていません');
+            logger.warn('[EDITOR] テキストエディタが開いていません');
             return;
         }
 
         const selection = window.getSelection();
         if (!selection.rangeCount) {
-            console.warn('[EDITOR] 選択範囲がありません');
+            logger.warn('[EDITOR] 選択範囲がありません');
             return;
         }
 
@@ -2325,7 +2293,7 @@ class BasicFigureEditor extends window.PluginBase {
         // 選択範囲が空の場合は全体に適用
         if (range.collapsed) {
             this.textEditorElement.style[styleName] = value;
-            console.log(`[EDITOR] テキスト全体に ${styleName}=${value} を適用`);
+            logger.debug(`[EDITOR] テキスト全体に ${styleName}=${value} を適用`);
             return;
         }
 
@@ -2346,7 +2314,7 @@ class BasicFigureEditor extends window.PluginBase {
         newRange.selectNodeContents(span);
         selection.addRange(newRange);
 
-        console.log(`[EDITOR] 選択範囲に ${styleName}=${value} を適用`);
+        logger.debug(`[EDITOR] 選択範囲に ${styleName}=${value} を適用`);
     }
 
     /**
@@ -2356,13 +2324,13 @@ class BasicFigureEditor extends window.PluginBase {
      */
     applyTextDecorationToSelection(decoration, enabled) {
         if (!this.textEditorElement) {
-            console.warn('[EDITOR] テキストエディタが開いていません');
+            logger.warn('[EDITOR] テキストエディタが開いていません');
             return;
         }
 
         const selection = window.getSelection();
         if (!selection.rangeCount) {
-            console.warn('[EDITOR] 選択範囲がありません');
+            logger.warn('[EDITOR] 選択範囲がありません');
             return;
         }
 
@@ -2371,7 +2339,7 @@ class BasicFigureEditor extends window.PluginBase {
         // 選択範囲が空の場合は全体に適用
         if (range.collapsed) {
             this.applyDecorationToElement(this.textEditorElement, decoration, enabled);
-            console.log(`[EDITOR] テキスト全体に ${decoration}=${enabled} を適用`);
+            logger.debug(`[EDITOR] テキスト全体に ${decoration}=${enabled} を適用`);
             return;
         }
 
@@ -2392,7 +2360,7 @@ class BasicFigureEditor extends window.PluginBase {
         newRange.selectNodeContents(span);
         selection.addRange(newRange);
 
-        console.log(`[EDITOR] 選択範囲に ${decoration}=${enabled} を適用`);
+        logger.debug(`[EDITOR] 選択範囲に ${decoration}=${enabled} を適用`);
     }
 
     /**
@@ -4055,6 +4023,11 @@ class BasicFigureEditor extends window.PluginBase {
             delete this.currentShape.tempEndX;
             delete this.currentShape.tempEndY;
 
+            // z-indexを設定（未設定の場合のみ）
+            if (this.currentShape.zIndex === null || this.currentShape.zIndex === undefined) {
+                this.currentShape.zIndex = this.getNextZIndex();
+            }
+
             // 多角形を確定
             this.shapes.push(this.currentShape);
             this.currentShape = null;
@@ -4080,7 +4053,8 @@ class BasicFigureEditor extends window.PluginBase {
                 fontSize: '16px sans-serif',
                 strokeColor: this.strokeColor,
                 fillColor: this.fillColor,
-                lineWidth: this.lineWidth
+                lineWidth: this.lineWidth,
+                zIndex: this.getNextZIndex()
             };
 
             this.shapes.push(textShape);
@@ -4093,19 +4067,19 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     async insertVirtualObject(x, y, virtualObject) {
-        console.log('[FIGURE EDITOR] 仮身を配置:', virtualObject.link_name, 'at', x, y);
-        console.log('[FIGURE EDITOR] ドラッグ状態チェック: isDraggingVirtualObjectShape=', this.isDraggingVirtualObjectShape, 'draggingVirtualObjectShape=', this.draggingVirtualObjectShape ? this.draggingVirtualObjectShape.virtualObject.link_name : 'null', 'dragMode=', this.dragState.dragMode);
+        logger.debug('[FIGURE EDITOR] 仮身を配置:', virtualObject.link_name, 'at', x, y);
+        logger.debug('[FIGURE EDITOR] ドラッグ状態チェック: isDraggingVirtualObjectShape=', this.isDraggingVirtualObjectShape, 'draggingVirtualObjectShape=', this.draggingVirtualObjectShape ? this.draggingVirtualObjectShape.virtualObject.link_name : 'null', 'dragMode=', this.dragState.dragMode);
 
         // 同じウィンドウ内での移動かチェック
         if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
             const oldShape = this.draggingVirtualObjectShape;
             const dragMode = this.dragState.dragMode;
 
-            console.log('[FIGURE EDITOR] 同じウィンドウ内での仮身ドラッグを検出（モード:', dragMode, '）');
+            logger.debug('[FIGURE EDITOR] 同じウィンドウ内での仮身ドラッグを検出（モード:', dragMode, '）');
 
             // 移動モードの場合、既存のshapeの座標のみ更新（新しいshapeは作成しない）
             if (dragMode === 'move') {
-                console.log('[FIGURE EDITOR] 移動モード: 既存shapeの座標を更新');
+                logger.debug('[FIGURE EDITOR] 移動モード: 既存shapeの座標を更新');
 
                 // Undo用に状態を保存
                 this.saveStateForUndo();
@@ -4113,7 +4087,7 @@ class BasicFigureEditor extends window.PluginBase {
                 // 幅と高さは既存のshapeから取得（サイズを保持）
                 const width = oldShape.endX - oldShape.startX;
                 const height = oldShape.endY - oldShape.startY;
-                console.log('[FIGURE EDITOR] 既存のshapeサイズを使用: width=', width, 'height=', height);
+                logger.debug('[FIGURE EDITOR] 既存のshapeサイズを使用: width=', width, 'height=', height);
 
                 // 既存のshapeの座標を更新
                 oldShape.startX = x;
@@ -4124,7 +4098,7 @@ class BasicFigureEditor extends window.PluginBase {
                 // 接続されている線の端点を更新
                 const connections = this.getConnectedLines(oldShape);
                 if (connections.length > 0) {
-                    console.log('[FIGURE EDITOR] 接続線を', connections.length, '本検出、端点を更新');
+                    logger.debug('[FIGURE EDITOR] 接続線を', connections.length, '本検出、端点を更新');
 
                     connections.forEach(conn => {
                         // コネクタポイントを取得
@@ -4136,11 +4110,11 @@ class BasicFigureEditor extends window.PluginBase {
                             if (conn.endpoint === 'start') {
                                 conn.line.startX = connectorPoint.x;
                                 conn.line.startY = connectorPoint.y;
-                                console.log('[FIGURE EDITOR] 線の始点を更新:', connectorPoint.x, connectorPoint.y);
+                                logger.debug('[FIGURE EDITOR] 線の始点を更新:', connectorPoint.x, connectorPoint.y);
                             } else {
                                 conn.line.endX = connectorPoint.x;
                                 conn.line.endY = connectorPoint.y;
-                                console.log('[FIGURE EDITOR] 線の終点を更新:', connectorPoint.x, connectorPoint.y);
+                                logger.debug('[FIGURE EDITOR] 線の終点を更新:', connectorPoint.x, connectorPoint.y);
                             }
                         }
                     });
@@ -4191,7 +4165,8 @@ class BasicFigureEditor extends window.PluginBase {
             textColor: virtualObject.chcol || '#000000',
             fillColor: virtualObject.tbcol || '#ffffff',
             lineWidth: 1,
-            originalHeight: height  // 元の高さを保存
+            originalHeight: height,  // 元の高さを保存
+            zIndex: this.getNextZIndex()
         };
 
         this.shapes.push(voShape);
@@ -4203,7 +4178,7 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     addVirtualObjectFromRealId(realId, name, dropPosition, applist) {
-        console.log('[FIGURE EDITOR] 原紙箱から仮身を追加:', name, 'at', dropPosition);
+        logger.debug('[FIGURE EDITOR] 原紙箱から仮身を追加:', name, 'at', dropPosition);
 
         // メニュー文字サイズを取得（ユーザ環境設定から）
         const menuFontSize = localStorage.getItem('menu-font-size') || '14';
@@ -4228,7 +4203,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         // ドロップ位置に仮身を配置
         this.insertVirtualObject(dropPosition.x, dropPosition.y, virtualObj);
-        console.log('[FIGURE EDITOR] 原紙箱から仮身追加完了');
+        logger.debug('[FIGURE EDITOR] 原紙箱から仮身追加完了');
     }
 
     /**
@@ -4254,13 +4229,13 @@ class BasicFigureEditor extends window.PluginBase {
             });
             return result.clipboardData;
         } catch (error) {
-            console.warn('[FIGURE EDITOR] クリップボード取得タイムアウト:', error);
+            logger.warn('[FIGURE EDITOR] クリップボード取得タイムアウト:', error);
             return null;
         }
     }
 
     async insertImage(x, y, file) {
-        console.log('[FIGURE EDITOR] 画像を配置:', file.name, 'at', x, y);
+        logger.debug('[FIGURE EDITOR] 画像を配置:', file.name, 'at', x, y);
 
         // Undo用に状態を保存
         this.saveStateForUndo();
@@ -4272,7 +4247,7 @@ class BasicFigureEditor extends window.PluginBase {
         return new Promise((resolve, reject) => {
             reader.onload = async (e) => {
                 img.onload = async () => {
-                    console.log('[FIGURE EDITOR] 画像ロード完了:', img.width, 'x', img.height);
+                    logger.debug('[FIGURE EDITOR] 画像ロード完了:', img.width, 'x', img.height);
 
                     // 画像が大きすぎる場合は縮小（最大600px）
                     const maxSize = 600;
@@ -4311,12 +4286,14 @@ class BasicFigureEditor extends window.PluginBase {
                         imgNo: imgNo,
                         rotation: 0,
                         flipH: false,
-                        flipV: false
+                        flipV: false,
+                        zIndex: this.getNextZIndex()
                     };
 
                     this.shapes.push(imageShape);
                     this.redraw();
                     this.isModified = true;
+                    this.hasUnsavedChanges = true;
                     this.setStatus(`画像「${file.name}」を配置しました`);
                     // スクロールバー更新を通知
                     this.resizeCanvas();
@@ -4324,7 +4301,7 @@ class BasicFigureEditor extends window.PluginBase {
                 };
 
                 img.onerror = () => {
-                    console.error('[FIGURE EDITOR] 画像読み込みエラー');
+                    logger.error('[FIGURE EDITOR] 画像読み込みエラー');
                     this.setStatus('画像の読み込みに失敗しました');
                     reject(new Error('画像読み込みエラー'));
                 };
@@ -4333,7 +4310,7 @@ class BasicFigureEditor extends window.PluginBase {
             };
 
             reader.onerror = () => {
-                console.error('[FIGURE EDITOR] ファイル読み込みエラー');
+                logger.error('[FIGURE EDITOR] ファイル読み込みエラー');
                 this.setStatus('ファイルの読み込みに失敗しました');
                 reject(new Error('ファイル読み込みエラー'));
             };
@@ -4378,9 +4355,9 @@ class BasicFigureEditor extends window.PluginBase {
                 mimeType: file.type
             }, '*');
 
-            console.log('[FIGURE EDITOR] 画像ファイル保存依頼:', fileName);
+            logger.debug('[FIGURE EDITOR] 画像ファイル保存依頼:', fileName);
         } catch (error) {
-            console.error('[FIGURE EDITOR] 画像ファイル保存エラー:', error);
+            logger.error('[FIGURE EDITOR] 画像ファイル保存エラー:', error);
         }
     }
 
@@ -4410,9 +4387,9 @@ class BasicFigureEditor extends window.PluginBase {
                 mimeType: 'image/png'
             }, '*');
 
-            console.log('[FIGURE EDITOR] ピクセルマップ画像ファイル保存依頼:', fileName);
+            logger.debug('[FIGURE EDITOR] ピクセルマップ画像ファイル保存依頼:', fileName);
         } catch (error) {
-            console.error('[FIGURE EDITOR] ピクセルマップ画像ファイル保存エラー:', error);
+            logger.error('[FIGURE EDITOR] ピクセルマップ画像ファイル保存エラー:', error);
         }
     }
 
@@ -4435,7 +4412,7 @@ class BasicFigureEditor extends window.PluginBase {
                 return '';
             }).filter(t => t).join('、');
 
-            console.log('[FIGURE EDITOR] 保護されている図形が含まれているため削除できません:', protectionTypes);
+            logger.debug('[FIGURE EDITOR] 保護されている図形が含まれているため削除できません:', protectionTypes);
             this.setStatus(`${protectedShapes.length}個の図形が保護されているため削除できません (${protectionTypes})`);
 
             // 削除可能な図形がない場合は終了
@@ -4451,14 +4428,14 @@ class BasicFigureEditor extends window.PluginBase {
                 // vobjElement（仮身のDOM要素）を削除
                 if (shape.vobjElement && shape.vobjElement.parentNode) {
                     shape.vobjElement.parentNode.removeChild(shape.vobjElement);
-                    console.log('[FIGURE EDITOR] 仮身DOM要素を削除:', shape.virtualObject.link_name);
+                    logger.debug('[FIGURE EDITOR] 仮身DOM要素を削除:', shape.virtualObject.link_name);
                 }
 
                 // expandedElement（開いた仮身のiframe要素）を削除
                 if (shape.expanded && shape.expandedElement) {
                     shape.expandedElement.remove();
                     delete shape.expandedElement;
-                    console.log('[FIGURE EDITOR] 開いた仮身のiframe要素を削除:', shape.virtualObject.link_name);
+                    logger.debug('[FIGURE EDITOR] 開いた仮身のiframe要素を削除:', shape.virtualObject.link_name);
                 }
             }
 
@@ -4488,7 +4465,7 @@ class BasicFigureEditor extends window.PluginBase {
             .filter(index => index > -1)
             .sort((a, b) => b - a); // 降順でソート（後ろから削除）
 
-        console.log('[FIGURE EDITOR] 削除するインデックス:', indicesToDelete);
+        logger.debug('[FIGURE EDITOR] 削除するインデックス:', indicesToDelete);
 
         shapesToDelete.forEach(s => {
             // 図形を削除
@@ -4506,7 +4483,7 @@ class BasicFigureEditor extends window.PluginBase {
             // DOM要素を削除
             if (s.vobjElement && s.vobjElement.parentNode) {
                 s.vobjElement.parentNode.removeChild(s.vobjElement);
-                console.log('[FIGURE EDITOR] 仮身DOM要素を削除:', s.virtualObject.link_name);
+                logger.debug('[FIGURE EDITOR] 仮身DOM要素を削除:', s.virtualObject.link_name);
             }
 
             // 展開されたiframeがあれば削除
@@ -4523,13 +4500,13 @@ class BasicFigureEditor extends window.PluginBase {
                     if (shape.startConnection && shape.startConnection.shapeId > deletedIndex) {
                         const oldIndex = shape.startConnection.shapeId;
                         shape.startConnection.shapeId--;
-                        console.log('[FIGURE EDITOR] 線の始点接続インデックスを更新:', oldIndex, '→', shape.startConnection.shapeId);
+                        logger.debug('[FIGURE EDITOR] 線の始点接続インデックスを更新:', oldIndex, '→', shape.startConnection.shapeId);
                     }
                     // endConnection のインデックスを更新
                     if (shape.endConnection && shape.endConnection.shapeId > deletedIndex) {
                         const oldIndex = shape.endConnection.shapeId;
                         shape.endConnection.shapeId--;
-                        console.log('[FIGURE EDITOR] 線の終点接続インデックスを更新:', oldIndex, '→', shape.endConnection.shapeId);
+                        logger.debug('[FIGURE EDITOR] 線の終点接続インデックスを更新:', oldIndex, '→', shape.endConnection.shapeId);
                     }
                 }
             });
@@ -4579,7 +4556,7 @@ class BasicFigureEditor extends window.PluginBase {
 
     async loadFile(fileData) {
         try {
-            console.log('[FIGURE EDITOR] ファイル読み込み:', fileData);
+            logger.debug('[FIGURE EDITOR] ファイル読み込み:', fileData);
 
             this.currentFile = fileData;
 
@@ -4599,7 +4576,7 @@ class BasicFigureEditor extends window.PluginBase {
             this.resizeCanvas();
 
         } catch (error) {
-            console.error('[FIGURE EDITOR] ファイル読み込みエラー:', error);
+            logger.error('[FIGURE EDITOR] ファイル読み込みエラー:', error);
         }
     }
 
@@ -4614,7 +4591,7 @@ class BasicFigureEditor extends window.PluginBase {
             // パースエラーチェック
             const parserError = xmlDoc.querySelector('parsererror');
             if (parserError) {
-                console.error('[FIGURE EDITOR] XML解析エラー:', parserError.textContent);
+                logger.error('[FIGURE EDITOR] XML解析エラー:', parserError.textContent);
                 this.shapes = [];
                 this.redraw();
                 return;
@@ -4630,7 +4607,7 @@ class BasicFigureEditor extends window.PluginBase {
             // 図形セグメント全体を取得
             const figureElem = xmlDoc.querySelector('figure');
             if (!figureElem) {
-                console.log('[FIGURE EDITOR] 図形セグメントが見つかりません');
+                logger.debug('[FIGURE EDITOR] 図形セグメントが見つかりません');
                 this.shapes = [];
                 this.redraw();
                 return;
@@ -4695,15 +4672,18 @@ class BasicFigureEditor extends window.PluginBase {
                 }
             }
 
-            console.log('[FIGURE EDITOR] 図形を読み込みました:', this.shapes.length, '個');
+            // z-indexの自動採番とソート
+            this.normalizeAndSortShapesByZIndex();
+
+            logger.debug('[FIGURE EDITOR] 図形を読み込みました:', this.shapes.length, '個');
 
             // 仮身のメタデータ（applist等）を読み込み
             const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'vobj' && shape.virtualObject);
-            console.log('[FIGURE EDITOR] 仮身のメタデータを読み込み中:', virtualObjectShapes.length, '個');
+            logger.debug('[FIGURE EDITOR] 仮身のメタデータを読み込み中:', virtualObjectShapes.length, '個');
             for (const shape of virtualObjectShapes) {
                 await this.loadVirtualObjectMetadata(shape.virtualObject);
             }
-            console.log('[FIGURE EDITOR] 仮身のメタデータ読み込み完了');
+            logger.debug('[FIGURE EDITOR] 仮身のメタデータ読み込み完了');
 
             // 仮身のアイコンを事前読み込み
             await this.preloadVirtualObjectIcons();
@@ -4711,7 +4691,7 @@ class BasicFigureEditor extends window.PluginBase {
             this.redraw();
 
         } catch (error) {
-            console.error('[FIGURE EDITOR] XML解析エラー:', error);
+            logger.error('[FIGURE EDITOR] XML解析エラー:', error);
             this.shapes = [];
             this.redraw();
         }
@@ -4784,6 +4764,9 @@ class BasicFigureEditor extends window.PluginBase {
         const end_arrow = parseInt(elem.getAttribute('end_arrow')) || 0;
         const arrow_type = elem.getAttribute('arrow_type') || 'simple';
 
+        // z-index属性を取得（指定がない場合はnullのまま、後でソート時に自動採番）
+        const zIndex = elem.getAttribute('zIndex');
+
         const lineShape = {
             type: 'line',
             startX: startX,
@@ -4799,7 +4782,8 @@ class BasicFigureEditor extends window.PluginBase {
             lineConnectionType: lineConnectionType,  // 接続形状を保存
             start_arrow: start_arrow,  // 始点矢印
             end_arrow: end_arrow,  // 終点矢印
-            arrow_type: arrow_type  // 矢印種類
+            arrow_type: arrow_type,  // 矢印種類
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
 
         // 接続情報を復元
@@ -4936,6 +4920,9 @@ class BasicFigureEditor extends window.PluginBase {
             ? parseFloat(elem.getAttribute('cornerRadius'))
             : (round > 0 ? 5 : 0);
 
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
+
         return {
             type: round > 0 ? 'roundRect' : 'rect',
             startX: left,
@@ -4948,7 +4935,8 @@ class BasicFigureEditor extends window.PluginBase {
             linePattern: linePattern,
             fillEnabled: fillEnabled,
             cornerRadius: cornerRadius,
-            angle: angle
+            angle: angle,
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
@@ -4972,6 +4960,9 @@ class BasicFigureEditor extends window.PluginBase {
         const fillColor = elem.getAttribute('fillColor') || '#ffffff';
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
+
         return {
             type: 'ellipse',
             startX: cx - rx,
@@ -4983,12 +4974,16 @@ class BasicFigureEditor extends window.PluginBase {
             lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
-            angle: angle
+            angle: angle,
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
     parseTextElement(elem) {
         // テキスト要素
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
+
         return {
             type: 'text',
             startX: parseFloat(elem.getAttribute('x')) || 0,
@@ -4997,7 +4992,8 @@ class BasicFigureEditor extends window.PluginBase {
             fontSize: elem.getAttribute('size') || '16px sans-serif',
             strokeColor: elem.getAttribute('color') || '#000000',
             fillColor: 'transparent',
-            lineWidth: 1
+            lineWidth: 1,
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
@@ -5081,6 +5077,9 @@ class BasicFigureEditor extends window.PluginBase {
             content = currentText.trim();
         }
 
+        // z-index属性を取得
+        const zIndex = textElem.getAttribute('zIndex');
+
         return {
             type: 'textbox',
             startX: viewLeft,
@@ -5094,7 +5093,8 @@ class BasicFigureEditor extends window.PluginBase {
             fillColor: 'transparent',
             strokeColor: 'transparent',
             lineWidth: 0,
-            decorations: decorations
+            decorations: decorations,
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
@@ -5120,6 +5120,9 @@ class BasicFigureEditor extends window.PluginBase {
         // 色情報を取得
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
+
         return {
             type: 'pencil',
             path: points,
@@ -5127,7 +5130,8 @@ class BasicFigureEditor extends window.PluginBase {
             fillColor: 'transparent',
             lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
             linePattern: linePattern,
-            fillEnabled: false
+            fillEnabled: false,
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
@@ -5191,6 +5195,9 @@ class BasicFigureEditor extends window.PluginBase {
         const fillColor = elem.getAttribute('fillColor') || '#ffffff';
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
+
         return {
             type: 'curve',
             path: points,
@@ -5198,7 +5205,8 @@ class BasicFigureEditor extends window.PluginBase {
             fillColor: fillEnabled ? fillColor : 'transparent',
             lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
             linePattern: linePattern,
-            fillEnabled: fillEnabled
+            fillEnabled: fillEnabled,
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
@@ -5234,6 +5242,9 @@ class BasicFigureEditor extends window.PluginBase {
             ? parseFloat(elem.getAttribute('cornerRadius'))
             : 0;
 
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
+
         return {
             type: 'polygon',
             points: points,
@@ -5242,7 +5253,8 @@ class BasicFigureEditor extends window.PluginBase {
             lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
-            cornerRadius: cornerRadius
+            cornerRadius: cornerRadius,
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
@@ -5259,6 +5271,9 @@ class BasicFigureEditor extends window.PluginBase {
         const lineHeight = 1.2;
         const textHeight = Math.ceil(chszPx * lineHeight);
         const originalHeight = textHeight + 8; // 閉じた仮身の高さ
+
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
 
         return {
             type: 'vobj',
@@ -5288,7 +5303,8 @@ class BasicFigureEditor extends window.PluginBase {
             lineWidth: 1,
             originalHeight: originalHeight,
             locked: elem.getAttribute('fixed') === 'true',  // 固定化
-            isBackground: elem.getAttribute('background') === 'true'  // 背景化
+            isBackground: elem.getAttribute('background') === 'true',  // 背景化
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
@@ -5321,20 +5337,32 @@ class BasicFigureEditor extends window.PluginBase {
         if (href) {
             // 親ウィンドウから画像ファイルの絶対パスを取得
             this.getImageFilePath(href).then(filePath => {
-                console.log('[FIGURE EDITOR] 画像パス取得成功:', href, '->', filePath);
-                img.src = filePath;
+                logger.debug('[FIGURE EDITOR] 画像パス取得成功:', href, '->', filePath);
+                // 絶対パスをfile:// URLに変換
+                let fileUrl = filePath;
+                if (filePath.match(/^[A-Za-z]:\\/)) {
+                    // Windows絶対パス (C:\...) を file:// URLに変換
+                    fileUrl = 'file:///' + filePath.replace(/\\/g, '/');
+                } else if (filePath.startsWith('/')) {
+                    // Unix絶対パス
+                    fileUrl = 'file://' + filePath;
+                }
+                img.src = fileUrl;
                 // 画像読み込み完了時に再描画
                 img.onload = () => {
-                    console.log('[FIGURE EDITOR] 画像読み込み完了:', href);
+                    logger.debug('[FIGURE EDITOR] 画像読み込み完了:', href);
                     this.redraw();
                 };
                 img.onerror = () => {
-                    console.error('[FIGURE EDITOR] 画像読み込みエラー:', href, filePath);
+                    logger.error('[FIGURE EDITOR] 画像読み込みエラー:', href, filePath);
                 };
             }).catch(error => {
-                console.error('[FIGURE EDITOR] 画像パス取得エラー:', href, error);
+                logger.error('[FIGURE EDITOR] 画像パス取得エラー:', href, error);
             });
         }
+
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
 
         return {
             type: 'image',
@@ -5351,7 +5379,8 @@ class BasicFigureEditor extends window.PluginBase {
             angle: parseFloat(elem.getAttribute('angle')) || 0,
             rotation: parseFloat(elem.getAttribute('rotation')) || 0,
             flipH: elem.getAttribute('flipH') === 'true',
-            flipV: elem.getAttribute('flipV') === 'true'
+            flipV: elem.getAttribute('flipV') === 'true',
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
@@ -5390,10 +5419,10 @@ class BasicFigureEditor extends window.PluginBase {
         if (href) {
             // 親ウィンドウから画像ファイルの絶対パスを取得
             this.getImageFilePath(href).then(filePath => {
-                console.log('[FIGURE EDITOR] ピクセルマップ画像パス取得成功:', href, '->', filePath);
+                logger.debug('[FIGURE EDITOR] ピクセルマップ画像パス取得成功:', href, '->', filePath);
                 const img = new Image();
                 img.onload = () => {
-                    console.log('[FIGURE EDITOR] ピクセルマップ画像読み込み完了:', href);
+                    logger.debug('[FIGURE EDITOR] ピクセルマップ画像読み込み完了:', href);
                     const width = Math.abs(right - left);
                     const height = Math.abs(bottom - top);
                     const tempCanvas = document.createElement('canvas');
@@ -5405,11 +5434,20 @@ class BasicFigureEditor extends window.PluginBase {
                     this.redraw();
                 };
                 img.onerror = (error) => {
-                    console.error('[FIGURE EDITOR] ピクセルマップ画像読み込みエラー:', href, error);
+                    logger.error('[FIGURE EDITOR] ピクセルマップ画像読み込みエラー:', href, error);
                 };
-                img.src = filePath;
+                // 絶対パスをfile:// URLに変換
+                let fileUrl = filePath;
+                if (filePath.match(/^[A-Za-z]:\\/)) {
+                    // Windows絶対パス (C:\...) を file:// URLに変換
+                    fileUrl = 'file:///' + filePath.replace(/\\/g, '/');
+                } else if (filePath.startsWith('/')) {
+                    // Unix絶対パス
+                    fileUrl = 'file://' + filePath;
+                }
+                img.src = fileUrl;
             }).catch(error => {
-                console.error('[FIGURE EDITOR] ピクセルマップ画像パス取得エラー:', href, error);
+                logger.error('[FIGURE EDITOR] ピクセルマップ画像パス取得エラー:', href, error);
             });
         }
 
@@ -5502,6 +5540,9 @@ class BasicFigureEditor extends window.PluginBase {
         const fillColor = elem.getAttribute('fillColor') || '#ffffff';
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
+
         return {
             type: 'arc',
             centerX: centerX,
@@ -5519,7 +5560,8 @@ class BasicFigureEditor extends window.PluginBase {
             fillColor: fillColor,
             lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
             linePattern: linePattern,
-            fillEnabled: fillEnabled
+            fillEnabled: fillEnabled,
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
@@ -5549,6 +5591,9 @@ class BasicFigureEditor extends window.PluginBase {
         const fillColor = elem.getAttribute('fillColor') || '#ffffff';
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
+
         return {
             type: 'chord',
             centerX: centerX,
@@ -5566,7 +5611,8 @@ class BasicFigureEditor extends window.PluginBase {
             fillColor: fillColor,
             lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
             linePattern: linePattern,
-            fillEnabled: fillEnabled
+            fillEnabled: fillEnabled,
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
@@ -5591,6 +5637,9 @@ class BasicFigureEditor extends window.PluginBase {
         // 色情報を取得
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
+        // z-index属性を取得
+        const zIndex = elem.getAttribute('zIndex');
+
         return {
             type: 'elliptical_arc',
             centerX: centerX,
@@ -5608,24 +5657,24 @@ class BasicFigureEditor extends window.PluginBase {
             fillColor: 'transparent',
             lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
             linePattern: linePattern,
-            fillEnabled: false
+            fillEnabled: false,
+            zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
 
     async saveFile() {
         try {
-            console.log('[FIGURE EDITOR] 保存処理開始');
+            logger.debug('[FIGURE EDITOR] 保存処理開始');
 
             // 図形データをXMLに変換
             const xmlData = this.convertToXmlTad();
 
             // 親ウィンドウにXMLデータを送信
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'xml-data-changed',
+            if (this.messageBus) {
+                this.messageBus.send('xml-data-changed', {
                     xmlData: xmlData,
                     fileId: this.realId
-                }, '*');
+                });
             }
 
             this.originalContent = JSON.stringify(this.shapes);
@@ -5633,31 +5682,30 @@ class BasicFigureEditor extends window.PluginBase {
             this.setStatus('保存しました');
 
         } catch (error) {
-            console.error('[FIGURE EDITOR] 保存エラー:', error);
+            logger.error('[FIGURE EDITOR] 保存エラー:', error);
             this.setStatus('保存に失敗しました');
         }
     }
 
     async saveAsNewRealObject() {
         if (!this.realId && !this.realId) {
-            console.warn('[FIGURE EDITOR] 保存するデータがありません');
+            logger.warn('[FIGURE EDITOR] 保存するデータがありません');
             this.setStatus('保存するデータがありません');
             return;
         }
 
         // realIdが未設定の場合はfileIdを使用
         const realIdToUse = this.realId || this.realId;
-        console.log('[FIGURE EDITOR] saveAsNewRealObject - realId:', this.realId, 'fileId:', this.realId, '使用:', realIdToUse);
+        logger.debug('[FIGURE EDITOR] saveAsNewRealObject - realId:', this.realId, 'fileId:', this.realId, '使用:', realIdToUse);
 
         try {
             // まず現在のデータを保存
             const xmlData = this.convertToXmlTad();
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'xml-data-changed',
+            if (this.messageBus) {
+                this.messageBus.send('xml-data-changed', {
                     xmlData: xmlData,
                     fileId: this.realId
-                }, '*');
+                });
             }
 
             this.originalContent = JSON.stringify(this.shapes);
@@ -5666,7 +5714,7 @@ class BasicFigureEditor extends window.PluginBase {
             // 選択されている仮身を取得
             const selectedVobjShape = this.selectedShapes.find(shape => shape.type === 'vobj');
             if (!selectedVobjShape) {
-                console.warn('[FIGURE EDITOR] 仮身が選択されていません');
+                logger.warn('[FIGURE EDITOR] 仮身が選択されていません');
                 this.setStatus('仮身を選択してください');
                 return;
             }
@@ -5675,11 +5723,12 @@ class BasicFigureEditor extends window.PluginBase {
             const messageId = 'save-as-new-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
 
             // 親ウィンドウに保存を要求
-            window.parent.postMessage({
-                type: 'save-as-new-real-object',
-                realId: realIdToUse,
-                messageId: messageId
-            }, '*');
+            if (this.messageBus) {
+                this.messageBus.send('save-as-new-real-object', {
+                    realId: realIdToUse,
+                    messageId: messageId
+                });
+            }
 
             this.setStatus('新しい実身への保存を準備中...');
 
@@ -5691,7 +5740,7 @@ class BasicFigureEditor extends window.PluginBase {
                 this.setStatus('保存がキャンセルされました');
             } else if (result.success) {
                 this.setStatus('新しい実身に保存しました: ' + result.newName);
-                console.log('[FIGURE EDITOR] 新しい実身に保存成功:', result.newRealId);
+                logger.debug('[FIGURE EDITOR] 新しい実身に保存成功:', result.newRealId);
 
                 // 元の仮身の属性をコピーして新しい仮身を作成
                 const originalVobj = selectedVobjShape.virtualObject;
@@ -5730,7 +5779,8 @@ class BasicFigureEditor extends window.PluginBase {
                     textColor: newVirtualObject.chcol,
                     fillColor: newVirtualObject.tbcol,
                     lineWidth: 1,
-                    originalHeight: newHeight
+                    originalHeight: newHeight,
+                    zIndex: this.getNextZIndex()
                 };
 
                 // 図形に追加
@@ -5738,7 +5788,7 @@ class BasicFigureEditor extends window.PluginBase {
 
                 // アイコンを事前読み込み
                 const realId = result.newRealId.replace(/_\d+\.xtad$/i, '');
-                this.loadIconFromParent(realId).then(iconData => {
+                this.iconManager.loadIcon(realId).then(iconData => {
                     if (iconData && this.virtualObjectRenderer) {
                         this.virtualObjectRenderer.loadIconToCache(realId, iconData);
                     }
@@ -5748,23 +5798,22 @@ class BasicFigureEditor extends window.PluginBase {
 
                 // XMLデータを更新
                 const updatedXmlData = this.convertToXmlTad();
-                if (window.parent && window.parent !== window) {
-                    window.parent.postMessage({
-                        type: 'xml-data-changed',
+                if (this.messageBus) {
+                    this.messageBus.send('xml-data-changed', {
                         xmlData: updatedXmlData,
                         fileId: this.realId
-                    }, '*');
+                    });
                 }
 
                 this.originalContent = JSON.stringify(this.shapes);
                 this.isModified = false;
             } else {
                 this.setStatus('新しい実身への保存に失敗しました');
-                console.error('[FIGURE EDITOR] 新しい実身への保存失敗');
+                logger.error('[FIGURE EDITOR] 新しい実身への保存失敗');
             }
 
         } catch (error) {
-            console.error('[FIGURE EDITOR] 新しい実身への保存エラー:', error);
+            logger.error('[FIGURE EDITOR] 新しい実身への保存エラー:', error);
             this.setStatus('新しい実身への保存に失敗しました');
         }
     }
@@ -5840,7 +5889,9 @@ class BasicFigureEditor extends window.PluginBase {
                 const end_arrow = shape.end_arrow || 0;
                 const arrow_type = shape.arrow_type || 'simple';
 
-                xmlParts.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" strokeColor="${strokeColor}" start_arrow="${start_arrow}" end_arrow="${end_arrow}" arrow_type="${arrow_type}" conn_pat="${conn_pat}" start_conn="${start_conn}" end_conn="${end_conn}" lineConnectionType="${lineConnectionType}" points="${linePoints}" />\r\n`);
+                // z-index属性を追加
+                const zIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                xmlParts.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" strokeColor="${strokeColor}" start_arrow="${start_arrow}" end_arrow="${end_arrow}" arrow_type="${arrow_type}" conn_pat="${conn_pat}" start_conn="${start_conn}" end_conn="${end_conn}" lineConnectionType="${lineConnectionType}" points="${linePoints}"${zIndexAttr} />\r\n`);
                 break;
 
             case 'rect':
@@ -5848,7 +5899,8 @@ class BasicFigureEditor extends window.PluginBase {
                 // tad.js形式: <rect round="0/1" cornerRadius="..." l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." left="..." top="..." right="..." bottom="..." />
                 const round = shape.cornerRadius && shape.cornerRadius > 0 ? 1 : 0;
                 const cornerRadius = shape.cornerRadius || 0;
-                xmlParts.push(`<rect round="${round}" cornerRadius="${cornerRadius}" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" />\r\n`);
+                const rectZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                xmlParts.push(`<rect round="${round}" cornerRadius="${cornerRadius}" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}"${rectZIndexAttr} />\r\n`);
                 break;
 
             case 'ellipse':
@@ -5857,12 +5909,14 @@ class BasicFigureEditor extends window.PluginBase {
                 const rx = Math.abs(shape.endX - shape.startX) / 2;
                 const ry = Math.abs(shape.endY - shape.startY) / 2;
                 // tad.js形式: <ellipse l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." cx="..." cy="..." rx="..." ry="..." />
-                xmlParts.push(`<ellipse l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" />\r\n`);
+                const ellipseZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                xmlParts.push(`<ellipse l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"${ellipseZIndexAttr} />\r\n`);
                 break;
 
             case 'text':
                 // テキストは文章セグメントとして扱う (簡易実装)
-                xmlParts.push(`<text x="${shape.startX}" y="${shape.startY}" color="${shape.strokeColor}" size="${shape.fontSize}">${this.escapeXml(shape.text)}</text>\r\n`);
+                const textZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                xmlParts.push(`<text x="${shape.startX}" y="${shape.startY}" color="${shape.strokeColor}" size="${shape.fontSize}"${textZIndexAttr}>${this.escapeXml(shape.text)}</text>\r\n`);
                 break;
 
             case 'pencil':
@@ -5870,7 +5924,8 @@ class BasicFigureEditor extends window.PluginBase {
                 // 折れ線として出力 (tad.js形式: <polyline l_atr="..." l_pat="..." strokeColor="..." round="0" start_arrow="0" end_arrow="0" points="x1,y1 x2,y2 ..." />)
                 if (shape.path && shape.path.length > 0) {
                     const polylinePoints = shape.path.map(p => `${p.x},${p.y}`).join(' ');
-                    xmlParts.push(`<polyline l_atr="${l_atr}" l_pat="${l_pat}" strokeColor="${strokeColor}" round="0" start_arrow="0" end_arrow="0" points="${polylinePoints}" />\r\n`);
+                    const polylineZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                    xmlParts.push(`<polyline l_atr="${l_atr}" l_pat="${l_pat}" strokeColor="${strokeColor}" round="0" start_arrow="0" end_arrow="0" points="${polylinePoints}"${polylineZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -5878,7 +5933,8 @@ class BasicFigureEditor extends window.PluginBase {
                 // スプライン曲線として出力 (tad.js形式: <curve l_atr="..." l_pat="..." f_pat="..." fillColor="..." strokeColor="..." type="..." closed="..." points="x1,y1 x2,y2 ..." />)
                 if (shape.path && shape.path.length > 0) {
                     const curvePoints = shape.path.map(p => `${p.x},${p.y}`).join(' ');
-                    xmlParts.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" fillColor="${fillColor}" strokeColor="${strokeColor}" type="0" closed="0" start_arrow="0" end_arrow="0" points="${curvePoints}" />\r\n`);
+                    const curveZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                    xmlParts.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" fillColor="${fillColor}" strokeColor="${strokeColor}" type="0" closed="0" start_arrow="0" end_arrow="0" points="${curvePoints}"${curveZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -5887,7 +5943,8 @@ class BasicFigureEditor extends window.PluginBase {
                 if (shape.points && shape.points.length > 0) {
                     const polygonPoints = shape.points.map(p => `${p.x},${p.y}`).join(' ');
                     const polygonCornerRadius = shape.cornerRadius || 0;
-                    xmlParts.push(`<polygon l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="${polygonCornerRadius}" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${polygonPoints}" />\r\n`);
+                    const polygonZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                    xmlParts.push(`<polygon l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="${polygonCornerRadius}" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${polygonPoints}"${polygonZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -5901,16 +5958,17 @@ class BasicFigureEditor extends window.PluginBase {
                 const acRadiusY = shape.radiusY || Math.abs(shape.endY - shape.startY) / 2;
                 const acStartAngle = shape.startAngle || 0;
                 const acEndAngle = shape.endAngle || 90;
+                const arcZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
 
                 if (shape.type === 'arc') {
                     // 扇形
-                    xmlParts.push(`<arc l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${shape.angle || 0}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0" />\r\n`);
+                    xmlParts.push(`<arc l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${shape.angle || 0}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0"${arcZIndexAttr} />\r\n`);
                 } else if (shape.type === 'chord') {
                     // 弦
-                    xmlParts.push(`<chord l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${shape.angle || 0}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0" />\r\n`);
+                    xmlParts.push(`<chord l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${shape.angle || 0}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0"${arcZIndexAttr} />\r\n`);
                 } else {
                     // 楕円弧
-                    xmlParts.push(`<elliptical_arc l_atr="${l_atr}" l_pat="${l_pat}" angle="${shape.angle || 0}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0" />\r\n`);
+                    xmlParts.push(`<elliptical_arc l_atr="${l_atr}" l_pat="${l_pat}" angle="${shape.angle || 0}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0"${arcZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -5922,7 +5980,9 @@ class BasicFigureEditor extends window.PluginBase {
                     // 保護属性を追加
                     const fixedAttr = shape.locked ? ' fixed="true"' : '';
                     const backgroundAttr = shape.isBackground ? ' background="true"' : '';
-                    xmlParts.push(`<link id="${vo.link_id}" vobjleft="${shape.startX}" vobjtop="${shape.startY}" vobjright="${shape.endX}" vobjbottom="${shape.endY}" height="${height}" chsz="${vo.chsz || 14}" frcol="${vo.frcol || '#000000'}" chcol="${vo.chcol || '#000000'}" tbcol="${vo.tbcol || '#ffffff'}" bgcol="${vo.bgcol || '#ffffff'}" dlen="${vo.link_name.length}" pictdisp="${vo.pictdisp || 'true'}" namedisp="${vo.namedisp || 'true'}" roledisp="${vo.roledisp || 'false'}" typedisp="${vo.typedisp || 'false'}" updatedisp="${vo.updatedisp || 'false'}" framedisp="${vo.framedisp || 'true'}" autoopen="${vo.autoopen || 'false'}"${fixedAttr}${backgroundAttr}>${this.escapeXml(vo.link_name)}</link>\r\n`);
+                    // z-index属性を追加
+                    const zIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                    xmlParts.push(`<link id="${vo.link_id}" vobjleft="${shape.startX}" vobjtop="${shape.startY}" vobjright="${shape.endX}" vobjbottom="${shape.endY}" height="${height}" chsz="${vo.chsz || 14}" frcol="${vo.frcol || '#000000'}" chcol="${vo.chcol || '#000000'}" tbcol="${vo.tbcol || '#ffffff'}" bgcol="${vo.bgcol || '#ffffff'}" dlen="${vo.link_name.length}" pictdisp="${vo.pictdisp || 'true'}" namedisp="${vo.namedisp || 'true'}" roledisp="${vo.roledisp || 'false'}" typedisp="${vo.typedisp || 'false'}" updatedisp="${vo.updatedisp || 'false'}" framedisp="${vo.framedisp || 'true'}" autoopen="${vo.autoopen || 'false'}"${fixedAttr}${backgroundAttr}${zIndexAttr}>${this.escapeXml(vo.link_name)}</link>\r\n`);
                 }
                 break;
 
@@ -5932,7 +5992,9 @@ class BasicFigureEditor extends window.PluginBase {
                     const rotation = shape.rotation || 0;
                     const flipH = shape.flipH ? 'true' : 'false';
                     const flipV = shape.flipV ? 'true' : 'false';
-                    xmlParts.push(`<image l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" href="${this.escapeXml(shape.fileName)}" />\r\n`);
+                    // z-index属性を追加
+                    const zIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                    xmlParts.push(`<image l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" href="${this.escapeXml(shape.fileName)}"${zIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -5943,7 +6005,8 @@ class BasicFigureEditor extends window.PluginBase {
                     xmlParts.push(`<document>\r\n`);
 
                     // 2. text要素で位置を定義（図形TADにおける文字枠の位置指定）
-                    xmlParts.push(`<text viewleft="${shape.startX}" viewtop="${shape.startY}" viewright="${shape.endX}" viewbottom="${shape.endY}" drawleft="${shape.startX}" drawtop="${shape.startY}" drawright="${shape.endX}" drawbottom="${shape.endY}"/>\r\n`);
+                    const textboxZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                    xmlParts.push(`<text viewleft="${shape.startX}" viewtop="${shape.startY}" viewright="${shape.endX}" viewbottom="${shape.endY}" drawleft="${shape.startX}" drawtop="${shape.startY}" drawright="${shape.endX}" drawbottom="${shape.endY}"${textboxZIndexAttr}/>\r\n`);
 
                     // 3. フォント設定
                     const fontSize = shape.fontSize || 16;
@@ -5988,6 +6051,7 @@ class BasicFigureEditor extends window.PluginBase {
 
             case 'pixelmap':
                 // ピクセルマップ - ImageDataをPNGファイルとして保存
+                const pixelmapZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
                 if (shape.imageData) {
                     // ピクセルマップ番号を取得または生成
                     if (shape.pixelmapNo === undefined) {
@@ -6006,21 +6070,22 @@ class BasicFigureEditor extends window.PluginBase {
                     const flipV = shape.flipV ? 'true' : 'false';
 
                     // pixelmap要素として保存（href属性でファイル名を指定）
-                    xmlParts.push(`<pixelmap left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" bgcolor="${shape.backgroundColor || '#ffffff'}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}" href="${this.escapeXml(pixelmapFileName)}"/>\r\n`);
+                    xmlParts.push(`<pixelmap left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" bgcolor="${shape.backgroundColor || '#ffffff'}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}" href="${this.escapeXml(pixelmapFileName)}"${pixelmapZIndexAttr}/>\r\n`);
                 } else {
                     const rotation = shape.rotation || 0;
                     const flipH = shape.flipH ? 'true' : 'false';
                     const flipV = shape.flipV ? 'true' : 'false';
 
                     // ImageDataがない場合は空のピクセルマップとして保存
-                    xmlParts.push(`<pixelmap left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" bgcolor="${shape.backgroundColor || '#ffffff'}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}"/>\r\n`);
+                    xmlParts.push(`<pixelmap left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" bgcolor="${shape.backgroundColor || '#ffffff'}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}"${pixelmapZIndexAttr}/>\r\n`);
                 }
                 break;
 
             case 'group':
                 // グループをXMLタグで囲んで保存
                 if (shape.shapes) {
-                    xmlParts.push(`<group left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}">\r\n`);
+                    const groupZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                    xmlParts.push(`<group left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}"${groupZIndexAttr}>\r\n`);
                     shape.shapes.forEach((s, i) => {
                         this.shapeToXML(s, `${index}_${i}`, xmlParts);
                     });
@@ -6028,6 +6093,92 @@ class BasicFigureEditor extends window.PluginBase {
                 }
                 break;
         }
+    }
+
+    /**
+     * shapes配列のz-indexを正規化してソート
+     * - z-indexが未設定のshapeに自動採番
+     * - 背景化されたshapeは負の値（-1, -2, ...）
+     * - 通常のshape（仮身、画像、線など全て）は正の値（1, 2, 3, ...）
+     * - Canvasのz-indexは0なので、負の値はCanvas背面、正の値はCanvas前面
+     * - z-indexでソート
+     */
+    normalizeAndSortShapesByZIndex() {
+        // 背景化されたshapeと通常のshapeを分離
+        const backgroundShapes = [];
+        const normalShapes = [];
+
+        for (const shape of this.shapes) {
+            if (shape.isBackground) {
+                backgroundShapes.push(shape);
+            } else {
+                normalShapes.push(shape);
+            }
+        }
+
+        // 背景化されたshapeに負のz-indexを採番（z-index未設定の場合）
+        let backgroundIndex = -1;
+        for (const shape of backgroundShapes) {
+            if (shape.zIndex === null || shape.zIndex === undefined) {
+                shape.zIndex = backgroundIndex--;
+            }
+        }
+
+        // 通常のshapeに正のz-indexを採番（z-index未設定の場合）
+        let normalIndex = 1;
+        for (const shape of normalShapes) {
+            if (shape.zIndex === null || shape.zIndex === undefined) {
+                shape.zIndex = normalIndex++;
+            }
+        }
+
+        // z-indexでソート（小さい順 = 背面から前面へ）
+        this.shapes.sort((a, b) => {
+            const aZ = a.zIndex !== null && a.zIndex !== undefined ? a.zIndex : 0;
+            const bZ = b.zIndex !== null && b.zIndex !== undefined ? b.zIndex : 0;
+            return aZ - bZ;
+        });
+
+        logger.debug('[FIGURE EDITOR] z-index正規化完了:', {
+            total: this.shapes.length,
+            background: backgroundShapes.length,
+            normal: normalShapes.length
+        });
+    }
+
+    /**
+     * shapes配列の現在の順序に基づいてz-indexを再採番
+     * 配列操作ベースのz-order変更に使用
+     * - shapes配列は既にz-indexでソート済みと仮定
+     * - 背景化図形: -1, -2, -3, ...（配列前方から）
+     * - 通常図形: 1, 2, 3, ...（配列前方から）
+     */
+    reassignZIndicesFromArrayOrder() {
+        let backgroundIndex = -1;
+        let normalIndex = 1;
+
+        for (const shape of this.shapes) {
+            if (shape.isBackground) {
+                shape.zIndex = backgroundIndex--;
+            } else {
+                shape.zIndex = normalIndex++;
+            }
+        }
+    }
+
+    /**
+     * 新規図形追加時に使用する次のz-indexを取得
+     * 既存図形の最大z-indexに+1した値を返す
+     * @returns {number} 次に使用すべきz-index値
+     */
+    getNextZIndex() {
+        let maxZIndex = 0;
+        for (const shape of this.shapes) {
+            if (shape.zIndex !== null && shape.zIndex !== undefined && shape.zIndex > maxZIndex) {
+                maxZIndex = shape.zIndex;
+            }
+        }
+        return maxZIndex + 1;
     }
 
     escapeXml(text) {
@@ -6048,12 +6199,12 @@ class BasicFigureEditor extends window.PluginBase {
             if (this.dblClickDragState.dblClickedElement) {
                 this.dblClickDragState.dblClickedElement.setAttribute('draggable', 'true');
             }
-            this.dblClickDragState.isDblClickDragCandidate = false;
-            this.dblClickDragState.isDblClickDrag = false;
-            this.dblClickDragState.dblClickedShape = null;
-            this.dblClickDragState.dblClickedElement = null;
+            // 共通メソッドでクリーンアップ
+            this.cleanupDblClickDragState();
+            // プラグイン固有のクリーンアップ
             this.dblClickDragState.lastClickTime = 0; // ダブルクリック検出をリセット
             this.dblClickDragState.lastClickedShape = null;
+            this.dblClickDragState.dblClickedShape = null;
             // プレビュー要素を削除
             if (this.dblClickDragState.previewElement) {
                 this.dblClickDragState.previewElement.remove();
@@ -6062,22 +6213,19 @@ class BasicFigureEditor extends window.PluginBase {
 
             if (window.parent && window.parent !== window) {
                 const rect = window.frameElement.getBoundingClientRect();
-                window.parent.postMessage({
-                    type: 'context-menu-request',
+                // MessageBus Phase 2: messageBus.send()を使用
+                this.messageBus.send('context-menu-request', {
                     x: rect.left + e.clientX,
                     y: rect.top + e.clientY
-                }, '*');
+                });
             }
         });
     }
 
     setupWindowActivation() {
-        window.addEventListener('focus', () => {
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'window-focus'
-                }, '*');
-            }
+        document.addEventListener('mousedown', () => {
+            // MessageBus Phase 2: messageBus.send()を使用
+            this.messageBus.send('activate-window');
         });
     }
 
@@ -6088,14 +6236,14 @@ class BasicFigureEditor extends window.PluginBase {
                 fileId: this.realId,
                 windowConfig: config
             });
-            console.log('[FIGURE EDITOR] ウィンドウ設定を更新:', this.realId, config);
+            logger.debug('[FIGURE EDITOR] ウィンドウ設定を更新:', this.realId, config);
         }
     }
 
     updatePanelPosition(pos) {
         // 道具パネルの位置を更新
         this.panelpos = pos;
-        console.log('[FIGURE EDITOR] 道具パネル位置を更新:', pos);
+        logger.debug('[FIGURE EDITOR] 道具パネル位置を更新:', pos);
 
         // 親ウィンドウに道具パネル位置の保存を要求
         if (window.parent && window.parent !== window) {
@@ -6182,10 +6330,10 @@ class BasicFigureEditor extends window.PluginBase {
         ];
 
         // 仮身が選択されている場合は仮身操作メニューを追加
-        console.log('[FIGURE EDITOR] getMenuDefinition: contextMenuVirtualObject:', this.contextMenuVirtualObject);
+        logger.debug('[FIGURE EDITOR] getMenuDefinition: contextMenuVirtualObject:', this.contextMenuVirtualObject);
         if (this.contextMenuVirtualObject) {
             try {
-                console.log('[FIGURE EDITOR] getMenuDefinition: 仮身が選択されています realId:', this.contextMenuVirtualObject.realId);
+                logger.debug('[FIGURE EDITOR] getMenuDefinition: 仮身が選択されています realId:', this.contextMenuVirtualObject.realId);
 
                 // 仮身操作メニュー
                 const realId = this.contextMenuVirtualObject.realId;
@@ -6222,11 +6370,11 @@ class BasicFigureEditor extends window.PluginBase {
 
                 // 実行メニュー
                 const applistData = await this.getAppListData(this.contextMenuVirtualObject.realId);
-                console.log('[FIGURE EDITOR] getMenuDefinition: applistData:', applistData);
+                logger.debug('[FIGURE EDITOR] getMenuDefinition: applistData:', applistData);
                 if (applistData && Object.keys(applistData).length > 0) {
                     const executeSubmenu = [];
                     for (const [pluginId, appInfo] of Object.entries(applistData)) {
-                        console.log('[FIGURE EDITOR] getMenuDefinition: 実行メニュー項目追加:', pluginId, appInfo);
+                        logger.debug('[FIGURE EDITOR] getMenuDefinition: 実行メニュー項目追加:', pluginId, appInfo);
                         executeSubmenu.push({
                             label: appInfo.name || pluginId,
                             action: `execute-with-${pluginId}`
@@ -6237,27 +6385,27 @@ class BasicFigureEditor extends window.PluginBase {
                         label: '実行',
                         submenu: executeSubmenu
                     });
-                    console.log('[FIGURE EDITOR] getMenuDefinition: 実行メニュー追加完了 項目数:', executeSubmenu.length);
+                    logger.debug('[FIGURE EDITOR] getMenuDefinition: 実行メニュー追加完了 項目数:', executeSubmenu.length);
                 } else {
-                    console.warn('[FIGURE EDITOR] getMenuDefinition: applistDataが空またはnull');
+                    logger.warn('[FIGURE EDITOR] getMenuDefinition: applistDataが空またはnull');
                 }
             } catch (error) {
-                console.error('[FIGURE EDITOR] applist取得エラー:', error);
+                logger.error('[FIGURE EDITOR] applist取得エラー:', error);
             }
         } else {
-            console.log('[FIGURE EDITOR] getMenuDefinition: 仮身が選択されていません');
+            logger.debug('[FIGURE EDITOR] getMenuDefinition: 仮身が選択されていません');
         }
 
         return menuDef;
     }
 
     async executeMenuAction(action, additionalData) {
-        console.log('[FIGURE EDITOR] メニューアクション実行:', action);
+        logger.debug('[FIGURE EDITOR] メニューアクション実行:', action);
 
         // 仮身の実行メニューからのアクション（基本文章編集プラグインと同じ処理）
         if (action.startsWith('execute-with-')) {
             const pluginId = action.replace('execute-with-', '');
-            console.log('[FIGURE EDITOR] 仮身を指定アプリで起動:', pluginId);
+            logger.debug('[FIGURE EDITOR] 仮身を指定アプリで起動:', pluginId);
 
             // contextMenuVirtualObjectから仮身情報を取得
             if (this.contextMenuVirtualObject && this.contextMenuVirtualObject.virtualObj) {
@@ -6447,7 +6595,7 @@ class BasicFigureEditor extends window.PluginBase {
                 break;
 
             default:
-                console.log('[FIGURE EDITOR] 未実装のアクション:', action);
+                logger.debug('[FIGURE EDITOR] 未実装のアクション:', action);
         }
     }
 
@@ -6456,14 +6604,14 @@ class BasicFigureEditor extends window.PluginBase {
         this.viewMode = 'xml';
         this.canvas.style.display = 'none';
         // XML表示用の要素を表示（未実装）
-        console.log('[FIGURE EDITOR] XMLモード');
+        logger.debug('[FIGURE EDITOR] XMLモード');
     }
 
     viewCanvasMode() {
         this.viewMode = 'canvas';
         this.canvas.style.display = 'block';
         this.redraw();
-        console.log('[FIGURE EDITOR] キャンバスモード');
+        logger.debug('[FIGURE EDITOR] キャンバスモード');
     }
 
     refresh() {
@@ -6541,7 +6689,7 @@ class BasicFigureEditor extends window.PluginBase {
         // まずグローバルクリップボードをチェック（仮身データ）
         const globalClipboard = await this.getGlobalClipboard();
         if (globalClipboard && globalClipboard.link_id) {
-            console.log('[FIGURE EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
+            logger.debug('[FIGURE EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
             // キャンバス中央に配置
             const x = this.canvas.width / 2;
             const y = this.canvas.height / 2;
@@ -6600,6 +6748,9 @@ class BasicFigureEditor extends window.PluginBase {
                     newShape.fileName = `${fileId}_${recordNo}_${newShape.pixelmapNo}.png`;
                 }
             }
+
+            // 新しいz-indexを割り当て
+            newShape.zIndex = this.getNextZIndex();
 
             return newShape;
         });
@@ -6679,6 +6830,9 @@ class BasicFigureEditor extends window.PluginBase {
                 }
             }
 
+            // 新しいz-indexを割り当て
+            newShape.zIndex = this.getNextZIndex();
+
             return newShape;
         });
 
@@ -6701,7 +6855,8 @@ class BasicFigureEditor extends window.PluginBase {
             shapes: [...this.selectedShapes],
             strokeColor: '#000000',
             fillColor: 'transparent',
-            lineWidth: 1
+            lineWidth: 1,
+            zIndex: this.getNextZIndex()
         };
 
         // グループの境界ボックスを計算
@@ -6823,13 +6978,16 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        this.selectedShapes.forEach(shape => {
-            const index = this.shapes.indexOf(shape);
-            if (index > -1) {
-                this.shapes.splice(index, 1);
-                this.shapes.push(shape);
-            }
-        });
+        // 配列操作ベース: 選択図形を配列最後に移動
+        // 1. 選択図形をshapes配列から削除
+        const selectedSet = new Set(this.selectedShapes);
+        const remainingShapes = this.shapes.filter(shape => !selectedSet.has(shape));
+
+        // 2. 選択図形を配列最後に追加
+        this.shapes = [...remainingShapes, ...this.selectedShapes];
+
+        // 3. 配列順序に基づいてz-indexを再採番
+        this.reassignZIndicesFromArrayOrder();
 
         this.redraw();
         this.isModified = true;
@@ -6842,13 +7000,19 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        this.selectedShapes.forEach(shape => {
-            const index = this.shapes.indexOf(shape);
-            if (index > -1 && index < this.shapes.length - 1) {
-                this.shapes.splice(index, 1);
-                this.shapes.splice(index + 1, 0, shape);
+        // 配列操作ベース: 選択図形を配列内で1つ後ろ（前面側）に移動
+        const selectedSet = new Set(this.selectedShapes);
+
+        // 配列を後ろから走査して、選択図形を1つ後ろに移動
+        for (let i = this.shapes.length - 2; i >= 0; i--) {
+            if (selectedSet.has(this.shapes[i]) && !selectedSet.has(this.shapes[i + 1])) {
+                // 選択図形で、次が非選択図形の場合、入れ替え
+                [this.shapes[i], this.shapes[i + 1]] = [this.shapes[i + 1], this.shapes[i]];
             }
-        });
+        }
+
+        // 配列順序に基づいてz-indexを再採番
+        this.reassignZIndicesFromArrayOrder();
 
         this.redraw();
         this.isModified = true;
@@ -6861,13 +7025,19 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        this.selectedShapes.forEach(shape => {
-            const index = this.shapes.indexOf(shape);
-            if (index > 0) {
-                this.shapes.splice(index, 1);
-                this.shapes.splice(index - 1, 0, shape);
+        // 配列操作ベース: 選択図形を配列内で1つ前（背面側）に移動
+        const selectedSet = new Set(this.selectedShapes);
+
+        // 配列を前から走査して、選択図形を1つ前に移動
+        for (let i = 1; i < this.shapes.length; i++) {
+            if (selectedSet.has(this.shapes[i]) && !selectedSet.has(this.shapes[i - 1])) {
+                // 選択図形で、前が非選択図形の場合、入れ替え
+                [this.shapes[i], this.shapes[i - 1]] = [this.shapes[i - 1], this.shapes[i]];
             }
-        });
+        }
+
+        // 配列順序に基づいてz-indexを再採番
+        this.reassignZIndicesFromArrayOrder();
 
         this.redraw();
         this.isModified = true;
@@ -6880,13 +7050,21 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        this.selectedShapes.forEach(shape => {
-            const index = this.shapes.indexOf(shape);
-            if (index > -1) {
-                this.shapes.splice(index, 1);
-                this.shapes.unshift(shape);
-            }
-        });
+        // 配列操作ベース: 選択図形を通常図形の最初に移動
+        // 1. 選択図形をshapes配列から削除
+        const selectedSet = new Set(this.selectedShapes);
+        const remainingShapes = this.shapes.filter(shape => !selectedSet.has(shape));
+
+        // 2. 背景化図形と通常図形を分離
+        const backgroundShapes = remainingShapes.filter(shape => shape.isBackground);
+        const normalShapes = remainingShapes.filter(shape => !shape.isBackground);
+
+        // 3. 選択図形を通常図形の最初に配置
+        // shapes配列 = [背景化図形...] + [選択図形...] + [通常図形...]
+        this.shapes = [...backgroundShapes, ...this.selectedShapes, ...normalShapes];
+
+        // 4. 配列順序に基づいてz-indexを再採番
+        this.reassignZIndicesFromArrayOrder();
 
         this.redraw();
         this.isModified = true;
@@ -7067,19 +7245,19 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     applyStrokeColorToSelected(color) {
-        console.log('[FIGURE EDITOR] applyStrokeColorToSelected:', color, '選択図形数:', this.selectedShapes.length);
+        logger.debug('[FIGURE EDITOR] applyStrokeColorToSelected:', color, '選択図形数:', this.selectedShapes.length);
 
         if (this.selectedShapes.length === 0) {
-            console.warn('[FIGURE EDITOR] 選択された図形がありません');
+            logger.warn('[FIGURE EDITOR] 選択された図形がありません');
             return;
         }
 
         this.selectedShapes.forEach((shape, index) => {
-            console.log(`[FIGURE EDITOR] 図形${index}の線色を変更: ${shape.strokeColor} -> ${color}`);
+            logger.debug(`[FIGURE EDITOR] 図形${index}の線色を変更: ${shape.strokeColor} -> ${color}`);
             shape.strokeColor = color;
         });
 
-        console.log('[FIGURE EDITOR] redraw()を呼び出します');
+        logger.debug('[FIGURE EDITOR] redraw()を呼び出します');
         this.redraw();
         this.isModified = true;
         this.setStatus(`線色を変更しました: ${color}`);
@@ -7256,7 +7434,7 @@ class BasicFigureEditor extends window.PluginBase {
             };
         }
 
-        console.log('[FIGURE EDITOR] フォント設定を送信:', settings);
+        logger.debug('[FIGURE EDITOR] フォント設定を送信:', settings);
 
         // 親ウィンドウ経由で道具パネルに設定を送信
         if (window.parent && window.parent !== window) {
@@ -7305,7 +7483,7 @@ class BasicFigureEditor extends window.PluginBase {
 
     showPrintPreview() {
         this.setStatus('印刷プレビュー（未実装）');
-        console.log('[FIGURE EDITOR] 印刷プレビュー');
+        logger.debug('[FIGURE EDITOR] 印刷プレビュー');
     }
 
     print() {
@@ -7317,12 +7495,12 @@ class BasicFigureEditor extends window.PluginBase {
     toggleRealSizePanel() {
         this.realSizePanelVisible = !this.realSizePanelVisible;
         this.setStatus(`実寸パネル: ${this.realSizePanelVisible ? '表示' : '非表示'}`);
-        console.log('[FIGURE EDITOR] 実寸パネル切り替え');
+        logger.debug('[FIGURE EDITOR] 実寸パネル切り替え');
     }
 
     editPattern() {
         this.setStatus('パターン編集（未実装）');
-        console.log('[FIGURE EDITOR] パターン編集');
+        logger.debug('[FIGURE EDITOR] パターン編集');
     }
 
     // === 編集（追加） ===
@@ -7374,7 +7552,7 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
         this.setStatus('変形（未実装）');
-        console.log('[FIGURE EDITOR] 変形');
+        logger.debug('[FIGURE EDITOR] 変形');
     }
 
     invertColor() {
@@ -7409,7 +7587,7 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
         this.setStatus('焼き付け（未実装）');
-        console.log('[FIGURE EDITOR] 焼き付け');
+        logger.debug('[FIGURE EDITOR] 焼き付け');
     }
 
     // === 保護（追加） ===
@@ -7428,7 +7606,7 @@ class BasicFigureEditor extends window.PluginBase {
         this.redraw();
         this.isModified = true;
         this.setStatus(`${this.selectedShapes.length}個の図形を固定化しました`);
-        console.log('[FIGURE EDITOR] 図形を固定化:', this.selectedShapes.map(s => s.type));
+        logger.debug('[FIGURE EDITOR] 図形を固定化:', this.selectedShapes.map(s => s.type));
     }
 
     unlockShape() {
@@ -7446,7 +7624,7 @@ class BasicFigureEditor extends window.PluginBase {
         this.redraw();
         this.isModified = true;
         this.setStatus(`${this.selectedShapes.length}個の図形の固定を解除しました`);
-        console.log('[FIGURE EDITOR] 図形の固定を解除:', this.selectedShapes.map(s => s.type));
+        logger.debug('[FIGURE EDITOR] 図形の固定を解除:', this.selectedShapes.map(s => s.type));
     }
 
     toBackground() {
@@ -7464,7 +7642,7 @@ class BasicFigureEditor extends window.PluginBase {
         this.redraw();
         this.isModified = true;
         this.setStatus(`${this.selectedShapes.length}個の図形を背景化しました`);
-        console.log('[FIGURE EDITOR] 図形を背景化:', this.selectedShapes.map(s => s.type));
+        logger.debug('[FIGURE EDITOR] 図形を背景化:', this.selectedShapes.map(s => s.type));
     }
 
     fromBackground() {
@@ -7482,7 +7660,7 @@ class BasicFigureEditor extends window.PluginBase {
         this.redraw();
         this.isModified = true;
         this.setStatus(`${this.selectedShapes.length}個の図形の背景化を解除しました`);
-        console.log('[FIGURE EDITOR] 図形の背景化を解除:', this.selectedShapes.map(s => s.type));
+        logger.debug('[FIGURE EDITOR] 図形の背景化を解除:', this.selectedShapes.map(s => s.type));
     }
 
     // === 書式/印刷（追加） ===
@@ -7502,7 +7680,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
             this.setStatus('仮身が選択されていません');
-            console.warn('[FIGURE EDITOR] 選択中の仮身がありません');
+            logger.warn('[FIGURE EDITOR] 選択中の仮身がありません');
             return;
         }
 
@@ -7512,19 +7690,18 @@ class BasicFigureEditor extends window.PluginBase {
         // 開いているかチェック
         if (!this.openedRealObjects.has(realId)) {
             this.setStatus('実身は開いていません');
-            console.log('[FIGURE EDITOR] 実身は開いていません:', realId);
+            logger.debug('[FIGURE EDITOR] 実身は開いていません:', realId);
             return;
         }
 
         const windowId = this.openedRealObjects.get(realId);
-        console.log('[FIGURE EDITOR] 実身ウィンドウを閉じます:', windowId, 'realId:', realId);
+        logger.debug('[FIGURE EDITOR] 実身ウィンドウを閉じます:', windowId, 'realId:', realId);
 
         // 親ウィンドウにウィンドウクローズを要求
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'close-window',
+        if (this.messageBus) {
+            this.messageBus.send('close-window', {
                 windowId: windowId
-            }, '*');
+            });
         }
 
         // 追跡から削除（window-closedイベントでも削除されるが、ここでも削除）
@@ -7541,24 +7718,23 @@ class BasicFigureEditor extends window.PluginBase {
         // 選択中の仮身図形を取得
         const virtualObjectShape = this.selectedShapes.find(s => s.type === 'vobj');
         if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
-            console.warn('[FIGURE EDITOR] 仮身が選択されていません');
+            logger.warn('[FIGURE EDITOR] 仮身が選択されていません');
             return;
         }
 
         const selectedVirtualObject = virtualObjectShape.virtualObject;
         const realId = selectedVirtualObject.link_id;
-        console.log('[FIGURE EDITOR] 仮身の実身を開く:', realId, 'プラグイン:', pluginId);
+        logger.debug('[FIGURE EDITOR] 仮身の実身を開く:', realId, 'プラグイン:', pluginId);
 
         // ウィンドウが開いた通知を受け取るハンドラー
         const messageId = `open-${realId}-${Date.now()}`;
         // 親ウィンドウ(tadjs-desktop.js)に実身を開くよう要求
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'open-virtual-object-real',
+        if (this.messageBus) {
+            this.messageBus.send('open-virtual-object-real', {
                 virtualObj: selectedVirtualObject,
                 pluginId: pluginId,
                 messageId: messageId
-            }, '*');
+            });
 
             try {
                 const result = await this.messageBus.waitFor('window-opened', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
@@ -7568,23 +7744,22 @@ class BasicFigureEditor extends window.PluginBase {
                 if (result.success && result.windowId) {
                     // 開いたウィンドウを追跡
                     this.openedRealObjects.set(realId, result.windowId);
-                    console.log('[FIGURE EDITOR] ウィンドウが開きました:', result.windowId, 'realId:', realId);
+                    logger.debug('[FIGURE EDITOR] ウィンドウが開きました:', result.windowId, 'realId:', realId);
 
                     // ウィンドウのアイコンを設定
                     // realIdから_0.xtadなどのサフィックスを除去して基本実身IDを取得（共通メソッドを使用）
                     const baseRealId = window.RealObjectSystem.extractRealId(realId);
                     const iconPath = `${baseRealId}.ico`;
-                    if (window.parent && window.parent !== window) {
-                        window.parent.postMessage({
-                            type: 'set-window-icon',
+                    if (this.messageBus) {
+                        this.messageBus.send('set-window-icon', {
                             windowId: result.windowId,
                             iconPath: iconPath
-                        }, '*');
-                        console.log('[FIGURE EDITOR] ウィンドウアイコン設定要求:', result.windowId, iconPath);
+                        });
+                        logger.debug('[FIGURE EDITOR] ウィンドウアイコン設定要求:', result.windowId, iconPath);
                     }
                 }
             } catch (error) {
-                console.error('[FIGURE EDITOR] ウィンドウ開起エラー:', error);
+                logger.error('[FIGURE EDITOR] ウィンドウ開起エラー:', error);
             }
         }
     }
@@ -7597,7 +7772,7 @@ class BasicFigureEditor extends window.PluginBase {
         // 選択中の仮身図形を取得
         const virtualObjectShape = this.selectedShapes.find(s => s.type === 'vobj');
         if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
-            console.warn('[FIGURE EDITOR] 選択中の仮身がありません');
+            logger.warn('[FIGURE EDITOR] 選択中の仮身がありません');
             return;
         }
 
@@ -7605,7 +7780,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         const applist = selectedVirtualObject.applist;
         if (!applist || typeof applist !== 'object') {
-            console.warn('[FIGURE EDITOR] applistが存在しません');
+            logger.warn('[FIGURE EDITOR] applistが存在しません');
             return;
         }
 
@@ -7624,7 +7799,7 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         if (!defaultPluginId) {
-            console.warn('[FIGURE EDITOR] 開くためのプラグインが見つかりません');
+            logger.warn('[FIGURE EDITOR] 開くためのプラグインが見つかりません');
             return;
         }
 
@@ -7634,7 +7809,7 @@ class BasicFigureEditor extends window.PluginBase {
         // 開いた実身を追跡
         const realId = selectedVirtualObject.link_id;
         // windowIdは親ウィンドウから通知される想定
-        console.log('[FIGURE EDITOR] 実身を開く:', realId, 'with', defaultPluginId);
+        logger.debug('[FIGURE EDITOR] 実身を開く:', realId, 'with', defaultPluginId);
     }
 
     async showVirtualAttributes() {
@@ -7643,7 +7818,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
             this.setStatus('仮身が選択されていません');
-            console.warn('[FIGURE EDITOR] 選択中の仮身がありません');
+            logger.warn('[FIGURE EDITOR] 選択中の仮身がありません');
             return;
         }
 
@@ -7687,18 +7862,17 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         // 親ウィンドウにダイアログ表示を要求
-        if (window.parent && window.parent !== window) {
+        if (this.messageBus) {
             const messageId = `change-vobj-attrs-${Date.now()}-${Math.random()}`;
 
-            window.parent.postMessage({
-                type: 'change-virtual-object-attributes',
+            this.messageBus.send('change-virtual-object-attributes', {
                 virtualObject: vobj,
                 currentAttributes: currentAttrs,
                 selectedRatio: selectedRatio,
                 messageId: messageId
-            }, '*');
+            });
 
-            console.log('[FIGURE EDITOR] 仮身属性変更ダイアログ要求');
+            logger.debug('[FIGURE EDITOR] 仮身属性変更ダイアログ要求');
 
             try {
                 const result = await this.messageBus.waitFor('virtual-object-attributes-changed', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
@@ -7709,7 +7883,7 @@ class BasicFigureEditor extends window.PluginBase {
                     this.applyVirtualObjectAttributes(virtualObjectShape, result.attributes);
                 }
             } catch (error) {
-                console.error('[FIGURE EDITOR] 仮身属性変更エラー:', error);
+                logger.error('[FIGURE EDITOR] 仮身属性変更エラー:', error);
             }
         }
     }
@@ -7719,7 +7893,7 @@ class BasicFigureEditor extends window.PluginBase {
      */
     applyVirtualObjectAttributes(shape, attrs) {
         if (!shape || !shape.virtualObject) {
-            console.warn('[FIGURE EDITOR] 仮身が見つかりません');
+            logger.warn('[FIGURE EDITOR] 仮身が見つかりません');
             return;
         }
 
@@ -7751,7 +7925,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         // 既存のDOM要素を削除して強制再作成（属性を反映させるため）
         if (shape.vobjElement && shape.vobjElement.parentNode) {
-            console.log('[FIGURE EDITOR] 属性変更のため既存のDOM要素を削除:', vobj.link_name);
+            logger.debug('[FIGURE EDITOR] 属性変更のため既存のDOM要素を削除:', vobj.link_name);
             shape.vobjElement.remove();
             shape.vobjElement = null;
         }
@@ -7762,7 +7936,7 @@ class BasicFigureEditor extends window.PluginBase {
         // 仮身DOM要素を再生成して表示を更新
         this.renderVirtualObjectsAsElements();
 
-        console.log('[FIGURE EDITOR] 仮身属性を適用:', attrs);
+        logger.debug('[FIGURE EDITOR] 仮身属性を適用:', attrs);
         this.setStatus('仮身属性を変更しました');
     }
 
@@ -7819,34 +7993,6 @@ class BasicFigureEditor extends window.PluginBase {
 
             this.isFullscreen = !this.isFullscreen;
             this.setStatus(this.isFullscreen ? '全画面表示ON' : '全画面表示OFF');
-        } else if (window.parent && window.parent !== window) {
-            // フォールバック: MessageBus未利用時
-            window.parent.postMessage({
-                type: 'toggle-maximize'
-            }, '*');
-
-            this.isFullscreen = !this.isFullscreen;
-            this.setStatus(this.isFullscreen ? '全画面表示ON' : '全画面表示OFF');
-        } else {
-            // 親ウィンドウがない場合は従来のフルスクリーンAPIを使用
-            const container = document.querySelector('.plugin-content');
-            if (!this.isFullscreen) {
-                if (container.requestFullscreen) {
-                    container.requestFullscreen();
-                } else if (container.webkitRequestFullscreen) {
-                    container.webkitRequestFullscreen();
-                }
-                this.isFullscreen = true;
-                this.setStatus('全画面表示ON');
-            } else {
-                if (document.exitFullscreen) {
-                    document.exitFullscreen();
-                } else if (document.webkitExitFullscreen) {
-                    document.webkitExitFullscreen();
-                }
-                this.isFullscreen = false;
-                this.setStatus('全画面表示OFF');
-            }
         }
     }
 
@@ -7854,12 +8000,11 @@ class BasicFigureEditor extends window.PluginBase {
         // 道具パネルウィンドウの表示/非表示を切り替え
         if (this.toolPanelWindowId) {
             // 道具パネルが開いている場合は閉じる
-            console.log('[FIGURE EDITOR] 道具パネルウィンドウを閉じます:', this.toolPanelWindowId);
-            if (window.parent && window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'close-window',
+            logger.debug('[FIGURE EDITOR] 道具パネルウィンドウを閉じます:', this.toolPanelWindowId);
+            if (this.messageBus) {
+                this.messageBus.send('close-window', {
                     windowId: this.toolPanelWindowId
-                }, '*');
+                });
             }
             this.toolPanelWindowId = null;
             this.toolPanelVisible = false;
@@ -7869,7 +8014,7 @@ class BasicFigureEditor extends window.PluginBase {
             this.updateWindowConfig({ panel: false });
         } else {
             // 道具パネルが閉じている場合は開く
-            console.log('[FIGURE EDITOR] 道具パネルウィンドウを開きます');
+            logger.debug('[FIGURE EDITOR] 道具パネルウィンドウを開きます');
             this.openToolPanelWindow();
             this.toolPanelVisible = true;
             this.setStatus('道具パネルを開きました');
@@ -7888,13 +8033,12 @@ class BasicFigureEditor extends window.PluginBase {
             this.isModified = true;
 
             // 親ウィンドウに背景色更新を通知（管理用セグメントに保存）
-            if (window.parent && window.parent !== window && this.realId) {
-                window.parent.postMessage({
-                    type: 'update-background-color',
+            if (this.messageBus && this.realId) {
+                this.messageBus.send('update-background-color', {
                     fileId: this.realId,
                     backgroundColor: this.bgColor
-                }, '*');
-                console.log('[FIGURE EDITOR] 背景色更新を親ウィンドウに通知:', this.realId, this.bgColor);
+                });
+                logger.debug('[FIGURE EDITOR] 背景色更新を親ウィンドウに通知:', this.realId, this.bgColor);
             }
 
             // this.currentFileを更新（再表示時に正しい色を適用するため）
@@ -7907,47 +8051,15 @@ class BasicFigureEditor extends window.PluginBase {
         }
     }
 
-    async handleCloseRequest(windowId) {
-        console.log('[FIGURE EDITOR] クローズ要求受信, isModified:', this.isModified);
-
-        if (this.isModified) {
-            // 編集中の場合、保存確認ダイアログを表示
-            const result = await this.showSaveConfirmDialog();
-            console.log('[FIGURE EDITOR] 保存確認ダイアログ結果:', result);
-
-            if (result === 'cancel') {
-                // 取消: クローズをキャンセル
-                this.respondCloseRequest(windowId, false);
-            } else if (result === 'no') {
-                // 保存しない: そのままクローズ
-                this.respondCloseRequest(windowId, true);
-            } else if (result === 'yes') {
-                // 保存: 保存してからクローズ
-                await this.saveFile();
-                this.isModified = false;
-                this.respondCloseRequest(windowId, true);
-            }
-        } else {
-            // 未編集の場合、そのままクローズ
-            this.respondCloseRequest(windowId, true);
-        }
-    }
-
     /**
-     * クローズ要求に応答
-     * @param {string} windowId - ウィンドウID
-     * @param {boolean} allowClose - クローズを許可するか
+     * クローズ前の保存処理フック（PluginBase共通ハンドラから呼ばれる）
+     * 「保存」が選択された時にファイルを保存
      */
-    respondCloseRequest(windowId, allowClose) {
-        console.log('[FIGURE EDITOR] クローズ応答送信, windowId:', windowId, ', allowClose:', allowClose);
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'window-close-response',
-                windowId: windowId,
-                allowClose: allowClose
-            }, '*');
-        }
+    async onSaveBeforeClose() {
+        await this.saveFile();
     }
+
+    // handleCloseRequest() と respondCloseRequest() は PluginBase で定義
 
     /**
      * ウィンドウを閉じるリクエストを送信
@@ -7958,11 +8070,10 @@ class BasicFigureEditor extends window.PluginBase {
             const windowElement = window.frameElement ? window.frameElement.closest('.window') : null;
             const windowId = windowElement ? windowElement.id : null;
 
-            if (windowId) {
-                window.parent.postMessage({
-                    type: 'close-window',
+            if (windowId && this.messageBus) {
+                this.messageBus.send('close-window', {
                     windowId: windowId
-                }, '*');
+                });
             }
         }
     }
@@ -7970,7 +8081,7 @@ class BasicFigureEditor extends window.PluginBase {
     // showSaveConfirmDialog() は基底クラス PluginBase で定義
 
     setStatus(message) {
-        console.log('[FIGURE EDITOR]', message);
+        logger.debug('[FIGURE EDITOR]', message);
         // ステータスバーがある場合はそこに表示
     }
 
@@ -7984,10 +8095,10 @@ class BasicFigureEditor extends window.PluginBase {
         const width = Math.abs(pixelmapShape.endX - pixelmapShape.startX);
         const height = Math.abs(pixelmapShape.endY - pixelmapShape.startY);
 
-        console.log('[FIGURE EDITOR] enterPixelmapMode 呼び出し - サイズ:', width, 'x', height, 'pixelmapShape:', pixelmapShape);
+        logger.debug('[FIGURE EDITOR] enterPixelmapMode 呼び出し - サイズ:', width, 'x', height, 'pixelmapShape:', pixelmapShape);
 
         if (width < 10 || height < 10) {
-            console.log('[FIGURE EDITOR] ピクセルマップ枠が小さすぎます。最小サイズ: 10x10ピクセル');
+            logger.debug('[FIGURE EDITOR] ピクセルマップ枠が小さすぎます。最小サイズ: 10x10ピクセル');
             // 小さすぎる枠は削除
             const index = this.shapes.indexOf(pixelmapShape);
             if (index > -1) {
@@ -8026,7 +8137,7 @@ class BasicFigureEditor extends window.PluginBase {
         this.showPixelmapToolPalette();
 
         this.redraw();
-        console.log('[FIGURE EDITOR] ピクセルマップモードに入りました - 編集対象:', this.editingPixelmap);
+        logger.debug('[FIGURE EDITOR] ピクセルマップモードに入りました - 編集対象:', this.editingPixelmap);
     }
 
     // ピクセルマップモードを抜ける
@@ -8047,15 +8158,15 @@ class BasicFigureEditor extends window.PluginBase {
         // 選択ツールに戻す
         this.currentTool = 'select';
         this.redraw();
-        console.log('[FIGURE EDITOR] ピクセルマップモードを抜けました');
+        logger.debug('[FIGURE EDITOR] ピクセルマップモードを抜けました');
     }
 
     // ピクセルマップ枠内でピクセル描画を行う
     handlePixelmapDraw(x, y) {
-        console.log('[FIGURE EDITOR] handlePixelmapDraw 呼び出し - 座標:', x, y, 'editingPixelmap:', this.editingPixelmap, 'pixelmapTool:', this.pixelmapTool);
+        logger.debug('[FIGURE EDITOR] handlePixelmapDraw 呼び出し - 座標:', x, y, 'editingPixelmap:', this.editingPixelmap, 'pixelmapTool:', this.pixelmapTool);
 
         if (!this.editingPixelmap || !this.editingPixelmap.imageData) {
-            console.log('[FIGURE EDITOR] handlePixelmapDraw: editingPixelmapまたはimageDataが無効');
+            logger.debug('[FIGURE EDITOR] handlePixelmapDraw: editingPixelmapまたはimageDataが無効');
             return;
         }
 
@@ -8067,17 +8178,17 @@ class BasicFigureEditor extends window.PluginBase {
         const localX = Math.floor(x - minX);
         const localY = Math.floor(y - minY);
 
-        console.log('[FIGURE EDITOR] ローカル座標:', localX, localY, 'ImageDataサイズ:', pixelmap.imageData.width, 'x', pixelmap.imageData.height);
+        logger.debug('[FIGURE EDITOR] ローカル座標:', localX, localY, 'ImageDataサイズ:', pixelmap.imageData.width, 'x', pixelmap.imageData.height);
 
         // 範囲外チェック
         if (localX < 0 || localY < 0 ||
             localX >= pixelmap.imageData.width ||
             localY >= pixelmap.imageData.height) {
-            console.log('[FIGURE EDITOR] 座標が範囲外');
+            logger.debug('[FIGURE EDITOR] 座標が範囲外');
             return;
         }
 
-        console.log('[FIGURE EDITOR] 描画ツール実行:', this.pixelmapTool);
+        logger.debug('[FIGURE EDITOR] 描画ツール実行:', this.pixelmapTool);
 
         // 画材ツールに応じた描画処理
         switch (this.pixelmapTool) {
@@ -8103,7 +8214,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         this.redraw();
         this.isModified = true;
-        console.log('[FIGURE EDITOR] 描画完了');
+        logger.debug('[FIGURE EDITOR] 描画完了');
     }
 
     // 単一ピクセルまたはブラシサイズでピクセルを描画
@@ -8247,7 +8358,7 @@ class BasicFigureEditor extends window.PluginBase {
         this.hidePixelmapToolPalette();
 
         if (!this.editingPixelmap) {
-            console.log('[FIGURE EDITOR] editingPixelmapが無効なため、パレットを表示できません');
+            logger.debug('[FIGURE EDITOR] editingPixelmapが無効なため、パレットを表示できません');
             return;
         }
 
@@ -8430,7 +8541,7 @@ class BasicFigureEditor extends window.PluginBase {
         palette.style.left = `${maxX + 10}px`;
         palette.style.top = `${minY}px`;
 
-        console.log('[FIGURE EDITOR] 画材ツールパレットを表示しました');
+        logger.debug('[FIGURE EDITOR] 画材ツールパレットを表示しました');
     }
 
     // 画材ツールパレットを非表示
@@ -8438,14 +8549,14 @@ class BasicFigureEditor extends window.PluginBase {
         const palette = document.getElementById('pixelmap-tool-palette');
         if (palette) {
             palette.remove();
-            console.log('[FIGURE EDITOR] 画材ツールパレットを非表示にしました');
+            logger.debug('[FIGURE EDITOR] 画材ツールパレットを非表示にしました');
         }
     }
 
     // 画材ツールを選択
     selectPixelmapTool(toolId) {
         this.pixelmapTool = toolId;
-        console.log('[FIGURE EDITOR] 画材ツール選択:', toolId);
+        logger.debug('[FIGURE EDITOR] 画材ツール選択:', toolId);
 
         // アクティブ状態を更新
         const buttons = document.querySelectorAll('.pixelmap-tool-btn');
@@ -8511,11 +8622,12 @@ class BasicFigureEditor extends window.PluginBase {
     async loadDataFileFromParent(fileName) {
         const messageId = `load-${Date.now()}-${Math.random()}`;
 
-        window.parent.postMessage({
-            type: 'load-data-file-request',
-            messageId: messageId,
-            fileName: fileName
-        }, '*');
+        if (this.messageBus) {
+            this.messageBus.send('load-data-file-request', {
+                messageId: messageId,
+                fileName: fileName
+            });
+        }
 
         try {
             const result = await this.messageBus.waitFor('load-data-file-response', window.DEFAULT_TIMEOUT_MS, (data) => {
@@ -8540,12 +8652,12 @@ class BasicFigureEditor extends window.PluginBase {
             // 実身IDを抽出してJSONファイル名を生成（共通メソッドを使用）
             const baseFileId = window.RealObjectSystem.extractRealId(virtualObj.link_id);
             const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(baseFileId);
-            console.log('[FIGURE EDITOR] メタデータ読み込み試行:', virtualObj.link_id, 'JSONファイル:', jsonFileName);
+            logger.debug('[FIGURE EDITOR] メタデータ読み込み試行:', virtualObj.link_id, 'JSONファイル:', jsonFileName);
 
             // 親ウィンドウのfileObjectsからJSONファイルを取得
             if (window.parent && window.parent.tadjsDesktop && window.parent.tadjsDesktop.fileObjects) {
                 const jsonFile = window.parent.tadjsDesktop.fileObjects[jsonFileName];
-                console.log('[FIGURE EDITOR] fileObjectsから検索:', jsonFileName, 'found:', !!jsonFile);
+                logger.debug('[FIGURE EDITOR] fileObjectsから検索:', jsonFileName, 'found:', !!jsonFile);
 
                 if (jsonFile) {
                     const jsonText = await jsonFile.text();
@@ -8555,10 +8667,10 @@ class BasicFigureEditor extends window.PluginBase {
                     virtualObj.applist = jsonData.applist || {};
                     virtualObj.metadata = jsonData;
                     virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
-                    console.log('[FIGURE EDITOR] メタデータ読み込み成功:', virtualObj.link_id, virtualObj.applist);
+                    logger.debug('[FIGURE EDITOR] メタデータ読み込み成功:', virtualObj.link_id, virtualObj.applist);
                 } else {
                     // JSONファイルが見つからない場合、Electron環境なら親ウィンドウ経由で読み込み
-                    console.log('[FIGURE EDITOR] fileObjectsに見つからない、親ウィンドウ経由で試行:', jsonFileName);
+                    logger.debug('[FIGURE EDITOR] fileObjectsに見つからない、親ウィンドウ経由で試行:', jsonFileName);
 
                     try {
                         const jsonFile = await this.loadDataFileFromParent(jsonFileName);
@@ -8567,9 +8679,9 @@ class BasicFigureEditor extends window.PluginBase {
                         virtualObj.applist = jsonData.applist || {};
                         virtualObj.metadata = jsonData;
                         virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
-                        console.log('[FIGURE EDITOR] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
+                        logger.debug('[FIGURE EDITOR] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
                     } catch (parentError) {
-                        console.log('[FIGURE EDITOR] 親ウィンドウ経由で失敗、HTTP fetchにフォールバック:', parentError.message);
+                        logger.debug('[FIGURE EDITOR] 親ウィンドウ経由で失敗、HTTP fetchにフォールバック:', parentError.message);
 
                         // HTTP fetchにフォールバック
                         const urlsToTry = [
@@ -8585,7 +8697,7 @@ class BasicFigureEditor extends window.PluginBase {
 
                         let found = false;
                         for (const jsonUrl of urlsToTry) {
-                            console.log('[FIGURE EDITOR] Fetch URL試行:', jsonUrl);
+                            logger.debug('[FIGURE EDITOR] Fetch URL試行:', jsonUrl);
                             const response = await fetch(jsonUrl);
 
                             if (response.ok) {
@@ -8593,21 +8705,21 @@ class BasicFigureEditor extends window.PluginBase {
                                 virtualObj.applist = jsonData.applist || {};
                                 virtualObj.metadata = jsonData;
                                 virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
-                                console.log('[FIGURE EDITOR] メタデータ読み込み成功（HTTP）:', jsonUrl, virtualObj.applist);
+                                logger.debug('[FIGURE EDITOR] メタデータ読み込み成功（HTTP）:', jsonUrl, virtualObj.applist);
                                 found = true;
                                 break;
                             }
                         }
 
                         if (!found) {
-                            console.log('[FIGURE EDITOR] JSONファイルなし（すべてのパスで404）:', virtualObj.link_id);
+                            logger.debug('[FIGURE EDITOR] JSONファイルなし（すべてのパスで404）:', virtualObj.link_id);
                             virtualObj.applist = {};
                         }
                     }
                 }
             } else {
                 // 親ウィンドウのfileObjectsにアクセスできない場合（親ウィンドウ経由で読み込み）
-                console.log('[FIGURE EDITOR] 親ウィンドウのfileObjectsにアクセスできない、親ウィンドウ経由で読み込み');
+                logger.debug('[FIGURE EDITOR] 親ウィンドウのfileObjectsにアクセスできない、親ウィンドウ経由で読み込み');
 
                 try {
                     const jsonFile = await this.loadDataFileFromParent(jsonFileName);
@@ -8616,14 +8728,14 @@ class BasicFigureEditor extends window.PluginBase {
                     virtualObj.applist = jsonData.applist || {};
                     virtualObj.metadata = jsonData;
                     virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
-                    console.log('[FIGURE EDITOR] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
+                    logger.debug('[FIGURE EDITOR] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
                 } catch (error) {
-                    console.log('[FIGURE EDITOR] メタデータ読み込み失敗:', virtualObj.link_id, error.message);
+                    logger.debug('[FIGURE EDITOR] メタデータ読み込み失敗:', virtualObj.link_id, error.message);
                     virtualObj.applist = {};
                 }
             }
         } catch (error) {
-            console.log('[FIGURE EDITOR] メタデータ読み込みエラー:', virtualObj.link_id, error);
+            logger.debug('[FIGURE EDITOR] メタデータ読み込みエラー:', virtualObj.link_id, error);
             virtualObj.applist = {};
         }
     }
@@ -8637,7 +8749,7 @@ class BasicFigureEditor extends window.PluginBase {
      */
     async expandVirtualObject(vobjElement, shape, options = {}) {
         const virtualObject = shape.virtualObject;
-        console.log('[FIGURE EDITOR] 開いた仮身の展開開始:', virtualObject.link_name);
+        logger.debug('[FIGURE EDITOR] 開いた仮身の展開開始:', virtualObject.link_name);
 
         // 展開フラグを設定（renderVirtualObjectsAsElementsによる中断を防ぐ）
         this.isExpandingVirtualObject = true;
@@ -8645,32 +8757,32 @@ class BasicFigureEditor extends window.PluginBase {
         try {
             // 実身IDを取得
             const linkId = virtualObject.link_id;
-            console.log('[FIGURE EDITOR] linkId:', linkId);
+            logger.debug('[FIGURE EDITOR] linkId:', linkId);
             // 実身IDを抽出（共通メソッドを使用）
             const realId = window.RealObjectSystem.extractRealId(linkId);
-            console.log('[FIGURE EDITOR] 抽出されたrealId:', realId);
-            console.log('[FIGURE EDITOR] レコード番号削除後（最終的な実身ID）:', realId);
+            logger.debug('[FIGURE EDITOR] 抽出されたrealId:', realId);
+            logger.debug('[FIGURE EDITOR] レコード番号削除後（最終的な実身ID）:', realId);
 
             // 1. defaultOpenプラグインを取得
             const defaultOpenPlugin = this.getDefaultOpenPlugin(virtualObject);
             if (!defaultOpenPlugin) {
-                console.warn('[FIGURE EDITOR] defaultOpenプラグインが見つかりません');
+                logger.warn('[FIGURE EDITOR] defaultOpenプラグインが見つかりません');
                 return null;
             }
-            console.log('[FIGURE EDITOR] defaultOpenプラグイン:', defaultOpenPlugin);
+            logger.debug('[FIGURE EDITOR] defaultOpenプラグイン:', defaultOpenPlugin);
 
             // 2. 実身データを読み込む
             const realObjectData = await this.loadRealObjectData(realId);
             if (!realObjectData) {
-                console.warn('[FIGURE EDITOR] 実身データの読み込みに失敗しました, realId:', realId);
+                logger.warn('[FIGURE EDITOR] 実身データの読み込みに失敗しました, realId:', realId);
                 return null;
             }
-            console.log('[FIGURE EDITOR] 実身データ読み込み完了:', realObjectData);
+            logger.debug('[FIGURE EDITOR] 実身データ読み込み完了:', realObjectData);
 
             // 3. コンテンツ領域を取得
             const contentArea = vobjElement.querySelector('.virtual-object-content-area');
             if (!contentArea) {
-                console.error('[FIGURE EDITOR] コンテンツ領域が見つかりません');
+                logger.error('[FIGURE EDITOR] コンテンツ領域が見つかりません');
                 return null;
             }
 
@@ -8704,7 +8816,7 @@ class BasicFigureEditor extends window.PluginBase {
 
             // iframeロード後にデータを送信（load-virtual-objectメッセージ形式）
             iframe.addEventListener('load', () => {
-                console.log('[FIGURE EDITOR] iframe読み込み完了、プラグインにload-virtual-objectメッセージ送信');
+                logger.debug('[FIGURE EDITOR] iframe読み込み完了、プラグインにload-virtual-objectメッセージ送信');
                 iframe.contentWindow.postMessage({
                     type: 'load-virtual-object',
                     virtualObj: virtualObject,
@@ -8713,18 +8825,18 @@ class BasicFigureEditor extends window.PluginBase {
                     readonly: options.readonly !== false,
                     noScrollbar: options.noScrollbar !== false
                 }, '*');
-                console.log('[FIGURE EDITOR] 開いた仮身表示にデータを送信:', { virtualObject, realObjectData, bgcol, readonly: options.readonly !== false, noScrollbar: options.noScrollbar !== false });
+                logger.debug('[FIGURE EDITOR] 開いた仮身表示にデータを送信:', { virtualObject, realObjectData, bgcol, readonly: options.readonly !== false, noScrollbar: options.noScrollbar !== false });
             });
 
             contentArea.appendChild(iframe);
-            console.log('[FIGURE EDITOR] iframe追加完了');
+            logger.debug('[FIGURE EDITOR] iframe追加完了');
 
             // shapeにiframeへの参照を保存
             shape.expandedElement = iframe;
 
             return iframe;
         } catch (error) {
-            console.error('[FIGURE EDITOR] expandVirtualObject エラー:', error);
+            logger.error('[FIGURE EDITOR] expandVirtualObject エラー:', error);
             return null;
         } finally {
             // 展開フラグをリセット
@@ -8778,7 +8890,7 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         shape.expanded = false;
-        console.log('[FIGURE EDITOR] 仮身を通常表示に戻す:', shape.virtualObject.link_name);
+        logger.debug('[FIGURE EDITOR] 仮身を通常表示に戻す:', shape.virtualObject.link_name);
 
         // コンテンツ領域内のiframeを削除
         if (shape.vobjElement) {
@@ -8826,7 +8938,7 @@ class BasicFigureEditor extends window.PluginBase {
 
         this.resizePreviewBox = previewBox;
 
-        console.log('[FIGURE EDITOR] リサイズプレビュー枠を作成しました');
+        logger.debug('[FIGURE EDITOR] リサイズプレビュー枠を作成しました');
     }
 
     /**
@@ -8834,7 +8946,7 @@ class BasicFigureEditor extends window.PluginBase {
      */
     updateResizePreviewBox(shape) {
         if (!this.resizePreviewBox) {
-            console.warn('[FIGURE EDITOR] リサイズプレビュー枠が存在しません');
+            logger.warn('[FIGURE EDITOR] リサイズプレビュー枠が存在しません');
             return;
         }
 
@@ -8862,7 +8974,7 @@ class BasicFigureEditor extends window.PluginBase {
         if (this.resizePreviewBox && this.resizePreviewBox.parentNode) {
             this.resizePreviewBox.parentNode.removeChild(this.resizePreviewBox);
             this.resizePreviewBox = null;
-            console.log('[FIGURE EDITOR] リサイズプレビュー枠を削除しました');
+            logger.debug('[FIGURE EDITOR] リサイズプレビュー枠を削除しました');
         }
     }
 
@@ -8871,95 +8983,28 @@ class BasicFigureEditor extends window.PluginBase {
      */
     async preloadVirtualObjectIcons() {
         if (!this.virtualObjectRenderer) {
-            console.log('[FIGURE EDITOR] VirtualObjectRendererが利用できないため、アイコン事前読み込みをスキップ');
+            logger.debug('[FIGURE EDITOR] VirtualObjectRendererが利用できないため、アイコン事前読み込みをスキップ');
             return;
         }
 
         const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'vobj' && shape.virtualObject && shape.virtualObject.link_id);
-        console.log('[FIGURE EDITOR] 仮身のアイコンを事前読み込み開始:', virtualObjectShapes.length, '個');
+        logger.debug('[FIGURE EDITOR] 仮身のアイコンを事前読み込み開始:', virtualObjectShapes.length, '個');
 
         const iconLoadPromises = virtualObjectShapes.map(async (shape) => {
             const realId = shape.virtualObject.link_id.replace(/_\d+\.xtad$/i, '');
             try {
-                const iconData = await this.loadIconFromParent(realId);
+                const iconData = await this.iconManager.loadIcon(realId);
                 if (iconData) {
                     await this.virtualObjectRenderer.loadIconToCache(realId, iconData);
-                    console.log('[FIGURE EDITOR] アイコンをキャッシュに読み込み:', realId);
+                    logger.debug('[FIGURE EDITOR] アイコンをキャッシュに読み込み:', realId);
                 }
             } catch (error) {
-                console.error('[FIGURE EDITOR] アイコン読み込みエラー:', realId, error);
+                logger.error('[FIGURE EDITOR] アイコン読み込みエラー:', realId, error);
             }
         });
 
         await Promise.all(iconLoadPromises);
-        console.log('[FIGURE EDITOR] 仮身のアイコン事前読み込み完了');
-    }
-
-    /**
-     * アイコンファイルを親ウィンドウ経由で読み込む
-     * @param {string} realId - 実身ID
-     * @returns {Promise<string|null>} Base64エンコードされたアイコンデータ、またはnull
-     */
-    async loadIconFromParent(realId) {
-        // キャッシュをチェック
-        if (this.iconCache.has(realId)) {
-            const cachedData = this.iconCache.get(realId);
-            console.log('[FIGURE EDITOR] アイコンキャッシュヒット:', realId, 'データあり:', !!cachedData);
-            return cachedData;
-        }
-
-        console.log('[FIGURE EDITOR] アイコンキャッシュミス、親ウィンドウに要求:', realId);
-
-        const messageId = `icon-${realId}-${Date.now()}`;
-        this.messageBus.send('read-icon-file', {
-            realId: realId,
-            messageId: messageId
-        });
-
-        try {
-            // フィルタを使用して、このリクエストに対応するレスポンスだけを受け取る
-            const result = await this.messageBus.waitFor('icon-file-loaded', window.ICON_LOAD_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-
-            if (result.success && result.filePath) {
-                // Electron環境の場合、パスからファイルを読み込む
-                if (typeof require !== 'undefined') {
-                    try {
-                        const fs = require('fs');
-                        const buffer = fs.readFileSync(result.filePath);
-                        const base64 = buffer.toString('base64');
-                        // VirtualObjectRendererが data:image/x-icon;base64, を追加するので、ここでは Base64 のみ返す
-
-                        // キャッシュに保存
-                        this.iconCache.set(realId, base64);
-                        console.log('[FIGURE EDITOR] アイコン読み込み成功（親から）:', realId, 'パス:', result.filePath);
-                        return base64;
-                    } catch (error) {
-                        console.error('[FIGURE EDITOR] アイコンファイル読み込みエラー:', realId, error);
-                        this.iconCache.set(realId, null);
-                        return null;
-                    }
-                } else {
-                    console.error('[FIGURE EDITOR] require not available (not in Electron environment)');
-                    this.iconCache.set(realId, null);
-                    return null;
-                }
-            } else {
-                // アイコンが存在しない場合はnullを返す
-                this.iconCache.set(realId, null);
-                console.log('[FIGURE EDITOR] アイコン読み込み失敗（親から）:', realId);
-                return null;
-            }
-        } catch (error) {
-            // タイムアウト（アイコンがない場合も多いのでnullを返す）
-            console.log('[FIGURE EDITOR] アイコン読み込みタイムアウト:', realId);
-            // キャッシュにまだ入っていない場合のみnullをセット
-            if (!this.iconCache.has(realId)) {
-                this.iconCache.set(realId, null);
-            }
-            return null;
-        }
+        logger.debug('[FIGURE EDITOR] 仮身のアイコン事前読み込み完了');
     }
 
     /**
@@ -8981,6 +9026,10 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
+        // Canvas要素のz-indexを0に設定
+        // 背景化図形（z-index < 0）はCanvasより背面、通常図形（z-index > 0）はCanvasより前面
+        this.canvas.style.zIndex = '0';
+
         // 仮身図形をフィルタ
         const virtualObjectShapes = this.shapes.filter(shape =>
             shape.type === 'vobj' && shape.virtualObject
@@ -8994,7 +9043,7 @@ class BasicFigureEditor extends window.PluginBase {
         existingElements.forEach(el => {
             const linkId = el.dataset.linkId;
             if (!linkId || !validLinkIds.has(linkId)) {
-                console.log('[FIGURE EDITOR] 不要な仮身DOM要素を削除:', linkId);
+                logger.debug('[FIGURE EDITOR] 不要な仮身DOM要素を削除:', linkId);
                 el.remove();
             }
         });
@@ -9003,26 +9052,29 @@ class BasicFigureEditor extends window.PluginBase {
         virtualObjectShapes.forEach(shape => {
             // 既にDOM要素が存在し、親ノードにも接続されている場合は、位置とサイズのみ更新
             if (shape.vobjElement && shape.vobjElement.parentNode) {
-                console.log('[FIGURE EDITOR] 既存の仮身DOM要素を再利用:', shape.virtualObject.link_name, 'vobjElement:', !!shape.vobjElement, 'parentNode:', !!shape.vobjElement.parentNode);
+                logger.debug('[FIGURE EDITOR] 既存の仮身DOM要素を再利用:', shape.virtualObject.link_name, 'vobjElement:', !!shape.vobjElement, 'parentNode:', !!shape.vobjElement.parentNode);
                 const width = shape.endX - shape.startX;
                 const height = shape.endY - shape.startY;
 
-                // 位置とサイズが変わっている場合のみ更新
+                // 位置、サイズ、z-indexが変わっている場合は更新
                 const currentLeft = parseInt(shape.vobjElement.style.left) || 0;
                 const currentTop = parseInt(shape.vobjElement.style.top) || 0;
                 const currentWidth = parseInt(shape.vobjElement.style.width) || 0;
                 const currentHeight = parseInt(shape.vobjElement.style.height) || 0;
+                const currentZIndex = parseInt(shape.vobjElement.style.zIndex) || 0;
+                const newZIndex = shape.zIndex !== null && shape.zIndex !== undefined ? shape.zIndex : 0;
 
                 if (currentLeft !== shape.startX || currentTop !== shape.startY ||
-                    currentWidth !== width || currentHeight !== height) {
+                    currentWidth !== width || currentHeight !== height || currentZIndex !== newZIndex) {
                     shape.vobjElement.style.left = shape.startX + 'px';
                     shape.vobjElement.style.top = shape.startY + 'px';
                     shape.vobjElement.style.width = width + 'px';
                     shape.vobjElement.style.height = height + 'px';
+                    shape.vobjElement.style.zIndex = String(newZIndex);
                 }
             } else {
                 // DOM要素が存在しない場合のみ新規作成
-                console.log('[FIGURE EDITOR] 新しい仮身DOM要素を作成:', shape.virtualObject.link_name, 'vobjElement:', !!shape.vobjElement, 'parentNode:', shape.vobjElement ? !!shape.vobjElement.parentNode : 'N/A');
+                logger.debug('[FIGURE EDITOR] 新しい仮身DOM要素を作成:', shape.virtualObject.link_name, 'vobjElement:', !!shape.vobjElement, 'parentNode:', shape.vobjElement ? !!shape.vobjElement.parentNode : 'N/A');
                 this.renderVirtualObjectElement(shape);
             }
         });
@@ -9032,10 +9084,10 @@ class BasicFigureEditor extends window.PluginBase {
      * 個別の仮身をDOM要素として描画
      */
     renderVirtualObjectElement(shape) {
-        console.log('[FIGURE EDITOR] ★ renderVirtualObjectElement 開始:', shape.virtualObject?.link_name);
+        logger.debug('[FIGURE EDITOR] ★ renderVirtualObjectElement 開始:', shape.virtualObject?.link_name);
 
         if (!this.virtualObjectRenderer) {
-            console.warn('[FIGURE EDITOR] VirtualObjectRenderer not available');
+            logger.warn('[FIGURE EDITOR] VirtualObjectRenderer not available');
             return;
         }
 
@@ -9056,16 +9108,16 @@ class BasicFigureEditor extends window.PluginBase {
         // 開いた仮身と閉じた仮身を判定
         const isOpenVirtualObj = this.virtualObjectRenderer.isOpenedVirtualObject(virtualObjectWithPos);
 
-        console.log('[FIGURE EDITOR] 仮身判定:', virtualObject.link_name, '高さ:', height, '開いた仮身:', isOpenVirtualObj);
+        logger.debug('[FIGURE EDITOR] 仮身判定:', virtualObject.link_name, '高さ:', height, '開いた仮身:', isOpenVirtualObj);
 
         // VirtualObjectRendererを使用してDOM要素を作成
         // アイコンは親ウィンドウ経由で読み込む
         const vobjElement = this.virtualObjectRenderer.createBlockElement(virtualObjectWithPos, {
-            loadIconCallback: (realId) => this.loadIconFromParent(realId)
+            loadIconCallback: (realId) => this.iconManager.loadIcon(realId)
         });
 
         if (!vobjElement) {
-            console.warn('[FIGURE EDITOR] Failed to create virtual object element');
+            logger.warn('[FIGURE EDITOR] Failed to create virtual object element');
             return;
         }
 
@@ -9079,11 +9131,14 @@ class BasicFigureEditor extends window.PluginBase {
         vobjElement.style.width = width + 'px';
         vobjElement.style.height = height + 'px';
         vobjElement.style.cursor = 'move';
-        vobjElement.style.zIndex = '100';
+        // z-indexをshapeのzIndexプロパティから設定
+        // Canvasのz-indexは0なので、負の値はCanvasより背面、正の値は前面になる
+        const zIndex = shape.zIndex !== null && shape.zIndex !== undefined ? shape.zIndex : 1;
+        vobjElement.style.zIndex = String(zIndex);
 
         // draggable属性をtrueに設定（クロスウィンドウドラッグ用）
         vobjElement.setAttribute('draggable', 'true');
-        console.log('[FIGURE EDITOR] vobjElement初期化: draggable=true, link_name=' + virtualObject.link_name);
+        logger.debug('[FIGURE EDITOR] vobjElement初期化: draggable=true, link_name=' + virtualObject.link_name);
 
         // 仮身要素自体のテキスト選択を無効化（文字部分のドラッグ時の問題を防止）
         vobjElement.style.userSelect = 'none';
@@ -9106,7 +9161,7 @@ class BasicFigureEditor extends window.PluginBase {
                 el.style.webkitUserDrag = 'none';
             }
         });
-        console.log('[FIGURE EDITOR] 仮身内部要素のドラッグを無効化:', allInnerElements.length, '個の要素');
+        logger.debug('[FIGURE EDITOR] 仮身内部要素のドラッグを無効化:', allInnerElements.length, '個の要素');
 
         // データ属性を設定（shape特定用）
         vobjElement.dataset.shapeId = this.shapes.indexOf(shape);
@@ -9180,11 +9235,11 @@ class BasicFigureEditor extends window.PluginBase {
 
         // 新しいハンドラーを定義
         const mousedownHandler = (e) => {
-            console.log('[FIGURE EDITOR] vobjElement mousedown: button=' + e.button + ', draggable=' + vobjElement.getAttribute('draggable'));
+            logger.debug('[FIGURE EDITOR] vobjElement mousedown: button=' + e.button + ', draggable=' + vobjElement.getAttribute('draggable'));
 
             // ドラッグクールダウン中は処理をスキップ
             if (this.dragCooldown) {
-                console.log('[FIGURE EDITOR] ドラッグクールダウン中のため処理をスキップ');
+                logger.debug('[FIGURE EDITOR] ドラッグクールダウン中のため処理をスキップ');
                 return;
             }
 
@@ -9195,17 +9250,15 @@ class BasicFigureEditor extends window.PluginBase {
 
             // 前回のクリックから300ms以内かつ同じ仮身の場合、ダブルクリック候補（左クリックのみ）
             if (timeSinceLastClick < 300 && isSameShape && e.button === 0) {
-                console.log('[FIGURE EDITOR] ダブルクリック候補を検出:', virtualObject.link_name);
-                this.dblClickDragState.isDblClickDragCandidate = true;
+                logger.debug('[FIGURE EDITOR] ダブルクリック候補を検出:', virtualObject.link_name);
+                this.setDoubleClickDragCandidate(vobjElement, e);  // 共通メソッド使用
+                // プラグイン固有のプロパティ設定
                 this.dblClickDragState.dblClickedShape = shape;
-                this.dblClickDragState.dblClickedElement = vobjElement;
-                this.dblClickDragState.startX = e.clientX;
-                this.dblClickDragState.startY = e.clientY;
 
                 // 一時的にdraggableをfalseにして、ブラウザの自動ドラッグを防ぐ
                 // これにより、mouseupイベントが確実に発火する
                 vobjElement.setAttribute('draggable', 'false');
-                console.log('[FIGURE EDITOR] draggable=false に設定（ダブルクリック候補）');
+                logger.debug('[FIGURE EDITOR] draggable=false に設定（ダブルクリック候補）');
             } else {
                 // 通常のクリック：時刻と図形を記録（全てのボタンで記録）
 
@@ -9214,9 +9267,9 @@ class BasicFigureEditor extends window.PluginBase {
                     this.dblClickDragState.dblClickedElement.setAttribute('draggable', 'true');
                 }
 
-                this.dblClickDragState.lastClickTime = now;
+                this.resetDoubleClickTimer();  // 共通メソッド使用
+                // プラグイン固有のプロパティ設定
                 this.dblClickDragState.lastClickedShape = shape;
-                this.dblClickDragState.isDblClickDragCandidate = false;
             }
 
             // 読み取り専用モードの場合は、ドラッグとリサイズを無効化（ダブルクリックは許可）
@@ -9250,13 +9303,13 @@ class BasicFigureEditor extends window.PluginBase {
                         this.selectedShapes = [shape];
                     }
                     this.redraw();
-                    console.log('[FIGURE EDITOR] 仮身を選択:', virtualObject.link_name, '選択数:', this.selectedShapes.length);
+                    logger.debug('[FIGURE EDITOR] 仮身を選択:', virtualObject.link_name, '選択数:', this.selectedShapes.length);
                 } else if (e.button === 2) {
                     // 右クリックの場合、未選択の仮身のみ選択（複数選択を維持するため）
                     if (!isAlreadySelected) {
                         this.selectedShapes = [shape];
                         this.redraw();
-                        console.log('[FIGURE EDITOR] 右クリックで未選択の仮身を選択:', virtualObject.link_name);
+                        logger.debug('[FIGURE EDITOR] 右クリックで未選択の仮身を選択:', virtualObject.link_name);
                     }
                 }
             }
@@ -9311,7 +9364,7 @@ class BasicFigureEditor extends window.PluginBase {
 
             // クリーンアップ関数（mouseup/dragstart/dragendから呼び出し）
             const cleanupHandlers = () => {
-                console.log('[FIGURE EDITOR] クリーンアップ: ハンドラ削除、状態リセット');
+                logger.debug('[FIGURE EDITOR] クリーンアップ: ハンドラ削除、状態リセット');
                 document.removeEventListener('mousemove', mousemoveHandler);
                 document.removeEventListener('mouseup', mouseupHandler);
                 if (vobjElement._handlerTimeout) {
@@ -9324,10 +9377,10 @@ class BasicFigureEditor extends window.PluginBase {
             };
 
             const mouseupHandler = (upEvent) => {
-                console.log('[FIGURE EDITOR] 要素レベルmouseup: button=' + upEvent.button + ', hasMoved=' + this.dragState.hasMoved + ', _dragStarted=' + vobjElement._dragStarted);
+                logger.debug('[FIGURE EDITOR] 要素レベルmouseup: button=' + upEvent.button + ', hasMoved=' + this.dragState.hasMoved + ', _dragStarted=' + vobjElement._dragStarted);
 
                 // 左+右同時押しのコピーモード検出はdragstartで行うため、ここでは常にクリーンアップを実行
-                console.log('[FIGURE EDITOR] 要素レベルmouseup: ハンドラ削除、状態リセット');
+                logger.debug('[FIGURE EDITOR] 要素レベルmouseup: ハンドラ削除、状態リセット');
                 cleanupHandlers();
 
                 // ダブルクリック検出とドラッグ処理はdocument-levelのmouseupハンドラで処理される
@@ -9342,12 +9395,18 @@ class BasicFigureEditor extends window.PluginBase {
 
             // フェイルセーフ: 5秒後に強制的にクリーンアップ（dragstartでmouseupが発火しない場合の対策）
             vobjElement._handlerTimeout = setTimeout(() => {
-                console.log('[FIGURE EDITOR] タイムアウト: 強制的にハンドラをクリーンアップ');
+                logger.debug('[FIGURE EDITOR] タイムアウト: 強制的にハンドラをクリーンアップ');
                 cleanupHandlers();
             }, 5000);
 
-            console.log('[FIGURE EDITOR] mousedown/mousemove/mouseupイベントリスナーを登録:', virtualObject.link_name);
+            logger.debug('[FIGURE EDITOR] mousedown/mousemove/mouseupイベントリスナーを登録:', virtualObject.link_name);
         };
+
+        // 重複登録を防ぐため、既存のハンドラーをクリーンアップ
+        if (vobjElement._mousedownHandler) {
+            vobjElement.removeEventListener('mousedown', vobjElement._mousedownHandler);
+            vobjElement._mousedownHandler = null;
+        }
 
         // ハンドラーを登録して参照を保存
         vobjElement.addEventListener('mousedown', mousedownHandler);
@@ -9362,17 +9421,17 @@ class BasicFigureEditor extends window.PluginBase {
 
         // 新しいハンドラーを定義
         const dragstartHandler = (e) => {
-            console.log('[FIGURE EDITOR] dragstart: buttons=' + e.buttons + ', isDblClickDragCandidate=' + this.dblClickDragState.isDblClickDragCandidate + ', isDblClickDrag=' + this.dblClickDragState.isDblClickDrag);
+            logger.debug('[FIGURE EDITOR] dragstart: buttons=' + e.buttons + ', isDblClickDragCandidate=' + this.dblClickDragState.isDblClickDragCandidate + ', isDblClickDrag=' + this.dblClickDragState.isDblClickDrag);
 
             // mousedownで登録したハンドラをクリーンアップ（dragstartが発火するとmouseupが発火しないため）
             if (vobjElement._cleanupMouseHandlers) {
-                console.log('[FIGURE EDITOR] dragstart: mousedownハンドラをクリーンアップ');
+                logger.debug('[FIGURE EDITOR] dragstart: mousedownハンドラをクリーンアップ');
                 vobjElement._cleanupMouseHandlers();
             }
 
             // ダブルクリック+ドラッグ候補またはダブルクリック+ドラッグ中の場合は通常のドラッグを抑制
             if (this.dblClickDragState.isDblClickDragCandidate || this.dblClickDragState.isDblClickDrag) {
-                console.log('[FIGURE EDITOR] ダブルクリック+ドラッグ検出、通常のドラッグを抑制');
+                logger.debug('[FIGURE EDITOR] ダブルクリック+ドラッグ検出、通常のドラッグを抑制');
                 e.preventDefault();
                 return;
             }
@@ -9386,7 +9445,7 @@ class BasicFigureEditor extends window.PluginBase {
             // 左+右同時押し検出（e.buttons: 1=左, 2=右, 3=左+右）
             if (e.buttons === 3) {
                 this.dragState.dragMode = 'copy';
-                console.log('[FIGURE EDITOR] 左+右同時押し検出、コピーモードに変更');
+                logger.debug('[FIGURE EDITOR] 左+右同時押し検出、コピーモードに変更');
             }
 
             // 選択中の仮身を取得（複数選択ドラッグのサポート）
@@ -9397,7 +9456,7 @@ class BasicFigureEditor extends window.PluginBase {
                 ? selectedVirtualObjectShapes
                 : [shape];
 
-            console.log('[FIGURE EDITOR] ドラッグ開始: ', shapesToDrag.length, '個の仮身');
+            logger.debug('[FIGURE EDITOR] ドラッグ開始: ', shapesToDrag.length, '個の仮身');
 
             // 各仮身のドラッグデータを準備
             const virtualObjects = shapesToDrag.map(s => {
@@ -9445,7 +9504,14 @@ class BasicFigureEditor extends window.PluginBase {
         vobjElement._dragstartHandler = dragstartHandler;
 
         // mouseupイベント（ドラッグキャンセル、draggableを無効化）
-        vobjElement.addEventListener('mouseup', (_e) => {
+        // 重複登録を防ぐため、既存のハンドラーをクリーンアップ
+        if (vobjElement._mouseupHandler) {
+            vobjElement.removeEventListener('mouseup', vobjElement._mouseupHandler);
+            vobjElement._mouseupHandler = null;
+        }
+
+        // 新しいハンドラーを定義
+        const mouseupHandler = (_e) => {
             // タイムアウトをクリア（draggable有効化をキャンセル）
             if (vobjElement._draggableTimeout) {
                 clearTimeout(vobjElement._draggableTimeout);
@@ -9460,7 +9526,11 @@ class BasicFigureEditor extends window.PluginBase {
             if (!this.isDraggingVirtualObjectShape) {
                 this.draggingVirtualObjectShape = null;
             }
-        });
+        };
+
+        // ハンドラーを登録して参照を保存
+        vobjElement.addEventListener('mouseup', mouseupHandler);
+        vobjElement._mouseupHandler = mouseupHandler;
 
         // dragendイベント
         // 重複登録を防ぐため、既存のハンドラーをクリーンアップ
@@ -9473,7 +9543,7 @@ class BasicFigureEditor extends window.PluginBase {
         const dragendHandler = () => {
             // mousedownで登録したハンドラをクリーンアップ（バックアップとして）
             if (vobjElement._cleanupMouseHandlers) {
-                console.log('[FIGURE EDITOR] dragend: mousedownハンドラをクリーンアップ（バックアップ）');
+                logger.debug('[FIGURE EDITOR] dragend: mousedownハンドラをクリーンアップ（バックアップ）');
                 vobjElement._cleanupMouseHandlers();
             }
 
@@ -9487,7 +9557,7 @@ class BasicFigureEditor extends window.PluginBase {
             setTimeout(() => {
                 vobjElement.style.pointerEvents = 'auto';
                 vobjElement.setAttribute('draggable', 'true');
-                console.log('[FIGURE EDITOR] dragend後のpointer-eventsとdraggableを復元');
+                logger.debug('[FIGURE EDITOR] dragend後のpointer-eventsとdraggableを復元');
             }, 100);
 
             // ドラッグクールダウンを設定（連続ドラッグ防止）
@@ -9497,8 +9567,12 @@ class BasicFigureEditor extends window.PluginBase {
             }
             this.dragCooldownTimeout = setTimeout(() => {
                 this.dragCooldown = false;
-                console.log('[FIGURE EDITOR] ドラッグクールダウン解除');
+                logger.debug('[FIGURE EDITOR] ドラッグクールダウン解除');
             }, 200);
+
+            // ドラッグモードをリセット（次のドラッグのため）
+            this.dragState.dragMode = 'move';
+            logger.debug('[FIGURE EDITOR] dragend: dragModeをmoveにリセット');
 
             // タイムアウトを設定（2秒以内にcross-window-drop-successが来なければリセット）
             if (this.virtualObjectDragTimeout) {
@@ -9532,12 +9606,12 @@ class BasicFigureEditor extends window.PluginBase {
             if (this.dblClickDragState.dblClickedElement) {
                 this.dblClickDragState.dblClickedElement.setAttribute('draggable', 'true');
             }
-            this.dblClickDragState.isDblClickDragCandidate = false;
-            this.dblClickDragState.isDblClickDrag = false;
-            this.dblClickDragState.dblClickedShape = null;
-            this.dblClickDragState.dblClickedElement = null;
+            // 共通メソッドでクリーンアップ
+            this.cleanupDblClickDragState();
+            // プラグイン固有のクリーンアップ
             this.dblClickDragState.lastClickTime = 0; // ダブルクリック検出をリセット
             this.dblClickDragState.lastClickedShape = null;
+            this.dblClickDragState.dblClickedShape = null;
             // プレビュー要素を削除
             if (this.dblClickDragState.previewElement) {
                 this.dblClickDragState.previewElement.remove();
@@ -9549,7 +9623,7 @@ class BasicFigureEditor extends window.PluginBase {
                 if (!this.selectedShapes.includes(shape)) {
                     this.selectedShapes = [shape];
                     this.redraw();
-                    console.log('[FIGURE EDITOR] 右クリックで仮身を選択:', virtualObject.link_name);
+                    logger.debug('[FIGURE EDITOR] 右クリックで仮身を選択:', virtualObject.link_name);
                 }
 
                 // 実身IDを抽出（共通メソッドを使用）
@@ -9561,19 +9635,24 @@ class BasicFigureEditor extends window.PluginBase {
                     realId: realId,
                     virtualObj: virtualObject
                 };
-                console.log('[FIGURE EDITOR] contextMenuVirtualObject設定完了:', this.contextMenuVirtualObject);
+                logger.debug('[FIGURE EDITOR] contextMenuVirtualObject設定完了:', this.contextMenuVirtualObject);
 
                 // 親ウィンドウにコンテキストメニュー要求を送信
-                if (window.parent && window.parent !== window) {
+                if (this.messageBus) {
                     const rect = window.frameElement.getBoundingClientRect();
-                    window.parent.postMessage({
-                        type: 'context-menu-request',
+                    this.messageBus.send('context-menu-request', {
                         x: rect.left + e.clientX,
                         y: rect.top + e.clientY
-                    }, '*');
+                    });
                 }
             }
         };
+
+        // 重複登録を防ぐため、既存のハンドラーをクリーンアップ
+        if (vobjElement._contextmenuHandler) {
+            vobjElement.removeEventListener('contextmenu', vobjElement._contextmenuHandler);
+            vobjElement._contextmenuHandler = null;
+        }
 
         // ハンドラーを登録して参照を保存
         vobjElement.addEventListener('contextmenu', contextmenuHandler);
@@ -9589,12 +9668,12 @@ class BasicFigureEditor extends window.PluginBase {
         } else {
             document.body.appendChild(vobjElement);
         }
-        console.log('[FIGURE EDITOR] ★ renderVirtualObjectElement 完了、DOMに追加:', virtualObject.link_name);
+        logger.debug('[FIGURE EDITOR] ★ renderVirtualObjectElement 完了、DOMに追加:', virtualObject.link_name);
 
         // 開いた仮身の場合、展開処理を実行（まだ展開されていない場合のみ）
         // 展開試行済み（expanded）またはエラー発生済み（expandError）の場合はスキップ
         if (isOpenVirtualObj && !shape.expanded && !shape.expandError) {
-            console.log('[FIGURE EDITOR] 開いた仮身を展開:', virtualObject.link_name);
+            logger.debug('[FIGURE EDITOR] 開いた仮身を展開:', virtualObject.link_name);
             // 無限ループを防ぐため、先にフラグを設定
             shape.expanded = true;
             // DOMに追加された後に非同期で展開
@@ -9604,7 +9683,7 @@ class BasicFigureEditor extends window.PluginBase {
                     noScrollbar: true,
                     bgcol: virtualObject.bgcol
                 }).catch(err => {
-                    console.error('[FIGURE EDITOR] 仮身展開エラー:', err);
+                    logger.error('[FIGURE EDITOR] 仮身展開エラー:', err);
                     // エラー時はエラーフラグを設定（無限ループ防止のためフラグはリセットしない）
                     shape.expandError = true;
                 });
@@ -9620,8 +9699,22 @@ class BasicFigureEditor extends window.PluginBase {
     makeVirtualObjectResizable(vobjElement, shape) {
         const obj = shape.virtualObject;
 
+        // 重複登録を防ぐため、既存のリサイズハンドラーをクリーンアップ
+        if (vobjElement._resizeMousemoveHandler) {
+            vobjElement.removeEventListener('mousemove', vobjElement._resizeMousemoveHandler);
+            vobjElement._resizeMousemoveHandler = null;
+        }
+        if (vobjElement._resizeMouseleaveHandler) {
+            vobjElement.removeEventListener('mouseleave', vobjElement._resizeMouseleaveHandler);
+            vobjElement._resizeMouseleaveHandler = null;
+        }
+        if (vobjElement._resizeMousedownHandler) {
+            vobjElement.removeEventListener('mousedown', vobjElement._resizeMousedownHandler);
+            vobjElement._resizeMousedownHandler = null;
+        }
+
         // マウス移動でカーソルを変更（リサイズエリアの表示）
-        vobjElement.addEventListener('mousemove', (e) => {
+        const mousemoveHandler = (e) => {
             // リサイズ中は何もしない
             if (this.isResizingVirtualObject) {
                 return;
@@ -9642,17 +9735,17 @@ class BasicFigureEditor extends window.PluginBase {
             } else {
                 vobjElement.style.cursor = 'move'; // 通常: 移動カーソル
             }
-        });
+        };
 
         // マウスが仮身から離れたらカーソルを元に戻す
-        vobjElement.addEventListener('mouseleave', () => {
+        const mouseleaveHandler = () => {
             if (!this.isResizingVirtualObject) {
                 vobjElement.style.cursor = 'move';
             }
-        });
+        };
 
         // マウスダウンでリサイズ開始
-        vobjElement.addEventListener('mousedown', (e) => {
+        const mousedownHandler = (e) => {
             // 読み取り専用モードの場合はリサイズを無効化
             if (this.readonly) {
                 return;
@@ -9675,7 +9768,7 @@ class BasicFigureEditor extends window.PluginBase {
 
             // リサイズ中は新しいリサイズを開始しない
             if (this.isResizingVirtualObject) {
-                console.log('[FIGURE EDITOR] リサイズ中のため、新しいリサイズを無視');
+                logger.debug('[FIGURE EDITOR] リサイズ中のため、新しいリサイズを無視');
                 return;
             }
 
@@ -9727,7 +9820,7 @@ class BasicFigureEditor extends window.PluginBase {
                 currentHeight = startHeight;
             }
 
-            console.log('[FIGURE EDITOR] 仮身リサイズ開始:', obj.link_name, 'startWidth:', startWidth, 'startHeight:', startHeight, 'currentHeight:', currentHeight, 'hasContentArea:', hasContentArea, 'chsz:', chsz, 'minClosedHeight:', minClosedHeight, 'minOpenHeight:', minOpenHeight);
+            logger.debug('[FIGURE EDITOR] 仮身リサイズ開始:', obj.link_name, 'startWidth:', startWidth, 'startHeight:', startHeight, 'currentHeight:', currentHeight, 'hasContentArea:', hasContentArea, 'chsz:', chsz, 'minClosedHeight:', minClosedHeight, 'minOpenHeight:', minOpenHeight);
 
             // リサイズプレビュー枠を作成
             const previewBox = document.createElement('div');
@@ -9804,7 +9897,7 @@ class BasicFigureEditor extends window.PluginBase {
                 obj.width = finalWidth;
                 obj.heightPx = finalHeight;
 
-                console.log('[FIGURE EDITOR] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
+                logger.debug('[FIGURE EDITOR] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
 
                 // 開いた仮身と閉じた仮身の判定が変わったかチェック
                 const chsz_resize = Math.round(obj.chsz || 14);
@@ -9817,7 +9910,7 @@ class BasicFigureEditor extends window.PluginBase {
 
                 if (wasOpen !== isNowOpen) {
                     // 判定が変わった場合は、少し待ってから仮身要素を再作成
-                    console.log('[FIGURE EDITOR] 開いた仮身/閉じた仮身の判定が変わりました。少し待ってから再作成します。');
+                    logger.debug('[FIGURE EDITOR] 開いた仮身/閉じた仮身の判定が変わりました。少し待ってから再作成します。');
 
                     // 既存のタイマーをクリア（連続したリサイズで最後の一回だけ実行）
                     if (this.recreateVirtualObjectTimer) {
@@ -9834,11 +9927,11 @@ class BasicFigureEditor extends window.PluginBase {
 
                     // 遅延して再作成（150ms後）
                     this.recreateVirtualObjectTimer = setTimeout(() => {
-                        console.log('[FIGURE EDITOR] 仮身を再作成します。');
+                        logger.debug('[FIGURE EDITOR] 仮身を再作成します。');
 
                         // 要素がまだDOMに存在するかチェック
                         if (!vobjElement.parentNode) {
-                            console.warn('[FIGURE EDITOR] 再作成対象の仮身要素がDOMから削除されています');
+                            logger.warn('[FIGURE EDITOR] 再作成対象の仮身要素がDOMから削除されています');
                             this.recreateVirtualObjectTimer = null;
                             this.isRecreatingVirtualObject = false;
                             return;
@@ -9865,7 +9958,17 @@ class BasicFigureEditor extends window.PluginBase {
 
             document.addEventListener('mousemove', onMouseMove);
             document.addEventListener('mouseup', onMouseUp);
-        });
+        };
+
+        // ハンドラを登録して参照を保存
+        vobjElement.addEventListener('mousemove', mousemoveHandler);
+        vobjElement._resizeMousemoveHandler = mousemoveHandler;
+
+        vobjElement.addEventListener('mouseleave', mouseleaveHandler);
+        vobjElement._resizeMouseleaveHandler = mouseleaveHandler;
+
+        vobjElement.addEventListener('mousedown', mousedownHandler);
+        vobjElement._resizeMousedownHandler = mousedownHandler;
     }
 
     /**
@@ -9873,15 +9976,16 @@ class BasicFigureEditor extends window.PluginBase {
      */
     openVirtualObject(shape) {
         const virtualObject = shape.virtualObject;
-        console.log('[FIGURE EDITOR] Opening virtual object:', virtualObject.link_name);
+        logger.debug('[FIGURE EDITOR] Opening virtual object:', virtualObject.link_name);
 
         // 親ウィンドウにメッセージを送信して開く
         // link_idとlink_nameを個別に送る（仮身一覧形式）
-        window.parent.postMessage({
-            type: 'open-virtual-object',
-            linkId: virtualObject.link_id,
-            linkName: virtualObject.link_name
-        }, '*');
+        if (this.messageBus) {
+            this.messageBus.send('open-virtual-object', {
+                linkId: virtualObject.link_id,
+                linkName: virtualObject.link_name
+            });
+        }
     }
 
     /**
@@ -9893,16 +9997,16 @@ class BasicFigureEditor extends window.PluginBase {
     async handleDoubleClickDragDuplicate(shape, targetX, targetY) {
         const virtualObject = shape.virtualObject;
         if (!virtualObject || !virtualObject.link_id) {
-            console.error('[FIGURE EDITOR] 複製対象の仮身が不正です');
+            logger.error('[FIGURE EDITOR] 複製対象の仮身が不正です');
             return;
         }
 
         const realId = virtualObject.link_id;
-        console.log('[FIGURE EDITOR] ダブルクリック+ドラッグによる実身複製:', realId, 'ドロップ位置:', targetX, targetY);
+        logger.debug('[FIGURE EDITOR] ダブルクリック+ドラッグによる実身複製:', realId, 'ドロップ位置:', targetX, targetY);
 
         // 元の仮身のサイズと属性を保存
-        const width = virtualObject.width || shape.width || 100;
-        const height = virtualObject.heightPx || shape.height || 32;
+        const width = virtualObject.width || (shape.endX - shape.startX) || 100;
+        const height = virtualObject.heightPx || (shape.endY - shape.startY) || 32;
         const chsz = virtualObject.chsz || 14;
         const frcol = virtualObject.frcol || '#000000';
         const chcol = virtualObject.chcol || '#000000';
@@ -9927,12 +10031,12 @@ class BasicFigureEditor extends window.PluginBase {
             });
 
             if (result.cancelled) {
-                console.log('[FIGURE EDITOR] 実身複製がキャンセルされました');
+                logger.debug('[FIGURE EDITOR] 実身複製がキャンセルされました');
             } else if (result.success) {
                 // 複製成功: 新しい実身IDで仮身を作成
                 const newRealId = result.newRealId;
                 const newName = result.newName;
-                console.log('[FIGURE EDITOR] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
+                logger.debug('[FIGURE EDITOR] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
 
                 // 新しい仮身図形を作成（ドロップ位置に配置）
                 const newShape = {
@@ -9953,7 +10057,8 @@ class BasicFigureEditor extends window.PluginBase {
                         bgcol: bgcol,
                         dlen: dlen,
                         applist: applist
-                    }
+                    },
+                    zIndex: this.getNextZIndex()
                 };
 
                 // 図形リストに追加
@@ -9966,14 +10071,15 @@ class BasicFigureEditor extends window.PluginBase {
                 this.redraw();
 
                 // 変更フラグを立てる
+                this.isModified = true;
                 this.hasUnsavedChanges = true;
 
-                console.log('[FIGURE EDITOR] 新しい仮身を配置:', newName, 'ドロップ位置:', newShape.startX, newShape.startY);
+                logger.debug('[FIGURE EDITOR] 新しい仮身を配置:', newName, 'ドロップ位置:', newShape.startX, newShape.startY);
             } else {
-                console.error('[FIGURE EDITOR] 実身複製失敗:', result.error);
+                logger.error('[FIGURE EDITOR] 実身複製失敗:', result.error);
             }
         } catch (error) {
-            console.error('[FIGURE EDITOR] 実身複製エラー:', error);
+            logger.error('[FIGURE EDITOR] 実身複製エラー:', error);
         }
     }
 
@@ -9982,7 +10088,7 @@ class BasicFigureEditor extends window.PluginBase {
      */
     log(...args) {
         if (this.debug) {
-            console.log('[FIGURE EDITOR]', ...args);
+            logger.debug('[FIGURE EDITOR]', ...args);
         }
     }
 
@@ -9990,14 +10096,14 @@ class BasicFigureEditor extends window.PluginBase {
      * エラーログ出力（常に出力）
      */
     error(...args) {
-        console.error('[FIGURE EDITOR]', ...args);
+        logger.error('[FIGURE EDITOR]', ...args);
     }
 
     /**
      * 警告ログ出力（常に出力）
      */
     warn(...args) {
-        console.warn('[FIGURE EDITOR]', ...args);
+        logger.warn('[FIGURE EDITOR]', ...args);
     }
 
 }

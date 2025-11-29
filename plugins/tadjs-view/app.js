@@ -4,27 +4,32 @@
  *
  * 描画は親ウィンドウのtad.jsを使用し、iframe内のcanvasに描画する
  */
-class TADjsViewPlugin {
+const logger = window.getLogger('TADjsView');
+
+class TADjsViewPlugin extends window.PluginBase {
     constructor() {
+        super('TADjsView');
+        logger.info('[TADjsView] 初期化開始');
+
         this.canvas = null;
         this.fileData = null;
         this.canvasId = 'tadCanvas';
-        this.realId = null; // 実身ID
+        // this.realId は PluginBase で定義済み
         this.linkRecordList = null; // BPKのlinkRecordList（tad.jsから取得）
         this.tadRecordDataArray = null; // BPKのtadRecordDataArray（tad.jsから取得）
-        this.debug = window.TADjsConfig?.debug || false; // デバッグモード（config.jsで管理）
+        // this.debug は PluginBase で定義済み（window.TADjsConfig?.debug || false）
 
         // MessageBusの初期化（即座に開始）
-        this.messageBus = null;
+        // this.messageBus は PluginBase で定義済み
         if (window.MessageBus) {
             this.messageBus = new window.MessageBus({
                 debug: this.debug,
                 pluginName: 'TADjsView'
             });
             this.messageBus.start();
-            console.log('[TADjsView] MessageBus initialized');
+            logger.debug('[TADjsView] MessageBus initialized');
         } else {
-            console.warn('[TADjsView] MessageBus not available');
+            logger.warn('[TADjsView] MessageBus not available');
         }
 
         // 初期化
@@ -35,12 +40,12 @@ class TADjsViewPlugin {
      * 初期化処理
      */
     init() {
-        console.log('[TADjsView] 初期化開始');
+        logger.debug('[TADjsView] 初期化開始');
 
         // Canvasを取得
         this.canvas = document.getElementById(this.canvasId);
         if (!this.canvas) {
-            console.error('[TADjsView] Canvas element not found');
+            logger.error('[TADjsView] Canvas element not found');
             return;
         }
 
@@ -64,7 +69,7 @@ class TADjsViewPlugin {
             pluginId: 'tadjs-view'
         });
 
-        console.log('[TADjsView] Plugin initialized');
+        logger.debug('[TADjsView] Plugin initialized');
     }
 
     /**
@@ -74,54 +79,54 @@ class TADjsViewPlugin {
     setupMessageBusHandlers() {
         // init メッセージ
         this.messageBus.on('init', (data) => {
-            console.log('[TADjsView] [MessageBus] init受信:', data);
+            logger.debug('[TADjsView] [MessageBus] init受信:', data);
             this.fileData = data.fileData;
 
             // realIdを保存（拡張子を除去）
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;
                 this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '').replace(/\.(bpk|BPK)$/, '') : null;
-                console.log('[TADjsView] [MessageBus] realId設定:', this.realId);
+                logger.debug('[TADjsView] [MessageBus] realId設定:', this.realId);
 
                 // createTADWindowと同様にoriginalLinkIdを保存
                 if (data.fileData.originalLinkId !== undefined) {
                     window.originalLinkId = data.fileData.originalLinkId;
-                    console.log('[TADjsView] [MessageBus] originalLinkId設定:', window.originalLinkId);
+                    logger.debug('[TADjsView] [MessageBus] originalLinkId設定:', window.originalLinkId);
                 }
 
                 // 親ウィンドウから受け取ったlinkRecordListを保存
                 if (data.fileData.linkRecordList) {
                     this.linkRecordList = data.fileData.linkRecordList;
                     window.linkRecordList = data.fileData.linkRecordList;
-                    console.log('[TADjsView] [MessageBus] linkRecordList設定:', this.linkRecordList.length, 'files');
+                    logger.debug('[TADjsView] [MessageBus] linkRecordList設定:', this.linkRecordList.length, 'files');
                 } else {
-                    console.warn('[TADjsView] [MessageBus] No linkRecordList in fileData');
+                    logger.warn('[TADjsView] [MessageBus] No linkRecordList in fileData');
                 }
 
                 // tadRecordDataArrayも受け取る
                 if (data.fileData.tadRecordDataArray) {
                     this.tadRecordDataArray = data.fileData.tadRecordDataArray;
-                    console.log('[TADjsView] [MessageBus] tadRecordDataArray設定:', this.tadRecordDataArray.length, 'records');
+                    logger.debug('[TADjsView] [MessageBus] tadRecordDataArray設定:', this.tadRecordDataArray.length, 'records');
                 }
             }
 
             // fileData.fileまたはfileData.fileNameからファイル情報を取得
             const fileName = this.fileData?.fileName || this.fileData?.file?.name;
             const rawData = this.fileData?.rawData;
-            console.log('[TADjsView] [MessageBus] File name:', fileName);
+            logger.debug('[TADjsView] [MessageBus] File name:', fileName);
 
             if (fileName && rawData) {
                 // プラグイン内でTAD描画を実行
                 const uint8Array = rawData instanceof Uint8Array ? rawData : new Uint8Array(rawData);
                 this.renderTAD(fileName, uint8Array);
             } else {
-                console.error('[TADjsView] [MessageBus] No file information or raw data found');
+                logger.error('[TADjsView] [MessageBus] No file information or raw data found');
             }
         });
 
         // window-moved メッセージ
         this.messageBus.on('window-moved', (data) => {
-            console.log('[TADjsView] [MessageBus] window-moved受信');
+            logger.debug('[TADjsView] [MessageBus] window-moved受信');
             this.updateWindowConfig({
                 pos: data.pos,
                 width: data.width,
@@ -131,7 +136,7 @@ class TADjsViewPlugin {
 
         // window-resized-end メッセージ
         this.messageBus.on('window-resized-end', (data) => {
-            console.log('[TADjsView] [MessageBus] window-resized-end受信');
+            logger.debug('[TADjsView] [MessageBus] window-resized-end受信');
             this.updateWindowConfig({
                 pos: data.pos,
                 width: data.width,
@@ -141,7 +146,7 @@ class TADjsViewPlugin {
 
         // window-maximize-toggled メッセージ
         this.messageBus.on('window-maximize-toggled', (data) => {
-            console.log('[TADjsView] [MessageBus] window-maximize-toggled受信');
+            logger.debug('[TADjsView] [MessageBus] window-maximize-toggled受信');
             this.updateWindowConfig({
                 pos: data.pos,
                 width: data.width,
@@ -152,7 +157,7 @@ class TADjsViewPlugin {
 
         // get-menu-definition メッセージ
         this.messageBus.on('get-menu-definition', (data) => {
-            console.log('[TADjsView] [MessageBus] get-menu-definition受信');
+            logger.debug('[TADjsView] [MessageBus] get-menu-definition受信');
             // 右クリックメニュー定義要求に応答（表示専用プラグインなので空メニュー）
             this.messageBus.send('menu-definition-response', {
                 messageId: data.messageId,
@@ -160,7 +165,7 @@ class TADjsViewPlugin {
             });
         });
 
-        console.log('[TADjsView] MessageBusハンドラ登録完了');
+        logger.debug('[TADjsView] MessageBusハンドラ登録完了');
     }
 
     /**
@@ -179,12 +184,12 @@ class TADjsViewPlugin {
      * @param {Uint8Array} rawData - TADファイルの生データ
      */
     async renderTAD(fileName, rawData) {
-        console.log('[TADjsView] Rendering TAD file:', fileName);
+        logger.debug('[TADjsView] Rendering TAD file:', fileName);
 
         try {
             // tad.jsがリンク処理をスキップしないように、canvas.virtualObjectLinksをクリア
             if (this.canvas.virtualObjectLinks) {
-                console.log('[TADjsView] Clearing existing virtualObjectLinks to allow tad.js link processing');
+                logger.debug('[TADjsView] Clearing existing virtualObjectLinks to allow tad.js link processing');
                 delete this.canvas.virtualObjectLinks;
                 delete this.canvas.tadRecordDataArray;
             }
@@ -203,35 +208,35 @@ class TADjsViewPlugin {
                 // canvasInit を先に実行してwindow.canvasを設定
                 if (typeof window.canvasInit === 'function') {
                     window.canvasInit(this.canvasId);
-                    console.log('[TADjsView] canvasInit called with:', this.canvasId);
-                    console.log('[TADjsView] window.canvas:', window.canvas);
-                    console.log('[TADjsView] window.canvas.id:', window.canvas ? window.canvas.id : 'undefined');
+                    logger.debug('[TADjsView] canvasInit called with:', this.canvasId);
+                    logger.debug('[TADjsView] window.canvas:', window.canvas);
+                    logger.debug('[TADjsView] window.canvas.id:', window.canvas ? window.canvas.id : 'undefined');
                 }
 
                 // tad.jsが使用するwindow.canvasからもvirtualObjectLinksをクリア
-                console.log('[TADjsView] DEBUG: Before clearing - window.canvas.virtualObjectLinks:', window.canvas ? window.canvas.virtualObjectLinks : 'window.canvas is null');
+                logger.debug('[TADjsView] DEBUG: Before clearing - window.canvas.virtualObjectLinks:', window.canvas ? window.canvas.virtualObjectLinks : 'window.canvas is null');
                 if (window.canvas && window.canvas.virtualObjectLinks) {
-                    console.log('[TADjsView] Clearing window.canvas.virtualObjectLinks to allow tad.js link processing');
+                    logger.debug('[TADjsView] Clearing window.canvas.virtualObjectLinks to allow tad.js link processing');
                     delete window.canvas.virtualObjectLinks;
                     delete window.canvas.tadRecordDataArray;
                 }
-                console.log('[TADjsView] DEBUG: After clearing - window.canvas.virtualObjectLinks:', window.canvas ? window.canvas.virtualObjectLinks : 'window.canvas is null');
+                logger.debug('[TADjsView] DEBUG: After clearing - window.canvas.virtualObjectLinks:', window.canvas ? window.canvas.virtualObjectLinks : 'window.canvas is null');
 
                 // 描画完了コールバックを設定（tad.jsはwindow.canvas.idから自動的にコールバック名を決定）
                 const callbackName = `tadProcessingComplete_${this.canvasId}`;
-                console.log('[TADjsView] Setting callback:', callbackName);
+                logger.debug('[TADjsView] Setting callback:', callbackName);
                 window[callbackName] = (tadData) => {
-                    console.log('[TADjsView] !!!!! TAD processing completed callback called !!!!!');
-                    console.log('[TADjsView] tadData:', tadData);
-                    console.log('[TADjsView] tadData.linkRecordList:', tadData ? tadData.linkRecordList : 'tadData is null');
-                    console.log('[TADjsView] tadData.isProcessingBpk:', tadData ? tadData.isProcessingBpk : 'tadData is null');
+                    logger.debug('[TADjsView] !!!!! TAD processing completed callback called !!!!!');
+                    logger.debug('[TADjsView] tadData:', tadData);
+                    logger.debug('[TADjsView] tadData.linkRecordList:', tadData ? tadData.linkRecordList : 'tadData is null');
+                    logger.debug('[TADjsView] tadData.isProcessingBpk:', tadData ? tadData.isProcessingBpk : 'tadData is null');
 
                     // tadjs-desktop.jsと同様にtadData.linkRecordListを取得
                     if (tadData && tadData.linkRecordList && tadData.linkRecordList.length > 0) {
                         this.linkRecordList = tadData.linkRecordList;
                         this.tadRecordDataArray = tadData.tadRecordDataArray || [];
-                        console.log('[TADjsView] Got linkRecordList from tadData:', this.linkRecordList.length, 'files');
-                        console.log('[TADjsView] linkRecordList[0] length:', this.linkRecordList[0] ? this.linkRecordList[0].length : 'undefined');
+                        logger.debug('[TADjsView] Got linkRecordList from tadData:', this.linkRecordList.length, 'files');
+                        logger.debug('[TADjsView] linkRecordList[0] length:', this.linkRecordList[0] ? this.linkRecordList[0].length : 'undefined');
 
                         // tadjs-desktop.jsのsaveTadDataToCanvas相当の処理
                         this.saveTadDataToCanvas();
@@ -239,32 +244,32 @@ class TADjsViewPlugin {
                         // tadjs-desktop.jsのsetupVirtualObjectEvents相当の処理
                         this.setupVirtualObjectEvents();
                     } else {
-                        console.warn('[TADjsView] No linkRecordList in tadData!', tadData);
+                        logger.warn('[TADjsView] No linkRecordList in tadData!', tadData);
                     }
 
                     this.onRenderingComplete(tadData);
                 };
-                console.log('[TADjsView] Callback set, window[' + callbackName + '] =', typeof window[callbackName]);
+                logger.debug('[TADjsView] Callback set, window[' + callbackName + '] =', typeof window[callbackName]);
 
                 // TAD描画を実行（引数は1つだけ）
-                console.log('[TADjsView] DEBUG: Calling window.tadRawArray()...');
+                logger.debug('[TADjsView] DEBUG: Calling window.tadRawArray()...');
                 window.tadRawArray(rawData);
-                console.log('[TADjsView] TAD rendering initiated');
+                logger.debug('[TADjsView] TAD rendering initiated');
 
                 // セカンダリウィンドウで親から受け取ったlinkRecordListがある場合、
                 // コールバックが呼ばれない可能性があるため、タイマーで確認
                 setTimeout(() => {
                     if (this.linkRecordList && !this.canvas.virtualObjectLinks) {
-                        console.log('[TADjsView] Callback not called, manually setting up virtual objects');
+                        logger.debug('[TADjsView] Callback not called, manually setting up virtual objects');
                         this.saveTadDataToCanvas();
                         this.setupVirtualObjectEvents();
                     }
                 }, 100);
             } else {
-                console.error('[TADjsView] TAD.js functions not available');
+                logger.error('[TADjsView] TAD.js functions not available');
             }
         } catch (error) {
-            console.error('[TADjsView] Error rendering TAD:', error);
+            logger.error('[TADjsView] Error rendering TAD:', error);
         }
     }
 
@@ -273,11 +278,11 @@ class TADjsViewPlugin {
      * @param {Object} data - 描画完了データ
      */
     onRenderingComplete(data) {
-        console.log('[TADjsView] Rendering complete data:', data);
+        logger.debug('[TADjsView] Rendering complete data:', data);
 
         // BPKファイルの場合、ファイル0の描画バッファをcanvasに表示
         if (data.isProcessingBpk && window.tadFileDrawBuffers && window.tadFileDrawBuffers[0]) {
-            console.log('[TADjsView] Rendering BPK file 0 to canvas');
+            logger.debug('[TADjsView] Rendering BPK file 0 to canvas');
             const drawBuffer = window.tadFileDrawBuffers[0];
             const ctx = this.canvas.getContext('2d');
 
@@ -298,16 +303,16 @@ class TADjsViewPlugin {
                     0, 0, this.canvas.width, this.canvas.height,
                     0, 0, this.canvas.width, this.canvas.height
                 );
-                console.log('[TADjsView] BPK file 0 rendered successfully');
+                logger.debug('[TADjsView] BPK file 0 rendered successfully');
             }
         }
 
         // Canvas要素のサイズとスタイルを確認
-        console.log('[TADjsView] Canvas size:', this.canvas.width, 'x', this.canvas.height);
-        console.log('[TADjsView] Canvas display:', window.getComputedStyle(this.canvas).display);
-        console.log('[TADjsView] Canvas visibility:', window.getComputedStyle(this.canvas).visibility);
-        console.log('[TADjsView] Canvas offsetWidth/Height:', this.canvas.offsetWidth, 'x', this.canvas.offsetHeight);
-        console.log('[TADjsView] Canvas rect:', this.canvas.getBoundingClientRect());
+        logger.debug('[TADjsView] Canvas size:', this.canvas.width, 'x', this.canvas.height);
+        logger.debug('[TADjsView] Canvas display:', window.getComputedStyle(this.canvas).display);
+        logger.debug('[TADjsView] Canvas visibility:', window.getComputedStyle(this.canvas).visibility);
+        logger.debug('[TADjsView] Canvas offsetWidth/Height:', this.canvas.offsetWidth, 'x', this.canvas.offsetHeight);
+        logger.debug('[TADjsView] Canvas rect:', this.canvas.getBoundingClientRect());
 
         // 仮身のダブルクリックイベントを設定
         const virtualLinks = data.linkRecordList && data.linkRecordList[0] ? data.linkRecordList[0] : [];
@@ -316,7 +321,7 @@ class TADjsViewPlugin {
         this.canvas.virtualObjectLinks = virtualLinks;
         this.canvas.tadRecordDataArray = data.tadRecordDataArray;
 
-        console.log('[TADjsView] Saved to canvas:', virtualLinks.length, 'links');
+        logger.debug('[TADjsView] Saved to canvas:', virtualLinks.length, 'links');
 
         // Note: setupVirtualObjectEventsは、renderTAD()のsetTimeoutで呼ばれるため、ここでは呼ばない
         // （二重呼び出しを避けるため）
@@ -334,14 +339,14 @@ class TADjsViewPlugin {
         // 新しい右クリックメニューハンドラーを作成
         this.canvas._contextMenuHandler = (e) => {
             e.preventDefault();
-            console.log('[TADjsView] Context menu requested at canvas:', e.clientX, e.clientY);
+            logger.debug('[TADjsView] Context menu requested at canvas:', e.clientX, e.clientY);
 
             // iframe内の座標を親ウィンドウの座標に変換
             const iframeRect = window.frameElement.getBoundingClientRect();
             const parentX = e.clientX + iframeRect.left;
             const parentY = e.clientY + iframeRect.top;
 
-            console.log('[TADjsView] Sending context menu request to parent at:', parentX, parentY);
+            logger.debug('[TADjsView] Sending context menu request to parent at:', parentX, parentY);
 
             // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('context-menu-request', {
@@ -366,7 +371,7 @@ class TADjsViewPlugin {
                 windowConfig: windowConfig
             });
 
-            console.log('[TADjsView] ウィンドウ設定を更新:', windowConfig);
+            logger.debug('[TADjsView] ウィンドウ設定を更新:', windowConfig);
         }
     }
 
@@ -376,12 +381,12 @@ class TADjsViewPlugin {
      * @param {Array} tadRecordArray - TADレコード配列
      */
     notifyLinkClick(link, tadRecordArray) {
-        console.log('[TADjsView] Notifying link click:', link);
-        console.log('[TADjsView] Debug - link.raw exists:', link.raw ? true : false);
-        console.log('[TADjsView] Debug - link.raw length:', link.raw ? link.raw.length : 0);
-        console.log('[TADjsView] Debug - link.link_id:', link.link_id);
-        console.log('[TADjsView] Debug - tadRecordArray available:', tadRecordArray ? true : false);
-        console.log('[TADjsView] Debug - tadRecordArray length:', tadRecordArray ? tadRecordArray.length : 0);
+        logger.debug('[TADjsView] Notifying link click:', link);
+        logger.debug('[TADjsView] Debug - link.raw exists:', link.raw ? true : false);
+        logger.debug('[TADjsView] Debug - link.raw length:', link.raw ? link.raw.length : 0);
+        logger.debug('[TADjsView] Debug - link.link_id:', link.link_id);
+        logger.debug('[TADjsView] Debug - tadRecordArray available:', tadRecordArray ? true : false);
+        logger.debug('[TADjsView] Debug - tadRecordArray length:', tadRecordArray ? tadRecordArray.length : 0);
 
         // リンク先データを準備
         let linkData = null;
@@ -390,11 +395,11 @@ class TADjsViewPlugin {
         if (link.link_id !== undefined && tadRecordArray) {
             // link_idは1始まりなので、配列インデックスとしては-1する
             const linkedIndex = parseInt(link.link_id) - 1;
-            console.log('[TADjsView] Looking for linked file:', { link_id: link.link_id, linkedIndex, tadRecordArrayLength: tadRecordArray.length });
+            logger.debug('[TADjsView] Looking for linked file:', { link_id: link.link_id, linkedIndex, tadRecordArrayLength: tadRecordArray.length });
 
             if (tadRecordArray[linkedIndex]) {
                 const linkedEntry = tadRecordArray[linkedIndex];
-                console.log('[TADjsView] Found linked entry:', linkedEntry.name);
+                logger.debug('[TADjsView] Found linked entry:', linkedEntry.name);
                 linkData = {
                     type: 'bpk',
                     title: linkedEntry.name || link.link_name || `ファイル ${link.link_id}`,
@@ -402,11 +407,11 @@ class TADjsViewPlugin {
                     linkId: link.link_id
                 };
             } else {
-                console.warn('[TADjsView] Link target not found:', { link_id: link.link_id, linkedIndex, tadRecordArrayLength: tadRecordArray.length });
+                logger.warn('[TADjsView] Link target not found:', { link_id: link.link_id, linkedIndex, tadRecordArrayLength: tadRecordArray.length });
             }
         } else if (link.raw && link.raw.length > 0) {
             // フォールバック：link.rawがある場合
-            console.log('[TADjsView] Using link.raw as fallback');
+            logger.debug('[TADjsView] Using link.raw as fallback');
             linkData = {
                 type: 'raw',
                 title: link.link_name || `仮身 - ${link.link_id || 'リンク'}`,
@@ -414,19 +419,19 @@ class TADjsViewPlugin {
                 linkId: link.link_id
             };
         } else {
-            console.warn('[TADjsView] No valid link data found');
+            logger.warn('[TADjsView] No valid link data found');
         }
 
         if (linkData) {
             // 親ウィンドウに通知（linkRecordListも一緒に送る）
-            console.log('[TADjsView] Sending linkRecordList:', this.linkRecordList ? this.linkRecordList.length : 'null', 'files');
+            logger.debug('[TADjsView] Sending linkRecordList:', this.linkRecordList ? this.linkRecordList.length : 'null', 'files');
             // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('open-tad-link', {
                 linkData: linkData,
                 linkRecordList: this.linkRecordList  // BPK全体のlinkRecordListを渡す
             });
 
-            console.log('[TADjsView] Link click notified to parent:', linkData.title);
+            logger.debug('[TADjsView] Link click notified to parent:', linkData.title);
         }
     }
 
@@ -434,11 +439,11 @@ class TADjsViewPlugin {
      * TADデータをcanvasに保存（tadjs-desktop.jsのsaveTadDataToCanvas相当）
      */
     saveTadDataToCanvas() {
-        console.log('[TADjsView] saveTadDataToCanvas called');
+        logger.debug('[TADjsView] saveTadDataToCanvas called');
 
         // originalLinkIdを取得（グローバル変数またはfileDataから）
         const originalLinkId = window.originalLinkId ?? this.fileData?.originalLinkId;
-        console.log('[TADjsView] originalLinkId:', originalLinkId);
+        logger.debug('[TADjsView] originalLinkId:', originalLinkId);
 
         // linkRecordListから適切なインデックスのリンクを取得
         let virtualLinks = [];
@@ -446,23 +451,23 @@ class TADjsViewPlugin {
         if (originalLinkId !== null && originalLinkId !== undefined) {
             // セカンダリウィンドウの場合：originalLinkId - 1のインデックスを使用
             const linkIndex = parseInt(originalLinkId) - 1;
-            console.log('[TADjsView] Secondary window: using linkRecordList[' + linkIndex + '] for originalLinkId', originalLinkId);
+            logger.debug('[TADjsView] Secondary window: using linkRecordList[' + linkIndex + '] for originalLinkId', originalLinkId);
 
             if (this.linkRecordList && this.linkRecordList[linkIndex] && Array.isArray(this.linkRecordList[linkIndex])) {
                 virtualLinks = [...this.linkRecordList[linkIndex]];
-                console.log('[TADjsView] Using linkRecordList[' + linkIndex + '] with', virtualLinks.length, 'links');
+                logger.debug('[TADjsView] Using linkRecordList[' + linkIndex + '] with', virtualLinks.length, 'links');
             } else {
-                console.warn('[TADjsView] linkRecordList[' + linkIndex + '] not found for originalLinkId', originalLinkId);
+                logger.warn('[TADjsView] linkRecordList[' + linkIndex + '] not found for originalLinkId', originalLinkId);
             }
         } else {
             // メインウィンドウの場合：linkRecordList[0]を使用
-            console.log('[TADjsView] Main window: using linkRecordList[0]');
+            logger.debug('[TADjsView] Main window: using linkRecordList[0]');
 
             if (this.linkRecordList && this.linkRecordList[0] && Array.isArray(this.linkRecordList[0])) {
                 virtualLinks = [...this.linkRecordList[0]];
-                console.log('[TADjsView] Using linkRecordList[0] with', virtualLinks.length, 'links');
+                logger.debug('[TADjsView] Using linkRecordList[0] with', virtualLinks.length, 'links');
             } else {
-                console.warn('[TADjsView] linkRecordList[0] not found');
+                logger.warn('[TADjsView] linkRecordList[0] not found');
             }
         }
 
@@ -470,7 +475,7 @@ class TADjsViewPlugin {
         this.canvas.virtualObjectLinks = virtualLinks;
         this.canvas.tadRecordDataArray = this.tadRecordDataArray ? [...this.tadRecordDataArray] : [];
 
-        console.log('[TADjsView] Canvas data saved:', {
+        logger.debug('[TADjsView] Canvas data saved:', {
             virtualObjectLinks: this.canvas.virtualObjectLinks.length,
             tadRecordDataArray: this.canvas.tadRecordDataArray.length
         });
@@ -480,7 +485,7 @@ class TADjsViewPlugin {
      * 仮身オブジェクトのダブルクリックイベントを設定（tadjs-desktop.jsのsetupVirtualObjectEvents相当）
      */
     setupVirtualObjectEvents() {
-        console.log('[TADjsView] setupVirtualObjectEvents called');
+        logger.debug('[TADjsView] setupVirtualObjectEvents called');
 
         // 既存のイベントリスナーを削除
         if (this.canvas._virtualObjectHandler) {
@@ -501,11 +506,11 @@ class TADjsViewPlugin {
             const x = displayX * scaleX;
             const y = displayY * scaleY;
 
-            console.log('[TADjsView] Canvas double-clicked at:', { x, y });
+            logger.debug('[TADjsView] Canvas double-clicked at:', { x, y });
 
             // canvasに保存された仮身情報を使用
             const links = this.canvas.virtualObjectLinks || [];
-            console.log('[TADjsView] Available virtual object links:', links.length);
+            logger.debug('[TADjsView] Available virtual object links:', links.length);
 
             if (links && links.length > 0) {
                 // クリック位置に仮身があるかチェック
@@ -514,7 +519,7 @@ class TADjsViewPlugin {
 
                     if (link && link.left !== undefined && link.left <= x && x <= link.right &&
                         link.top !== undefined && link.top <= y && y <= link.bottom) {
-                        console.log('[TADjsView] Virtual object double-clicked:', link);
+                        logger.debug('[TADjsView] Virtual object double-clicked:', link);
 
                         // tadjs-desktop.jsと同じ処理
                         if (link.raw && link.raw.length > 0) {
@@ -526,7 +531,7 @@ class TADjsViewPlugin {
                                 linkId: link.link_id
                             };
 
-                            console.log('[TADjsView] Opening link with raw data:', linkData.title);
+                            logger.debug('[TADjsView] Opening link with raw data:', linkData.title);
                             // MessageBus Phase 2: messageBus.send()を使用
                             this.messageBus.send('open-tad-link', {
                                 linkData: linkData,
@@ -538,7 +543,7 @@ class TADjsViewPlugin {
                             const linkedIndex = parseInt(link.link_id) - 1;  // link_idは1始まり、配列は0始まり
                             const tadRecordArray = this.canvas.tadRecordDataArray;
 
-                            console.log('[TADjsView] Looking for link_id:', link.link_id, '-> array index:', linkedIndex, 'in tadRecordDataArray:', tadRecordArray ? tadRecordArray.length : 'null');
+                            logger.debug('[TADjsView] Looking for link_id:', link.link_id, '-> array index:', linkedIndex, 'in tadRecordDataArray:', tadRecordArray ? tadRecordArray.length : 'null');
 
                             if (tadRecordArray && tadRecordArray[linkedIndex]) {
                                 const linkedEntry = tadRecordArray[linkedIndex];
@@ -549,7 +554,7 @@ class TADjsViewPlugin {
                                     linkId: link.link_id
                                 };
 
-                                console.log('[TADjsView] Opening linked entry:', linkData.title);
+                                logger.debug('[TADjsView] Opening linked entry:', linkData.title);
                                 // MessageBus Phase 2: messageBus.send()を使用
                                 this.messageBus.send('open-tad-link', {
                                     linkData: linkData,
@@ -557,7 +562,7 @@ class TADjsViewPlugin {
                                     tadRecordDataArray: this.tadRecordDataArray
                                 });
                             } else {
-                                console.warn('[TADjsView] Link target not found:', linkedIndex);
+                                logger.warn('[TADjsView] Link target not found:', linkedIndex);
                             }
                         }
                         break;
@@ -568,7 +573,7 @@ class TADjsViewPlugin {
 
         // イベントリスナーを追加
         this.canvas.addEventListener('dblclick', this.canvas._virtualObjectHandler);
-        console.log('[TADjsView] Virtual object events setup complete');
+        logger.debug('[TADjsView] Virtual object events setup complete');
     }
 
     /**
@@ -576,7 +581,7 @@ class TADjsViewPlugin {
      */
     log(...args) {
         if (this.debug) {
-            console.log('[TADjsView]', ...args);
+            logger.debug('[TADjsView]', ...args);
         }
     }
 
@@ -584,14 +589,14 @@ class TADjsViewPlugin {
      * エラーログ出力（常に出力）
      */
     error(...args) {
-        console.error('[TADjsView]', ...args);
+        logger.error('[TADjsView]', ...args);
     }
 
     /**
      * 警告ログ出力（常に出力）
      */
     warn(...args) {
-        console.warn('[TADjsView]', ...args);
+        logger.warn('[TADjsView]', ...args);
     }
 }
 

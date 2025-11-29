@@ -8,20 +8,23 @@ import {
     DEFAULT_BGCOL,
     DEFAULT_FONT_SIZE
 } from './util.js';
+import { getLogger } from './logger.js';
+
+const logger = getLogger('RealObjectSystem');
 
 /**
  * 実身仮身システム - ファイル直接アクセス版
  * IndexedDBを使わず、ファイルシステムから直接読み書き
  */
 export class RealObjectSystem {
-    constructor() {
-        console.log('[RealObjectSystem] 初期化（ファイル直接アクセスモード）');
+    constructor(dataFolder = null) {
+        logger.info('初期化（ファイル直接アクセスモード）');
 
         // Electron環境チェック（コンストラクタで1回だけ）
         this.isElectronEnv = typeof require !== 'undefined' && typeof process !== 'undefined' && process.versions && process.versions.electron;
 
         if (!this.isElectronEnv) {
-            console.warn('[RealObjectSystem] Electron環境ではありません。一部の機能は使用できません。');
+            logger.warn('Electron環境ではありません。一部の機能は使用できません。');
             this.fs = null;
             this.path = null;
             this.crypto = null;
@@ -36,10 +39,14 @@ export class RealObjectSystem {
         this.crypto = require('crypto');
         this.process = require('process');
 
-        // ベースパスをキャッシュ
-        this._basePath = this._calculateBasePath();
-
-        console.log(`[RealObjectSystem] basePath: ${this._basePath}`);
+        // データフォルダが指定されている場合はそれを使用、なければ計算
+        if (dataFolder) {
+            this._basePath = dataFolder;
+            logger.info(`データフォルダを使用: ${this._basePath}`);
+        } else {
+            this._basePath = this._calculateBasePath();
+            logger.info(`basePath（デフォルト）: ${this._basePath}`);
+        }
     }
 
     /**
@@ -74,27 +81,27 @@ export class RealObjectSystem {
 
         const basePath = this._basePath;
 
-        console.log(`[RealObjectSystem] 実身読み込み: ${realId}`);
+        logger.info(`実身読み込み: ${realId}`);
 
         // メタデータ読み込み
         const jsonPath = this.path.join(basePath, `${realId}.json`);
-        console.log(`[RealObjectSystem] basePath: ${basePath}`);
-        console.log(`[RealObjectSystem] jsonPath: ${jsonPath}`);
+        logger.debug(`basePath: ${basePath}`);
+        logger.debug(`jsonPath: ${jsonPath}`);
 
         if (!this.fs.existsSync(jsonPath)) {
             throw new Error(`実身が見つかりません: ${realId}`);
         }
 
         const jsonContent = this.fs.readFileSync(jsonPath, 'utf-8');
-        console.log(`[RealObjectSystem] JSON内容: ${jsonContent.substring(0, 200)}`);
+        logger.debug(`JSON内容: ${jsonContent.substring(0, 200)}`);
 
         const metadata = JSON.parse(jsonContent);
-        console.log(`[RealObjectSystem] パース後のmetadata:`, JSON.stringify(metadata, null, 2).substring(0, 300));
+        logger.debug(`パース後のmetadata:`, JSON.stringify(metadata, null, 2).substring(0, 300));
         metadata.realId = realId;
 
         // recordCount が存在しない場合は、実際にファイルを確認してカウント
         if (metadata.recordCount === undefined || metadata.recordCount === null) {
-            console.log(`[RealObjectSystem] recordCount未定義、ファイルシステムから検索します`);
+            logger.debug(`recordCount未定義、ファイルシステムから検索します`);
             let count = 0;
             while (true) {
                 const xtadPath = this.path.join(basePath, `${realId}_${count}.xtad`);
@@ -105,10 +112,10 @@ export class RealObjectSystem {
                 }
             }
             metadata.recordCount = count;
-            console.log(`[RealObjectSystem] 検出されたレコード数: ${count}`);
+            logger.debug(`検出されたレコード数: ${count}`);
         }
 
-        console.log(`[RealObjectSystem] メタデータ読み込み: name=${metadata.name || metadata.realName}, recordCount=${metadata.recordCount}`);
+        logger.info(`メタデータ読み込み: name=${metadata.name || metadata.realName}, recordCount=${metadata.recordCount}`);
 
         // レコード読み込み
         const records = [];
@@ -128,13 +135,13 @@ export class RealObjectSystem {
                     rawData: rawData,     // バイト配列
                     images: []
                 });
-                console.log(`[RealObjectSystem] レコード読み込み: ${realId}_${recordNo}.xtad (${xtad.length}文字, ${rawData.length}バイト)`);
+                logger.debug(`レコード読み込み: ${realId}_${recordNo}.xtad (${xtad.length}文字, ${rawData.length}バイト)`);
             } else {
-                console.warn(`[RealObjectSystem] レコードファイルが見つかりません: ${xtadPath}`);
+                logger.warn(`レコードファイルが見つかりません: ${xtadPath}`);
             }
         }
 
-        console.log(`[RealObjectSystem] 実身読み込み完了: ${realId} (${records.length}レコード)`);
+        logger.info(`実身読み込み完了: ${realId} (${records.length}レコード)`);
         return { metadata, records };
     }
 
@@ -150,7 +157,7 @@ export class RealObjectSystem {
 
         const basePath = this._basePath;
 
-        console.log(`[RealObjectSystem] 実身保存: ${realId}`);
+        logger.info(`実身保存: ${realId}`);
 
         // メタデータ保存
         const jsonPath = this.path.join(basePath, `${realId}.json`);
@@ -159,18 +166,18 @@ export class RealObjectSystem {
         metadata.recordCount = realObject.records.length;
 
         this.fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
-        console.log(`[RealObjectSystem] メタデータ保存: ${jsonPath}`);
+        logger.debug(`メタデータ保存: ${jsonPath}`);
 
         // レコード保存
         realObject.records.forEach((record, index) => {
             if (record.xtad) {
                 const xtadPath = this.path.join(basePath, `${realId}_${index}.xtad`);
                 this.fs.writeFileSync(xtadPath, record.xtad, 'utf-8');
-                console.log(`[RealObjectSystem] レコード保存: ${xtadPath}`);
+                logger.debug(`レコード保存: ${xtadPath}`);
             }
         });
 
-        console.log(`[RealObjectSystem] 実身保存完了: ${realId}`);
+        logger.info(`実身保存完了: ${realId}`);
     }
 
     /**
@@ -192,18 +199,18 @@ export class RealObjectSystem {
 
         // 既にコピー済みの場合は、新しいIDを返す
         if (idMap.has(sourceRealId)) {
-            console.log(`[RealObjectSystem] 既にコピー済み: ${sourceRealId} -> ${idMap.get(sourceRealId)}`);
+            logger.debug(`既にコピー済み: ${sourceRealId} -> ${idMap.get(sourceRealId)}`);
             return idMap.get(sourceRealId);
         }
 
-        console.log(`[RealObjectSystem] 実身コピー: ${sourceRealId}`);
+        logger.info(`実身コピー: ${sourceRealId}`);
 
         // 元の実身を読み込む
         const sourceRealObject = await this.loadRealObject(sourceRealId);
 
         // 新しいUUIDを生成
         const newRealId = this.generateUUIDv7();
-        console.log(`[RealObjectSystem] 新しい実身ID: ${newRealId}`);
+        logger.debug(`新しい実身ID: ${newRealId}`);
 
         // IDマッピングに登録（循環参照対策）
         idMap.set(sourceRealId, newRealId);
@@ -233,13 +240,13 @@ export class RealObjectSystem {
                 for (const refRealId of referencedIds) {
                     try {
                         const newRefRealId = await this.copyRealObject(refRealId, idMap);
-                        console.log(`[RealObjectSystem] 参照実身をコピー: ${refRealId} -> ${newRefRealId}`);
+                        logger.debug(`参照実身をコピー: ${refRealId} -> ${newRefRealId}`);
 
                         // XTADのlink_idを新しいIDに置き換え
                         const oldLinkIdPattern = new RegExp(refRealId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g');
                         updatedXtad = updatedXtad.replace(oldLinkIdPattern, newRefRealId);
                     } catch (error) {
-                        console.warn(`[RealObjectSystem] 参照実身のコピーに失敗（スキップ）: ${refRealId}`, error);
+                        logger.warn(`参照実身のコピーに失敗（スキップ）: ${refRealId}`, error);
                     }
                 }
 
@@ -267,40 +274,62 @@ export class RealObjectSystem {
         await this.saveRealObject(newRealId, newRealObject);
 
         // icoファイルもコピー（存在する場合のみ）
-        if (isRootCall) {
-            const basePath = this._basePath;
-            const sourceIcoPath = this.path.join(basePath, `${sourceRealId}.ico`);
-            const newIcoPath = this.path.join(basePath, `${newRealId}.ico`);
+        // 再帰的にコピーされた実身のアイコンファイルもコピーする
+        const basePath = this._basePath;
+        const sourceIcoPath = this.path.join(basePath, `${sourceRealId}.ico`);
+        const newIcoPath = this.path.join(basePath, `${newRealId}.ico`);
 
-            console.log(`[RealObjectSystem] icoファイルコピー試行:`, {
-                isRootCall: isRootCall,
-                sourceRealId: sourceRealId,
-                newRealId: newRealId,
-                basePath: basePath,
-                sourceIcoPath: sourceIcoPath,
-                newIcoPath: newIcoPath,
-                sourceExists: this.fs.existsSync(sourceIcoPath)
-            });
+        logger.debug(`icoファイルコピー試行:`, {
+            isRootCall: isRootCall,
+            sourceRealId: sourceRealId,
+            newRealId: newRealId,
+            basePath: basePath,
+            sourceIcoPath: sourceIcoPath,
+            newIcoPath: newIcoPath,
+            sourceExists: this.fs.existsSync(sourceIcoPath)
+        });
 
-            if (this.fs.existsSync(sourceIcoPath)) {
-                try {
-                    this.fs.copyFileSync(sourceIcoPath, newIcoPath);
-                    const copySuccess = this.fs.existsSync(newIcoPath);
-                    console.log(`[RealObjectSystem] icoファイルコピー成功: ${sourceRealId}.ico -> ${newRealId}.ico`, {
-                        copySuccess: copySuccess,
-                        newIcoPath: newIcoPath
-                    });
-                } catch (error) {
-                    console.error(`[RealObjectSystem] icoファイルのコピーに失敗:`, error);
-                }
-            } else {
-                console.warn(`[RealObjectSystem] 元のicoファイルが存在しません: ${sourceIcoPath}`);
+        if (this.fs.existsSync(sourceIcoPath)) {
+            try {
+                this.fs.copyFileSync(sourceIcoPath, newIcoPath);
+                const copySuccess = this.fs.existsSync(newIcoPath);
+                logger.debug(`icoファイルコピー成功: ${sourceRealId}.ico -> ${newRealId}.ico`, {
+                    copySuccess: copySuccess,
+                    newIcoPath: newIcoPath
+                });
+            } catch (error) {
+                logger.error(`icoファイルのコピーに失敗:`, error);
             }
         } else {
-            console.log(`[RealObjectSystem] icoファイルコピーをスキップ（再帰呼び出しのため）: ${sourceRealId}`);
+            logger.debug(`元のicoファイルが存在しません: ${sourceIcoPath}`);
         }
 
-        console.log(`[RealObjectSystem] 実身コピー完了: ${sourceRealId} -> ${newRealId}`);
+        // ピクセルマップのPNG画像ファイルもコピー（存在する場合のみ）
+        // 基本図形編集プラグインで使用されるピクセルマップ画像
+        // ファイル名パターン: realId_0_0.png, realId_0_1.png など
+        try {
+            const files = this.fs.readdirSync(basePath);
+            const pngPattern = new RegExp(`^${sourceRealId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}_\\d+_\\d+\\.png$`);
+
+            for (const file of files) {
+                if (pngPattern.test(file)) {
+                    const sourcePngPath = this.path.join(basePath, file);
+                    const newPngFile = file.replace(sourceRealId, newRealId);
+                    const newPngPath = this.path.join(basePath, newPngFile);
+
+                    try {
+                        this.fs.copyFileSync(sourcePngPath, newPngPath);
+                        logger.debug(`PNGファイルコピー成功: ${file} -> ${newPngFile}`);
+                    } catch (error) {
+                        logger.error(`PNGファイルのコピーに失敗: ${file}`, error);
+                    }
+                }
+            }
+        } catch (error) {
+            logger.debug(`PNGファイルの検索中にエラー:`, error);
+        }
+
+        logger.info(`実身コピー完了: ${sourceRealId} -> ${newRealId}`);
         return newRealId;
     }
 
@@ -315,14 +344,14 @@ export class RealObjectSystem {
             throw new Error('ファイルシステムアクセスにはElectron環境が必要です');
         }
 
-        console.log(`[RealObjectSystem] 実身非再帰的コピー: ${sourceRealId}, 新しい名前: ${newName}`);
+        logger.info(`実身非再帰的コピー: ${sourceRealId}, 新しい名前: ${newName}`);
 
         // 元の実身を読み込む
         const sourceRealObject = await this.loadRealObject(sourceRealId);
 
         // 新しいUUIDを生成
         const newRealId = this.generateUUIDv7();
-        console.log(`[RealObjectSystem] 新しい実身ID: ${newRealId}`);
+        logger.debug(`新しい実身ID: ${newRealId}`);
 
         // レコードをコピー（参照実身は複製しない）
         const newRecords = [];
@@ -354,7 +383,7 @@ export class RealObjectSystem {
         const sourceIcoPath = this.path.join(basePath, `${sourceRealId}.ico`);
         const newIcoPath = this.path.join(basePath, `${newRealId}.ico`);
 
-        console.log(`[RealObjectSystem] 非再帰的コピー: icoファイルコピー試行:`, {
+        logger.debug(`非再帰的コピー: icoファイルコピー試行:`, {
             sourceRealId: sourceRealId,
             newRealId: newRealId,
             basePath: basePath,
@@ -367,18 +396,18 @@ export class RealObjectSystem {
             try {
                 this.fs.copyFileSync(sourceIcoPath, newIcoPath);
                 const copySuccess = this.fs.existsSync(newIcoPath);
-                console.log(`[RealObjectSystem] 非再帰的コピー: icoファイルコピー成功: ${sourceRealId}.ico -> ${newRealId}.ico`, {
+                logger.debug(`非再帰的コピー: icoファイルコピー成功: ${sourceRealId}.ico -> ${newRealId}.ico`, {
                     copySuccess: copySuccess,
                     newIcoPath: newIcoPath
                 });
             } catch (error) {
-                console.error(`[RealObjectSystem] 非再帰的コピー: icoファイルのコピーに失敗:`, error);
+                logger.error(`非再帰的コピー: icoファイルのコピーに失敗:`, error);
             }
         } else {
-            console.warn(`[RealObjectSystem] 非再帰的コピー: 元のicoファイルが存在しません: ${sourceIcoPath}`);
+            logger.warn(`非再帰的コピー: 元のicoファイルが存在しません: ${sourceIcoPath}`);
         }
 
-        console.log(`[RealObjectSystem] 実身非再帰的コピー完了: ${sourceRealId} -> ${newRealId}`);
+        logger.info(`実身非再帰的コピー完了: ${sourceRealId} -> ${newRealId}`);
         return newRealId;
     }
 
@@ -414,12 +443,12 @@ export class RealObjectSystem {
 
         const basePath = this._basePath;
 
-        console.log(`[RealObjectSystem] 仮身削除（refCount-1）: ${realId}`);
+        logger.info(`仮身削除（refCount-1）: ${realId}`);
 
         // メタデータ読み込み
         const jsonPath = this.path.join(basePath, `${realId}.json`);
         if (!this.fs.existsSync(jsonPath)) {
-            console.warn(`[RealObjectSystem] メタデータが見つかりません: ${realId}`);
+            logger.warn(`メタデータが見つかりません: ${realId}`);
             return;
         }
 
@@ -431,7 +460,7 @@ export class RealObjectSystem {
 
         // メタデータを保存
         this.fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
-        console.log(`[RealObjectSystem] 参照カウント更新: ${realId} ${currentRefCount} -> ${metadata.refCount}`);
+        logger.debug(`参照カウント更新: ${realId} ${currentRefCount} -> ${metadata.refCount}`);
     }
 
     /**
@@ -445,13 +474,13 @@ export class RealObjectSystem {
 
         const basePath = this._basePath;
 
-        console.log(`[RealObjectSystem] 実身削除: ${realId}`);
+        logger.info(`実身削除: ${realId}`);
 
         // メタデータ削除
         const jsonPath = this.path.join(basePath, `${realId}.json`);
         if (this.fs.existsSync(jsonPath)) {
             this.fs.unlinkSync(jsonPath);
-            console.log(`[RealObjectSystem] メタデータ削除: ${jsonPath}`);
+            logger.debug(`メタデータ削除: ${jsonPath}`);
         }
 
         // レコード削除（すべてのレコードファイルを探して削除）
@@ -460,7 +489,7 @@ export class RealObjectSystem {
             const xtadPath = this.path.join(basePath, `${realId}_${recordNo}.xtad`);
             if (this.fs.existsSync(xtadPath)) {
                 this.fs.unlinkSync(xtadPath);
-                console.log(`[RealObjectSystem] レコード削除: ${xtadPath}`);
+                logger.debug(`レコード削除: ${xtadPath}`);
                 recordNo++;
             } else {
                 break;
@@ -471,10 +500,10 @@ export class RealObjectSystem {
         const icoPath = this.path.join(basePath, `${realId}.ico`);
         if (this.fs.existsSync(icoPath)) {
             this.fs.unlinkSync(icoPath);
-            console.log(`[RealObjectSystem] アイコン削除: ${icoPath}`);
+            logger.debug(`アイコン削除: ${icoPath}`);
         }
 
-        console.log(`[RealObjectSystem] 実身削除完了: ${realId} (${recordNo}レコード)`);
+        logger.info(`実身削除完了: ${realId} (${recordNo}レコード)`);
     }
 
     /**
@@ -492,7 +521,7 @@ export class RealObjectSystem {
 
         const jsonPath = this.path.join(basePath, `${realId}.json`);
         if (!this.fs.existsSync(jsonPath)) {
-            console.warn(`[RealObjectSystem] メタデータが見つかりません: ${realId}`);
+            logger.warn(`メタデータが見つかりません: ${realId}`);
             return;
         }
 
@@ -500,7 +529,7 @@ export class RealObjectSystem {
         metadata.refCount = refCount;
 
         this.fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
-        console.log(`[RealObjectSystem] 参照カウント更新: ${realId} -> ${refCount}`);
+        logger.debug(`参照カウント更新: ${realId} -> ${refCount}`);
     }
 
     /**
@@ -524,7 +553,7 @@ export class RealObjectSystem {
         const newRefCount = currentRefCount + 1;
 
         await this.updateRefCount(realId, newRefCount);
-        console.log(`[RealObjectSystem] 仮身コピー完了: ${realId} (refCount: ${currentRefCount} -> ${newRefCount})`);
+        logger.debug(`仮身コピー完了: ${realId} (refCount: ${currentRefCount} -> ${newRefCount})`);
     }
 
     /**
@@ -552,14 +581,14 @@ export class RealObjectSystem {
                 if (metadata.name !== undefined) {
                     metadataList.push(metadata);
                 } else {
-                    console.warn(`[RealObjectSystem] 実身ではないJSONファイルをスキップ: ${jsonFile}`);
+                    logger.debug(`実身ではないJSONファイルをスキップ: ${jsonFile}`);
                 }
             } catch (error) {
-                console.warn(`[RealObjectSystem] メタデータ読み込みエラー: ${jsonFile}`, error);
+                logger.warn(`メタデータ読み込みエラー: ${jsonFile}`, error);
             }
         }
 
-        console.log(`[RealObjectSystem] メタデータ一覧取得: ${metadataList.length}件`);
+        logger.info(`メタデータ一覧取得: ${metadataList.length}件`);
         return metadataList;
     }
 
@@ -568,7 +597,7 @@ export class RealObjectSystem {
      * @returns {Promise<Array>} 参照カウント0の実身のメタデータ配列
      */
     async getUnreferencedRealObjects() {
-        console.log('[RealObjectSystem] 参照カウント0の実身一覧取得開始');
+        logger.info('参照カウント0の実身一覧取得開始');
 
         const allMetadata = await this.getAllMetadata();
         const unreferencedObjects = allMetadata.filter(metadata => {
@@ -576,7 +605,7 @@ export class RealObjectSystem {
             return refCount === 0;
         });
 
-        console.log(`[RealObjectSystem] 参照カウント0の実身: ${unreferencedObjects.length}件 / 全${allMetadata.length}件`);
+        logger.info(`参照カウント0の実身: ${unreferencedObjects.length}件 / 全${allMetadata.length}件`);
         return unreferencedObjects;
     }
 
@@ -595,7 +624,7 @@ export class RealObjectSystem {
      */
     static extractRealId(linkId) {
         if (!linkId) {
-            console.warn('[RealObjectSystem] extractRealId: linkIdが空です');
+            logger.warn('extractRealId: linkIdが空です');
             return '';
         }
         // .xtadまたは.jsonの拡張子を削除
@@ -612,7 +641,7 @@ export class RealObjectSystem {
      */
     static getRealObjectJsonFileName(realId) {
         if (!realId) {
-            console.warn('[RealObjectSystem] getRealObjectJsonFileName: realIdが空です');
+            logger.warn('getRealObjectJsonFileName: realIdが空です');
             return '';
         }
         return `${realId}.json`;
@@ -626,9 +655,9 @@ export class RealObjectSystem {
      */
     static async getAppListData(plugin, realId) {
         try {
-            console.log('[RealObjectSystem] getAppListData開始 realId:', realId);
+            logger.debug('getAppListData開始 realId:', realId);
             const jsonFileName = this.getRealObjectJsonFileName(realId);
-            console.log('[RealObjectSystem] JSONファイル名:', jsonFileName);
+            logger.debug('JSONファイル名:', jsonFileName);
 
             // 親ウィンドウ経由でファイルを読み込む（仮身一覧プラグインと同じ方法）
             const messageId = `load-json-${Date.now()}-${Math.random()}`;
@@ -639,7 +668,7 @@ export class RealObjectSystem {
                 messageId: messageId
             });
 
-            console.log('[RealObjectSystem] 親ウィンドウにファイル読み込み要求送信:', jsonFileName);
+            logger.debug('親ウィンドウにファイル読み込み要求送信:', jsonFileName);
 
             try {
                 // レスポンスを待つ（10秒タイムアウト）
@@ -648,41 +677,41 @@ export class RealObjectSystem {
                 });
 
                 if (result.success) {
-                    console.log('[RealObjectSystem] JSONファイル読み込み成功（親ウィンドウ経由）:', jsonFileName);
+                    logger.debug('JSONファイル読み込み成功（親ウィンドウ経由）:', jsonFileName);
 
                     // dataフィールド（Fileオブジェクト）またはcontentフィールド（テキスト）に対応
                     let jsonText;
                     if (result.data && result.data instanceof File) {
-                        console.log('[RealObjectSystem] Fileオブジェクトをテキストとして読み込み');
+                        logger.debug('Fileオブジェクトをテキストとして読み込み');
                         jsonText = await result.data.text();
                     } else if (result.content) {
                         jsonText = result.content;
                     } else {
-                        console.error('[RealObjectSystem] レスポンスにdataまたはcontentフィールドがありません');
+                        logger.error('レスポンスにdataまたはcontentフィールドがありません');
                         return null;
                     }
 
                     const jsonData = JSON.parse(jsonText);
-                    console.log('[RealObjectSystem] JSONパース成功 keys:', Object.keys(jsonData));
+                    logger.debug('JSONパース成功 keys:', Object.keys(jsonData));
 
                     // applistセクションを返す（小文字）
                     if (jsonData.applist) {
-                        console.log('[RealObjectSystem] applist found:', Object.keys(jsonData.applist));
+                        logger.debug('applist found:', Object.keys(jsonData.applist));
                         return jsonData.applist;
                     } else {
-                        console.warn('[RealObjectSystem] applistが設定されていません jsonData:', jsonData);
+                        logger.warn('applistが設定されていません jsonData:', jsonData);
                         return null;
                     }
                 } else {
-                    console.error('[RealObjectSystem] JSONファイル読み込み失敗:', result.error);
+                    logger.error('JSONファイル読み込み失敗:', result.error);
                     return null;
                 }
             } catch (error) {
-                console.error('[RealObjectSystem] JSONファイル読み込みタイムアウトまたはエラー:', jsonFileName, error);
+                logger.error('JSONファイル読み込みタイムアウトまたはエラー:', jsonFileName, error);
                 return null;
             }
         } catch (error) {
-            console.error('[RealObjectSystem] appList取得エラー:', error);
+            logger.error('appList取得エラー:', error);
             return null;
         }
     }
@@ -693,7 +722,7 @@ export class RealObjectSystem {
      */
     static closeRealObject(plugin) {
         if (!plugin.contextMenuVirtualObject) {
-            console.warn('[RealObjectSystem] 選択中の仮身がありません');
+            logger.warn('選択中の仮身がありません');
             return;
         }
 
@@ -701,7 +730,7 @@ export class RealObjectSystem {
         const windowId = plugin.openedRealObjects.get(realId);
 
         if (!windowId) {
-            console.warn('[RealObjectSystem] 実身が開いていません:', realId);
+            logger.warn('実身が開いていません:', realId);
             plugin.setStatus('実身が開いていません');
             return;
         }
@@ -711,7 +740,7 @@ export class RealObjectSystem {
             windowId: windowId
         });
 
-        console.log('[RealObjectSystem] ウィンドウを閉じる要求:', windowId);
+        logger.debug('ウィンドウを閉じる要求:', windowId);
         plugin.setStatus('実身を閉じました');
     }
 
@@ -721,7 +750,7 @@ export class RealObjectSystem {
      */
     static async changeVirtualObjectAttributes(plugin) {
         if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
-            console.warn('[RealObjectSystem] 選択中の仮身がありません');
+            logger.warn('選択中の仮身がありません');
             return;
         }
 
@@ -742,7 +771,7 @@ export class RealObjectSystem {
         const autoopen = element.dataset.linkAutoopen !== undefined ? element.dataset.linkAutoopen : (vobj.autoopen || 'false');
         const chsz = element.dataset.linkChsz ? parseFloat(element.dataset.linkChsz) : (parseFloat(vobj.chsz) || 14);
 
-        console.log('[RealObjectSystem] 仮身属性ダイアログ用に現在の属性を取得:', {
+        logger.debug('仮身属性ダイアログ用に現在の属性を取得:', {
             pictdisp, namedisp, roledisp, typedisp, updatedisp, framedisp,
             frcol, chcol, tbcol, bgcol, autoopen, chsz
         });
@@ -793,7 +822,7 @@ export class RealObjectSystem {
             messageId: messageId
         });
 
-        console.log('[RealObjectSystem] 仮身属性変更ダイアログ要求');
+        logger.debug('仮身属性変更ダイアログ要求');
 
         try {
             // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
@@ -806,7 +835,7 @@ export class RealObjectSystem {
                 plugin.applyVirtualObjectAttributes(result.attributes, vobj, element);
             }
         } catch (error) {
-            console.error('[RealObjectSystem] 仮身属性変更エラー:', error);
+            logger.error('仮身属性変更エラー:', error);
         }
     }
 
@@ -816,7 +845,7 @@ export class RealObjectSystem {
      */
     static async renameRealObject(plugin) {
         if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
-            console.warn('[RealObjectSystem] 選択中の仮身がありません');
+            logger.warn('選択中の仮身がありません');
             return { success: false };
         }
 
@@ -833,7 +862,7 @@ export class RealObjectSystem {
             messageId: messageId
         });
 
-        console.log('[RealObjectSystem] 実身名変更要求:', realId, currentName);
+        logger.debug('実身名変更要求:', realId, currentName);
 
         try {
             // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
@@ -848,7 +877,7 @@ export class RealObjectSystem {
                     element.textContent = result.newName;
                     element.dataset.linkName = result.newName;
                 }
-                console.log('[RealObjectSystem] 実身名変更成功:', realId, result.newName);
+                logger.info('実身名変更成功:', realId, result.newName);
                 plugin.setStatus(`実身名を「${result.newName}」に変更しました`);
                 plugin.isModified = true;
 
@@ -858,7 +887,7 @@ export class RealObjectSystem {
 
             return { success: false };
         } catch (error) {
-            console.error('[RealObjectSystem] 実身名変更エラー:', error);
+            logger.error('実身名変更エラー:', error);
             return { success: false, error: error };
         }
     }
@@ -869,7 +898,7 @@ export class RealObjectSystem {
      */
     static async duplicateRealObject(plugin) {
         if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
-            console.warn('[RealObjectSystem] 選択中の仮身がありません');
+            logger.warn('選択中の仮身がありません');
             return;
         }
 
@@ -883,7 +912,7 @@ export class RealObjectSystem {
             messageId: messageId
         });
 
-        console.log('[RealObjectSystem] 実身複製要求:', realId);
+        logger.debug('実身複製要求:', realId);
 
         try {
             // レスポンスを待つ（デフォルトタイムアウト5秒）
@@ -892,11 +921,11 @@ export class RealObjectSystem {
             });
 
             if (result.success) {
-                console.log('[RealObjectSystem] 実身複製成功:', realId, '->', result.newRealId);
+                logger.info('実身複製成功:', realId, '->', result.newRealId);
                 plugin.setStatus(`実身を複製しました: ${result.newName}`);
             }
         } catch (error) {
-            console.error('[RealObjectSystem] 実身複製エラー:', error);
+            logger.error('実身複製エラー:', error);
             plugin.setStatus('実身の複製に失敗しました');
         }
     }
@@ -909,12 +938,113 @@ export class RealObjectSystem {
         if (window.parent && window.parent !== window && window.parent.pluginManager) {
             try {
                 window.parent.pluginManager.launchPlugin('trash-real-objects', null);
-                console.log('[RealObjectSystem] 屑実身操作ウィンドウ起動');
+                logger.info('屑実身操作ウィンドウ起動');
                 plugin.setStatus('屑実身操作ウィンドウを起動しました');
             } catch (error) {
-                console.error('[RealObjectSystem] 屑実身操作ウィンドウ起動エラー:', error);
+                logger.error('屑実身操作ウィンドウ起動エラー:', error);
                 plugin.setStatus('屑実身操作ウィンドウの起動に失敗しました');
             }
+        }
+    }
+
+    /**
+     * 画像ファイルを保存
+     * @param {string} fileName ファイル名
+     * @param {Array|Uint8Array} imageDataArray 画像データ
+     * @returns {boolean} 成功/失敗
+     * 
+     */
+    saveImageFile(fileName, imageDataArray) {
+        if (!this.isElectronEnv) {
+            logger.error('画像ファイル保存エラー: Electron環境が必要です');
+            return false;
+        }
+
+        try {
+            // データフォルダに保存
+            const basePath = this.getDataBasePath();
+            const filePath = this.path.join(basePath, fileName);
+
+            // Uint8Arrayに変換して保存
+            const buffer = Buffer.from(imageDataArray);
+            this.fs.writeFileSync(filePath, buffer);
+
+            logger.info('画像ファイル保存成功:', filePath);
+            return true;
+        } catch (error) {
+            logger.error('画像ファイル保存エラー:', error);
+            return false;
+        }
+    }
+
+    /**
+     * 画像ファイルを読み込み（postMessage経由でレスポンス）
+     * @param {string} fileName ファイル名
+     * @param {string} messageId メッセージID
+     * @param {Window} source レスポンス送信先
+     */
+    loadImageFile(fileName, messageId, source) {
+        if (!this.isElectronEnv) {
+            source.postMessage({
+                type: 'load-image-response',
+                messageId: messageId,
+                success: false,
+                error: 'Electron environment required'
+            }, '*');
+            return;
+        }
+
+        try {
+            // データフォルダから読み込み
+            const basePath = this.getDataBasePath();
+            const filePath = this.path.join(basePath, fileName);
+
+            logger.info('画像ファイル読み込み:', filePath);
+
+            // ファイルが存在するかチェック
+            if (!this.fs.existsSync(filePath)) {
+                logger.error('画像ファイルが見つかりません:', filePath);
+                source.postMessage({
+                    type: 'load-image-response',
+                    messageId: messageId,
+                    success: false,
+                    error: 'File not found'
+                }, '*');
+                return;
+            }
+
+            // ファイルを読み込み
+            const buffer = this.fs.readFileSync(filePath);
+            const imageData = Array.from(buffer);
+
+            // MIMEタイプを推測
+            const ext = this.path.extname(fileName).toLowerCase();
+            let mimeType = 'image/png';
+            if (ext === '.jpg' || ext === '.jpeg') {
+                mimeType = 'image/jpeg';
+            } else if (ext === '.gif') {
+                mimeType = 'image/gif';
+            } else if (ext === '.bmp') {
+                mimeType = 'image/bmp';
+            }
+
+            source.postMessage({
+                type: 'load-image-response',
+                messageId: messageId,
+                success: true,
+                imageData: imageData,
+                mimeType: mimeType
+            }, '*');
+
+            logger.info('画像ファイル読み込み成功:', filePath, '(', buffer.length, 'bytes)');
+        } catch (error) {
+            logger.error('画像ファイル読み込みエラー:', error);
+            source.postMessage({
+                type: 'load-image-response',
+                messageId: messageId,
+                success: false,
+                error: error.message
+            }, '*');
         }
     }
 }

@@ -1,0 +1,460 @@
+/**
+ * DialogManager - ダイアログ管理クラス
+ * TADjs Desktopのダイアログ表示・非表示を管理
+ * @module DialogManager
+ */
+
+import { getLogger } from './logger.js';
+import { UI_UPDATE_DELAY_MS } from './util.js';
+
+const logger = getLogger('DialogManager');
+
+export class DialogManager {
+    constructor() {
+        logger.debug('DialogManager initialized');
+    }
+
+    /**
+     * メッセージダイアログを表示
+     * @param {string} message - 表示するメッセージ
+     * @param {Array<{label: string, value: any}>} buttons - ボタン定義の配列
+     * @param {number} defaultButton - デフォルトボタンのインデックス (0始まり)
+     * @returns {Promise<any>} - 選択されたボタンの値
+     */
+    showMessageDialog(message, buttons, defaultButton = 0) {
+        return new Promise((resolve) => {
+            const overlay = document.getElementById('dialog-overlay');
+            const dialog = document.getElementById('message-dialog');
+            const messageText = document.getElementById('dialog-message-text');
+            const buttonsContainer = document.getElementById('dialog-message-buttons');
+
+            // メッセージを設定
+            messageText.textContent = message;
+
+            // ボタンをクリア
+            buttonsContainer.innerHTML = '';
+
+            // ボタンを作成
+            buttons.forEach((buttonDef, index) => {
+                const button = document.createElement('button');
+                button.className = 'dialog-button';
+                button.textContent = buttonDef.label;
+
+                // デフォルトボタンにマーク
+                if (index === defaultButton) {
+                    button.classList.add('default');
+                }
+
+                button.addEventListener('click', () => {
+                    this.hideMessageDialog();
+                    resolve(buttonDef.value);
+                });
+
+                buttonsContainer.appendChild(button);
+            });
+
+            // Enterキーでデフォルトボタンを押す
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.hideMessageDialog();
+                    document.removeEventListener('keydown', handleKeyDown);
+                    resolve(buttons[defaultButton].value);
+                }
+            };
+            document.addEventListener('keydown', handleKeyDown);
+
+            // ダイアログを表示
+            overlay.style.display = 'block';
+            dialog.style.display = 'block';
+
+            // デフォルトボタンにフォーカス
+            const defaultBtn = buttonsContainer.children[defaultButton];
+            if (defaultBtn) {
+                defaultBtn.focus();
+            }
+        });
+    }
+
+    /**
+     * メッセージダイアログを非表示にする
+     */
+    hideMessageDialog() {
+        const overlay = document.getElementById('dialog-overlay');
+        const dialog = document.getElementById('message-dialog');
+        overlay.style.display = 'none';
+        dialog.style.display = 'none';
+    }
+
+    /**
+     * 入力ダイアログを表示
+     * @param {string} message - 表示するメッセージ
+     * @param {string} defaultValue - 入力欄のデフォルト値
+     * @param {number} inputWidth - 入力欄の幅（文字数）
+     * @param {Array<{label: string, value: any}>} buttons - ボタン定義の配列
+     * @param {number} defaultButton - デフォルトボタンのインデックス (0始まり)
+     * @returns {Promise<{button: any, value: string}>} - 選択されたボタンと入力値
+     */
+    showInputDialog(message, defaultValue = '', inputWidth = window.DEFAULT_INPUT_WIDTH, buttons = [{ label: '取消', value: 'cancel' }, { label: 'OK', value: 'ok' }], defaultButton = 1) {
+        return new Promise((resolve) => {
+            const overlay = document.getElementById('dialog-overlay');
+            const dialog = document.getElementById('input-dialog');
+            const messageText = document.getElementById('input-dialog-message');
+            const inputField = document.getElementById('dialog-input-field');
+            const buttonsContainer = document.getElementById('input-dialog-buttons');
+
+            // メッセージを設定
+            messageText.textContent = message;
+
+            // 入力欄を設定
+            inputField.value = defaultValue;
+            inputField.style.width = `${inputWidth}ch`;
+            inputField.select();
+
+            // ボタンをクリア
+            buttonsContainer.innerHTML = '';
+
+            // ボタンを作成
+            buttons.forEach((buttonDef, index) => {
+                const button = document.createElement('button');
+                button.className = 'dialog-button';
+                button.textContent = buttonDef.label;
+
+                // デフォルトボタンにマーク
+                if (index === defaultButton) {
+                    button.classList.add('default');
+                }
+
+                button.addEventListener('click', () => {
+                    this.hideInputDialog();
+                    resolve({
+                        button: buttonDef.value,
+                        value: inputField.value
+                    });
+                });
+
+                buttonsContainer.appendChild(button);
+            });
+
+            // Enterキーでデフォルトボタンを押す
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.hideInputDialog();
+                    document.removeEventListener('keydown', handleKeyDown);
+                    resolve({
+                        button: buttons[defaultButton].value,
+                        value: inputField.value
+                    });
+                }
+            };
+            document.addEventListener('keydown', handleKeyDown);
+
+            // ダイアログを表示
+            overlay.style.display = 'block';
+            dialog.style.display = 'block';
+
+            // 入力欄にフォーカス
+            setTimeout(() => {
+                inputField.focus();
+                inputField.select();
+             }, UI_UPDATE_DELAY_MS);
+        });
+    }
+
+    /**
+     * 入力ダイアログを非表示にする
+     */
+    hideInputDialog() {
+        const overlay = document.getElementById('dialog-overlay');
+        const dialog = document.getElementById('input-dialog');
+        overlay.style.display = 'none';
+        dialog.style.display = 'none';
+    }
+
+    /**
+     * カスタムダイアログを表示
+     * @param {string} dialogHtml - ダイアログ内に表示するHTML
+     * @param {Array<{label: string, value: any}>} buttons - ボタン定義の配列
+     * @param {number} defaultButton - デフォルトボタンのインデックス (0始まり)
+     * @param {Object} inputs - 入力要素のID {checkbox: 'id1', text: 'id2', radios: {key: 'radioName'}}
+     * @returns {Promise<{button: any, checkbox: boolean, input: string, radios: Object, inputs: Object, dialogElement: Element}>}
+     */
+    showCustomDialog(dialogHtml, buttons, defaultButton = 0, inputs = {}) {
+        return new Promise((resolve) => {
+            const overlay = document.getElementById('dialog-overlay');
+            const dialog = document.getElementById('input-dialog');
+            const messageText = document.getElementById('input-dialog-message');
+            const buttonsContainer = document.getElementById('input-dialog-buttons');
+
+            // カスタムHTMLを設定
+            messageText.innerHTML = dialogHtml;
+
+            // ボタンをクリア
+            buttonsContainer.innerHTML = '';
+
+            // ボタンを作成
+            buttons.forEach((buttonDef, index) => {
+                const button = document.createElement('button');
+                button.className = 'dialog-button';
+                button.textContent = buttonDef.label;
+
+                // デフォルトボタンにマーク
+                if (index === defaultButton) {
+                    button.classList.add('default');
+                }
+
+                button.addEventListener('click', () => {
+                    // 入力値を取得
+                    let checkboxValue = false;
+                    let textValue = '';
+                    let radiosValue = {};
+
+                    if (inputs.checkbox) {
+                        const checkboxElement = document.getElementById(inputs.checkbox);
+                        if (checkboxElement) {
+                            checkboxValue = checkboxElement.checked;
+                        }
+                    }
+
+                    if (inputs.text) {
+                        const textElement = document.getElementById(inputs.text);
+                        if (textElement) {
+                            textValue = textElement.value;
+                        }
+                    }
+
+                    // ラジオボタンの値を取得
+                    if (inputs.radios) {
+                        for (const [key, radioName] of Object.entries(inputs.radios)) {
+                            const radioElement = messageText.querySelector(`input[name="${radioName}"]:checked`);
+                            if (radioElement) {
+                                radiosValue[key] = radioElement.value;
+                            }
+                        }
+                    }
+
+                    // ダイアログ要素への参照を保持
+                    const dialogElement = messageText.cloneNode(true);
+
+                    this.hideInputDialog();
+                    resolve({
+                        button: buttonDef.value,
+                        checkbox: checkboxValue,
+                        input: textValue,
+                        radios: radiosValue,
+                        inputs: { columnCount: textValue },
+                        dialogElement: dialogElement
+                    });
+                });
+
+                buttonsContainer.appendChild(button);
+            });
+
+            // Enterキーでデフォルトボタンを押す
+            const handleKeyDown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+
+                    // 入力値を取得
+                    let checkboxValue = false;
+                    let textValue = '';
+                    let radiosValue = {};
+
+                    if (inputs.checkbox) {
+                        const checkboxElement = document.getElementById(inputs.checkbox);
+                        if (checkboxElement) {
+                            checkboxValue = checkboxElement.checked;
+                        }
+                    }
+
+                    if (inputs.text) {
+                        const textElement = document.getElementById(inputs.text);
+                        if (textElement) {
+                            textValue = textElement.value;
+                        }
+                    }
+
+                    // ラジオボタンの値を取得
+                    if (inputs.radios) {
+                        for (const [key, radioName] of Object.entries(inputs.radios)) {
+                            const radioElement = messageText.querySelector(`input[name="${radioName}"]:checked`);
+                            if (radioElement) {
+                                radiosValue[key] = radioElement.value;
+                            }
+                        }
+                    }
+
+                    // ダイアログ要素への参照を保持
+                    const dialogElement = messageText.cloneNode(true);
+
+                    this.hideInputDialog();
+                    document.removeEventListener('keydown', handleKeyDown);
+                    resolve({
+                        button: buttons[defaultButton].value,
+                        checkbox: checkboxValue,
+                        input: textValue,
+                        radios: radiosValue,
+                        inputs: { columnCount: textValue },
+                        dialogElement: dialogElement
+                    });
+                }
+            };
+            document.addEventListener('keydown', handleKeyDown);
+
+            // ダイアログを表示
+            overlay.style.display = 'block';
+            dialog.style.display = 'block';
+
+            // テキスト入力欄があればフォーカス
+            if (inputs.text) {
+                setTimeout(() => {
+                    const textElement = document.getElementById(inputs.text);
+                    if (textElement) {
+                        textElement.focus();
+                        textElement.select();
+                    }
+                 }, UI_UPDATE_DELAY_MS);
+            }
+        });
+    }
+
+    /**
+     * 仮身属性ダイアログのHTML生成
+     * @param {Object} attrs - 仮身属性
+     * @param {string} selectedRatio - 選択中の文字サイズ倍率ラベル
+     * @returns {string} ダイアログHTML
+     */
+    createVirtualObjectAttributesDialogHtml(attrs, selectedRatio) {
+        return `
+            <div class="vobj-attr-dialog">
+                <div class="vobj-attr-title">
+                    仮身属性変更
+                </div>
+                <div class="vobj-attr-grid">
+                    <!-- 左側: 表示項目 -->
+                    <div>
+                        <div class="vobj-attr-section-title">表示項目：</div>
+                        <label class="vobj-attr-checkbox-label">
+                            <input type="checkbox" id="pictdisp" ${attrs.pictdisp ? 'checked' : ''}> <span>ピクトグラム</span>
+                        </label>
+                        <label class="vobj-attr-checkbox-label">
+                            <input type="checkbox" id="namedisp" ${attrs.namedisp ? 'checked' : ''}> <span>名称</span>
+                        </label>
+                        <label class="vobj-attr-checkbox-label">
+                            <input type="checkbox" id="roledisp" ${attrs.roledisp ? 'checked' : ''}> <span>続柄</span>
+                        </label>
+                        <label class="vobj-attr-checkbox-label">
+                            <input type="checkbox" id="typedisp" ${attrs.typedisp ? 'checked' : ''}> <span>タイプ</span>
+                        </label>
+                        <label class="vobj-attr-checkbox-label">
+                            <input type="checkbox" id="updatedisp" ${attrs.updatedisp ? 'checked' : ''}> <span>更新日時</span>
+                        </label>
+                        <label class="vobj-attr-checkbox-label">
+                            <input type="checkbox" id="framedisp" ${attrs.framedisp ? 'checked' : ''}> <span>仮身枠</span>
+                        </label>
+                    </div>
+
+                    <!-- 中央: 色 -->
+                    <div>
+                        <div class="vobj-attr-section-title">色：</div>
+                        <label class="vobj-attr-color-label">
+                            <span>枠</span>
+                            <input type="text" id="frcol" value="${attrs.frcol}" class="vobj-attr-color-input">
+                        </label>
+                        <label class="vobj-attr-color-label">
+                            <span>仮身文字</span>
+                            <input type="text" id="chcol" value="${attrs.chcol}" class="vobj-attr-color-input">
+                        </label>
+                        <label class="vobj-attr-color-label">
+                            <span>仮身背景</span>
+                            <input type="text" id="tbcol" value="${attrs.tbcol}" class="vobj-attr-color-input">
+                        </label>
+                        <label class="vobj-attr-color-label last">
+                            <span>表示領域背景</span>
+                            <input type="text" id="bgcol" value="${attrs.bgcol}" class="vobj-attr-color-input">
+                        </label>
+                        <label class="vobj-attr-checkbox-label">
+                            <input type="checkbox" id="autoopen" ${attrs.autoopen ? 'checked' : ''}> <span>自動起動</span>
+                        </label>
+                    </div>
+
+                    <!-- 右側: 文字サイズ -->
+                    <div>
+                        <label class="vobj-attr-size-label">
+                            <span class="vobj-attr-section-title" style="display: inline;">文字サイズ：</span>
+                            <select id="chszSelect" class="vobj-attr-select">
+                                <option value="0.5" ${selectedRatio === '1/2倍' ? 'selected' : ''}>1/2倍</option>
+                                <option value="0.75" ${selectedRatio === '3/4倍' ? 'selected' : ''}>3/4倍</option>
+                                <option value="1.0" ${selectedRatio === '標準' ? 'selected' : ''}>標準</option>
+                                <option value="1.5" ${selectedRatio === '3/2倍' ? 'selected' : ''}>3/2倍</option>
+                                <option value="2.0" ${selectedRatio === '2倍' ? 'selected' : ''}>2倍</option>
+                                <option value="3.0" ${selectedRatio === '3倍' ? 'selected' : ''}>3倍</option>
+                                <option value="4.0" ${selectedRatio === '4倍' ? 'selected' : ''}>4倍</option>
+                            </select>
+                        </label>
+                        <label class="vobj-attr-custom-label">
+                            <span>自由入力</span>
+                            <input type="number" id="chszCustom" step="1" min="1" value="${attrs.chsz}"
+                                   class="vobj-attr-custom-input">
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <script>
+                // 文字サイズの選択ドロップダウンと自由入力を同期
+                const chszSelect = document.getElementById('chszSelect');
+                const chszCustom = document.getElementById('chszCustom');
+                const baseFontSize = 14; // BTRONの標準文字サイズ
+
+                // ドロップダウン変更時: 倍率をピクセル値に変換
+                chszSelect.addEventListener('change', () => {
+                    const ratio = parseFloat(chszSelect.value);
+                    chszCustom.value = Math.round(baseFontSize * ratio);
+                });
+
+                // 自由入力変更時: ピクセル値を倍率に逆変換してドロップダウンを更新
+                chszCustom.addEventListener('input', () => {
+                    const pixelValue = parseInt(chszCustom.value);
+                    const ratio = pixelValue / baseFontSize;
+                    const options = chszSelect.options;
+                    let matched = false;
+                    for (let i = 0; i < options.length; i++) {
+                        if (Math.abs(parseFloat(options[i].value) - ratio) < 0.01) {
+                            chszSelect.selectedIndex = i;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        chszSelect.selectedIndex = -1; // 該当する倍率がない場合は選択解除
+                    }
+                });
+            </script>
+        `;
+    }
+
+    /**
+     * ダイアログから仮身属性を抽出
+     * @param {Element} dialogElement - ダイアログ要素
+     * @returns {Object} 仮身属性オブジェクト
+     */
+    extractVirtualObjectAttributesFromDialog(dialogElement) {
+        const chszValue = parseInt(dialogElement.querySelector('#chszCustom').value) || 14;
+
+        return {
+            pictdisp: dialogElement.querySelector('#pictdisp').checked,
+            namedisp: dialogElement.querySelector('#namedisp').checked,
+            roledisp: dialogElement.querySelector('#roledisp').checked,
+            typedisp: dialogElement.querySelector('#typedisp').checked,
+            updatedisp: dialogElement.querySelector('#updatedisp').checked,
+            framedisp: dialogElement.querySelector('#framedisp').checked,
+            frcol: dialogElement.querySelector('#frcol').value,
+            chcol: dialogElement.querySelector('#chcol').value,
+            tbcol: dialogElement.querySelector('#tbcol').value,
+            bgcol: dialogElement.querySelector('#bgcol').value,
+            autoopen: dialogElement.querySelector('#autoopen').checked,
+            chsz: chszValue
+        };
+    }
+}

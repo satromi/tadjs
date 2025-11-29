@@ -1,3 +1,5 @@
+import { getLogger, LogLevel } from './logger.js';
+
 /**
  * プラグイン間通信を管理するメッセージバス
  * window.postMessage を使用したメッセージングを簡素化
@@ -7,7 +9,7 @@
  * - コールバック付きメッセージ送信
  * - Promise ベースのメッセージ待機
  * - 自動的なコールバック管理
- * - Phase 2: 親→子の双方向通信サポート
+ * - 親→子の双方向通信サポート
  */
 export class MessageBus {
     /**
@@ -17,7 +19,6 @@ export class MessageBus {
      * @param {string} options.mode - 動作モード: 'child'（デフォルト）または 'parent'
      */
     constructor(options = {}) {
-        this.debug = options.debug || false;
         this.pluginName = options.pluginName || 'Plugin';
         this.mode = options.mode || 'child';  // Phase 2: 親モードと子モード
         this.handlers = new Map();           // type -> handler
@@ -26,6 +27,13 @@ export class MessageBus {
         this.callbackCounter = 0;
         this.isListening = false;
         this._boundHandler = null;          // イベントリスナーの参照を保持（削除用）
+
+        // Logger初期化（pluginName + MessageBus をモジュール名として使用）
+        this.logger = getLogger(`${this.pluginName} MessageBus`);
+        // debugオプションが指定された場合はDEBUGレベルに設定
+        if (options.debug) {
+            this.logger.setLevel(LogLevel.DEBUG);
+        }
 
         // Phase 2: 親モードの場合のみ使用
         if (this.mode === 'parent') {
@@ -326,26 +334,24 @@ export class MessageBus {
     }
 
     /**
-     * デバッグログ出力（デバッグモード時のみ）
+     * デバッグログ出力（DEBUGレベル以上で出力）
      */
     log(...args) {
-        if (this.debug) {
-            console.log(`[${this.pluginName} MessageBus]`, ...args);
-        }
+        this.logger.debug(...args);
     }
 
     /**
-     * 警告ログ出力（常に出力）
+     * 警告ログ出力（WARNレベル以上で出力）
      */
     warn(...args) {
-        console.warn(`[${this.pluginName} MessageBus]`, ...args);
+        this.logger.warn(...args);
     }
 
     /**
-     * エラーログ出力（常に出力）
+     * エラーログ出力（ERRORレベル以上で出力）
      */
     error(...args) {
-        console.error(`[${this.pluginName} MessageBus]`, ...args);
+        this.logger.error(...args);
     }
 
     // ========================================
@@ -628,18 +634,19 @@ export class MessageBus {
         if (windowId) {
             // MessageBus経由で送信
             this.sendToWindow(windowId, type, data);
-            this.log(`Response sent via MessageBus: ${type}`, data);
+            this.logger.debug(`[respondTo] Response sent via MessageBus: ${type}, windowId=${windowId}`);
         } else {
             // フォールバック: 旧postMessage方式（openable: false のプラグインでは正常動作）
+            this.logger.debug(`[respondTo] Using fallback postMessage (windowId not found)`);
             if (source && source.postMessage) {
                 try {
                     source.postMessage({ type, ...data }, '*');
-                    this.log(`Response sent via fallback postMessage: ${type}`, data);
+                    this.logger.debug(`[respondTo] Response sent via fallback postMessage: ${type}`);
                 } catch (error) {
-                    this.error(`Failed to send response via fallback: ${type}`, error);
+                    this.error(`[respondTo] Failed to send response via fallback: ${type}`, error);
                 }
             } else {
-                this.error(`Cannot send response: invalid source for ${type}`, {
+                this.error(`[respondTo] Cannot send response: invalid source for ${type}`, {
                     hasSource: !!source,
                     hasPostMessage: !!(source && source.postMessage),
                     messageId: data.messageId

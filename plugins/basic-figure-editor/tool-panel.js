@@ -2,6 +2,7 @@
  * 基本図形編集プラグイン
  *  道具パネル（別ウィンドウ）
  */
+const logger = window.getLogger('ToolPanel');
 
 class ToolPanel {
     constructor() {
@@ -33,7 +34,7 @@ class ToolPanel {
     init() {
         // 親ウィンドウからのメッセージを受信
         window.addEventListener('message', (event) => {
-            console.log('[TOOL PANEL] メッセージ受信:', event.data);
+            logger.debug('[TOOL PANEL] メッセージ受信:', event.data);
 
             if (event.data && event.data.type === 'init-tool-panel') {
                 // 初期設定を受信
@@ -53,7 +54,7 @@ class ToolPanel {
             } else if (event.data && event.data.type === 'popup-grid-interval-click') {
                 // 格子点間隔ボタンがクリックされた
                 this.gridInterval = event.data.interval;
-                console.log('[TOOL PANEL] 格子点間隔を更新:', this.gridInterval);
+                logger.debug('[TOOL PANEL] 格子点間隔を更新:', this.gridInterval);
                 this.sendToEditor({
                     type: 'update-grid-interval',
                     gridInterval: this.gridInterval
@@ -61,7 +62,7 @@ class ToolPanel {
             } else if (event.data && event.data.type === 'popup-grid-mode-change') {
                 // 格子点モードが変更された
                 this.gridMode = event.data.gridMode;
-                console.log('[TOOL PANEL] 格子点モードを更新:', this.gridMode);
+                logger.debug('[TOOL PANEL] 格子点モードを更新:', this.gridMode);
                 this.sendToEditor({
                     type: 'update-grid-mode',
                     gridMode: this.gridMode
@@ -69,14 +70,14 @@ class ToolPanel {
             } else if (event.data && event.data.type === 'popup-grid-interval-custom') {
                 // 格子点間隔カスタム入力が変更された
                 this.gridInterval = event.data.interval;
-                console.log('[TOOL PANEL] 格子点間隔（カスタム）を更新:', this.gridInterval);
+                logger.debug('[TOOL PANEL] 格子点間隔（カスタム）を更新:', this.gridInterval);
                 this.sendToEditor({
                     type: 'update-grid-interval',
                     gridInterval: this.gridInterval
                 });
             } else if (event.data && event.data.type === 'current-font-settings') {
                 // エディタから現在のフォント設定を受信
-                console.log('[TOOL PANEL] 現在のフォント設定:', event.data.settings);
+                logger.debug('[TOOL PANEL] 現在のフォント設定:', event.data.settings);
                 if (this.fontSettingsButtonElement) {
                     this.showFontPopupInParent(this.fontSettingsButtonElement, event.data.settings);
                     this.fontSettingsButtonElement = null;
@@ -85,12 +86,12 @@ class ToolPanel {
                 // ピクセルマップモードに入る
                 this.isPixelmapMode = true;
                 this.updateCanvasToolIcon();
-                console.log('[TOOL PANEL] ピクセルマップモードに入りました');
+                logger.debug('[TOOL PANEL] ピクセルマップモードに入りました');
             } else if (event.data && event.data.type === 'exit-pixelmap-mode') {
                 // ピクセルマップモードを抜ける
                 this.isPixelmapMode = false;
                 this.updateCanvasToolIcon();
-                console.log('[TOOL PANEL] ピクセルマップモードを抜けました');
+                logger.debug('[TOOL PANEL] ピクセルマップモードを抜けました');
             } else if (event.data && event.data.type === 'popup-fill-color-change') {
                 // 塗りつぶし色変更
                 this.fillColor = event.data.fillColor;
@@ -108,10 +109,10 @@ class ToolPanel {
                 });
             } else if (event.data && event.data.type === 'popup-stroke-color-change') {
                 // 線色変更
-                console.log('[TOOL PANEL] 線色変更:', event.data.strokeColor);
+                logger.debug('[TOOL PANEL] 線色変更:', event.data.strokeColor);
                 this.strokeColor = event.data.strokeColor;
                 this.updatePaletteIcons();
-                console.log('[TOOL PANEL] update-stroke-colorをエディタに送信:', this.strokeColor);
+                logger.debug('[TOOL PANEL] update-stroke-colorをエディタに送信:', this.strokeColor);
                 this.sendToEditor({
                     type: 'update-stroke-color',
                     strokeColor: this.strokeColor
@@ -184,7 +185,7 @@ class ToolPanel {
             }, '*');
         }
 
-        console.log('[道具パネル] 準備完了');
+        logger.info('[道具パネル] 準備完了');
     }
 
     setupEventListeners() {
@@ -270,7 +271,7 @@ class ToolPanel {
     }
 
     selectTool(tool) {
-        console.log('[TOOL PANEL] ツール選択:', tool);
+        logger.debug('[TOOL PANEL] ツール選択:', tool);
         this.sendToEditor({
             type: 'select-tool',
             tool: tool
@@ -326,7 +327,7 @@ class ToolPanel {
         }
 
         // すべてのポップアップタイプが親ウィンドウ表示に対応済み
-        console.warn('[TOOL PANEL] 未知のポップアップタイプ:', paletteType);
+        logger.warn('[TOOL PANEL] 未知のポップアップタイプ:', paletteType);
     }
 
     updatePaletteIcons() {

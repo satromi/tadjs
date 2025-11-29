@@ -1,7 +1,10 @@
 /**
  * 書庫解凍プラグイン
  * BPK書庫ファイルを解凍し、実身を仮身形式で表示
+ * ドラッグで実身をtadjs-desktopに渡す
  */
+const logger = window.getLogger('UnpackFile');
+
 class UnpackFileManager {
     constructor() {
         this.archiveFiles = [];
@@ -24,7 +27,7 @@ class UnpackFileManager {
     }
 
     init() {
-        console.log('[UnpackFile] 初期化開始');
+        logger.info('[UnpackFile] 初期化開始');
 
         // MessageBus Phase 2: MessageBusのハンドラを設定
         if (this.messageBus) {
@@ -44,13 +47,13 @@ class UnpackFileManager {
     setupMessageBusHandlers() {
         // 初期化メッセージ
         this.messageBus.on('init', async (data) => {
-            console.log('[UnpackFile] init受信', data);
-            console.log('[UnpackFile] data.fileData:', data.fileData);
-            console.log('[UnpackFile] data.fileData keys:', data.fileData ? Object.keys(data.fileData) : 'null');
+            logger.info('[UnpackFile] init受信', data);
+            logger.info('[UnpackFile] data.fileData:', data.fileData);
+            logger.info('[UnpackFile] data.fileData keys:', data.fileData ? Object.keys(data.fileData) : 'null');
 
             // ウィンドウIDを保存
             this.windowId = data.windowId;
-            console.log('[UnpackFile] windowId:', this.windowId);
+            logger.info('[UnpackFile] windowId:', this.windowId);
 
             if (data.fileData) {
                 this.rawData = data.fileData.rawData;
@@ -60,9 +63,9 @@ class UnpackFileManager {
                 let rawId = data.fileData.realId || data.fileData.fileId;
                 this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
 
-                console.log('[UnpackFile] this.rawData設定:', this.rawData ? `存在（長さ: ${this.rawData.length}）` : 'null');
-                console.log('[UnpackFile] fileName設定:', this.fileName);
-                console.log('[UnpackFile] realId設定:', this.realId, '(元:', rawId, ')');
+                logger.info('[UnpackFile] this.rawData設定:', this.rawData ? `存在（長さ: ${this.rawData.length}）` : 'null');
+                logger.info('[UnpackFile] fileName設定:', this.fileName);
+                logger.info('[UnpackFile] realId設定:', this.realId, '(元:', rawId, ')');
 
                 // BPKファイルのヘッダーのみ読み込み（解凍は行わない）
                 this.loadArchiveHeader(this.rawData, this.fileName);
@@ -119,13 +122,13 @@ class UnpackFileManager {
 
         // アーカイブドロップ検出
         this.messageBus.on('archive-drop-detected', async (data) => {
-            console.log('[UnpackFile] ドロップ検出通知受信');
+            logger.info('[UnpackFile] ドロップ検出通知受信');
             await this.handleArchiveDrop(data.dropPosition, data.dragData);
         });
 
         // ルート実身配置完了
         this.messageBus.on('root-virtual-object-inserted', async (data) => {
-            console.log('[UnpackFile] ルート実身配置完了通知受信');
+            logger.info('[UnpackFile] ルート実身配置完了通知受信');
             await this.handleRootInsertionComplete();
         });
     }
@@ -204,7 +207,7 @@ class UnpackFileManager {
      * @param {string} fileName - BPKファイル名
      */
     async loadArchiveHeader(rawData, fileName) {
-        console.log('[UnpackFile] 書庫ヘッダー読み込み開始（解凍は実施しない）');
+        logger.info('[UnpackFile] 書庫ヘッダー読み込み開始（解凍は実施しない）');
 
         try {
             // ファイル名から拡張子を除いたベース名を取得
@@ -214,7 +217,7 @@ class UnpackFileManager {
                 baseName = fileName.replace(/\.(bpk|BPK)$/i, '');
             }
 
-            console.log('[UnpackFile] ルート実身名:', baseName);
+            logger.info('[UnpackFile] ルート実身名:', baseName);
 
             const rootFile = {
                 fileId: this.generateUUIDv7(),
@@ -228,7 +231,7 @@ class UnpackFileManager {
             this.renderRootVirtualObject();
 
         } catch (error) {
-            console.error('[UnpackFile] ヘッダー読み込みエラー:', error);
+            logger.error('[UnpackFile] ヘッダー読み込みエラー:', error);
         }
     }
 
@@ -236,7 +239,7 @@ class UnpackFileManager {
      * BPKファイルを解凍（ドラッグ時に呼び出される）
      */
     async extractArchive(rawData) {
-        console.log('[UnpackFile] 書庫解凍開始');
+        logger.info('[UnpackFile] 書庫解凍開始');
 
         try {
             // unpack.jsの解凍処理を呼び出し
@@ -257,11 +260,11 @@ class UnpackFileManager {
                 // 仮身一覧を表示
                 this.renderArchiveFiles();
             } else {
-                console.error('[UnpackFile] tadRawArray関数が見つかりません');
+                logger.error('[UnpackFile] tadRawArray関数が見つかりません');
             }
 
         } catch (error) {
-            console.error('[UnpackFile] 書庫解凍エラー:', error);
+            logger.error('[UnpackFile] 書庫解凍エラー:', error);
         }
     }
 
@@ -269,23 +272,23 @@ class UnpackFileManager {
      * unpack.jsから解凍結果を取得
      */
     getExtractedFilesFromUnpackJS() {
-        console.log('[UnpackFile] unpack.jsから解凍結果を取得');
+        logger.info('[UnpackFile] unpack.jsから解凍結果を取得');
 
         // unpack.jsから実身情報を取得
         if (typeof window.getArchiveFiles === 'function') {
             this.archiveFiles = window.getArchiveFiles();
-            console.log(`[UnpackFile] ${this.archiveFiles.length}個の実身を取得`);
+            logger.info(`[UnpackFile] ${this.archiveFiles.length}個の実身を取得`);
         } else {
-            console.error('[UnpackFile] getArchiveFiles関数が見つかりません');
+            logger.error('[UnpackFile] getArchiveFiles関数が見つかりません');
             this.archiveFiles = [];
         }
 
         // unpack.jsから実身IDマップを取得
         if (typeof window.getRealIdMap === 'function') {
             this.fileIdMap = window.getRealIdMap();
-            console.log(`[UnpackFile] 実身IDマップを取得:`, this.fileIdMap.size, '個');
+            logger.info(`[UnpackFile] 実身IDマップを取得:`, this.fileIdMap.size, '個');
         } else {
-            console.error('[UnpackFile] getRealIdMap関数が見つかりません');
+            logger.error('[UnpackFile] getRealIdMap関数が見つかりません');
             this.fileIdMap = new Map();
         }
     }
@@ -294,7 +297,7 @@ class UnpackFileManager {
      * 実身ファイルセットを生成してtadjs-desktopに送信
      */
     async generateAndSendRealFiles() {
-        console.log('[UnpackFile] 実身ファイルセット生成開始');
+        logger.info('[UnpackFile] 実身ファイルセット生成開始');
 
         try {
             const generatedFiles = [];
@@ -306,7 +309,7 @@ class UnpackFileManager {
                 const nrec = file.nrec || 1;
                 const recordXmls = file.recordXmls || [];
 
-                console.log(`[UnpackFile] 実身 ${i + 1}/${this.archiveFiles.length}: ${realName} (レコード数: ${nrec})`);
+                logger.info(`[UnpackFile] 実身 ${i + 1}/${this.archiveFiles.length}: ${realName} (レコード数: ${nrec})`);
 
                 // 現在の日時を取得
                 const now = new Date().toISOString();
@@ -349,11 +352,14 @@ class UnpackFileManager {
                             name: "基本文章編集",
                             defaultOpen: true
                         },
+                        "basic-figure-editor": {
+                            name: "基本図形編集",
+                            defaultOpen: false
+                        },
                         "virtual-object-list": {
                             name: "仮身一覧",
                             defaultOpen: false
                         }
-
                     }
                 };
 
@@ -364,11 +370,11 @@ class UnpackFileManager {
 
                     // 空のXTADデータ(type=0, type=8のレコード)はスキップ
                     if (xtadContent.length === 0) {
-                        console.log(`[UnpackFile] レコード ${recNo}: スキップ（XML不要なレコード）`);
+                        logger.info(`[UnpackFile] レコード ${recNo}: スキップ（XML不要なレコード）`);
                         continue;
                     }
 
-                    console.log(`[UnpackFile] レコード ${recNo}: ${file.fileId}_${xtadIndex}.xtad (長さ: ${xtadContent.length} 文字)`);
+                    logger.info(`[UnpackFile] レコード ${recNo}: ${file.fileId}_${xtadIndex}.xtad (長さ: ${xtadContent.length} 文字)`);
 
                     // 生成したファイル情報を保存
                     generatedFiles.push({
@@ -383,13 +389,13 @@ class UnpackFileManager {
                 }
             }
 
-            console.log('[UnpackFile] 実身ファイルセット生成完了:', generatedFiles.length, '個のファイルエントリ');
+            logger.info('[UnpackFile] 実身ファイルセット生成完了:', generatedFiles.length, '個のファイルエントリ');
 
             // unpack.jsから生成された画像を取得
             let generatedImages = [];
             if (typeof window.getGeneratedImages === 'function') {
                 generatedImages = window.getGeneratedImages();
-                console.log(`[UnpackFile] ${generatedImages.length}個の画像を取得`);
+                logger.info(`[UnpackFile] ${generatedImages.length}個の画像を取得`);
             }
 
             // データを分割して送信（postMessageのサイズ制限対策）
@@ -412,7 +418,7 @@ class UnpackFileManager {
                         isLast: isLastChunk
                     }
                 });
-                console.log(`[UnpackFile] チャンク ${i / CHUNK_SIZE + 1}/${Math.ceil(generatedFiles.length / CHUNK_SIZE)} を送信（${chunk.length}個のファイル、${imagesToSend.length}個の画像）`);
+                logger.info(`[UnpackFile] チャンク ${i / CHUNK_SIZE + 1}/${Math.ceil(generatedFiles.length / CHUNK_SIZE)} を送信（${chunk.length}個のファイル、${imagesToSend.length}個の画像）`);
 
                 // 次のチャンクを送る前に少し待機（処理の負荷を軽減）
                 if (!isLastChunk) {
@@ -420,10 +426,10 @@ class UnpackFileManager {
                 }
             }
 
-            console.log('[UnpackFile] すべてのファイル情報送信完了');
+            logger.info('[UnpackFile] すべてのファイル情報送信完了');
 
         } catch (error) {
-            console.error('[UnpackFile] 実身ファイルセット生成エラー:', error);
+            logger.error('[UnpackFile] 実身ファイルセット生成エラー:', error);
         }
     }
 
@@ -432,7 +438,7 @@ class UnpackFileManager {
      * 確認ダイアログを表示→解凍→ルート実身配置要求の流れを実行
      */
     async handleArchiveDrop(dropPosition, dragData) {
-        console.log('[UnpackFile] ドロップ処理開始');
+        logger.info('[UnpackFile] ドロップ処理開始');
 
         // ドロップ位置とdragDataを保存
         this.pendingDropPosition = dropPosition;
@@ -471,7 +477,7 @@ class UnpackFileManager {
         );
 
         if (result === 'start') {
-            console.log('[UnpackFile] 解凍開始');
+            logger.info('[UnpackFile] 解凍開始');
             // 解凍処理を実行
             const rawDataArray = dragData.rawData ? new Uint8Array(dragData.rawData) : this.rawData;
             await this.extractArchive(rawDataArray);
@@ -479,7 +485,7 @@ class UnpackFileManager {
             // 解凍完了後、ルート実身配置要求を送信
             await this.requestRootInsertion();
         } else {
-            console.log('[UnpackFile] 解凍キャンセル');
+            logger.info('[UnpackFile] 解凍キャンセル');
         }
     }
 
@@ -495,7 +501,7 @@ class UnpackFileManager {
                 defaultButton: defaultButton
             }, (result) => {
                 if (result.error) {
-                    console.warn('[UnpackFile] Message dialog error:', result.error);
+                    logger.warn('[UnpackFile] Message dialog error:', result.error);
                     resolve(null);
                     return;
                 }
@@ -508,10 +514,10 @@ class UnpackFileManager {
      * ルート実身配置要求をvirtual-object-listに送信
      */
     async requestRootInsertion() {
-        console.log('[UnpackFile] ルート実身配置要求を送信');
+        logger.info('[UnpackFile] ルート実身配置要求を送信');
 
         if (this.archiveFiles.length === 0) {
-            console.error('[UnpackFile] 解凍されたファイルがありません');
+            logger.error('[UnpackFile] 解凍されたファイルがありません');
             return;
         }
 
@@ -526,6 +532,10 @@ class UnpackFileManager {
             },
             "basic-text-editor": {
                 name: "基本文章編集",
+                defaultOpen: false
+            },
+            "basic-figure-editor": {
+                name: "基本図形編集",
                 defaultOpen: false
             }
         };
@@ -549,7 +559,7 @@ class UnpackFileManager {
      * ルート実身配置完了後、tadjs-desktopに全実身ファイルセット情報を送信
      */
     async handleRootInsertionComplete() {
-        console.log('[UnpackFile] ルート実身配置完了、ファイルセット情報を送信');
+        logger.info('[UnpackFile] ルート実身配置完了、ファイルセット情報を送信');
 
         // 全実身ファイルセット情報をtadjs-desktopに送信
         await this.generateAndSendRealFiles();
@@ -577,7 +587,7 @@ class UnpackFileManager {
         const vobjElement = this.createVirtualObject(rootFile, 0);
         listElement.appendChild(vobjElement);
 
-        console.log(`[UnpackFile] ルート実身の仮身を表示: ${rootFile.name}`);
+        logger.info(`[UnpackFile] ルート実身の仮身を表示: ${rootFile.name}`);
     }
 
     /**
@@ -603,7 +613,7 @@ class UnpackFileManager {
             listElement.appendChild(vobjElement);
         });
 
-        console.log(`[UnpackFile] ${this.archiveFiles.length}個の実身を表示`);
+        logger.info(`[UnpackFile] ${this.archiveFiles.length}個の実身を表示`);
     }
 
     /**
@@ -651,8 +661,8 @@ class UnpackFileManager {
      * ドラッグ開始処理
      */
     async handleDragStart(event, file, index) {
-        console.log('[UnpackFile] ドラッグ開始:', file.name);
-        console.log('[UnpackFile] ドラッグ開始時のファイル情報:', file);
+        logger.info('[UnpackFile] ドラッグ開始:', file.name);
+        logger.info('[UnpackFile] ドラッグ開始時のファイル情報:', file);
 
         // ドラッグデータを設定（ルート実身も含む）
         const dragData = {
@@ -671,10 +681,10 @@ class UnpackFileManager {
             rawData: this.rawData ? Array.from(this.rawData) : null // rawDataを配列として追加（JSON化のため）
         };
 
-        console.log('[UnpackFile] this.rawData:', this.rawData ? `存在（長さ: ${this.rawData.length}）` : 'null');
+        logger.info('[UnpackFile] this.rawData:', this.rawData ? `存在（長さ: ${this.rawData.length}）` : 'null');
 
-        console.log('[UnpackFile] ドラッグデータ:', dragData);
-        console.log('[UnpackFile] ドラッグデータのxmlData:', dragData.file.xmlData ? `存在（長さ: ${dragData.file.xmlData.length}）` : 'null');
+        logger.info('[UnpackFile] ドラッグデータ:', dragData);
+        logger.info('[UnpackFile] ドラッグデータのxmlData:', dragData.file.xmlData ? `存在（長さ: ${dragData.file.xmlData.length}）` : 'null');
 
         event.dataTransfer.setData('text/plain', JSON.stringify(dragData));
         event.dataTransfer.effectAllowed = 'copy';
@@ -687,7 +697,7 @@ class UnpackFileManager {
      * ドラッグ終了処理
      */
     handleDragEnd(event) {
-        console.log('[UnpackFile] ドラッグ終了');
+        logger.info('[UnpackFile] ドラッグ終了');
 
         // スタイルを元に戻す
         event.target.style.opacity = '1';
@@ -705,7 +715,7 @@ class UnpackFileManager {
                 windowConfig: windowConfig
             });
 
-            console.log('[UnpackFile] ウィンドウ設定を更新:', windowConfig);
+            logger.info('[UnpackFile] ウィンドウ設定を更新:', windowConfig);
         }
     }
 }

@@ -1,3 +1,5 @@
+const logger = window.getLogger('FileImportManager');
+
 /**
  * ファイルインポート管理クラス
  * 外部ファイルを実身オブジェクトとして登録する機能を提供
@@ -17,11 +19,11 @@ class FileImportManager {
      * @returns {Promise<{realId: string, name: string, applist: object}|null>} 作成された実身の情報、またはnull（エラー時）
      */
     async createRealObjectFromImportedFile(file) {
-        console.log('[FileImportManager] createRealObjectFromImportedFile開始:', file.name);
+        logger.info('createRealObjectFromImportedFile開始:', file.name);
 
         // ファイル拡張子を取得して小文字化
         const fileExt = file.name.split('.').pop().toLowerCase();
-        console.log('[FileImportManager] ファイル拡張子:', fileExt);
+        logger.debug('ファイル拡張子:', fileExt);
 
         // 拡張子に応じて使用する原紙を決定
         let pluginId;
@@ -39,11 +41,11 @@ class FileImportManager {
 
         // 実身名はファイル名から拡張子を除いたものを使用
         const newName = file.name.replace(/\.[^.]+$/, ''); // 拡張子を除いた名前
-        console.log('[FileImportManager] 新しい実身名:', newName);
+        logger.debug('新しい実身名:', newName);
 
         // 新しい実身IDを生成
         const newRealId = typeof generateUUIDv7 === 'function' ? generateUUIDv7() : this.tadjs.generateRealFileIdSet(1).fileId;
-        console.log('[FileImportManager] 新しい実身ID:', newRealId);
+        logger.debug('新しい実身ID:', newRealId);
 
         // 原紙のJSONとXTADを読み込む
         let basefileJson = null;
@@ -63,9 +65,9 @@ class FileImportManager {
             const jsonResponse = await fetch(jsonPath);
             if (jsonResponse.ok) {
                 basefileJson = await jsonResponse.json();
-                console.log('[FileImportManager] 原紙 JSON読み込み完了:', basefileJson);
+                logger.debug('原紙 JSON読み込み完了:', basefileJson);
             } else {
-                console.error('[FileImportManager] 原紙 JSON読み込み失敗');
+                logger.error('原紙 JSON読み込み失敗');
                 return null;
             }
 
@@ -73,13 +75,13 @@ class FileImportManager {
             const xtadResponse = await fetch(xtadPath);
             if (xtadResponse.ok) {
                 basefileXtad = await xtadResponse.text();
-                console.log('[FileImportManager] 原紙 XTAD読み込み完了');
+                logger.debug('原紙 XTAD読み込み完了');
             } else {
-                console.error('[FileImportManager] 原紙 XTAD読み込み失敗');
+                logger.error('原紙 XTAD読み込み失敗');
                 return null;
             }
         } catch (error) {
-            console.error('[FileImportManager] 原紙読み込みエラー:', error);
+            logger.error('原紙読み込みエラー:', error);
             return null;
         }
 
@@ -107,7 +109,7 @@ class FileImportManager {
                 /(<p>\s*)[^<]*(\s*<\/p>)/,
                 `$1${fileExt}$2`
             );
-            console.log('[FileImportManager] existing-data-exec用にxtadを更新: 拡張子=', fileExt);
+            logger.debug('existing-data-exec用にxtadを更新: 拡張子=', fileExt);
         }
 
         // RealObjectSystemに実身を登録
@@ -128,9 +130,9 @@ class FileImportManager {
                 };
 
                 await this.tadjs.realObjectSystem.saveRealObject(newRealId, realObject);
-                console.log('[FileImportManager] 実身をRealObjectSystemに保存:', newRealId, newName);
+                logger.debug('実身をRealObjectSystemに保存:', newRealId, newName);
             } catch (error) {
-                console.error('[FileImportManager] 実身保存エラー:', error);
+                logger.error('実身保存エラー:', error);
             }
         }
 
@@ -142,9 +144,9 @@ class FileImportManager {
         const xtadSaved = await this.tadjs.saveDataFile(xtadFileName, newRealXtad);
 
         if (jsonSaved && xtadSaved) {
-            console.log('[FileImportManager] 新しい実身をファイルシステムに保存しました:', jsonFileName, xtadFileName);
+            logger.info('新しい実身をファイルシステムに保存しました:', jsonFileName, xtadFileName);
         } else {
-            console.warn('[FileImportManager] ファイルシステムへの保存に失敗しました');
+            logger.warn('ファイルシステムへの保存に失敗しました');
             return null;
         }
 
@@ -158,11 +160,11 @@ class FileImportManager {
                     const newIconFileName = `${newRealId}.ico`;
                     const iconSaved = await this.tadjs.saveDataFile(newIconFileName, iconData);
                     if (iconSaved) {
-                        console.log('[FileImportManager] アイコンファイルをコピーしました:', newIconFileName);
+                        logger.debug('アイコンファイルをコピーしました:', newIconFileName);
                     }
                 }
             } catch (error) {
-                console.warn('[FileImportManager] アイコンファイルコピー中のエラー:', error.message);
+                logger.warn('アイコンファイルコピー中のエラー:', error.message);
             }
         }
 
@@ -174,19 +176,39 @@ class FileImportManager {
             this.tadjs.fileObjects[file.name] = file;
 
             // ディスクにコピー（実身IDを使った新しい名前で）
-            const arrayBuffer = await file.arrayBuffer();
-            const uint8Array = new Uint8Array(arrayBuffer);
+            let uint8Array;
+
+            if (file.path && this.tadjs.isElectronEnv) {
+                // Electron環境でファイルパスが利用可能な場合、fsで読み込む
+                const fs = require('fs');
+                const buffer = fs.readFileSync(file.path);
+                uint8Array = new Uint8Array(buffer);
+                logger.debug('ファイルをfsで読み込み:', file.path);
+            } else if (typeof file.arrayBuffer === 'function') {
+                // File オブジェクトの場合、arrayBuffer()で読み込む
+                const arrayBuffer = await file.arrayBuffer();
+                uint8Array = new Uint8Array(arrayBuffer);
+            } else {
+                // ファイル内容を取得できない場合はスキップ（参照のみ作成済み）
+                logger.warn('ファイル内容を取得できません。参照のみ作成:', file.name);
+                return {
+                    realId: newRealId,
+                    name: newName,
+                    applist: newRealJson.applist || {}
+                };
+            }
+
             await this.tadjs.saveDataFile(newFileName, uint8Array);
-            console.log('[FileImportManager] インポートファイルをコピー:', file.name, '->', newFileName);
+            logger.debug('インポートファイルをコピー:', file.name, '->', newFileName);
 
             // メモリ上でも新しい名前で参照できるようにする（元の名前も残す）
             this.tadjs.fileObjects[newFileName] = file;
         } catch (error) {
-            console.error('[FileImportManager] ファイルコピーエラー:', error);
+            logger.error('ファイルコピーエラー:', error);
             return null;
         }
 
-        console.log('[FileImportManager] 実身オブジェクト作成完了:', newRealId, newName);
+        logger.info('実身オブジェクト作成完了:', newRealId, newName);
         return {
             realId: newRealId,
             name: newName,
@@ -201,11 +223,11 @@ class FileImportManager {
     async handleFilesDrop(files) {
         this.tadjs.setStatusMessage(`${files.length}個のファイルを受け取りました`);
 
-        console.log('[FileImportManager] handleFilesDrop - files:', files.length);
+        logger.info('handleFilesDrop - files:', files.length);
 
         // アクティブなウィンドウを取得
         const activeWindow = document.querySelector('.window.active');
-        console.log('[FileImportManager] activeWindow:', activeWindow ? activeWindow.id : 'null');
+        logger.debug('activeWindow:', activeWindow ? activeWindow.id : 'null');
 
         // アクティブなウィンドウの情報を取得（windows Mapから）
         let pluginId = null;
@@ -215,16 +237,16 @@ class FileImportManager {
                 pluginId = windowInfo.pluginId;
             }
         }
-        console.log('[FileImportManager] pluginId:', pluginId);
+        logger.debug('pluginId:', pluginId);
 
         // アクティブなウィンドウがプラグインウィンドウかチェック
         if (activeWindow && pluginId) {
-            console.log('[FileImportManager] アクティブなプラグインウィンドウ:', pluginId);
+            logger.debug('アクティブなプラグインウィンドウ:', pluginId);
 
             // 仮身一覧プラグインの場合は、仮身として追加
             if (pluginId === 'virtual-object-list') {
                 const iframe = activeWindow.querySelector('iframe');
-                console.log('[FileImportManager] iframe:', iframe ? 'found' : 'null', 'contentWindow:', iframe && iframe.contentWindow ? 'found' : 'null');
+                logger.debug('iframe:', iframe ? 'found' : 'null', 'contentWindow:', iframe && iframe.contentWindow ? 'found' : 'null');
 
                 if (iframe && iframe.contentWindow) {
                     // ファイルをインポート
@@ -234,7 +256,7 @@ class FileImportManager {
             } else {
                 // その他のプラグインウィンドウの場合は、各ファイルを開く
                 files.forEach((file) => {
-                    console.log('[FileImportManager] プラグインウィンドウでファイルを開く:', file.name);
+                    logger.debug('プラグインウィンドウでファイルを開く:', file.name);
                     this.tadjs.openTADFile(file);
                 });
                 return; // 処理完了
@@ -243,16 +265,16 @@ class FileImportManager {
 
         // アクティブなウィンドウがない、またはプラグインウィンドウでない場合
         {
-            console.log('[FileImportManager] アクティブなウィンドウがない、またはプラグインウィンドウでない');
+            logger.debug('アクティブなウィンドウがない、またはプラグインウィンドウでない');
 
             // デフォルトウィンドウの場合は、ファイルアイコンを追加
             // file-iconsコンテナが存在するかチェック
             const fileIconsContainer = document.getElementById('file-icons');
-            console.log('[FileImportManager] file-iconsコンテナ:', fileIconsContainer ? 'found' : 'null');
+            logger.debug('file-iconsコンテナ:', fileIconsContainer ? 'found' : 'null');
 
             if (fileIconsContainer) {
                 // file-iconsコンテナが存在する場合は、ファイルアイコンを追加
-                console.log('[FileImportManager] file-iconsコンテナにファイルアイコンを追加');
+                logger.debug('file-iconsコンテナにファイルアイコンを追加');
                 files.forEach((file, index) => {
                     this.tadjs.addFileIcon(file, index);
                 });
@@ -266,21 +288,21 @@ class FileImportManager {
                         break;
                     }
                 }
-                console.log('[FileImportManager] 仮身一覧プラグインのウィンドウ:', virtualObjectListWindow ? virtualObjectListWindow.id : 'null');
+                logger.debug('仮身一覧プラグインのウィンドウ:', virtualObjectListWindow ? virtualObjectListWindow.id : 'null');
 
                 if (virtualObjectListWindow) {
                     // 仮身一覧プラグインがあれば、そこに追加
                     const iframe = virtualObjectListWindow.querySelector('iframe');
-                    console.log('[FileImportManager] 仮身一覧プラグインのiframe:', iframe ? 'found' : 'null');
+                    logger.debug('仮身一覧プラグインのiframe:', iframe ? 'found' : 'null');
 
                     if (iframe && iframe.contentWindow) {
-                        console.log('[FileImportManager] 仮身一覧プラグインに追加（フォールバック）');
+                        logger.debug('仮身一覧プラグインに追加（フォールバック）');
                         // ファイルをインポート
                         await this.handleFilesImport(files, iframe);
                     }
                 } else {
                     // どちらもない場合は、警告を出す（ファイルは開かない）
-                    console.warn('[FileImportManager] 初期ウィンドウも仮身一覧プラグインもありません。ファイルを配置できません。');
+                    logger.warn('初期ウィンドウも仮身一覧プラグインもありません。ファイルを配置できません。');
                 }
             }
         }
@@ -292,18 +314,18 @@ class FileImportManager {
      * @param {HTMLIFrameElement} iframe - 仮身一覧プラグインのiframe
      */
     async handleFilesImport(files, iframe) {
-        console.log('[FileImportManager] handleFilesImport開始:', files.length, 'files');
+        logger.info('handleFilesImport開始:', files.length, 'files');
 
         // 各ファイルを処理（非同期処理を順番に実行）
         for (const file of files) {
-            console.log('[FileImportManager] ファイルを処理:', file.name);
+            logger.debug('ファイルを処理:', file.name);
 
             // インポートファイルから実身オブジェクトを作成
             const realObjectInfo = await this.createRealObjectFromImportedFile(file);
 
             // エラーが発生した場合はスキップ
             if (!realObjectInfo) {
-                console.log('[FileImportManager] ファイルのインポートに失敗しました:', file.name);
+                logger.warn('ファイルのインポートに失敗しました:', file.name);
                 this.tadjs.setStatusMessage(`ファイルのインポートに失敗: ${file.name}`);
                 continue;
             }
@@ -329,9 +351,12 @@ class FileImportManager {
             this.tadjs.setStatusMessage(`実身「${realObjectInfo.name}」を作成しました`);
         }
 
-        console.log('[FileImportManager] handleFilesImport完了');
+        logger.info('handleFilesImport完了');
     }
 }
 
 // グローバル変数としてエクスポート
 window.FileImportManager = FileImportManager;
+
+// ES6モジュールとしてもエクスポート
+export { FileImportManager };

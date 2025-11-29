@@ -1,6 +1,8 @@
 /**
  * 仮身一覧ビューアプラグイン
  */
+const logger = window.getLogger('VirtualObjectList');
+
 class VirtualObjectListApp extends window.PluginBase {
     constructor() {
         // 基底クラスのコンストラクタを呼び出し
@@ -14,9 +16,6 @@ class VirtualObjectListApp extends window.PluginBase {
         this.selectedVirtualObjects = new Set(); // 選択中の仮身（複数選択対応）
         this.clipboard = null; // クリップボード（仮身データ）
         this.isFullscreen = false; // 全画面表示フラグ
-        this.openedRealObjects = new Map(); // 開いている実身のMap（realId -> windowId）
-        this.iconCache = new Map(); // アイコンキャッシュ（realId -> Base64データ）
-        this.debug = false; // デバッグモード（開発時のみtrue）
 
         // this.windowId は基底クラスで定義されるが、このプラグインは独自の形式を使うので上書き
         this.windowId = `window-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -39,16 +38,10 @@ class VirtualObjectListApp extends window.PluginBase {
         };
 
         // ダブルクリック+ドラッグ（実身複製）用の状態管理
-        this.dblClickDragState = {
-            lastClickTime: 0,           // 最後のクリック時刻
-            lastClickedObject: null,    // 最後にクリックされたオブジェクト
-            isDblClickDragCandidate: false, // ダブルクリック+ドラッグ候補
-            dblClickedObject: null,     // ダブルクリックされたオブジェクト
-            dblClickedElement: null,    // ダブルクリックされた要素
-            startX: 0,                  // ドラッグ開始X座標
-            startY: 0,                  // ドラッグ開始Y座標
-            isDblClickDrag: false       // ダブルクリック+ドラッグ確定フラグ
-        };
+        // PluginBaseで共通プロパティ（lastClickTime, isDblClickDragCandidate, isDblClickDrag, dblClickedElement, startX, startY）を初期化済み
+        // プラグイン固有のプロパティのみ追加
+        this.dblClickDragState.lastClickedObject = null;  // 最後にクリックされたオブジェクト
+        this.dblClickDragState.dblClickedObject = null;   // ダブルクリックされたオブジェクト
 
         // リサイズ状態管理
         this.isResizing = false;
@@ -59,9 +52,6 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // コンテキストメニューを閉じた直後かどうかのフラグ
         this.justClosedContextMenu = false;
-
-        // VirtualObjectRenderer
-        this.virtualObjectRenderer = null; // 初期化後に設定
 
         // MessageBusの初期化（即座に開始）
         this.messageBus = null;
@@ -76,7 +66,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 pluginName: 'VirtualObjectList'
             });
             this.messageBus.start();
-            console.log('[VirtualObjectList] MessageBus initialized');
+            logger.debug('[VirtualObjectList] MessageBus initialized');
 
             // 開いた仮身（子iframe）との通信用（親モード）
             this.childMessageBus = new window.MessageBus({
@@ -85,27 +75,24 @@ class VirtualObjectListApp extends window.PluginBase {
                 mode: 'parent'
             });
             this.childMessageBus.start();
-            console.log('[VirtualObjectList] Child MessageBus initialized');
+            logger.debug('[VirtualObjectList] Child MessageBus initialized');
         } else {
-            console.warn('[VirtualObjectList] MessageBus not available');
+            logger.warn('[VirtualObjectList] MessageBus not available');
         }
 
         this.init();
     }
 
     init() {
-        // VirtualObjectRendererの初期化
-        if (window.VirtualObjectRenderer) {
-            this.virtualObjectRenderer = new window.VirtualObjectRenderer();
-            console.log('[VirtualObjectList] VirtualObjectRenderer initialized');
-        }
+        // 共通コンポーネントの初期化
+        this.initializeCommonComponents('[VirtualObjectList]');
 
         // パフォーマンス最適化関数の初期化
         if (window.throttleRAF && window.throttle) {
-            console.log('[VirtualObjectList] Performance optimization initialized');
+            logger.debug('[VirtualObjectList] Performance optimization initialized');
         }
 
-        console.log('[VirtualObjectList] 初期化開始');
+        logger.debug('[VirtualObjectList] 初期化開始');
 
         // MessageBusのハンドラを登録
         if (this.messageBus) {
@@ -190,7 +177,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
                             // 原紙管理からのコピー - 親ウィンドウに処理を委譲
                             // 親ウィンドウのhandleBaseFileDropが実身名入力ダイアログを表示する
-                            console.log('[VirtualObjectList] 原紙箱からのドロップを親ウィンドウに委譲');
+                            logger.debug('[VirtualObjectList] 原紙箱からのドロップを親ウィンドウに委譲');
 
                             // MessageBus Phase 2: messageBus.send()を使用
                             this.messageBus.send('base-file-drop-request', {
@@ -201,7 +188,7 @@ class VirtualObjectListApp extends window.PluginBase {
                             return; // 処理を親ウィンドウに任せる
                         } else if (dragData.type === 'trash-real-object-restore' && dragData.source === 'trash-real-objects') {
                             // 屑実身操作からの復元 - 親ウィンドウに処理を委譲
-                            console.log('[VirtualObjectList] 屑実身操作からのドロップを親ウィンドウに委譲');
+                            logger.debug('[VirtualObjectList] 屑実身操作からのドロップを親ウィンドウに委譲');
 
                             // MessageBus Phase 2: messageBus.send()を使用
                             this.messageBus.send('trash-real-object-drop-request', {
@@ -217,22 +204,22 @@ class VirtualObjectListApp extends window.PluginBase {
                         } else if (dragData.type === 'virtual-object-drag') {
                             // 仮身のドラッグ（仮身一覧または基本文章編集プラグインから）
                             const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
-                            console.log('[VirtualObjectList] ========== drop受信 ==========');
-                            console.log('[VirtualObjectList] 仮身ドロップ受信:', virtualObjects.length, '個');
-                            console.log('[VirtualObjectList] drop: ソース:', dragData.source);
-                            console.log('[VirtualObjectList] drop: モード:', dragData.mode);
-                            console.log('[VirtualObjectList] drop: ソースウィンドウID:', dragData.sourceWindowId);
-                            console.log('[VirtualObjectList] drop: 現在のウィンドウID:', this.windowId);
+                            logger.debug('[VirtualObjectList] ========== drop受信 ==========');
+                            logger.debug('[VirtualObjectList] 仮身ドロップ受信:', virtualObjects.length, '個');
+                            logger.debug('[VirtualObjectList] drop: ソース:', dragData.source);
+                            logger.debug('[VirtualObjectList] drop: モード:', dragData.mode);
+                            logger.debug('[VirtualObjectList] drop: ソースウィンドウID:', dragData.sourceWindowId);
+                            logger.debug('[VirtualObjectList] drop: 現在のウィンドウID:', this.windowId);
 
                             // 異なるウィンドウからのドロップかどうかを判定
                             // sourceWindowIdが自分のウィンドウIDと異なる場合は別ウィンドウとして扱う
                             const isCrossWindow = dragData.sourceWindowId !== this.windowId;
-                            console.log('[VirtualObjectList] drop: isCrossWindow:', isCrossWindow);
-                            console.log('[VirtualObjectList] ======================================');
+                            logger.debug('[VirtualObjectList] drop: isCrossWindow:', isCrossWindow);
+                            logger.debug('[VirtualObjectList] ======================================');
 
                             if (isCrossWindow) {
                                 // 別ウィンドウからのドロップ成功をマーク（dragendでfinishDrag()をスキップするため）
-                                console.log('[VirtualObjectList] クロスウィンドウドロップ検知、元ウィンドウに通知');
+                                logger.debug('[VirtualObjectList] クロスウィンドウドロップ検知、元ウィンドウに通知');
 
                                 // 即座にソースウィンドウに通知（dragendより前に届くように）
                                 this.messageBus.send('notify-cross-window-drop', {
@@ -255,7 +242,7 @@ class VirtualObjectListApp extends window.PluginBase {
                                 });
                             } else {
                                 // 同じウィンドウ内での移動：ドロップ位置を保存してdragendで使用
-                                console.log('[VirtualObjectList] 同じウィンドウ内でのドロップ位置を保存:', e.clientX, e.clientY);
+                                logger.debug('[VirtualObjectList] 同じウィンドウ内でのドロップ位置を保存:', e.clientX, e.clientY);
                                 this.draggingState.dropClientX = e.clientX;
                                 this.draggingState.dropClientY = e.clientY;
                                 this.draggingState.hasMoved = true; // ドロップされたので移動したとみなす
@@ -264,11 +251,11 @@ class VirtualObjectListApp extends window.PluginBase {
                         }
                     } catch (_jsonError) {
                         // JSON形式でない場合はスキップ
-                        console.log('[VirtualObjectList] JSON形式でないドロップデータ');
+                        logger.debug('[VirtualObjectList] JSON形式でないドロップデータ');
                     }
                 }
             } catch (error) {
-                console.error('[VirtualObjectList] ドロップ処理エラー:', error);
+                logger.error('[VirtualObjectList] ドロップ処理エラー:', error);
             }
         });
     }
@@ -277,14 +264,14 @@ class VirtualObjectListApp extends window.PluginBase {
      * 原紙ファイルを仮身として挿入
      */
     insertBaseFileAsVirtualObject(baseFile, clientX, clientY) {
-        console.log('[VirtualObjectList] 原紙ファイル挿入:', baseFile.displayName);
+        logger.debug('[VirtualObjectList] 原紙ファイル挿入:', baseFile.displayName);
 
         // ドロップ位置を計算
         const listElement = document.getElementById('virtualList');
         const canvas = listElement.querySelector('.virtual-canvas');
 
         if (!canvas) {
-            console.warn('[VirtualObjectList] キャンバスが見つかりません');
+            logger.warn('[VirtualObjectList] キャンバスが見つかりません');
             return;
         }
 
@@ -319,7 +306,7 @@ class VirtualObjectListApp extends window.PluginBase {
         // 再描画
         this.renderVirtualObjects();
 
-        console.log('[VirtualObjectList] 原紙ファイル挿入完了');
+        logger.debug('[VirtualObjectList] 原紙ファイル挿入完了');
     }
 
     /**
@@ -327,14 +314,14 @@ class VirtualObjectListApp extends window.PluginBase {
      * ドロップ位置情報のみをunpack-fileに返す（確認ダイアログはunpack-fileが表示）
      */
     async insertArchiveFileAsVirtualObject(dragData, clientX, clientY) {
-        console.log('[VirtualObjectList] 書庫ファイルドロップ検出:', dragData.file.name);
+        logger.debug('[VirtualObjectList] 書庫ファイルドロップ検出:', dragData.file.name);
 
         // ドロップ位置を計算
         const listElement = document.getElementById('virtualList');
         const canvas = listElement.querySelector('.virtual-canvas');
 
         if (!canvas) {
-            console.warn('[VirtualObjectList] キャンバスが見つかりません');
+            logger.warn('[VirtualObjectList] キャンバスが見つかりません');
             return;
         }
 
@@ -360,25 +347,25 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     insertVirtualObjectFromDrag(dragData, clientX, clientY) {
         const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
-        console.log('[VirtualObjectList] 仮身ドロップ受信:', virtualObjects.length, '個', 'モード:', dragData.mode, 'ソースウィンドウID:', dragData.sourceWindowId, '現在のウィンドウID:', this.windowId);
+        logger.debug('[VirtualObjectList] 仮身ドロップ受信:', virtualObjects.length, '個', 'モード:', dragData.mode, 'ソースウィンドウID:', dragData.sourceWindowId, '現在のウィンドウID:', this.windowId);
 
         // 同じウィンドウ内からのドラッグの場合、既にmouseupイベントで位置更新済み
         // 重複して<link>を追加しないようにする
         const isSameWindow = dragData.sourceWindowId === this.windowId;
         if (dragData.mode === 'move' && isSameWindow) {
-            console.log('[VirtualObjectList] 同じウィンドウ内の移動モード: mouseupイベントで既に処理済みのためスキップ');
+            logger.debug('[VirtualObjectList] 同じウィンドウ内の移動モード: mouseupイベントで既に処理済みのためスキップ');
             return;
         }
 
         // コピーモード、または別ウィンドウからの移動モードの場合は新しい仮身を追加
-        console.log('[VirtualObjectList] 新しい仮身を挿入:', isSameWindow ? 'コピーモード' : '別ウィンドウからの移動/コピー');
+        logger.debug('[VirtualObjectList] 新しい仮身を挿入:', isSameWindow ? 'コピーモード' : '別ウィンドウからの移動/コピー');
 
         // ドロップ位置を計算
         const listElement = document.getElementById('virtualList');
         const canvas = listElement.querySelector('.virtual-canvas');
 
         if (!canvas) {
-            console.warn('[VirtualObjectList] キャンバスが見つかりません');
+            logger.warn('[VirtualObjectList] キャンバスが見つかりません');
             return;
         }
 
@@ -389,7 +376,7 @@ class VirtualObjectListApp extends window.PluginBase {
         // 複数の仮身を順番に挿入
         virtualObjects.forEach((virtualObjectData, index) => {
             // デバッグ: 受信した仮身データをログ出力
-            console.log('[VirtualObjectList] 受信した仮身データ:', {
+            logger.debug('[VirtualObjectList] 受信した仮身データ:', {
                 link_name: virtualObjectData.link_name,
                 tbcol: virtualObjectData.tbcol,
                 frcol: virtualObjectData.frcol,
@@ -446,7 +433,7 @@ class VirtualObjectListApp extends window.PluginBase {
             };
 
             // デバッグ: 作成された仮身オブジェクトをログ出力
-            console.log('[VirtualObjectList] 作成された仮身オブジェクト:', {
+            logger.debug('[VirtualObjectList] 作成された仮身オブジェクト:', {
                 link_name: virtualObj.link_name,
                 tbcol: virtualObj.tbcol,
                 frcol: virtualObj.frcol,
@@ -478,7 +465,7 @@ class VirtualObjectListApp extends window.PluginBase {
         // XMLデータの変更を実身ファイルに保存
         this.saveToFile();
 
-        console.log('[VirtualObjectList] 仮身挿入完了');
+        logger.debug('[VirtualObjectList] 仮身挿入完了');
     }
 
     /**
@@ -489,8 +476,8 @@ class VirtualObjectListApp extends window.PluginBase {
      * @param {string} sourceWindowId - 送信元（unpack-file）のウィンドウID
      */
     insertRootVirtualObject(rootFileData, x, y, sourceWindowId) {
-        console.log('[VirtualObjectList] ルート実身を配置:', rootFileData.name);
-        console.log('[VirtualObjectList] rootFileData.applist:', rootFileData.applist);
+        logger.debug('[VirtualObjectList] ルート実身を配置:', rootFileData.name);
+        logger.debug('[VirtualObjectList] rootFileData.applist:', rootFileData.applist);
 
         // 仮身オブジェクトを作成
         const virtualObj = {
@@ -525,7 +512,7 @@ class VirtualObjectListApp extends window.PluginBase {
         // 再描画
         this.renderVirtualObjects();
 
-        console.log('[VirtualObjectList] ルート実身配置完了');
+        logger.debug('[VirtualObjectList] ルート実身配置完了');
 
         // unpack-fileに配置完了を通知
         // MessageBus Phase 2: messageBus.send()を使用
@@ -543,7 +530,7 @@ class VirtualObjectListApp extends window.PluginBase {
      * @param {Object} applist - アプリケーションリスト
      */
     addVirtualObjectFromRealId(realId, name, dropPosition, applist) {
-        console.log('[VirtualObjectList] 実身IDから仮身を追加:', realId, name, dropPosition, 'applist:', applist);
+        logger.debug('[VirtualObjectList] 実身IDから仮身を追加:', realId, name, dropPosition, 'applist:', applist);
 
         // ドロップ位置を計算
         let x = 100;
@@ -558,9 +545,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 const rect = canvas.getBoundingClientRect();
                 x = dropPosition.x - rect.left;
                 y = dropPosition.y - rect.top;
-                console.log('[VirtualObjectList] ドロップ位置をキャンバス座標に変換:', {clientX: dropPosition.x, clientY: dropPosition.y, canvasX: x, canvasY: y});
+                logger.debug('[VirtualObjectList] ドロップ位置をキャンバス座標に変換:', {clientX: dropPosition.x, clientY: dropPosition.y, canvasX: x, canvasY: y});
             } else {
-                console.warn('[VirtualObjectList] キャンバスが見つかりません、デフォルト位置を使用');
+                logger.warn('[VirtualObjectList] キャンバスが見つかりません、デフォルト位置を使用');
             }
         }
 
@@ -597,7 +584,7 @@ class VirtualObjectListApp extends window.PluginBase {
         // 再描画
         this.renderVirtualObjects();
 
-        console.log('[VirtualObjectList] 実身IDから仮身を追加完了:', realId, name);
+        logger.debug('[VirtualObjectList] 実身IDから仮身を追加完了:', realId, name);
     }
 
     // showMessageDialog() は基底クラス PluginBase で定義
@@ -609,12 +596,12 @@ class VirtualObjectListApp extends window.PluginBase {
     setupMessageBusHandlers() {
         // init メッセージ
         this.messageBus.on('init', async (data) => {
-            console.log('[VirtualObjectList] [MessageBus] init受信', data);
+            logger.debug('[VirtualObjectList] [MessageBus] init受信', data);
 
             // ウィンドウIDを保存
             if (data.windowId) {
                 this.windowId = data.windowId;
-                console.log('[VirtualObjectList] [MessageBus] windowId更新:', this.windowId);
+                logger.debug('[VirtualObjectList] [MessageBus] windowId更新:', this.windowId);
             }
 
             this.fileData = data.fileData;
@@ -626,12 +613,12 @@ class VirtualObjectListApp extends window.PluginBase {
             } else {
                 this.realId = null;
             }
-            console.log('[VirtualObjectList] [MessageBus] this.realId設定完了:', this.realId);
+            logger.debug('[VirtualObjectList] [MessageBus] this.realId設定完了:', this.realId);
 
             // 全画面表示状態を復元
             if (this.fileData && this.fileData.isFullscreen !== undefined) {
                 this.isFullscreen = this.fileData.isFullscreen;
-                console.log('[VirtualObjectList] [MessageBus] 全画面表示状態を復元:', this.isFullscreen);
+                logger.debug('[VirtualObjectList] [MessageBus] 全画面表示状態を復元:', this.isFullscreen);
             }
 
             // XMLデータを取得
@@ -648,97 +635,55 @@ class VirtualObjectListApp extends window.PluginBase {
                 const canvas = document.querySelector('.virtual-canvas');
                 if (canvas) {
                     canvas.style.background = bgColor;
-                    console.log('[VirtualObjectList] [MessageBus] 背景色を適用 (初期化時):', bgColor);
+                    logger.debug('[VirtualObjectList] [MessageBus] 背景色を適用 (初期化時):', bgColor);
                 }
             }
 
             // キーボードショートカットが動作するようにbodyにフォーカスを設定
             setTimeout(() => {
                 document.body.focus();
-                console.log('[VirtualObjectList] [MessageBus] bodyにフォーカスを設定');
+                logger.debug('[VirtualObjectList] [MessageBus] bodyにフォーカスを設定');
             }, 100);
         });
 
-        // window-moved メッセージ
-        this.messageBus.on('window-moved', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] window-moved受信');
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-        });
-
-        // window-resized-end メッセージ
-        this.messageBus.on('window-resized-end', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] window-resized-end受信');
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-        });
-
-        // window-maximize-toggled メッセージ
-        this.messageBus.on('window-maximize-toggled', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] window-maximize-toggled受信');
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height,
-                maximize: data.maximize
-            });
-        });
-
-        // get-menu-definition メッセージ
-        this.messageBus.on('get-menu-definition', async (data) => {
-            console.log('[VirtualObjectList] [MessageBus] get-menu-definition受信');
-            const menuDefinition = await this.getMenuDefinition();
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: menuDefinition
-            });
-        });
-
-        // menu-action メッセージ
-        this.messageBus.on('menu-action', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] menu-action受信:', data.action);
-            this.handleMenuAction(data.action);
-        });
+        // 共通MessageBusハンドラを登録（PluginBaseで定義）
+        // window-moved, window-resized-end, window-maximize-toggled,
+        // menu-action, get-menu-definition, window-close-request
+        this.setupCommonMessageBusHandlers();
 
         // input-dialog-response メッセージ（MessageBusが自動処理）
         this.messageBus.on('input-dialog-response', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] input-dialog-response受信:', data.messageId);
+            logger.debug('[VirtualObjectList] [MessageBus] input-dialog-response受信:', data.messageId);
             // sendWithCallback使用時は自動的にコールバックが実行される
         });
 
         // message-dialog-response メッセージ（MessageBusが自動処理）
         this.messageBus.on('message-dialog-response', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] message-dialog-response受信:', data.messageId);
+            logger.debug('[VirtualObjectList] [MessageBus] message-dialog-response受信:', data.messageId);
             // sendWithCallback使用時は自動的にコールバックが実行される
         });
 
         // window-closed メッセージ
         this.messageBus.on('window-closed', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] window-closed受信');
+            logger.debug('[VirtualObjectList] [MessageBus] window-closed受信');
             this.handleWindowClosed(data.windowId, data.fileData);
         });
 
         // custom-dialog-response メッセージ（MessageBusが自動処理）
         this.messageBus.on('custom-dialog-response', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] custom-dialog-response受信:', data.messageId);
+            logger.debug('[VirtualObjectList] [MessageBus] custom-dialog-response受信:', data.messageId);
             // sendWithCallback使用時は自動的にコールバックが実行される
         });
 
         // load-virtual-object メッセージ
         this.messageBus.on('load-virtual-object', async (data) => {
-            console.log('[VirtualObjectList] [MessageBus] load-virtual-object受信', data);
+            logger.debug('[VirtualObjectList] [MessageBus] load-virtual-object受信', data);
 
             // readonlyモードの設定（開いた仮身表示用）
             if (data.readonly === true) {
                 this.isReadonly = true;
                 document.body.classList.add('readonly-mode');
-                console.log('[VirtualObjectList] [MessageBus] 読み取り専用モードを適用');
+                logger.debug('[VirtualObjectList] [MessageBus] 読み取り専用モードを適用');
             }
 
             // スクロールバー非表示モードの設定（開いた仮身表示用）
@@ -753,7 +698,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 if (viewerContainer) {
                     viewerContainer.style.overflow = 'hidden';
                 }
-                console.log('[VirtualObjectList] [MessageBus] スクロールバー非表示モードを適用');
+                logger.debug('[VirtualObjectList] [MessageBus] スクロールバー非表示モードを適用');
             }
 
             // realObjectからXMLデータを取得
@@ -775,13 +720,13 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // load-data メッセージ
         this.messageBus.on('load-data', async (data) => {
-            console.log('[VirtualObjectList] [MessageBus] load-data受信:', data);
+            logger.debug('[VirtualObjectList] [MessageBus] load-data受信:', data);
 
             // readonlyモードの設定
             if (data.readonly === true) {
                 this.isReadonly = true;
                 document.body.classList.add('readonly-mode');
-                console.log('[VirtualObjectList] [MessageBus] 読み取り専用モードを適用');
+                logger.debug('[VirtualObjectList] [MessageBus] 読み取り専用モードを適用');
             }
 
             // スクロールバー非表示モードの設定
@@ -796,7 +741,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 if (viewerContainer) {
                     viewerContainer.style.overflow = 'hidden';
                 }
-                console.log('[VirtualObjectList] [MessageBus] スクロールバー非表示モードを適用');
+                logger.debug('[VirtualObjectList] [MessageBus] スクロールバー非表示モードを適用');
             }
 
             // 背景色の設定
@@ -821,31 +766,31 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // add-virtual-object メッセージ
         this.messageBus.on('add-virtual-object', async (data) => {
-            console.log('[VirtualObjectList] [MessageBus] 仮身追加要求受信:', data.file);
+            logger.debug('[VirtualObjectList] [MessageBus] 仮身追加要求受信:', data.file);
             await this.addVirtualObjectFromFile(data.file);
         });
 
         // insert-root-virtual-object メッセージ
         this.messageBus.on('insert-root-virtual-object', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] ルート実身配置要求受信:', data.rootFileData);
+            logger.debug('[VirtualObjectList] [MessageBus] ルート実身配置要求受信:', data.rootFileData);
             this.insertRootVirtualObject(data.rootFileData, data.x, data.y, data.sourceWindowId);
         });
 
         // add-virtual-object-from-base メッセージ
         this.messageBus.on('add-virtual-object-from-base', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] 原紙箱から仮身追加:', data.realId, data.name);
+            logger.debug('[VirtualObjectList] [MessageBus] 原紙箱から仮身追加:', data.realId, data.name);
             this.addVirtualObjectFromRealId(data.realId, data.name, data.dropPosition, data.applist);
         });
 
         // add-virtual-object-from-trash メッセージ
         this.messageBus.on('add-virtual-object-from-trash', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] 屑実身操作から仮身追加:', data.realId, data.name);
+            logger.debug('[VirtualObjectList] [MessageBus] 屑実身操作から仮身追加:', data.realId, data.name);
             this.addVirtualObjectFromRealId(data.realId, data.name, data.dropPosition, data.applist);
         });
 
         // window-resized メッセージ
         this.messageBus.on('window-resized', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] window-resized受信');
+            logger.debug('[VirtualObjectList] [MessageBus] window-resized受信');
             this.updateCanvasSize();
         });
 
@@ -856,18 +801,18 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // cross-window-drop-in-progress メッセージ（dragendより前に受信する）
         this.messageBus.on('cross-window-drop-in-progress', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] cross-window-drop-in-progress受信:', data.targetWindowId);
+            logger.debug('[VirtualObjectList] [MessageBus] cross-window-drop-in-progress受信:', data.targetWindowId);
             // dragend時にfinishDrag()をスキップするためのフラグ
             this.lastDropWasCrossWindow = true;
         });
 
         // cross-window-drop-success メッセージ
         this.messageBus.on('cross-window-drop-success', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] cross-window-drop-success受信:', data);
+            logger.debug('[VirtualObjectList] [MessageBus] cross-window-drop-success受信:', data);
 
             // moveモードの場合のみ、元ウィンドウから仮身を削除
             if (data.mode === 'move' && data.virtualObjects) {
-                console.log('[VirtualObjectList] クロスウィンドウmove: 元ウィンドウから仮身を削除', data.virtualObjects.length, '個');
+                logger.debug('[VirtualObjectList] クロスウィンドウmove: 元ウィンドウから仮身を削除', data.virtualObjects.length, '個');
 
                 data.virtualObjects.forEach(vobj => {
                     let index = -1;
@@ -879,20 +824,20 @@ class VirtualObjectListApp extends window.PluginBase {
                             v.vobjleft === vobj.originalVobjLeft &&
                             v.vobjtop === vobj.originalVobjTop
                         );
-                        console.log('[VirtualObjectList] 位置情報を使って検索:', vobj.link_name, '位置:', vobj.originalVobjLeft, vobj.originalVobjTop, 'index:', index);
+                        logger.debug('[VirtualObjectList] 位置情報を使って検索:', vobj.link_name, '位置:', vobj.originalVobjLeft, vobj.originalVobjTop, 'index:', index);
                     } else {
                         // originalVobjLeft/Topがない場合（基本文章編集プラグインなどから）は、link_idのみで検索
                         // 同じlink_idの仮身が複数ある場合は最初の一つを削除
                         index = this.virtualObjects.findIndex(v => v.link_id === vobj.link_id);
-                        console.log('[VirtualObjectList] link_idのみで検索:', vobj.link_name, 'index:', index);
+                        logger.debug('[VirtualObjectList] link_idのみで検索:', vobj.link_name, 'index:', index);
                     }
 
                     if (index !== -1) {
-                        console.log('[VirtualObjectList] 仮身を削除:', vobj.link_name, 'index:', index);
+                        logger.debug('[VirtualObjectList] 仮身を削除:', vobj.link_name, 'index:', index);
                         this.virtualObjects.splice(index, 1);
                         this.removeVirtualObjectFromXml(vobj);
                     } else {
-                        console.warn('[VirtualObjectList] 削除対象の仮身が見つかりません:', vobj.link_name);
+                        logger.warn('[VirtualObjectList] 削除対象の仮身が見つかりません:', vobj.link_name);
                     }
                 });
 
@@ -903,13 +848,13 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // parent-drop-event メッセージ
         this.messageBus.on('parent-drop-event', (data) => {
-            console.log('[VirtualObjectList] [MessageBus] parent-drop-event受信:', data);
+            logger.debug('[VirtualObjectList] [MessageBus] parent-drop-event受信:', data);
             // ドロップイベントを処理（setupDropZone内のdropイベントと同等の処理）
             if (data.dragData) {
                 // canvas要素を取得
                 const canvas = document.querySelector('.virtual-canvas');
                 if (!canvas) {
-                    console.error('[VirtualObjectList] Canvas element not found');
+                    logger.error('[VirtualObjectList] Canvas element not found');
                     return;
                 }
 
@@ -944,7 +889,7 @@ class VirtualObjectListApp extends window.PluginBase {
         window.addEventListener('message', (e) => {
             if (e.data && e.data.type === 'read-icon-file') {
                 const { realId, messageId } = e.data;
-                console.log('[VirtualObjectList] 子からread-icon-file受信、親に転送:', realId, messageId);
+                logger.debug('[VirtualObjectList] 子からread-icon-file受信、親に転送:', realId, messageId);
 
                 // 元のsourceを記録（レスポンスを返すため）
                 this.iconRequestMap.set(messageId, e.source);
@@ -963,7 +908,7 @@ class VirtualObjectListApp extends window.PluginBase {
             const source = this.iconRequestMap.get(messageId);
 
             if (source) {
-                console.log('[VirtualObjectList] 親からicon-file-loaded受信、子に転送:', messageId);
+                logger.debug('[VirtualObjectList] 親からicon-file-loaded受信、子に転送:', messageId);
                 // 元の子iframeにレスポンスを返す
                 try {
                     source.postMessage({
@@ -971,7 +916,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         ...data
                     }, '*');
                 } catch (error) {
-                    console.error('[VirtualObjectList] 子へのicon-file-loaded転送エラー:', error);
+                    logger.error('[VirtualObjectList] 子へのicon-file-loaded転送エラー:', error);
                 }
 
                 // マップから削除（メモリリーク防止）
@@ -986,7 +931,7 @@ class VirtualObjectListApp extends window.PluginBase {
         window.addEventListener('message', (e) => {
             if (e.data && e.data.type === 'get-image-file-path') {
                 const { fileName, messageId } = e.data;
-                console.log('[VirtualObjectList] 子からget-image-file-path受信、親に転送:', fileName, messageId);
+                logger.debug('[VirtualObjectList] 子からget-image-file-path受信、親に転送:', fileName, messageId);
 
                 // 元のsourceを記録（レスポンスを返すため）
                 this.imagePathRequestMap.set(messageId, e.source);
@@ -1005,7 +950,7 @@ class VirtualObjectListApp extends window.PluginBase {
             const source = this.imagePathRequestMap.get(messageId);
 
             if (source) {
-                console.log('[VirtualObjectList] 親からimage-file-path-response受信、子に転送:', messageId);
+                logger.debug('[VirtualObjectList] 親からimage-file-path-response受信、子に転送:', messageId);
                 // 元の子iframeにレスポンスを返す
                 try {
                     source.postMessage({
@@ -1013,7 +958,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         ...data
                     }, '*');
                 } catch (error) {
-                    console.error('[VirtualObjectList] 子へのimage-file-path-response転送エラー:', error);
+                    logger.error('[VirtualObjectList] 子へのimage-file-path-response転送エラー:', error);
                 }
 
                 // マップから削除（メモリリーク防止）
@@ -1021,7 +966,7 @@ class VirtualObjectListApp extends window.PluginBase {
             }
         });
 
-        console.log('[VirtualObjectList] MessageBusハンドラ登録完了');
+        logger.debug('[VirtualObjectList] MessageBusハンドラ登録完了');
     }
 
     /**
@@ -1034,7 +979,7 @@ class VirtualObjectListApp extends window.PluginBase {
         if (data.currentMouseOverWindowId !== undefined && data.currentMouseOverWindowId !== null) {
             // ウィンドウIDが変化した場合のみログ出力
             if (this.draggingState.lastMouseOverWindowId !== data.currentMouseOverWindowId) {
-                console.log('[VirtualObjectList] ドラッグ先ウィンドウ変更:', this.draggingState.lastMouseOverWindowId, '->', data.currentMouseOverWindowId, '(thisWindowId:', this.windowId + ')');
+                logger.debug('[VirtualObjectList] ドラッグ先ウィンドウ変更:', this.draggingState.lastMouseOverWindowId, '->', data.currentMouseOverWindowId, '(thisWindowId:', this.windowId + ')');
             }
             this.draggingState.lastMouseOverWindowId = data.currentMouseOverWindowId;
         }
@@ -1140,7 +1085,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     async getMenuDefinition() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
-        console.log('[VirtualObjectList] getMenuDefinition呼び出し, 選択中の仮身:', selectedVirtualObject ? selectedVirtualObject.link_name : 'なし');
+        logger.debug('[VirtualObjectList] getMenuDefinition呼び出し, 選択中の仮身:', selectedVirtualObject ? selectedVirtualObject.link_name : 'なし');
 
         // 読み取り専用モードの場合は、表示系メニューのみ表示
         const menuDefinition = this.isReadonly ? [
@@ -1196,13 +1141,13 @@ class VirtualObjectListApp extends window.PluginBase {
         ];
 
         // 仮身が選択されている場合は「仮身操作」メニューを追加（読み取り専用モードでは非表示）
-        console.log('[VirtualObjectList] getMenuDefinition: selectedVirtualObject:', selectedVirtualObject);
+        logger.debug('[VirtualObjectList] getMenuDefinition: selectedVirtualObject:', selectedVirtualObject);
         if (selectedVirtualObject && !this.isReadonly) {
             try {
                 // 実身IDを抽出（共通メソッドを使用）
                 const realId = window.RealObjectSystem.extractRealId(selectedVirtualObject.link_id);
 
-                console.log('[VirtualObjectList] getMenuDefinition: 仮身が選択されています realId:', realId);
+                logger.debug('[VirtualObjectList] getMenuDefinition: 仮身が選択されています realId:', realId);
 
                 // 仮身操作メニュー
                 const isOpened = this.openedRealObjects.has(realId);
@@ -1238,11 +1183,11 @@ class VirtualObjectListApp extends window.PluginBase {
 
                 // 実行メニュー（基本文章編集プラグインと同じパターン）
                 const applistData = await this.getAppListData(realId);
-                console.log('[VirtualObjectList] getMenuDefinition: applistData:', applistData);
+                logger.debug('[VirtualObjectList] getMenuDefinition: applistData:', applistData);
                 if (applistData && Object.keys(applistData).length > 0) {
                     const executeSubmenu = [];
                     for (const [pluginId, appInfo] of Object.entries(applistData)) {
-                        console.log('[VirtualObjectList] getMenuDefinition: 実行メニュー項目追加:', pluginId, appInfo);
+                        logger.debug('[VirtualObjectList] getMenuDefinition: 実行メニュー項目追加:', pluginId, appInfo);
                         executeSubmenu.push({
                             text: appInfo.name || pluginId,
                             action: `execute-with-${pluginId}`
@@ -1253,15 +1198,15 @@ class VirtualObjectListApp extends window.PluginBase {
                         text: '実行',
                         submenu: executeSubmenu
                     });
-                    console.log('[VirtualObjectList] getMenuDefinition: 実行メニュー追加完了 項目数:', executeSubmenu.length);
+                    logger.debug('[VirtualObjectList] getMenuDefinition: 実行メニュー追加完了 項目数:', executeSubmenu.length);
                 } else {
-                    console.warn('[VirtualObjectList] getMenuDefinition: applistDataが空またはnull');
+                    logger.warn('[VirtualObjectList] getMenuDefinition: applistDataが空またはnull');
                 }
             } catch (error) {
-                console.error('[VirtualObjectList] applist取得エラー:', error);
+                logger.error('[VirtualObjectList] applist取得エラー:', error);
             }
         } else {
-            console.log('[VirtualObjectList] getMenuDefinition: 仮身が選択されていません');
+            logger.debug('[VirtualObjectList] getMenuDefinition: 仮身が選択されていません');
         }
 
         return menuDefinition;
@@ -1276,6 +1221,16 @@ class VirtualObjectListApp extends window.PluginBase {
             return window.parent.pluginManager.plugins.has(pluginId);
         }
         return false;
+    }
+
+    /**
+     * メニューアクション実行（PluginBase共通ハンドラから呼ばれる）
+     * handleMenuAction()へのエイリアス
+     * @param {string} action - アクション名
+     * @param {Object} additionalData - 追加データ（このプラグインでは未使用）
+     */
+    executeMenuAction(action, additionalData) {
+        this.handleMenuAction(action);
     }
 
     handleMenuAction(action) {
@@ -1300,9 +1255,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 this.refresh();
                 break;
             case 'change-bg-color':
-                console.log('[VirtualObjectList] 背景色変更メニュー選択');
+                logger.debug('[VirtualObjectList] 背景色変更メニュー選択');
                 this.changeBgColor().catch(err => {
-                    console.error('[VirtualObjectList] 背景色変更エラー:', err);
+                    logger.error('[VirtualObjectList] 背景色変更エラー:', err);
                 });
                 break;
             case 'copy':
@@ -1340,11 +1295,11 @@ class VirtualObjectListApp extends window.PluginBase {
                 break;
             case 'undo':
                 // TODO: Undo機能
-                console.log('[VirtualObjectList] Undo未実装');
+                logger.debug('[VirtualObjectList] Undo未実装');
                 break;
             case 'redo':
                 // TODO: Redo機能
-                console.log('[VirtualObjectList] Redo未実装');
+                logger.debug('[VirtualObjectList] Redo未実装');
                 break;
             case 'open-real-object':
                 this.openRealObjectWithDefaultApp();
@@ -1373,12 +1328,12 @@ class VirtualObjectListApp extends window.PluginBase {
     async executeVirtualObjectWithPlugin(pluginId) {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 仮身が選択されていません');
+            logger.warn('[VirtualObjectList] 仮身が選択されていません');
             return;
         }
 
         const realId = selectedVirtualObject.link_id;
-        console.log('[VirtualObjectList] 仮身の実身を開く:', realId, 'プラグイン:', pluginId);
+        logger.debug('[VirtualObjectList] 仮身の実身を開く:', realId, 'プラグイン:', pluginId);
 
         const messageId = `open-${realId}-${Date.now()}`;
 
@@ -1398,7 +1353,7 @@ class VirtualObjectListApp extends window.PluginBase {
             if (result.success && result.windowId) {
                 // 開いたウィンドウを追跡
                 this.openedRealObjects.set(realId, result.windowId);
-                console.log('[VirtualObjectList] ウィンドウが開きました:', result.windowId, 'realId:', realId);
+                logger.debug('[VirtualObjectList] ウィンドウが開きました:', result.windowId, 'realId:', realId);
 
                 // ウィンドウのアイコンを設定
                 // realIdから_0.xtadなどのサフィックスを除去して基本実身IDを取得（共通メソッドを使用）
@@ -1409,10 +1364,10 @@ class VirtualObjectListApp extends window.PluginBase {
                     windowId: result.windowId,
                     iconPath: iconPath
                 });
-                console.log('[VirtualObjectList] ウィンドウアイコン設定要求:', result.windowId, iconPath);
+                logger.debug('[VirtualObjectList] ウィンドウアイコン設定要求:', result.windowId, iconPath);
             }
         } catch (error) {
-            console.error('[VirtualObjectList] ウィンドウを開く処理でエラー:', error);
+            logger.error('[VirtualObjectList] ウィンドウを開く処理でエラー:', error);
         }
     }
 
@@ -1422,11 +1377,11 @@ class VirtualObjectListApp extends window.PluginBase {
     moveSelectedVirtualObjectToFront() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
-        console.log('[VirtualObjectList] 仮身を最前面に移動:', selectedVirtualObject.link_name);
+        logger.debug('[VirtualObjectList] 仮身を最前面に移動:', selectedVirtualObject.link_name);
 
         // 現在の最大z-indexを見つける
         let maxZIndex = 0;
@@ -1446,7 +1401,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             if (left === selectedVirtualObject.vobjleft && top === selectedVirtualObject.vobjtop) {
                 el.style.zIndex = (maxZIndex + 1).toString();
-                console.log('[VirtualObjectList] z-indexを設定:', maxZIndex + 1);
+                logger.debug('[VirtualObjectList] z-indexを設定:', maxZIndex + 1);
             }
         });
     }
@@ -1457,17 +1412,17 @@ class VirtualObjectListApp extends window.PluginBase {
     moveSelectedVirtualObjectToBack() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
         // 固定化された仮身は移動可能、背景化された仮身は移動不可
         if (selectedVirtualObject.isBackground) {
-            console.log('[VirtualObjectList] 背景化されているため移動できません');
+            logger.debug('[VirtualObjectList] 背景化されているため移動できません');
             return;
         }
 
-        console.log('[VirtualObjectList] 仮身を最背面に移動:', selectedVirtualObject.link_name);
+        logger.debug('[VirtualObjectList] 仮身を最背面に移動:', selectedVirtualObject.link_name);
 
         // 背景化された仮身と通常の仮身を分離
         const backgroundObjects = this.virtualObjects.filter(obj => obj.isBackground);
@@ -1484,7 +1439,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // 再描画
         this.renderVirtualObjects();
-        console.log('[VirtualObjectList] 仮身を背景化仮身の直後に移動完了');
+        logger.debug('[VirtualObjectList] 仮身を背景化仮身の直後に移動完了');
     }
 
     /**
@@ -1545,7 +1500,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         }
                     };
                 }
-                console.log('[VirtualObjectList] デフォルトapplist設定:', newVirtualObject.applist);
+                logger.debug('[VirtualObjectList] デフォルトapplist設定:', newVirtualObject.applist);
             }
 
             // 仮身リストに追加
@@ -1554,9 +1509,9 @@ class VirtualObjectListApp extends window.PluginBase {
             // 再描画
             this.renderVirtualObjects();
 
-            console.log('[VirtualObjectList] 仮身を追加しました:', file.name);
+            logger.debug('[VirtualObjectList] 仮身を追加しました:', file.name);
         } catch (error) {
-            console.error('[VirtualObjectList] 仮身追加エラー:', error);
+            logger.error('[VirtualObjectList] 仮身追加エラー:', error);
         }
     }
 
@@ -1565,43 +1520,43 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     saveToFile() {
         if (!this.xmlData) {
-            console.warn('[VirtualObjectList] 保存するデータがありません');
+            logger.warn('[VirtualObjectList] 保存するデータがありません');
             return;
         }
 
         // 親ウィンドウに保存を通知
         this.notifyXmlDataChanged();
-        console.log('[VirtualObjectList] ファイル保存を実行');
+        logger.debug('[VirtualObjectList] ファイル保存を実行');
     }
 
     /**
      * 新たな実身に保存（非再帰的コピー）
      */
     async saveAsNewRealObject() {
-        console.log('[VirtualObjectList] saveAsNewRealObject - realId:', this.realId);
+        logger.debug('[VirtualObjectList] saveAsNewRealObject - realId:', this.realId);
 
         if (!this.xmlData) {
-            console.warn('[VirtualObjectList] 保存するデータがありません');
+            logger.warn('[VirtualObjectList] 保存するデータがありません');
             return;
         }
 
         // 選択されている仮身が1つであることを確認
         if (this.selectedVirtualObjects.size !== 1) {
-            console.warn('[VirtualObjectList] 仮身を1つ選択してください');
+            logger.warn('[VirtualObjectList] 仮身を1つ選択してください');
             return;
         }
 
         // 選択されている仮身のvobjIndexを取得
         const selectedVobjIndex = Array.from(this.selectedVirtualObjects)[0];
-        console.log('[VirtualObjectList] 選択されているvobjIndex:', selectedVobjIndex);
+        logger.debug('[VirtualObjectList] 選択されているvobjIndex:', selectedVobjIndex);
 
         // virtualObjects配列から実際のオブジェクトを取得
         const selectedVobj = this.virtualObjects[selectedVobjIndex];
         if (!selectedVobj) {
-            console.error('[VirtualObjectList] 選択されている仮身が見つかりません:', selectedVobjIndex);
+            logger.error('[VirtualObjectList] 選択されている仮身が見つかりません:', selectedVobjIndex);
             return;
         }
-        console.log('[VirtualObjectList] 選択されている仮身オブジェクト:', selectedVobj);
+        logger.debug('[VirtualObjectList] 選択されている仮身オブジェクト:', selectedVobj);
 
         // まず現在のデータを保存
         this.notifyXmlDataChanged();
@@ -1622,9 +1577,9 @@ class VirtualObjectListApp extends window.PluginBase {
             });
 
             if (result.cancelled) {
-                console.log('[VirtualObjectList] 新たな実身への保存がキャンセルされました');
+                logger.debug('[VirtualObjectList] 新たな実身への保存がキャンセルされました');
             } else if (result.success) {
-                console.log('[VirtualObjectList] 新たな実身への保存成功:', result.newRealId, '名前:', result.newName);
+                logger.debug('[VirtualObjectList] 新たな実身への保存成功:', result.newRealId, '名前:', result.newName);
 
                 // 新しい仮身を元の仮身の下に配置
                 const newVirtualObj = {
@@ -1645,7 +1600,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     applist: selectedVobj.applist || {}
                 };
 
-                console.log('[VirtualObjectList] 新しい仮身を追加:', newVirtualObj);
+                logger.debug('[VirtualObjectList] 新しい仮身を追加:', newVirtualObj);
 
                 // XMLに仮身を追加（addVirtualObjectToXmlが自動保存する）
                 this.addVirtualObjectToXml(newVirtualObj);
@@ -1656,12 +1611,12 @@ class VirtualObjectListApp extends window.PluginBase {
                 // 再描画
                 this.renderVirtualObjects();
 
-                console.log('[VirtualObjectList] 新しい仮身を追加しました');
+                logger.debug('[VirtualObjectList] 新しい仮身を追加しました');
             } else {
-                console.error('[VirtualObjectList] 新たな実身への保存失敗:', result.error);
+                logger.error('[VirtualObjectList] 新たな実身への保存失敗:', result.error);
             }
         } catch (error) {
-            console.error('[VirtualObjectList] 新たな実身への保存エラー:', error);
+            logger.error('[VirtualObjectList] 新たな実身への保存エラー:', error);
         }
     }
 
@@ -1689,7 +1644,7 @@ class VirtualObjectListApp extends window.PluginBase {
     copySelectedVirtualObject() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
@@ -1702,7 +1657,7 @@ class VirtualObjectListApp extends window.PluginBase {
             clipboardData: clipboardData
         });
 
-        console.log('[VirtualObjectList] 仮身をクリップボードにコピー:', clipboardData.link_name, 'realId:', clipboardData.link_id);
+        logger.debug('[VirtualObjectList] 仮身をクリップボードにコピー:', clipboardData.link_name, 'realId:', clipboardData.link_id);
     }
 
     /**
@@ -1711,7 +1666,7 @@ class VirtualObjectListApp extends window.PluginBase {
     cutSelectedVirtualObject() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
@@ -1730,7 +1685,7 @@ class VirtualObjectListApp extends window.PluginBase {
             this.virtualObjects.splice(index, 1);
             this.selectedVirtualObjects.clear();
             this.renderVirtualObjects();
-            console.log('[VirtualObjectList] 仮身をカット:', clipboardData.link_name);
+            logger.debug('[VirtualObjectList] 仮身をカット:', clipboardData.link_name);
         }
     }
 
@@ -1742,7 +1697,7 @@ class VirtualObjectListApp extends window.PluginBase {
         const clipboard = await this.getClipboard();
 
         if (!clipboard) {
-            console.warn('[VirtualObjectList] クリップボードが空です');
+            logger.warn('[VirtualObjectList] クリップボードが空です');
             return;
         }
 
@@ -1768,7 +1723,7 @@ class VirtualObjectListApp extends window.PluginBase {
         // 親ウィンドウに仮身コピーを通知してrefCountを+1
         this.requestCopyVirtualObject(realId);
 
-        console.log('[VirtualObjectList] 仮身をペースト:', newVirtualObj.link_name, 'realId:', realId);
+        logger.debug('[VirtualObjectList] 仮身をペースト:', newVirtualObj.link_name, 'realId:', realId);
     }
 
     /**
@@ -1794,7 +1749,7 @@ class VirtualObjectListApp extends window.PluginBase {
             });
             return result.clipboardData;
         } catch (error) {
-            console.warn('[VirtualObjectList] クリップボード取得タイムアウト:', error);
+            logger.warn('[VirtualObjectList] クリップボード取得タイムアウト:', error);
             return null;
         }
     }
@@ -1805,13 +1760,13 @@ class VirtualObjectListApp extends window.PluginBase {
     deleteSelectedVirtualObject() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
         // 保護チェック：固定化または背景化されている場合は削除を無効化
         if (selectedVirtualObject.isFixed || selectedVirtualObject.isBackground) {
-            console.log('[VirtualObjectList] 保護されているため削除できません:', selectedVirtualObject.link_name,
+            logger.debug('[VirtualObjectList] 保護されているため削除できません:', selectedVirtualObject.link_name,
                 selectedVirtualObject.isFixed ? '固定化' : '', selectedVirtualObject.isBackground ? '背景化' : '');
             return;
         }
@@ -1837,7 +1792,7 @@ class VirtualObjectListApp extends window.PluginBase {
         // 親ウィンドウに仮身削除を通知してrefCount-1
         this.requestDeleteVirtualObject(realId);
 
-        console.log('[VirtualObjectList] 仮身を削除:', linkName, 'realId:', realId);
+        logger.debug('[VirtualObjectList] 仮身を削除:', linkName, 'realId:', realId);
     }
 
     /**
@@ -1851,7 +1806,7 @@ class VirtualObjectListApp extends window.PluginBase {
     async renameRealObject() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
@@ -1874,7 +1829,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 for (const vo of this.virtualObjects) {
                     if (vo.link_id === selectedVirtualObject.link_id) {
                         vo.link_name = result.newName;
-                        console.log('[VirtualObjectList] virtualObjects内の仮身名を更新:', vo.link_id, '->', result.newName);
+                        logger.debug('[VirtualObjectList] virtualObjects内の仮身名を更新:', vo.link_id, '->', result.newName);
                     }
                 }
             }
@@ -1886,7 +1841,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     const nameSpan = element.querySelector('.virtual-object-name');
                     if (nameSpan) {
                         nameSpan.textContent = result.newName;
-                        console.log('[VirtualObjectList] DOM上の仮身名を更新:', selectedVirtualObject.link_id, '->', result.newName);
+                        logger.debug('[VirtualObjectList] DOM上の仮身名を更新:', selectedVirtualObject.link_id, '->', result.newName);
                     }
                 }
             });
@@ -1905,7 +1860,7 @@ class VirtualObjectListApp extends window.PluginBase {
     async duplicateRealObject() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
@@ -1964,10 +1919,10 @@ class VirtualObjectListApp extends window.PluginBase {
                     this.renderVirtualObjects();
 
                     this.setStatus(`実身を複製しました: ${result.newName}`);
-                    console.log('[VirtualObjectList] 実身複製成功:', selectedVirtualObject.link_id, '->', result.newRealId);
+                    logger.debug('[VirtualObjectList] 実身複製成功:', selectedVirtualObject.link_id, '->', result.newRealId);
                 }
             } catch (error) {
-                console.error('[VirtualObjectList] 実身複製エラー:', error);
+                logger.error('[VirtualObjectList] 実身複製エラー:', error);
                 this.setStatus('実身の複製に失敗しました');
             }
         }
@@ -1991,12 +1946,12 @@ class VirtualObjectListApp extends window.PluginBase {
     async handleDoubleClickDragDuplicate(dropX, dropY) {
         const obj = this.dblClickDragState.dblClickedObject;
         if (!obj || !obj.link_id) {
-            console.error('[VirtualObjectList] 複製対象の仮身が不正です');
+            logger.error('[VirtualObjectList] 複製対象の仮身が不正です');
             return;
         }
 
         const realId = obj.link_id;
-        console.log('[VirtualObjectList] ダブルクリック+ドラッグによる実身複製:', realId, 'ドロップ位置:', dropX, dropY);
+        logger.debug('[VirtualObjectList] ダブルクリック+ドラッグによる実身複製:', realId, 'ドロップ位置:', dropX, dropY);
 
         // 元の仮身のサイズと属性を保存
         const width = obj.width || (obj.vobjright - obj.vobjleft) || 100;
@@ -2025,12 +1980,12 @@ class VirtualObjectListApp extends window.PluginBase {
             });
 
             if (result.cancelled) {
-                console.log('[VirtualObjectList] 実身複製がキャンセルされました');
+                logger.debug('[VirtualObjectList] 実身複製がキャンセルされました');
             } else if (result.success) {
                 // 複製成功: 新しい実身IDで仮身を作成
                 const newRealId = result.newRealId;
                 const newName = result.newName;
-                console.log('[VirtualObjectList] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
+                logger.debug('[VirtualObjectList] 実身複製成功:', realId, '->', newRealId, '名前:', newName);
 
                 // 新しい仮身オブジェクトを作成（ドラッグ終了位置に配置）
                 const newVirtualObj = {
@@ -2064,12 +2019,12 @@ class VirtualObjectListApp extends window.PluginBase {
                 // 再描画
                 this.renderVirtualObjects();
 
-                console.log('[VirtualObjectList] 新しい仮身を配置:', newName, '位置:', dropX, dropY);
+                logger.debug('[VirtualObjectList] 新しい仮身を配置:', newName, '位置:', dropX, dropY);
             } else {
-                console.error('[VirtualObjectList] 実身複製失敗:', result.error);
+                logger.error('[VirtualObjectList] 実身複製失敗:', result.error);
             }
         } catch (error) {
-            console.error('[VirtualObjectList] 実身複製エラー:', error);
+            logger.error('[VirtualObjectList] 実身複製エラー:', error);
         }
     }
 
@@ -2079,13 +2034,13 @@ class VirtualObjectListApp extends window.PluginBase {
     openRealObjectWithDefaultApp() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
         const applist = selectedVirtualObject.applist;
         if (!applist || typeof applist !== 'object') {
-            console.warn('[VirtualObjectList] applistが存在しません');
+            logger.warn('[VirtualObjectList] applistが存在しません');
             return;
         }
 
@@ -2104,7 +2059,7 @@ class VirtualObjectListApp extends window.PluginBase {
         }
 
         if (!defaultPluginId) {
-            console.warn('[VirtualObjectList] 開くためのプラグインが見つかりません');
+            logger.warn('[VirtualObjectList] 開くためのプラグインが見つかりません');
             return;
         }
 
@@ -2114,7 +2069,7 @@ class VirtualObjectListApp extends window.PluginBase {
         // 開いた実身を追跡
         const realId = selectedVirtualObject.link_id;
         // windowIdは親ウィンドウから通知される想定
-        console.log('[VirtualObjectList] 実身を開く:', realId, 'with', defaultPluginId);
+        logger.debug('[VirtualObjectList] 実身を開く:', realId, 'with', defaultPluginId);
     }
 
     /**
@@ -2123,7 +2078,7 @@ class VirtualObjectListApp extends window.PluginBase {
     closeRealObject() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
@@ -2145,6 +2100,8 @@ class VirtualObjectListApp extends window.PluginBase {
         // 追跡からの削除はwindow-closedメッセージで行う
     }
 
+    // handleCloseRequest() は PluginBase で定義（isModified未設定のため常にクローズ許可）
+
     /**
      * ウィンドウが閉じたことを処理
      */
@@ -2156,7 +2113,7 @@ class VirtualObjectListApp extends window.PluginBase {
             // openedRealObjectsから削除
             if (this.openedRealObjects.has(realId)) {
                 this.openedRealObjects.delete(realId);
-                console.log('[VirtualObjectList] 実身の追跡を削除:', realId);
+                logger.debug('[VirtualObjectList] 実身の追跡を削除:', realId);
             }
         }
 
@@ -2164,7 +2121,7 @@ class VirtualObjectListApp extends window.PluginBase {
         for (const [realId, wId] of this.openedRealObjects.entries()) {
             if (wId === windowId) {
                 this.openedRealObjects.delete(realId);
-                console.log('[VirtualObjectList] windowIdから実身の追跡を削除:', realId, windowId);
+                logger.debug('[VirtualObjectList] windowIdから実身の追跡を削除:', realId, windowId);
                 break;
             }
         }
@@ -2176,7 +2133,7 @@ class VirtualObjectListApp extends window.PluginBase {
     async changeVirtualObjectAttributes() {
         const selectedVirtualObject = this.getSelectedVirtualObject();
         if (!selectedVirtualObject) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
@@ -2219,7 +2176,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     setStatus(message) {
         // 仮身一覧プラグインにはステータスバーがないため、コンソールログのみ
-        console.log('[VirtualObjectList] Status:', message);
+        logger.debug('[VirtualObjectList] Status:', message);
     }
 
     /**
@@ -2248,7 +2205,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 vobj.pictdisp = newValue;
                 pictdispChanged = true;
                 hasChanges = true;
-                console.log('[VirtualObjectList] pictdisp変更:', oldValue, '->', newValue);
+                logger.debug('[VirtualObjectList] pictdisp変更:', oldValue, '->', newValue);
             }
         }
         if (attrs.namedisp !== undefined) {
@@ -2257,7 +2214,7 @@ class VirtualObjectListApp extends window.PluginBase {
             if (oldValue !== newValue) {
                 vobj.namedisp = newValue;
                 hasChanges = true;
-                console.log('[VirtualObjectList] namedisp変更:', oldValue, '->', newValue);
+                logger.debug('[VirtualObjectList] namedisp変更:', oldValue, '->', newValue);
             }
         }
         if (attrs.roledisp !== undefined) {
@@ -2266,7 +2223,7 @@ class VirtualObjectListApp extends window.PluginBase {
             if (oldValue !== newValue) {
                 vobj.roledisp = newValue;
                 hasChanges = true;
-                console.log('[VirtualObjectList] roledisp変更:', oldValue, '->', newValue);
+                logger.debug('[VirtualObjectList] roledisp変更:', oldValue, '->', newValue);
             }
         }
         if (attrs.typedisp !== undefined) {
@@ -2275,7 +2232,7 @@ class VirtualObjectListApp extends window.PluginBase {
             if (oldValue !== newValue) {
                 vobj.typedisp = newValue;
                 hasChanges = true;
-                console.log('[VirtualObjectList] typedisp変更:', oldValue, '->', newValue);
+                logger.debug('[VirtualObjectList] typedisp変更:', oldValue, '->', newValue);
             }
         }
         if (attrs.updatedisp !== undefined) {
@@ -2284,7 +2241,7 @@ class VirtualObjectListApp extends window.PluginBase {
             if (oldValue !== newValue) {
                 vobj.updatedisp = newValue;
                 hasChanges = true;
-                console.log('[VirtualObjectList] updatedisp変更:', oldValue, '->', newValue);
+                logger.debug('[VirtualObjectList] updatedisp変更:', oldValue, '->', newValue);
             }
         }
         if (attrs.framedisp !== undefined) {
@@ -2293,29 +2250,29 @@ class VirtualObjectListApp extends window.PluginBase {
             if (oldValue !== newValue) {
                 vobj.framedisp = newValue;
                 hasChanges = true;
-                console.log('[VirtualObjectList] framedisp変更:', oldValue, '->', newValue);
+                logger.debug('[VirtualObjectList] framedisp変更:', oldValue, '->', newValue);
             }
         }
 
         // 色の設定（値が実際に変更された場合のみ）
         const colorRegex = /^#[0-9A-Fa-f]{6}$/;
         if (attrs.frcol && colorRegex.test(attrs.frcol) && vobj.frcol !== attrs.frcol) {
-            console.log('[VirtualObjectList] frcol変更:', vobj.frcol, '->', attrs.frcol);
+            logger.debug('[VirtualObjectList] frcol変更:', vobj.frcol, '->', attrs.frcol);
             vobj.frcol = attrs.frcol;
             hasChanges = true;
         }
         if (attrs.chcol && colorRegex.test(attrs.chcol) && vobj.chcol !== attrs.chcol) {
-            console.log('[VirtualObjectList] chcol変更:', vobj.chcol, '->', attrs.chcol);
+            logger.debug('[VirtualObjectList] chcol変更:', vobj.chcol, '->', attrs.chcol);
             vobj.chcol = attrs.chcol;
             hasChanges = true;
         }
         if (attrs.tbcol && colorRegex.test(attrs.tbcol) && vobj.tbcol !== attrs.tbcol) {
-            console.log('[VirtualObjectList] tbcol変更:', vobj.tbcol, '->', attrs.tbcol);
+            logger.debug('[VirtualObjectList] tbcol変更:', vobj.tbcol, '->', attrs.tbcol);
             vobj.tbcol = attrs.tbcol;
             hasChanges = true;
         }
         if (attrs.bgcol && colorRegex.test(attrs.bgcol) && vobj.bgcol !== attrs.bgcol) {
-            console.log('[VirtualObjectList] bgcol変更:', vobj.bgcol, '->', attrs.bgcol);
+            logger.debug('[VirtualObjectList] bgcol変更:', vobj.bgcol, '->', attrs.bgcol);
             vobj.bgcol = attrs.bgcol;
             hasChanges = true;
         }
@@ -2341,7 +2298,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 const vobjHeight = vobj.vobjbottom - vobj.vobjtop;
                 const vobjWidth = vobj.vobjright - vobj.vobjleft;
 
-                console.log('[VirtualObjectList] chsz変更:', {
+                logger.debug('[VirtualObjectList] chsz変更:', {
                     oldChsz,
                     newChsz,
                     vobjHeight,
@@ -2356,7 +2313,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     const textHeight = Math.ceil(newChszPx * lineHeight);
                     const newHeight = textHeight + 8;
                     vobj.vobjbottom = vobj.vobjtop + newHeight;
-                    console.log('[VirtualObjectList] 閉じた仮身の高さを調整:', vobjHeight, '->', newHeight, `(${newChsz}pt = ${newChszPx}px)`);
+                    logger.debug('[VirtualObjectList] 閉じた仮身の高さを調整:', vobjHeight, '->', newHeight, `(${newChsz}pt = ${newChszPx}px)`);
                 } else {
                     // 開いた仮身の場合、chszに比例して高さを調整
                     const lineHeight = 1.2;
@@ -2366,7 +2323,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     const heightRatio = newChsz / oldChsz;
                     const adjustedHeight = Math.max(newMinOpenHeight, Math.round(vobjHeight * heightRatio));
                     vobj.vobjbottom = vobj.vobjtop + adjustedHeight;
-                    console.log('[VirtualObjectList] 開いた仮身の高さを比例調整:', vobjHeight, '->', adjustedHeight, 'ratio:', heightRatio);
+                    logger.debug('[VirtualObjectList] 開いた仮身の高さを比例調整:', vobjHeight, '->', adjustedHeight, 'ratio:', heightRatio);
                 }
 
                 // 幅も文字サイズに応じて調整(最小幅を確保)
@@ -2374,10 +2331,10 @@ class VirtualObjectListApp extends window.PluginBase {
                 const minWidth = Math.max(50, newChszPx * 6); // chszPxの6倍を最小幅とする
                 if (vobjWidth < minWidth) {
                     vobj.vobjright = vobj.vobjleft + minWidth;
-                    console.log('[VirtualObjectList] 最小幅を確保:', vobjWidth, '->', minWidth);
+                    logger.debug('[VirtualObjectList] 最小幅を確保:', vobjWidth, '->', minWidth);
                 }
             } else {
-                console.log('[VirtualObjectList] chszは変更なし:', oldChsz);
+                logger.debug('[VirtualObjectList] chszは変更なし:', oldChsz);
             }
         }
 
@@ -2401,7 +2358,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 // 高さが既に正しい場合はスキップ
                 if (currentHeight !== newHeight) {
                     vobj.vobjbottom = vobj.vobjtop + newHeight;
-                    console.log('[VirtualObjectList] pictdisp変更による高さ調整:', currentHeight, '->', newHeight);
+                    logger.debug('[VirtualObjectList] pictdisp変更による高さ調整:', currentHeight, '->', newHeight);
                 }
             }
         }
@@ -2413,13 +2370,13 @@ class VirtualObjectListApp extends window.PluginBase {
             if (oldValue !== newValue) {
                 vobj.autoopen = newValue;
                 hasChanges = true;
-                console.log('[VirtualObjectList] autoopen変更:', oldValue, '->', newValue);
+                logger.debug('[VirtualObjectList] autoopen変更:', oldValue, '->', newValue);
             }
         }
 
         // 変更がない場合は早期リターン
         if (!hasChanges) {
-            console.log('[VirtualObjectList] 属性に変更がないため処理をスキップ');
+            logger.debug('[VirtualObjectList] 属性に変更がないため処理をスキップ');
             return;
         }
 
@@ -2434,7 +2391,7 @@ class VirtualObjectListApp extends window.PluginBase {
         const iframe = vobjElement ? vobjElement.querySelector('.virtual-object-content-iframe') : null;
 
         if (vobjElement && iframe) {
-            console.log('[VirtualObjectList] 開いた仮身の属性を更新:', vobj.link_name);
+            logger.debug('[VirtualObjectList] 開いた仮身の属性を更新:', vobj.link_name);
 
             // 背景色のみの変更の場合は、iframeに直接通知して再描画を回避
             const bgcolChanged = attrs.bgcol !== undefined;
@@ -2448,7 +2405,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         type: 'update-background-color',
                         bgcol: vobj.bgcol
                     }, '*');
-                    console.log('[VirtualObjectList] 開いた仮身のiframeに背景色変更を通知:', vobj.bgcol);
+                    logger.debug('[VirtualObjectList] 開いた仮身のiframeに背景色変更を通知:', vobj.bgcol);
                 }
             } else {
                 // その他の属性変更がある場合は、再描画
@@ -2459,7 +2416,7 @@ class VirtualObjectListApp extends window.PluginBase {
             this.renderVirtualObjects();
         }
 
-        console.log('[VirtualObjectList] 仮身属性を適用:', attrs);
+        logger.debug('[VirtualObjectList] 仮身属性を適用:', attrs);
     }
 
     /**
@@ -2467,7 +2424,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     async showArrangeDialog() {
         if (this.selectedVirtualObjects.size === 0) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
@@ -2498,19 +2455,19 @@ class VirtualObjectListApp extends window.PluginBase {
                     sortOrder: 'sortOrder'
                 }
             }, (result) => {
-                console.log('[VirtualObjectList] 整頓ダイアログコールバック実行:', result);
+                logger.debug('[VirtualObjectList] 整頓ダイアログコールバック実行:', result);
 
                 // Dialog result is wrapped in result.result
                 const dialogResult = result.result || result;
 
                 if (dialogResult.error) {
-                    console.warn('[VirtualObjectList] Arrange dialog error:', dialogResult.error);
+                    logger.warn('[VirtualObjectList] Arrange dialog error:', dialogResult.error);
                     resolve(null);
                     return;
                 }
 
                 if (dialogResult.button === 'ok') {
-                    console.log('[VirtualObjectList] OKボタンが押されました');
+                    logger.debug('[VirtualObjectList] OKボタンが押されました');
 
                     // フォームの値を取得
                     const horizontal = (dialogResult.radios && dialogResult.radios.horizontal) || 'none';
@@ -2521,7 +2478,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     const sortOrder = (dialogResult.radios && dialogResult.radios.sortOrder) || 'asc';
                     const columnCount = parseInt((dialogResult.inputs && dialogResult.inputs.columnCount) || '1') || 1;
 
-                    console.log('[VirtualObjectList] 整頓設定:', {
+                    logger.debug('[VirtualObjectList] 整頓設定:', {
                         horizontal, vertical, column, columnCount,
                         length, sortBy, sortOrder
                     });
@@ -2532,7 +2489,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         length, sortBy, sortOrder
                     });
                 } else {
-                    console.log('[VirtualObjectList] OKボタンが押されませんでした。button:', dialogResult.button);
+                    logger.debug('[VirtualObjectList] OKボタンが押されませんでした。button:', dialogResult.button);
                 }
 
                 resolve(result);
@@ -2550,7 +2507,7 @@ class VirtualObjectListApp extends window.PluginBase {
         }).filter(v => v !== undefined);
         if (selectedObjects.length === 0) return;
 
-        console.log('[VirtualObjectList] 整頓開始:', options, '選択数:', selectedObjects.length);
+        logger.debug('[VirtualObjectList] 整頓開始:', options, '選択数:', selectedObjects.length);
 
         // ソート前の座標範囲を記録（整頓の基準位置として使用）
         const topmost = Math.min(...selectedObjects.map(o => o.vobjtop));
@@ -2558,7 +2515,7 @@ class VirtualObjectListApp extends window.PluginBase {
         const rightmost = Math.max(...selectedObjects.map(o => o.vobjright));
         const baseCoords = { top: topmost, left: leftmost, right: rightmost };
 
-        console.log('[VirtualObjectList] 整頓基準座標:', baseCoords);
+        logger.debug('[VirtualObjectList] 整頓基準座標:', baseCoords);
 
         // 先頭の仮身（最初に選択されたもの）- 長さ調整の参照用
         const firstObj = selectedObjects[0];
@@ -2580,7 +2537,7 @@ class VirtualObjectListApp extends window.PluginBase {
             if (options.sortBy !== 'none' && options.column === 'none' &&
                 options.horizontal === 'none' && options.vertical === 'none') {
                 effectiveColumn = 'single';
-                console.log('[VirtualObjectList] 整列順が指定されたため、自動的に1段組を適用します');
+                logger.debug('[VirtualObjectList] 整列順が指定されたため、自動的に1段組を適用します');
             }
 
             if (effectiveColumn === 'single') {
@@ -2606,7 +2563,7 @@ class VirtualObjectListApp extends window.PluginBase {
             this.updateVirtualObjectInXml(obj);
         });
 
-        console.log('[VirtualObjectList] 整頓完了（位置保存済み）');
+        logger.debug('[VirtualObjectList] 整頓完了（位置保存済み）');
     }
 
     /**
@@ -2743,7 +2700,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     applyProtection(protectionType) {
         if (this.selectedVirtualObjects.size === 0) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
@@ -2752,7 +2709,7 @@ class VirtualObjectListApp extends window.PluginBase {
             return this.virtualObjects[vobjIndex];
         }).filter(v => v !== undefined);
 
-        console.log('[VirtualObjectList] 保護適用:', protectionType, selectedObjects.length, '個の仮身');
+        logger.debug('[VirtualObjectList] 保護適用:', protectionType, selectedObjects.length, '個の仮身');
 
         // 各仮身に保護状態を適用
         selectedObjects.forEach(obj => {
@@ -2771,7 +2728,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // 再描画
         this.renderVirtualObjects();
-        console.log('[VirtualObjectList] 保護適用完了:', protectionType);
+        logger.debug('[VirtualObjectList] 保護適用完了:', protectionType);
 
         // コンテキストメニューを閉じた直後のドラッグを防ぐ
         this.justClosedContextMenu = true;
@@ -2786,7 +2743,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     removeProtection(protectionType) {
         if (this.selectedVirtualObjects.size === 0) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
@@ -2795,7 +2752,7 @@ class VirtualObjectListApp extends window.PluginBase {
             return this.virtualObjects[vobjIndex];
         }).filter(v => v !== undefined);
 
-        console.log('[VirtualObjectList] 保護解除:', protectionType, selectedObjects.length, '個の仮身');
+        logger.debug('[VirtualObjectList] 保護解除:', protectionType, selectedObjects.length, '個の仮身');
 
         // 各仮身の保護状態を解除（該当する保護タイプのみ）
         selectedObjects.forEach(obj => {
@@ -2809,7 +2766,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // 再描画
         this.renderVirtualObjects();
-        console.log('[VirtualObjectList] 保護解除完了:', protectionType);
+        logger.debug('[VirtualObjectList] 保護解除完了:', protectionType);
 
         // コンテキストメニューを閉じた直後のドラッグを防ぐ
         this.justClosedContextMenu = true;
@@ -2823,7 +2780,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     moveSelectedVirtualObjectsToBackground() {
         if (this.selectedVirtualObjects.size === 0) {
-            console.warn('[VirtualObjectList] 選択中の仮身がありません');
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
@@ -2843,7 +2800,7 @@ class VirtualObjectListApp extends window.PluginBase {
             this.virtualObjects = [...selectedObjects, ...unselectedObjects];
         });
 
-        console.log('[VirtualObjectList] 仮身を背景に移動:', selectedObjects.length, '個');
+        logger.debug('[VirtualObjectList] 仮身を背景に移動:', selectedObjects.length, '個');
     }
 
     /**
@@ -2903,8 +2860,8 @@ class VirtualObjectListApp extends window.PluginBase {
             colLefts[i] = colLefts[i - 1] + colMaxWidths[i - 1] + horizontalSpacing;
         }
 
-        console.log('[VirtualObjectList] 列の最大幅:', colMaxWidths);
-        console.log('[VirtualObjectList] 列の左位置:', colLefts);
+        logger.debug('[VirtualObjectList] 列の最大幅:', colMaxWidths);
+        logger.debug('[VirtualObjectList] 列の左位置:', colLefts);
 
         // 第2パス: 固定された列位置に基づいて配置
         let currentRow = 0;
@@ -2921,7 +2878,7 @@ class VirtualObjectListApp extends window.PluginBase {
             obj.vobjtop = rowTops[currentRow];
             obj.vobjbottom = obj.vobjtop + height;
 
-            console.log(`[VirtualObjectList] 整頓[${index}] ${obj.link_name}: 行${currentRow}, 列${currentCol}, left=${obj.vobjleft}, right=${obj.vobjright}`);
+            logger.debug(`[VirtualObjectList] 整頓[${index}] ${obj.link_name}: 行${currentRow}, 列${currentCol}, left=${obj.vobjleft}, right=${obj.vobjright}`);
 
             currentCol++;
             if (currentCol >= columnCount) {
@@ -2964,8 +2921,8 @@ class VirtualObjectListApp extends window.PluginBase {
             colLefts[i] = colLefts[i - 1] + colMaxWidths[i - 1] + horizontalSpacing;
         }
 
-        console.log('[VirtualObjectList] 列の最大幅:', colMaxWidths);
-        console.log('[VirtualObjectList] 列の左位置:', colLefts);
+        logger.debug('[VirtualObjectList] 列の最大幅:', colMaxWidths);
+        logger.debug('[VirtualObjectList] 列の左位置:', colLefts);
 
         // 第2パス: 固定された列位置に基づいて配置
         objects.forEach((obj, index) => {
@@ -2987,7 +2944,7 @@ class VirtualObjectListApp extends window.PluginBase {
             }
             obj.vobjbottom = obj.vobjtop + height;
 
-            console.log(`[VirtualObjectList] 整頓[${index}] ${obj.link_name}: 行${currentRow}, 列${currentCol}, left=${obj.vobjleft}, right=${obj.vobjright}`);
+            logger.debug(`[VirtualObjectList] 整頓[${index}] ${obj.link_name}: 行${currentRow}, 列${currentCol}, left=${obj.vobjleft}, right=${obj.vobjright}`);
         });
     }
 
@@ -3038,7 +2995,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     addVirtualObjectToXml(virtualObj) {
         if (!this.xmlData) {
-            console.warn('[VirtualObjectList] xmlDataがありません');
+            logger.warn('[VirtualObjectList] xmlDataがありません');
             return;
         }
 
@@ -3096,25 +3053,25 @@ class VirtualObjectListApp extends window.PluginBase {
             const figureElement = xmlDoc.getElementsByTagName('figure')[0];
             if (figureElement) {
                 figureElement.appendChild(linkElement);
-                console.log('[VirtualObjectList] <figure>要素内に仮身を追加');
+                logger.debug('[VirtualObjectList] <figure>要素内に仮身を追加');
             } else {
                 // <figure>がない場合はルート要素に追加
                 const rootElement = xmlDoc.documentElement;
                 rootElement.appendChild(linkElement);
-                console.log('[VirtualObjectList] <figure>がないためルート要素に仮身を追加');
+                logger.debug('[VirtualObjectList] <figure>がないためルート要素に仮身を追加');
             }
 
             // XMLを文字列に戻す
             const serializer = new XMLSerializer();
             this.xmlData = serializer.serializeToString(xmlDoc);
 
-            console.log('[VirtualObjectList] xmlTADに仮身を追加:', virtualObj.link_id);
+            logger.debug('[VirtualObjectList] xmlTADに仮身を追加:', virtualObj.link_id);
 
             // 自動保存
             this.notifyXmlDataChanged();
 
         } catch (error) {
-            console.error('[VirtualObjectList] xmlTAD追加エラー:', error);
+            logger.error('[VirtualObjectList] xmlTAD追加エラー:', error);
         }
     }
 
@@ -3124,7 +3081,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     removeVirtualObjectFromXml(virtualObj) {
         if (!this.xmlData) {
-            console.warn('[VirtualObjectList] xmlDataがありません');
+            logger.warn('[VirtualObjectList] xmlDataがありません');
             return;
         }
 
@@ -3138,7 +3095,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 const linkElement = linkElements[i];
                 if (linkElement.getAttribute('id') === virtualObj.link_id) {
                     linkElement.parentNode.removeChild(linkElement);
-                    console.log('[VirtualObjectList] <link>要素を削除:', virtualObj.link_id);
+                    logger.debug('[VirtualObjectList] <link>要素を削除:', virtualObj.link_id);
                     break;
                 }
             }
@@ -3147,13 +3104,13 @@ class VirtualObjectListApp extends window.PluginBase {
             const serializer = new XMLSerializer();
             this.xmlData = serializer.serializeToString(xmlDoc);
 
-            console.log('[VirtualObjectList] xmlTADから仮身を削除:', virtualObj.link_id);
+            logger.debug('[VirtualObjectList] xmlTADから仮身を削除:', virtualObj.link_id);
 
             // 自動保存
             this.notifyXmlDataChanged();
 
         } catch (error) {
-            console.error('[VirtualObjectList] xmlTAD削除エラー:', error);
+            logger.error('[VirtualObjectList] xmlTAD削除エラー:', error);
         }
     }
 
@@ -3163,7 +3120,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     updateVirtualObjectInXml(virtualObj) {
         if (!this.xmlData) {
-            console.warn('[VirtualObjectList] xmlDataがありません');
+            logger.warn('[VirtualObjectList] xmlDataがありません');
             return;
         }
 
@@ -3224,7 +3181,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     }
 
                     linkElement.textContent = virtualObj.link_name || '';
-                    console.log('[VirtualObjectList] <link>要素を更新:', virtualObj.link_id);
+                    logger.debug('[VirtualObjectList] <link>要素を更新:', virtualObj.link_id);
                     
                     // 元の位置情報を更新（次回の移動時に正しく識別できるように）
                     virtualObj.originalLeft = virtualObj.vobjleft;
@@ -3240,13 +3197,13 @@ class VirtualObjectListApp extends window.PluginBase {
             const serializer = new XMLSerializer();
             this.xmlData = serializer.serializeToString(xmlDoc);
 
-            console.log('[VirtualObjectList] xmlTADの仮身を更新:', virtualObj.link_id);
+            logger.debug('[VirtualObjectList] xmlTADの仮身を更新:', virtualObj.link_id);
 
             // 自動保存
             this.notifyXmlDataChanged();
 
         } catch (error) {
-            console.error('[VirtualObjectList] xmlTAD更新エラー:', error);
+            logger.error('[VirtualObjectList] xmlTAD更新エラー:', error);
         }
     }
 
@@ -3265,7 +3222,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 realId: actualRealId,
                 messageId: messageId
             });
-            console.log('[VirtualObjectList] 仮身コピー要求:', actualRealId, '(元:', realId, ')');
+            logger.debug('[VirtualObjectList] 仮身コピー要求:', actualRealId, '(元:', realId, ')');
         }
     }
 
@@ -3284,7 +3241,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 realId: actualRealId,
                 messageId: messageId
             });
-            console.log('[VirtualObjectList] 仮身削除要求:', actualRealId, '(元:', realId, ')');
+            logger.debug('[VirtualObjectList] 仮身削除要求:', actualRealId, '(元:', realId, ')');
         }
     }
 
@@ -3297,7 +3254,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // ドラッグ中は右クリックメニューを表示しない（コピーモード用の右ボタン操作として使用）
             if (this.draggingState.isDragging) {
-                console.log('[VirtualObjectList] ドラッグ中のため右クリックメニューを抑制');
+                logger.debug('[VirtualObjectList] ドラッグ中のため右クリックメニューを抑制');
                 return;
             }
 
@@ -3397,40 +3354,32 @@ class VirtualObjectListApp extends window.PluginBase {
         // ドラッグ用のmousemoveハンドラ
         const handleDragMouseMove = (e) => {
             // ダブルクリック+ドラッグ候補の検出
-            if (this.dblClickDragState.isDblClickDragCandidate && !this.dblClickDragState.isDblClickDrag) {
-                const deltaX = e.clientX - this.dblClickDragState.startX;
-                const deltaY = e.clientY - this.dblClickDragState.startY;
+            // 共通メソッドでドラッグ開始判定
+            if (this.shouldStartDblClickDrag(e)) {
+                logger.debug('[VirtualObjectList] ダブルクリック+ドラッグを確定（ドラッグ完了待ち）:', this.dblClickDragState.dblClickedObject.link_name);
 
-                // 5px以上移動したらダブルクリック+ドラッグ確定（mouseup時に実身複製処理を実行）
-                if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
-                    console.log('[VirtualObjectList] ダブルクリック+ドラッグを確定（ドラッグ完了待ち）:', this.dblClickDragState.dblClickedObject.link_name);
-                    this.dblClickDragState.isDblClickDrag = true;
-                    // 候補フラグをクリア
-                    this.dblClickDragState.isDblClickDragCandidate = false;
+                // 青い選択枠のプレビュー要素を作成（プラグイン固有）
+                const obj = this.dblClickDragState.dblClickedObject;
+                const width = obj.width || (obj.vobjright - obj.vobjleft) || 100;
+                const height = obj.heightPx || (obj.vobjbottom - obj.vobjtop) || 32;
 
-                    // 青い選択枠のプレビュー要素を作成
-                    const obj = this.dblClickDragState.dblClickedObject;
-                    const width = obj.width || (obj.vobjright - obj.vobjleft) || 100;
-                    const height = obj.heightPx || (obj.vobjbottom - obj.vobjtop) || 32;
+                const preview = document.createElement('div');
+                preview.className = 'dblclick-drag-preview';
+                preview.style.position = 'absolute';
+                preview.style.border = '2px solid #0078d4';
+                preview.style.backgroundColor = 'rgba(0, 120, 212, 0.1)';
+                preview.style.pointerEvents = 'none';
+                preview.style.zIndex = '10000';
+                preview.style.width = width + 'px';
+                preview.style.height = height + 'px';
+                preview.style.left = obj.vobjleft + 'px';
+                preview.style.top = obj.vobjtop + 'px';
 
-                    const preview = document.createElement('div');
-                    preview.className = 'dblclick-drag-preview';
-                    preview.style.position = 'absolute';
-                    preview.style.border = '2px solid #0078d4';
-                    preview.style.backgroundColor = 'rgba(0, 120, 212, 0.1)';
-                    preview.style.pointerEvents = 'none';
-                    preview.style.zIndex = '10000';
-                    preview.style.width = width + 'px';
-                    preview.style.height = height + 'px';
-                    preview.style.left = obj.vobjleft + 'px';
-                    preview.style.top = obj.vobjtop + 'px';
-
-                    const canvas = document.querySelector('.virtual-canvas');
-                    if (canvas) {
-                        canvas.appendChild(preview);
-                    }
-                    return;
+                const canvas = document.querySelector('.virtual-canvas');
+                if (canvas) {
+                    canvas.appendChild(preview);
                 }
+                return;
             }
 
             // ダブルクリック+ドラッグ中のプレビュー位置更新
@@ -3457,7 +3406,7 @@ class VirtualObjectListApp extends window.PluginBase {
             // 5px以上移動したらドラッグとみなす
             if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
                 if (!this.draggingState.hasMoved) {
-                    console.log('[VirtualObjectList] mousemove: 移動検知 delta:', deltaX, deltaY);
+                    logger.debug('[VirtualObjectList] mousemove: 移動検知 delta:', deltaX, deltaY);
                 }
                 this.draggingState.hasMoved = true;
             }
@@ -3479,12 +3428,12 @@ class VirtualObjectListApp extends window.PluginBase {
             // 右ボタン（button === 2）の押下を検出
             if (e.button === 2) {
                 this.draggingState.isRightButtonPressed = true;
-                console.log('[VirtualObjectList] 右ボタン押下検出');
+                logger.debug('[VirtualObjectList] 右ボタン押下検出');
 
                 // 左ボタンドラッグ中で既に移動している場合、即座にコピーモードに切り替え
                 if (this.draggingState.isDragging && this.draggingState.hasMoved) {
                     this.draggingState.dragMode = 'copy';
-                    console.log('[VirtualObjectList] 左ボタンドラッグ中（移動済み）に右ボタン押下 → コピーモードに変更');
+                    logger.debug('[VirtualObjectList] 左ボタンドラッグ中（移動済み）に右ボタン押下 → コピーモードに変更');
                 }
                 // まだ移動していない場合は、drag イベントで hasMoved=true になった時点で判定
                 return;
@@ -3496,7 +3445,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 // 仮身要素内でmousedownされたら、即座に全iframeを無効化
                 // これにより、iframe上でもドラッグを開始できる
                 this.setIframesPointerEvents(false);
-                console.log('[VirtualObjectList] document mousedown: iframeを無効化（仮身要素内）');
+                logger.debug('[VirtualObjectList] document mousedown: iframeを無効化（仮身要素内）');
 
                 // 短時間後に、ドラッグが始まらなかった場合はiframeを再有効化
                 // （単なるクリックの場合）
@@ -3507,7 +3456,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     if (!this.draggingState.isDragging && !this.draggingState.hasMoved) {
                         // 開いた仮身のiframeは常に無効化されたままにするため、再有効化しない
                         // this.setIframesPointerEvents(true);
-                        console.log('[VirtualObjectList] タイムアウト: ドラッグなし（iframe再有効化はスキップ）');
+                        logger.debug('[VirtualObjectList] タイムアウト: ドラッグなし（iframe再有効化はスキップ）');
                     }
                 }, 200);
             }
@@ -3518,7 +3467,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // document全体でのmouseup
         document.addEventListener('mouseup', (e) => {
-            console.log('[VirtualObjectList] mouseup検知 isDragging:', this.draggingState.isDragging, 'hasMoved:', this.draggingState.hasMoved, 'button:', e.button);
+            logger.debug('[VirtualObjectList] mouseup検知 isDragging:', this.draggingState.isDragging, 'hasMoved:', this.draggingState.hasMoved, 'button:', e.button);
 
             // ダブルクリック+ドラッグのプレビュー要素を削除
             const preview = document.querySelector('.dblclick-drag-preview');
@@ -3528,7 +3477,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // ダブルクリック+ドラッグ完了時に実身複製処理を実行
             if (this.dblClickDragState.isDblClickDrag) {
-                console.log('[VirtualObjectList] ダブルクリック+ドラッグ完了、実身複製処理を開始');
+                logger.debug('[VirtualObjectList] ダブルクリック+ドラッグ完了、実身複製処理を開始');
 
                 // ドラッグ終了位置を記録（キャンバス座標系）
                 const canvas = document.querySelector('.virtual-canvas');
@@ -3541,15 +3490,14 @@ class VirtualObjectListApp extends window.PluginBase {
                     this.handleDoubleClickDragDuplicate(dropX, dropY);
                 }
 
-                // 状態をクリア
-                this.dblClickDragState.isDblClickDrag = false;
-                this.dblClickDragState.isDblClickDragCandidate = false;
+                // 状態をクリア（共通メソッド使用）
+                this.cleanupDblClickDragState();
+                // プラグイン固有のクリーンアップ
                 this.dblClickDragState.dblClickedObject = null;
-                this.dblClickDragState.dblClickedElement = null;
             }
             // ダブルクリック候補でドラッグしなかった場合、仮身を開く
             else if (this.dblClickDragState.isDblClickDragCandidate) {
-                console.log('[VirtualObjectList] ダブルクリック検出、仮身を開く');
+                logger.debug('[VirtualObjectList] ダブルクリック検出、仮身を開く');
 
                 const obj = this.dblClickDragState.dblClickedObject;
                 const vobj = this.dblClickDragState.dblClickedElement;
@@ -3557,7 +3505,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 if (obj && vobj && !this.isReadonly) {
                     // 開いた仮身（expandedクラスがある）の場合は、defaultOpenプラグインで実身を起動
                     if (vobj.classList.contains('expanded')) {
-                        console.log('[VirtualObjectList] 開いた仮身をdefaultOpenで起動:', obj.link_name);
+                        logger.debug('[VirtualObjectList] 開いた仮身をdefaultOpenで起動:', obj.link_name);
 
                         // applistからdefaultOpenプラグインを取得
                         const applist = obj.applist || {};
@@ -3571,7 +3519,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         }
 
                         if (defaultOpenPlugin) {
-                            console.log('[VirtualObjectList] defaultOpenプラグイン:', defaultOpenPlugin);
+                            logger.debug('[VirtualObjectList] defaultOpenプラグイン:', defaultOpenPlugin);
 
                             // MessageBus Phase 2: messageBus.send()を使用
                             this.messageBus.send('open-virtual-object-real', {
@@ -3579,7 +3527,7 @@ class VirtualObjectListApp extends window.PluginBase {
                                 pluginId: defaultOpenPlugin
                             });
                         } else {
-                            console.warn('[VirtualObjectList] defaultOpenプラグインが見つかりません');
+                            logger.warn('[VirtualObjectList] defaultOpenプラグインが見つかりません');
                         }
                     } else {
                         // 閉じた仮身の場合は、既存の動作（別ウィンドウで開く）
@@ -3587,10 +3535,10 @@ class VirtualObjectListApp extends window.PluginBase {
                     }
                 }
 
-                // 状態をクリア
-                this.dblClickDragState.isDblClickDragCandidate = false;
+                // 状態をクリア（共通メソッド使用）
+                this.cleanupDblClickDragState();
+                // プラグイン固有のクリーンアップ
                 this.dblClickDragState.dblClickedObject = null;
-                this.dblClickDragState.dblClickedElement = null;
             }
 
             // タイムアウトをクリア
@@ -3602,10 +3550,10 @@ class VirtualObjectListApp extends window.PluginBase {
             // 右ボタンのmouseupを検出してフラグをクリア
             if (e.button === 2) {
                 this.draggingState.isRightButtonPressed = false;
-                console.log('[VirtualObjectList] 右ボタンアップ検出、フラグクリア');
+                logger.debug('[VirtualObjectList] 右ボタンアップ検出、フラグクリア');
                 // 右ボタンアップ時、ドラッグ中でコピーモードなら何もせずreturn（左ボタンのmouseupを待つ）
                 if (this.draggingState.isDragging && this.draggingState.dragMode === 'copy') {
-                    console.log('[VirtualObjectList] コピーモードのドラッグ中、左ボタンのmouseupを待つ');
+                    logger.debug('[VirtualObjectList] コピーモードのドラッグ中、左ボタンのmouseupを待つ');
                     return;
                 }
             }
@@ -3619,7 +3567,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
                 if (this.draggingState.hasMoved && isRightStillPressed) {
                     this.draggingState.dragMode = 'copy';
-                    console.log('[VirtualObjectList] 左ボタンアップ時に右ボタンがまだ押されている → コピーモードに変更');
+                    logger.debug('[VirtualObjectList] 左ボタンアップ時に右ボタンがまだ押されている → コピーモードに変更');
                     return; // 右ボタンのmouseupを待つ
                 }
             }
@@ -3627,11 +3575,11 @@ class VirtualObjectListApp extends window.PluginBase {
             if (this.draggingState.isDragging) {
                 if (this.draggingState.hasMoved) {
                     // 移動があった場合は位置を確定
-                    console.log('[VirtualObjectList] mouseup: ドラッグ完了、finishDrag()呼び出し');
+                    logger.debug('[VirtualObjectList] mouseup: ドラッグ完了、finishDrag()呼び出し');
                     this.finishDrag();
                 } else {
                     // 移動がなかった場合は状態をリセット
-                    console.log('[VirtualObjectList] mouseup: 移動なし、状態リセット');
+                    logger.debug('[VirtualObjectList] mouseup: 移動なし、状態リセット');
                     this.draggingState.isDragging = false;
                     this.draggingState.currentObject = null;
                     this.draggingState.currentElement = null;
@@ -3652,11 +3600,11 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // クロスウィンドウドロップの場合は仮身を削除（moveモードの場合のみ）
         if (this.lastDropWasCrossWindow) {
-            console.log('[VirtualObjectList] クロスウィンドウドロップ検知');
+            logger.debug('[VirtualObjectList] クロスウィンドウドロップ検知');
             this.lastDropWasCrossWindow = false; // フラグをリセット
 
             if (this.draggingState.dragMode === 'move' && this.draggingState.selectedObjects) {
-                console.log('[VirtualObjectList] moveモード: 元ウィンドウから仮身を削除', this.draggingState.selectedObjects.length, '個');
+                logger.debug('[VirtualObjectList] moveモード: 元ウィンドウから仮身を削除', this.draggingState.selectedObjects.length, '個');
 
                 // selectedObjectsのvobjIndexを降順にソート（後ろから削除するため）
                 const sortedIndexes = this.draggingState.selectedObjects
@@ -3666,7 +3614,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 sortedIndexes.forEach(vobjIndex => {
                     const vobj = this.virtualObjects[vobjIndex];
                     if (vobj) {
-                        console.log('[VirtualObjectList] 仮身を削除:', vobj.link_name, 'vobjIndex:', vobjIndex);
+                        logger.debug('[VirtualObjectList] 仮身を削除:', vobj.link_name, 'vobjIndex:', vobjIndex);
                         this.virtualObjects.splice(vobjIndex, 1);
                         this.removeVirtualObjectFromXml(vobj);
                     }
@@ -3675,7 +3623,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 this.renderVirtualObjects();
                 this.saveToFile();
             } else if (this.draggingState.dragMode === 'copy') {
-                console.log('[VirtualObjectList] copyモード: 元ウィンドウの仮身は保持');
+                logger.debug('[VirtualObjectList] copyモード: 元ウィンドウの仮身は保持');
             }
 
             // ドラッグ状態をリセット
@@ -3693,7 +3641,7 @@ class VirtualObjectListApp extends window.PluginBase {
             return;
         }
 
-        console.log('[VirtualObjectList] ドラッグ終了:', this.draggingState.currentObject?.link_name, 'モード:', this.draggingState.dragMode, '選択数:', this.draggingState.selectedObjects?.length || 1);
+        logger.debug('[VirtualObjectList] ドラッグ終了:', this.draggingState.currentObject?.link_name, 'モード:', this.draggingState.dragMode, '選択数:', this.draggingState.selectedObjects?.length || 1);
 
         if (this.draggingState.hasMoved && this.draggingState.currentObject && this.draggingState.currentElement) {
             const obj = this.draggingState.currentObject;
@@ -3706,7 +3654,7 @@ class VirtualObjectListApp extends window.PluginBase {
             if (this.draggingState.dropClientX !== undefined && this.draggingState.dropClientY !== undefined) {
                 deltaX = this.draggingState.dropClientX - this.draggingState.startX;
                 deltaY = this.draggingState.dropClientY - this.draggingState.startY;
-                console.log('[VirtualObjectList] dropイベントの座標を使用:',
+                logger.debug('[VirtualObjectList] dropイベントの座標を使用:',
                     'drop:', this.draggingState.dropClientX, this.draggingState.dropClientY,
                     'delta:', deltaX, deltaY);
             } else {
@@ -3715,7 +3663,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 const newTop = parseInt(vobjElement.style.top);
                 deltaX = newLeft - this.draggingState.initialLeft;
                 deltaY = newTop - this.draggingState.initialTop;
-                console.log('[VirtualObjectList] style.left/topを使用:', newLeft, newTop, 'delta:', deltaX, deltaY);
+                logger.debug('[VirtualObjectList] style.left/topを使用:', newLeft, newTop, 'delta:', deltaX, deltaY);
             }
 
             // 複数選択時は全ての選択仮身を移動、それ以外は単一の仮身を移動
@@ -3725,7 +3673,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             if (this.draggingState.dragMode === 'copy') {
                 // コピーモード: 元の仮身を元の位置に戻し、新しい仮身を作成
-                console.log('[VirtualObjectList] コピーモード: 元の仮身を復元し、新しい仮身を作成 (対象:', objectsToMove.length, '個)');
+                logger.debug('[VirtualObjectList] コピーモード: 元の仮身を復元し、新しい仮身を作成 (対象:', objectsToMove.length, '個)');
 
                 objectsToMove.forEach((sourceObj, index) => {
                     // 元のサイズを保持
@@ -3776,7 +3724,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             } else {
                 // 移動モード: 位置を更新
-                console.log('[VirtualObjectList] 移動モード: 仮身を移動 (対象:', objectsToMove.length, '個)');
+                logger.debug('[VirtualObjectList] 移動モード: 仮身を移動 (対象:', objectsToMove.length, '個)');
 
                 objectsToMove.forEach((targetObj, index) => {
                     // 元のサイズを保持
@@ -3794,7 +3742,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     targetObj.vobjright = newLeft + width;
                     targetObj.vobjbottom = newTop + height;
 
-                    console.log('[VirtualObjectList] 移動:', targetObj.link_name, {
+                    logger.debug('[VirtualObjectList] 移動:', targetObj.link_name, {
                         left: targetObj.vobjleft,
                         top: targetObj.vobjtop,
                         delta: { x: deltaX, y: deltaY }
@@ -3829,7 +3777,7 @@ class VirtualObjectListApp extends window.PluginBase {
         const pluginContent = document.querySelector('.plugin-content');
         if (pluginContent && pluginContent.style.overflow === 'hidden') {
             pluginContent.style.overflow = 'auto';
-            console.log('[VirtualObjectList] finishDrag: スクロールを再有効化');
+            logger.debug('[VirtualObjectList] finishDrag: スクロールを再有効化');
         }
 
         // 開いた仮身のiframeは常に無効化されたままにするため、再有効化しない
@@ -3845,7 +3793,7 @@ class VirtualObjectListApp extends window.PluginBase {
         iframes.forEach(iframe => {
             iframe.style.pointerEvents = enabled ? 'auto' : 'none';
         });
-        console.log('[VirtualObjectList] iframeのpointer-events:', enabled ? '有効化' : '無効化', 'iframe数:', iframes.length);
+        logger.debug('[VirtualObjectList] iframeのpointer-events:', enabled ? '有効化' : '無効化', 'iframe数:', iframes.length);
     }
 
     /**
@@ -3857,7 +3805,7 @@ class VirtualObjectListApp extends window.PluginBase {
             this.messageBus.send('toggle-maximize');
 
             this.isFullscreen = !this.isFullscreen;
-            console.log('[VirtualObjectList] 全画面表示:', this.isFullscreen ? 'ON' : 'OFF');
+            logger.debug('[VirtualObjectList] 全画面表示:', this.isFullscreen ? 'ON' : 'OFF');
 
             // 実身管理用セグメントのfullscreenフラグを更新
             if (this.realId) {
@@ -3866,28 +3814,8 @@ class VirtualObjectListApp extends window.PluginBase {
                     fileId: this.realId,
                     isFullscreen: this.isFullscreen
                 });
-                console.log('[VirtualObjectList] 全画面表示状態更新を親ウィンドウに通知:', this.realId, this.isFullscreen);
+                logger.debug('[VirtualObjectList] 全画面表示状態更新を親ウィンドウに通知:', this.realId, this.isFullscreen);
             }
-        } else if (window.parent && window.parent !== window) {
-            // フォールバック: MessageBus未利用時
-            window.parent.postMessage({
-                type: 'toggle-maximize'
-            }, '*');
-
-            this.isFullscreen = !this.isFullscreen;
-            console.log('[VirtualObjectList] 全画面表示:', this.isFullscreen ? 'ON' : 'OFF');
-
-            // 実身管理用セグメントのfullscreenフラグを更新
-            if (this.realId) {
-                window.parent.postMessage({
-                    type: 'update-fullscreen-state',
-                    fileId: this.realId,
-                    isFullscreen: this.isFullscreen
-                }, '*');
-                console.log('[VirtualObjectList] 全画面表示状態更新を親ウィンドウに通知:', this.realId, this.isFullscreen);
-            }
-        } else {
-            console.warn('[VirtualObjectList] 親ウィンドウが見つかりません');
         }
     }
 
@@ -3897,7 +3825,7 @@ class VirtualObjectListApp extends window.PluginBase {
     refresh() {
         this.renderVirtualObjects();
         this.applyBackgroundColor();
-        console.log('[VirtualObjectList] 再表示しました');
+        logger.debug('[VirtualObjectList] 再表示しました');
     }
 
     /**
@@ -3917,7 +3845,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     if (pluginContent) {
                         pluginContent.style.backgroundColor = bgColor;
                     }
-                    console.log('[VirtualObjectList] 背景色を適用 (開いた仮身):', bgColor);
+                    logger.debug('[VirtualObjectList] 背景色を適用 (開いた仮身):', bgColor);
                 }
 
                 // 通常のウィンドウ表示の場合は、canvasに背景色を適用
@@ -3925,15 +3853,15 @@ class VirtualObjectListApp extends window.PluginBase {
                 if (canvas) {
                     canvas.style.background = bgColor;
                     if (!this.bgcol) {
-                        console.log('[VirtualObjectList] 背景色を適用 (ウィンドウ設定):', bgColor);
+                        logger.debug('[VirtualObjectList] 背景色を適用 (ウィンドウ設定):', bgColor);
                     }
                 } else if (!this.bgcol) {
                     // 開いた仮身でない場合のみ警告
-                    console.warn('[VirtualObjectList] .virtual-canvas 要素が見つかりません');
+                    logger.warn('[VirtualObjectList] .virtual-canvas 要素が見つかりません');
                 }
             }, 100);
         } else {
-            console.log('[VirtualObjectList] 背景色が設定されていません');
+            logger.debug('[VirtualObjectList] 背景色が設定されていません');
         }
     }
 
@@ -3941,9 +3869,9 @@ class VirtualObjectListApp extends window.PluginBase {
      * 背景色変更ダイアログを表示
      */
     async changeBgColor() {
-        console.log('[VirtualObjectList] changeBgColor開始');
-        console.log('[VirtualObjectList] this.realId:', this.realId);
-        console.log('[VirtualObjectList] this.messageBus:', !!this.messageBus);
+        logger.debug('[VirtualObjectList] changeBgColor開始');
+        logger.debug('[VirtualObjectList] this.realId:', this.realId);
+        logger.debug('[VirtualObjectList] this.messageBus:', !!this.messageBus);
 
         const selectedVirtualObject = this.getSelectedVirtualObject();
 
@@ -3952,7 +3880,7 @@ class VirtualObjectListApp extends window.PluginBase {
             ? this.fileData.windowConfig.backgroundColor
             : '#ffffff';
 
-        console.log('[VirtualObjectList] 現在の背景色:', currentBgColor);
+        logger.debug('[VirtualObjectList] 現在の背景色:', currentBgColor);
 
         // ダイアログのHTML要素を作成
         const dialogHtml = `
@@ -3970,7 +3898,7 @@ class VirtualObjectListApp extends window.PluginBase {
             </div>
         `;
 
-        console.log('[VirtualObjectList] ダイアログ表示を要求');
+        logger.debug('[VirtualObjectList] ダイアログ表示を要求');
 
         return new Promise((resolve) => {
             this.messageBus.sendWithCallback('show-custom-dialog', {
@@ -3985,25 +3913,25 @@ class VirtualObjectListApp extends window.PluginBase {
                     text: 'bgColorInput'
                 }
             }, (result) => {
-                console.log('[VirtualObjectList] ダイアログコールバック実行:', result);
-                console.log('[VirtualObjectList] result.error:', result.error);
-                console.log('[VirtualObjectList] result.button:', result.button);
-                console.log('[VirtualObjectList] result.result:', result.result);
-                console.log('[VirtualObjectList] result keys:', Object.keys(result));
+                logger.debug('[VirtualObjectList] ダイアログコールバック実行:', result);
+                logger.debug('[VirtualObjectList] result.error:', result.error);
+                logger.debug('[VirtualObjectList] result.button:', result.button);
+                logger.debug('[VirtualObjectList] result.result:', result.result);
+                logger.debug('[VirtualObjectList] result keys:', Object.keys(result));
 
                 if (result.error) {
-                    console.warn('[VirtualObjectList] Change bg color dialog error:', result.error);
+                    logger.warn('[VirtualObjectList] Change bg color dialog error:', result.error);
                     resolve(null);
                     return;
                 }
 
                 // show-custom-dialogからのレスポンスはresult.resultに格納されている可能性がある
                 const dialogResult = result.result || result;
-                console.log('[VirtualObjectList] dialogResult:', dialogResult);
-                console.log('[VirtualObjectList] dialogResult.button:', dialogResult.button);
+                logger.debug('[VirtualObjectList] dialogResult:', dialogResult);
+                logger.debug('[VirtualObjectList] dialogResult.button:', dialogResult.button);
 
                 if (dialogResult.button === 'ok') {
-                    console.log('[VirtualObjectList] OKボタンが押されました');
+                    logger.debug('[VirtualObjectList] OKボタンが押されました');
                     const useLinkBgColor = dialogResult.checkbox;
                     const inputColor = dialogResult.input;
 
@@ -4016,7 +3944,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         if (/^#[0-9A-Fa-f]{6}$/.test(inputColor)) {
                             newBgColor = inputColor;
                         } else {
-                            console.warn('[VirtualObjectList] 無効な色形式:', inputColor);
+                            logger.warn('[VirtualObjectList] 無効な色形式:', inputColor);
                             resolve(result);
                             return;
                         }
@@ -4026,7 +3954,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     const canvas = document.querySelector('.virtual-canvas');
                     if (canvas) {
                         canvas.style.background = newBgColor;
-                        console.log('[VirtualObjectList] 背景色を変更しました:', newBgColor);
+                        logger.debug('[VirtualObjectList] 背景色を変更しました:', newBgColor);
                     }
 
                     // 実身管理用セグメントのbackgroundColorを更新
@@ -4036,7 +3964,7 @@ class VirtualObjectListApp extends window.PluginBase {
                             fileId: this.realId,
                             backgroundColor: newBgColor
                         });
-                        console.log('[VirtualObjectList] 背景色更新を親ウィンドウに通知:', this.realId, newBgColor);
+                        logger.debug('[VirtualObjectList] 背景色更新を親ウィンドウに通知:', this.realId, newBgColor);
                     }
 
                     // this.fileDataを更新（再表示時に正しい色を適用するため）
@@ -4045,7 +3973,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     }
                     this.fileData.windowConfig.backgroundColor = newBgColor;
                 } else {
-                    console.log('[VirtualObjectList] OKボタンが押されませんでした。button:', dialogResult.button);
+                    logger.debug('[VirtualObjectList] OKボタンが押されませんでした。button:', dialogResult.button);
                 }
 
                 resolve(result);
@@ -4061,14 +3989,14 @@ class VirtualObjectListApp extends window.PluginBase {
             try {
                 const uint8Array = rawData instanceof Uint8Array ? rawData : new Uint8Array(rawData);
                 const xmlResult = await window.parent.parseTADToXML(uint8Array, 0);
-                console.log('[VirtualObjectList] XML変換完了:', xmlResult ? xmlResult.substring(0, 100) : 'null');
+                logger.debug('[VirtualObjectList] XML変換完了:', xmlResult ? xmlResult.substring(0, 100) : 'null');
                 return xmlResult;
             } catch (error) {
-                console.error('[VirtualObjectList] TAD→XML変換エラー:', error);
+                logger.error('[VirtualObjectList] TAD→XML変換エラー:', error);
                 return null;
             }
         }
-        console.warn('[VirtualObjectList] parseTADToXML関数が見つかりません');
+        logger.warn('[VirtualObjectList] parseTADToXML関数が見つかりません');
         return null;
     }
 
@@ -4076,12 +4004,12 @@ class VirtualObjectListApp extends window.PluginBase {
      * TAD XMLから段落要素を抽出（基本文章編集から移植）
      */
     parseTextElements(tadXML) {
-        console.log('[VirtualObjectList] parseTextElements開始');
+        logger.debug('[VirtualObjectList] parseTextElements開始');
         const textElements = [];
 
         const docMatch = /<document>([\s\S]*?)<\/document>/i.exec(tadXML);
         if (!docMatch) {
-            console.warn('[VirtualObjectList] <document>タグが見つかりません');
+            logger.warn('[VirtualObjectList] <document>タグが見つかりません');
             return textElements;
         }
 
@@ -4140,7 +4068,7 @@ class VirtualObjectListApp extends window.PluginBase {
             }
         }
 
-        console.log('[VirtualObjectList] parseTextElements完了, 要素数:', textElements.length);
+        logger.debug('[VirtualObjectList] parseTextElements完了, 要素数:', textElements.length);
         return textElements;
     }
 
@@ -4297,7 +4225,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             return htmlContent || xmlContent;
         } catch (error) {
-            console.error('[VirtualObjectList] HTML変換エラー:', error);
+            logger.error('[VirtualObjectList] HTML変換エラー:', error);
             return xmlContent;
         }
     }
@@ -4306,14 +4234,14 @@ class VirtualObjectListApp extends window.PluginBase {
      * エディタの内容をTAD XMLに変換（基本文章編集から移植）
      */
     convertEditorToXML(editorElement) {
-        console.log('[VirtualObjectList] convertEditorToXML開始');
+        logger.debug('[VirtualObjectList] convertEditorToXML開始');
 
         const xmlParts = ['<tad version="1.0" encoding="UTF-8">\r\n'];
         xmlParts.push('<document>\r\n');
 
         // エディタの各段落（<p>タグ）を処理
         const paragraphs = editorElement.querySelectorAll('p');
-        console.log('[VirtualObjectList] 段落数:', paragraphs.length);
+        logger.debug('[VirtualObjectList] 段落数:', paragraphs.length);
 
         if (paragraphs.length === 0) {
             // 段落がない場合、エディタ全体を1つの段落として扱う
@@ -4357,7 +4285,7 @@ class VirtualObjectListApp extends window.PluginBase {
         xmlParts.push('</tad>');
 
         const xml = xmlParts.join('');
-        console.log('[VirtualObjectList] convertEditorToXML完了, XML長さ:', xml.length);
+        logger.debug('[VirtualObjectList] convertEditorToXML完了, XML長さ:', xml.length);
         return xml;
     }
 
@@ -4593,12 +4521,12 @@ class VirtualObjectListApp extends window.PluginBase {
                 }
             }
 
-            console.log('[VirtualObjectList] 仮身数:', this.virtualObjects.length);
+            logger.debug('[VirtualObjectList] 仮身数:', this.virtualObjects.length);
 
             // autoopen属性がtrueの仮身を自動的に開く
             await this.autoOpenVirtualObjects();
         } catch (error) {
-            console.error('[VirtualObjectList] XML解析エラー:', error);
+            logger.error('[VirtualObjectList] XML解析エラー:', error);
         }
     }
 
@@ -4626,77 +4554,8 @@ class VirtualObjectListApp extends window.PluginBase {
                 throw new Error(result.error || 'ファイル読み込み失敗');
             }
         } catch (error) {
-            console.error('[VirtualObjectList] ファイル読み込みエラー:', error);
+            logger.error('[VirtualObjectList] ファイル読み込みエラー:', error);
             throw error;
-        }
-    }
-
-    /**
-     * アイコンファイルを親ウィンドウ経由で読み込む
-     * @param {string} realId - 実身ID
-     * @returns {Promise<string|null>} Base64エンコードされたアイコンデータ、またはnull
-     */
-    async loadIconFromParent(realId) {
-        // キャッシュをチェック
-        if (this.iconCache.has(realId)) {
-            const cachedData = this.iconCache.get(realId);
-            console.log('[VirtualObjectList] アイコンキャッシュヒット:', realId, 'データあり:', !!cachedData);
-            return cachedData;
-        }
-
-        console.log('[VirtualObjectList] アイコンキャッシュミス、親ウィンドウに要求:', realId);
-
-        // MessageBusでread-icon-fileを送信
-        const messageId = `icon-${realId}-${Date.now()}`;
-        this.messageBus.send('read-icon-file', {
-            realId: realId,
-            messageId: messageId
-        });
-
-        try {
-            // レスポンスを待つ（3秒タイムアウト）
-            // フィルタを使用して、このリクエストに対応するレスポンスだけを受け取る
-            const result = await this.messageBus.waitFor('icon-file-loaded', window.ICON_LOAD_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-
-            if (result.success && result.filePath) {
-                // Electron環境の場合、パスからファイルを読み込む
-                if (typeof require !== 'undefined') {
-                    try {
-                        const fs = require('fs');
-                        const buffer = fs.readFileSync(result.filePath);
-                        const base64 = buffer.toString('base64');
-                        // VirtualObjectRendererが data:image/x-icon;base64, を追加するので、ここでは Base64 のみ返す
-
-                        // キャッシュに保存
-                        this.iconCache.set(realId, base64);
-                        console.log('[VirtualObjectList] アイコン読み込み成功（親から）:', realId, 'パス:', result.filePath);
-                        return base64;
-                    } catch (error) {
-                        console.error('[VirtualObjectList] アイコンファイル読み込みエラー:', realId, error);
-                        this.iconCache.set(realId, null);
-                        return null;
-                    }
-                } else {
-                    console.error('[VirtualObjectList] require not available (not in Electron environment)');
-                    this.iconCache.set(realId, null);
-                    return null;
-                }
-            } else {
-                // アイコンが存在しない場合はnullを返す
-                this.iconCache.set(realId, null);
-                console.log('[VirtualObjectList] アイコン読み込み失敗（親から）:', realId);
-                return null;
-            }
-        } catch (error) {
-            // タイムアウトまたはエラーの場合はnullを返す
-            // キャッシュにまだ入っていない場合のみnullをセット
-            if (!this.iconCache.has(realId)) {
-                this.iconCache.set(realId, null);
-            }
-            console.log('[VirtualObjectList] アイコン読み込みタイムアウト:', realId);
-            return null;
         }
     }
 
@@ -4708,7 +4567,7 @@ class VirtualObjectListApp extends window.PluginBase {
         try {
             // link_idがundefinedまたは空の場合はスキップ
             if (!virtualObj.link_id || virtualObj.link_id === '') {
-                console.warn('[VirtualObjectList] link_idが未設定、メタデータ読み込みをスキップ:', virtualObj);
+                logger.warn('[VirtualObjectList] link_idが未設定、メタデータ読み込みをスキップ:', virtualObj);
                 virtualObj.applist = {};
                 return;
             }
@@ -4716,12 +4575,12 @@ class VirtualObjectListApp extends window.PluginBase {
             // 実身IDを抽出してJSONファイル名を生成（共通メソッドを使用）
             const baseFileId = window.RealObjectSystem.extractRealId(virtualObj.link_id);
             const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(baseFileId);
-            console.log('[VirtualObjectList] メタデータ読み込み試行:', virtualObj.link_id, 'JSONファイル:', jsonFileName);
+            logger.debug('[VirtualObjectList] メタデータ読み込み試行:', virtualObj.link_id, 'JSONファイル:', jsonFileName);
 
             // 親ウィンドウのfileObjectsからJSONファイルを取得
             if (window.parent && window.parent.tadjsDesktop && window.parent.tadjsDesktop.fileObjects) {
                 const jsonFile = window.parent.tadjsDesktop.fileObjects[jsonFileName];
-                console.log('[VirtualObjectList] fileObjectsから検索:', jsonFileName, 'found:', !!jsonFile);
+                logger.debug('[VirtualObjectList] fileObjectsから検索:', jsonFileName, 'found:', !!jsonFile);
 
                 if (jsonFile) {
                     const jsonText = await jsonFile.text();
@@ -4731,10 +4590,10 @@ class VirtualObjectListApp extends window.PluginBase {
                     virtualObj.applist = jsonData.applist || {};
                     virtualObj.metadata = jsonData;
                     virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
-                    console.log('[VirtualObjectList] メタデータ読み込み成功:', virtualObj.link_id, virtualObj.applist);
+                    logger.debug('[VirtualObjectList] メタデータ読み込み成功:', virtualObj.link_id, virtualObj.applist);
                 } else {
                     // JSONファイルが見つからない場合、Electron環境なら親ウィンドウ経由で読み込み
-                    console.log('[VirtualObjectList] fileObjectsに見つからない、親ウィンドウ経由で試行:', jsonFileName);
+                    logger.debug('[VirtualObjectList] fileObjectsに見つからない、親ウィンドウ経由で試行:', jsonFileName);
 
                     try {
                         const jsonFile = await this.loadDataFileFromParent(jsonFileName);
@@ -4743,9 +4602,9 @@ class VirtualObjectListApp extends window.PluginBase {
                         virtualObj.applist = jsonData.applist || {};
                         virtualObj.metadata = jsonData;
                         virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
-                        console.log('[VirtualObjectList] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
+                        logger.debug('[VirtualObjectList] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
                     } catch (parentError) {
-                        console.log('[VirtualObjectList] 親ウィンドウ経由で失敗、HTTP fetchにフォールバック:', parentError.message);
+                        logger.debug('[VirtualObjectList] 親ウィンドウ経由で失敗、HTTP fetchにフォールバック:', parentError.message);
 
                         // HTTP fetchにフォールバック
                         const urlsToTry = [
@@ -4761,7 +4620,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
                         let found = false;
                         for (const jsonUrl of urlsToTry) {
-                            console.log('[VirtualObjectList] Fetch URL試行:', jsonUrl);
+                            logger.debug('[VirtualObjectList] Fetch URL試行:', jsonUrl);
                             const response = await fetch(jsonUrl);
 
                             if (response.ok) {
@@ -4769,21 +4628,21 @@ class VirtualObjectListApp extends window.PluginBase {
                                 virtualObj.applist = jsonData.applist || {};
                                 virtualObj.metadata = jsonData;
                                 virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
-                                console.log('[VirtualObjectList] メタデータ読み込み成功（HTTP）:', jsonUrl, virtualObj.applist);
+                                logger.debug('[VirtualObjectList] メタデータ読み込み成功（HTTP）:', jsonUrl, virtualObj.applist);
                                 found = true;
                                 break;
                             }
                         }
 
                         if (!found) {
-                            console.log('[VirtualObjectList] JSONファイルなし（すべてのパスで404）:', virtualObj.link_id);
+                            logger.debug('[VirtualObjectList] JSONファイルなし（すべてのパスで404）:', virtualObj.link_id);
                             virtualObj.applist = {};
                         }
                     }
                 }
             } else {
                 // 親ウィンドウのfileObjectsにアクセスできない場合（親ウィンドウ経由で読み込み）
-                console.log('[VirtualObjectList] 親ウィンドウのfileObjectsにアクセスできない、親ウィンドウ経由で読み込み');
+                logger.debug('[VirtualObjectList] 親ウィンドウのfileObjectsにアクセスできない、親ウィンドウ経由で読み込み');
 
                 try {
                     const jsonFile = await this.loadDataFileFromParent(jsonFileName);
@@ -4792,14 +4651,14 @@ class VirtualObjectListApp extends window.PluginBase {
                     virtualObj.applist = jsonData.applist || {};
                     virtualObj.metadata = jsonData;
                     virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
-                    console.log('[VirtualObjectList] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
+                    logger.debug('[VirtualObjectList] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
                 } catch (error) {
-                    console.log('[VirtualObjectList] メタデータ読み込み失敗:', virtualObj.link_id, error.message);
+                    logger.debug('[VirtualObjectList] メタデータ読み込み失敗:', virtualObj.link_id, error.message);
                     virtualObj.applist = {};
                 }
             }
         } catch (error) {
-            console.log('[VirtualObjectList] メタデータ読み込みエラー:', virtualObj.link_id, error);
+            logger.debug('[VirtualObjectList] メタデータ読み込みエラー:', virtualObj.link_id, error);
             virtualObj.applist = {};
         }
     }
@@ -4852,7 +4711,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             return obj;
         } catch (error) {
-            console.error('[VirtualObjectList] リンク要素解析エラー:', error);
+            logger.error('[VirtualObjectList] リンク要素解析エラー:', error);
             return null;
         }
     }
@@ -4900,7 +4759,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             return obj;
         } catch (error) {
-            console.error('[VirtualObjectList] 仮身セグメント解析エラー:', error);
+            logger.error('[VirtualObjectList] 仮身セグメント解析エラー:', error);
             return null;
         }
     }
@@ -4919,7 +4778,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 const linkId = vobj.getAttribute('data-link-id');
                 if (linkId) {
                     expandedVirtualObjects.add(linkId);
-                    console.log('[VirtualObjectList] 展開中の仮身を記録:', linkId);
+                    logger.debug('[VirtualObjectList] 展開中の仮身を記録:', linkId);
                 }
             }
         });
@@ -4985,7 +4844,7 @@ class VirtualObjectListApp extends window.PluginBase {
             // 閉じた仮身の場合、サイズを正しい値に調整
             if (!isOpenVirtualObj) {
                 obj.vobjbottom = obj.vobjtop + titleHeight;
-                console.log('[VirtualObjectList] 閉じた仮身のサイズ調整:', obj.link_name, '高さ:', titleHeight);
+                logger.debug('[VirtualObjectList] 閉じた仮身のサイズ調整:', obj.link_name, '高さ:', titleHeight);
             }
 
             // virtualObjects配列内での元のインデックスを取得（一意のID代わりに使用）
@@ -5004,9 +4863,9 @@ class VirtualObjectListApp extends window.PluginBase {
             if (isOpenVirtualObj) {
                 // 初回起動時またはrefresh時に開いた仮身を展開
                 if (!expandedVirtualObjects.has(obj.link_id)) {
-                    console.log('[VirtualObjectList] 開いた仮身を自動展開:', obj.link_name);
+                    logger.debug('[VirtualObjectList] 開いた仮身を自動展開:', obj.link_name);
                 } else {
-                    console.log('[VirtualObjectList] 仮身を再展開:', obj.link_name);
+                    logger.debug('[VirtualObjectList] 仮身を再展開:', obj.link_name);
                 }
                 // 非同期で展開（DOMに追加された後に実行）
                 setTimeout(() => {
@@ -5015,7 +4874,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         noScrollbar: true,
                         bgcol: obj.bgcol
                     }).catch(err => {
-                        console.error('[VirtualObjectList] 展開エラー:', err);
+                        logger.error('[VirtualObjectList] 展開エラー:', err);
                     });
                 }, 0);
             }
@@ -5038,7 +4897,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     vobjElement.style.outline = '2px solid #007bff';
                 }
             });
-            console.log('[VirtualObjectList] 選択状態を復元:', this.selectedVirtualObjects.size, '個');
+            logger.debug('[VirtualObjectList] 選択状態を復元:', this.selectedVirtualObjects.size, '個');
         }
     }
 
@@ -5051,13 +4910,13 @@ class VirtualObjectListApp extends window.PluginBase {
     createVirtualObjectElement(obj, vobjIndex) {
         // VirtualObjectRendererを使用して仮身要素を作成
         if (!this.virtualObjectRenderer) {
-            console.error('[VirtualObjectList] VirtualObjectRenderer が初期化されていません');
+            logger.error('[VirtualObjectList] VirtualObjectRenderer が初期化されていません');
             return document.createElement('div');
         }
 
         // loadIconCallbackオプションでアイコン読み込み機能を提供
         const options = {
-            loadIconCallback: (realId) => this.loadIconFromParent(realId),
+            loadIconCallback: (realId) => this.iconManager.loadIcon(realId),
             vobjIndex: vobjIndex  // 一意のインデックスを渡す
         };
 
@@ -5133,8 +4992,8 @@ class VirtualObjectListApp extends window.PluginBase {
         const showTitleArea = showPict || showName || showRole || showType || showUpdate;
 
         // デバッグログ: 表示フラグの状態を確認
-        console.log('[TADjs] 閉仮身表示フラグ:', obj.link_id);
-        console.log('  - フラグ値:', JSON.stringify({
+        logger.debug('[TADjs] 閉仮身表示フラグ:', obj.link_id);
+        logger.debug('  - フラグ値:', JSON.stringify({
             pictdisp: obj.pictdisp,
             namedisp: obj.namedisp,
             roledisp: obj.roledisp,
@@ -5142,10 +5001,10 @@ class VirtualObjectListApp extends window.PluginBase {
             updatedisp: obj.updatedisp,
             framedisp: obj.framedisp
         }));
-        console.log('  - 計算結果:', JSON.stringify({
+        logger.debug('  - 計算結果:', JSON.stringify({
             showPict, showName, showRole, showType, showUpdate, showFrame, showTitleArea
         }));
-        console.log('  - データ:', JSON.stringify({
+        logger.debug('  - データ:', JSON.stringify({
             hasMetadata: !!obj.metadata,
             hasUpdateDate: !!(obj.metadata && obj.metadata.updateDate),
             hasRelationship: !!(obj.metadata && obj.metadata.relationship),
@@ -5168,7 +5027,7 @@ class VirtualObjectListApp extends window.PluginBase {
         // アイコンとテキストの高い方を使用
         const contentHeight = Math.max(iconSize, textHeight);
         const titleHeight = contentHeight + 8;
-        console.log('[TADjs] 閉仮身タイトル高さ計算:', obj.link_name, {
+        logger.debug('[TADjs] 閉仮身タイトル高さ計算:', obj.link_name, {
             chsz: obj.chsz,
             chszPx,
             iconSize,
@@ -5212,19 +5071,19 @@ class VirtualObjectListApp extends window.PluginBase {
             const realId = obj.link_id.replace(/_\d+\.xtad$/i, '');
 
             // アイコンを非同期で読み込む
-            console.log('[TADjs] アイコン読み込み開始:', realId, 'showPict:', showPict);
-            this.loadIconFromParent(realId).then(iconData => {
-                console.log('[TADjs] アイコン読み込みPromiseコールバック実行:', realId, 'データあり:', !!iconData);
+            logger.debug('[TADjs] アイコン読み込み開始:', realId, 'showPict:', showPict);
+            this.iconManager.loadIcon(realId).then(iconData => {
+                logger.debug('[TADjs] アイコン読み込みPromiseコールバック実行:', realId, 'データあり:', !!iconData);
                 if (iconData) {
                     iconImg.src = `data:image/x-icon;base64,${iconData}`;
-                    console.log('[TADjs] アイコンimg.src設定完了:', realId, 'データ長:', iconData.length);
+                    logger.debug('[TADjs] アイコンimg.src設定完了:', realId, 'データ長:', iconData.length);
                 } else {
                     // デフォルトアイコン（空の画像または絵文字）
                     iconImg.style.display = 'none';
-                    console.log('[TADjs] アイコンデータなし、非表示に設定:', realId);
+                    logger.debug('[TADjs] アイコンデータなし、非表示に設定:', realId);
                 }
             }).catch(error => {
-                console.error('[TADjs] アイコン読み込みエラー:', realId, error);
+                logger.error('[TADjs] アイコン読み込みエラー:', realId, error);
                 iconImg.style.display = 'none';
             });
 
@@ -5308,7 +5167,7 @@ class VirtualObjectListApp extends window.PluginBase {
         mainArea.style.bottom = '0';
         mainArea.style.backgroundColor = obj.tbcol;
         mainArea.style.zIndex = '0'; // titleAreaの下に表示
-        console.log('[TADjs] 閉仮身mainArea配置:', obj.link_name, {
+        logger.debug('[TADjs] 閉仮身mainArea配置:', obj.link_name, {
             top: mainArea.style.top,
             zIndex: mainArea.style.zIndex
         });
@@ -5367,7 +5226,7 @@ class VirtualObjectListApp extends window.PluginBase {
         const vobjIndex = this.virtualObjects.indexOf(obj);
 
         if (vobjIndex === -1) {
-            console.warn('[VirtualObjectList] 仮身がvirtualObjects配列に見つかりません:', obj.link_name);
+            logger.warn('[VirtualObjectList] 仮身がvirtualObjects配列に見つかりません:', obj.link_name);
             return;
         }
 
@@ -5377,12 +5236,12 @@ class VirtualObjectListApp extends window.PluginBase {
                 // 既に選択されている場合は解除
                 this.selectedVirtualObjects.delete(vobjIndex);
                 element.style.outline = '';
-                console.log('[VirtualObjectList] 仮身の選択を解除:', obj.link_name, 'vobjIndex:', vobjIndex);
+                logger.debug('[VirtualObjectList] 仮身の選択を解除:', obj.link_name, 'vobjIndex:', vobjIndex);
             } else {
                 // 選択されていない場合は追加
                 this.selectedVirtualObjects.add(vobjIndex);
                 element.style.outline = '2px solid #007bff';
-                console.log('[VirtualObjectList] 仮身を選択（複数選択）:', obj.link_name, 'vobjIndex:', vobjIndex);
+                logger.debug('[VirtualObjectList] 仮身を選択（複数選択）:', obj.link_name, 'vobjIndex:', vobjIndex);
             }
         } else {
             // 通常クリック: 単一選択
@@ -5397,7 +5256,7 @@ class VirtualObjectListApp extends window.PluginBase {
             this.selectedVirtualObjects.add(vobjIndex);
             element.style.outline = '2px solid #007bff';
 
-            console.log('[VirtualObjectList] 仮身を選択:', obj.link_name, 'vobjIndex:', vobjIndex);
+            logger.debug('[VirtualObjectList] 仮身を選択:', obj.link_name, 'vobjIndex:', vobjIndex);
         }
     }
 
@@ -5436,7 +5295,7 @@ class VirtualObjectListApp extends window.PluginBase {
             }
         });
 
-        console.log('[VirtualObjectList] 選択状態を保持:', this.selectedVirtualObjects.size, '個の仮身');
+        logger.debug('[VirtualObjectList] 選択状態を保持:', this.selectedVirtualObjects.size, '個の仮身');
     }
 
     /**
@@ -5449,43 +5308,43 @@ class VirtualObjectListApp extends window.PluginBase {
      * @returns {Promise<HTMLIFrameElement>} コンテンツiframe
      */
     async expandVirtualObject(vobjElement, virtualObject, options = {}) {
-        console.log('[VirtualObjectList] 開いた仮身の展開開始:', virtualObject.link_name);
+        logger.debug('[VirtualObjectList] 開いた仮身の展開開始:', virtualObject.link_name);
 
         try {
             // 実身IDを取得
             const linkId = virtualObject.link_id;
-            console.log('[VirtualObjectList] linkId:', linkId);
+            logger.debug('[VirtualObjectList] linkId:', linkId);
             // 実身IDを抽出（共通メソッドを使用）
             const realId = window.RealObjectSystem.extractRealId(linkId);
-            console.log('[VirtualObjectList] 抽出されたrealId:', realId);
-            console.log('[VirtualObjectList] レコード番号削除後（最終的な実身ID）:', realId);
+            logger.debug('[VirtualObjectList] 抽出されたrealId:', realId);
+            logger.debug('[VirtualObjectList] レコード番号削除後（最終的な実身ID）:', realId);
 
             // 1. defaultOpenプラグインを取得
             const defaultOpenPlugin = this.getDefaultOpenPlugin(virtualObject);
             if (!defaultOpenPlugin) {
-                console.warn('[VirtualObjectList] defaultOpenプラグインが見つかりません');
+                logger.warn('[VirtualObjectList] defaultOpenプラグインが見つかりません');
                 return null;
             }
-            console.log('[VirtualObjectList] defaultOpenプラグイン:', defaultOpenPlugin);
+            logger.debug('[VirtualObjectList] defaultOpenプラグイン:', defaultOpenPlugin);
 
             // 2. 実身データを読み込む
             const realObjectData = await this.loadRealObjectData(realId);
             if (!realObjectData) {
-                console.warn('[VirtualObjectList] 実身データの読み込みに失敗しました, realId:', realId);
+                logger.warn('[VirtualObjectList] 実身データの読み込みに失敗しました, realId:', realId);
                 return null;
             }
-            console.log('[VirtualObjectList] 実身データ読み込み完了:', realObjectData);
+            logger.debug('[VirtualObjectList] 実身データ読み込み完了:', realObjectData);
 
             // await後にvobjElementがまだDOMに接続されているか確認
             if (!vobjElement.isConnected) {
-                console.warn('[VirtualObjectList] 展開処理中に仮身要素がDOMから削除されました:', virtualObject.link_name);
+                logger.warn('[VirtualObjectList] 展開処理中に仮身要素がDOMから削除されました:', virtualObject.link_name);
                 return null;
             }
 
             // 3. コンテンツ領域を取得
             const contentArea = vobjElement.querySelector('.virtual-object-content-area');
             if (!contentArea) {
-                console.error('[VirtualObjectList] コンテンツ領域が見つかりません');
+                logger.error('[VirtualObjectList] コンテンツ領域が見つかりません');
                 return null;
             }
 
@@ -5514,7 +5373,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // iframeロード後にデータを送信（load-virtual-objectメッセージ形式）
             iframe.addEventListener('load', () => {
-                console.log('[VirtualObjectList] iframe読み込み完了、プラグインにload-virtual-objectメッセージ送信');
+                logger.debug('[VirtualObjectList] iframe読み込み完了、プラグインにload-virtual-objectメッセージ送信');
                 iframe.contentWindow.postMessage({
                     type: 'load-virtual-object',
                     virtualObj: virtualObject,
@@ -5523,15 +5382,15 @@ class VirtualObjectListApp extends window.PluginBase {
                     readonly: options.readonly !== false,
                     noScrollbar: options.noScrollbar !== false
                 }, '*');
-                console.log('[VirtualObjectList] 開いた仮身表示にデータを送信:', { virtualObject, realObjectData, bgcol, readonly: options.readonly !== false, noScrollbar: options.noScrollbar !== false });
+                logger.debug('[VirtualObjectList] 開いた仮身表示にデータを送信:', { virtualObject, realObjectData, bgcol, readonly: options.readonly !== false, noScrollbar: options.noScrollbar !== false });
             });
 
             contentArea.appendChild(iframe);
-            console.log('[VirtualObjectList] iframe追加完了');
+            logger.debug('[VirtualObjectList] iframe追加完了');
 
             return iframe;
         } catch (error) {
-            console.error('[VirtualObjectList] expandVirtualObject エラー:', error);
+            logger.error('[VirtualObjectList] expandVirtualObject エラー:', error);
             return null;
         }
     }
@@ -5583,7 +5442,7 @@ class VirtualObjectListApp extends window.PluginBase {
     }
 
     openVirtualObject(obj) {
-        console.log('[VirtualObjectList] 仮身を開く:', obj.link_name, obj.link_id);
+        logger.debug('[VirtualObjectList] 仮身を開く:', obj.link_name, obj.link_id);
 
         // 親ウィンドウにメッセージを送信して仮身リンク先を開く
         // MessageBus Phase 2: messageBus.send()を使用
@@ -5606,7 +5465,7 @@ class VirtualObjectListApp extends window.PluginBase {
         vobjElement.addEventListener('dragstart', (e) => {
             // mousedownで準備したドラッグ状態を確認
             if (!this.draggingState.currentObject || !this.draggingState.isDragging) {
-                console.warn('[VirtualObjectList] dragstart: ドラッグ準備ができていません');
+                logger.warn('[VirtualObjectList] dragstart: ドラッグ準備ができていません');
                 e.preventDefault();
                 return;
             }
@@ -5622,7 +5481,7 @@ class VirtualObjectListApp extends window.PluginBase {
             const pluginContent = document.querySelector('.plugin-content');
             if (pluginContent) {
                 pluginContent.style.overflow = 'hidden';
-                console.log('[VirtualObjectList] ドラッグ中: スクロールを無効化');
+                logger.debug('[VirtualObjectList] ドラッグ中: スクロールを無効化');
             }
 
             // ドラッグ中はすべてのiframeのpointer-eventsを無効化（開いた仮身内へのドロップを防ぐ）
@@ -5631,10 +5490,10 @@ class VirtualObjectListApp extends window.PluginBase {
             allIframes.forEach(iframe => {
                 iframe.style.pointerEvents = 'none';
             });
-            console.log('[VirtualObjectList] ドラッグ中: iframe pointer-events無効化 (', allIframes.length, '個)');
+            logger.debug('[VirtualObjectList] ドラッグ中: iframe pointer-events無効化 (', allIframes.length, '個)');
 
-            console.log('[VirtualObjectList] dragstart: HTML5ドラッグ開始', obj.link_name);
-            console.log('[VirtualObjectList] ドラッグ開始:', obj.link_name, 'モード:', this.draggingState.dragMode);
+            logger.debug('[VirtualObjectList] dragstart: HTML5ドラッグ開始', obj.link_name);
+            logger.debug('[VirtualObjectList] ドラッグ開始:', obj.link_name, 'モード:', this.draggingState.dragMode);
 
             // 複数選択時は全ての仮身データを含める
             let virtualObjects = [];
@@ -5663,7 +5522,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         offsetY: vobj.vobjtop - obj.vobjtop
                     };
                 });
-                console.log('[VirtualObjectList] 複数選択ドラッグ:', virtualObjects.length, '個の仮身');
+                logger.debug('[VirtualObjectList] 複数選択ドラッグ:', virtualObjects.length, '個の仮身');
             } else {
                 // 単一選択時: ドラッグした仮身のみ
                 virtualObjects = [{
@@ -5732,13 +5591,13 @@ class VirtualObjectListApp extends window.PluginBase {
             // 5px以上移動したらドラッグとみなす
             if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
                 if (!this.draggingState.hasMoved) {
-                    console.log('[VirtualObjectList] drag: 移動を検知 (hasMoved = true)', deltaX, deltaY);
+                    logger.debug('[VirtualObjectList] drag: 移動を検知 (hasMoved = true)', deltaX, deltaY);
                     this.draggingState.hasMoved = true;
 
                     // 移動検知時に右ボタンが押されていればコピーモードに切り替え
                     if (this.draggingState.isRightButtonPressed) {
                         this.draggingState.dragMode = 'copy';
-                        console.log('[VirtualObjectList] 移動検知時に右ボタンが押されている → コピーモードに変更');
+                        logger.debug('[VirtualObjectList] 移動検知時に右ボタンが押されている → コピーモードに変更');
                     }
                 } else {
                     this.draggingState.hasMoved = true;
@@ -5795,7 +5654,7 @@ class VirtualObjectListApp extends window.PluginBase {
             const pluginContent = document.querySelector('.plugin-content');
             if (pluginContent) {
                 pluginContent.style.overflow = 'auto';
-                console.log('[VirtualObjectList] ドラッグ終了: スクロールを再有効化');
+                logger.debug('[VirtualObjectList] ドラッグ終了: スクロールを再有効化');
             }
 
             // ドラッグ終了時にすべてのiframeのpointer-eventsを再有効化
@@ -5804,17 +5663,17 @@ class VirtualObjectListApp extends window.PluginBase {
             allIframes.forEach(iframe => {
                 iframe.style.pointerEvents = 'auto';
             });
-            console.log('[VirtualObjectList] ドラッグ終了: iframe pointer-events再有効化 (', allIframes.length, '個)');
+            logger.debug('[VirtualObjectList] ドラッグ終了: iframe pointer-events再有効化 (', allIframes.length, '個)');
 
-            console.log('[VirtualObjectList] ========== dragend開始 ==========');
-            console.log('[VirtualObjectList] dragend: オブジェクト:', obj.link_name);
-            console.log('[VirtualObjectList] dragend: dropEffect:', e.dataTransfer.dropEffect);
+            logger.debug('[VirtualObjectList] ========== dragend開始 ==========');
+            logger.debug('[VirtualObjectList] dragend: オブジェクト:', obj.link_name);
+            logger.debug('[VirtualObjectList] dragend: dropEffect:', e.dataTransfer.dropEffect);
 
             // dropEffect === 'none'の場合のみ処理（ドロップ失敗）
             // それ以外（'move'または'copy'）の場合は、dropイベントで既に処理済み
             if (e.dataTransfer.dropEffect === 'none') {
                 // ドロップ失敗（キャンセル）: 元の位置に戻す
-                console.log('[VirtualObjectList] ドロップキャンセル: 元の位置に戻す');
+                logger.debug('[VirtualObjectList] ドロップキャンセル: 元の位置に戻す');
 
                 // 複数選択時はすべての選択仮身を元の位置に戻す
                 if (this.draggingState.selectedObjects && this.draggingState.selectedObjectsInitialPositions) {
@@ -5828,7 +5687,7 @@ class VirtualObjectListApp extends window.PluginBase {
                             element.style.visibility = 'visible';
                         }
                     });
-                    console.log('[VirtualObjectList] ドロップキャンセル: 複数仮身を元の位置に戻しました:', this.draggingState.selectedObjects.length, '個');
+                    logger.debug('[VirtualObjectList] ドロップキャンセル: 複数仮身を元の位置に戻しました:', this.draggingState.selectedObjects.length, '個');
                 } else {
                     vobjElement.style.left = this.draggingState.initialLeft + 'px';
                     vobjElement.style.top = this.draggingState.initialTop + 'px';
@@ -5851,10 +5710,10 @@ class VirtualObjectListApp extends window.PluginBase {
             } else {
                 // drop成功（dropイベントで処理済み）
                 // 50ms待ってから finishDrag() を実行（cross-window-drop-in-progress メッセージを受信する時間を確保）
-                console.log('[VirtualObjectList] drop成功: 50ms待機してからfinishDrag()実行');
+                logger.debug('[VirtualObjectList] drop成功: 50ms待機してからfinishDrag()実行');
                 setTimeout(() => {
                     if (this.lastDropWasCrossWindow) {
-                        console.log('[VirtualObjectList] クロスウィンドウドロップ検知: finishDrag()をスキップ');
+                        logger.debug('[VirtualObjectList] クロスウィンドウドロップ検知: finishDrag()をスキップ');
                         // ドラッグ状態をリセット
                         this.draggingState.isDragging = false;
                         this.draggingState.hasMoved = false;
@@ -5871,7 +5730,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         this.lastDropWasCrossWindow = false;
                     } else {
                         // 同じウィンドウ内の移動
-                        console.log('[VirtualObjectList] 同じウィンドウ内のドロップ: finishDrag()を実行');
+                        logger.debug('[VirtualObjectList] 同じウィンドウ内のドロップ: finishDrag()を実行');
                         this.finishDrag();
                     }
                 }, 50);
@@ -5894,22 +5753,20 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // 前回のクリックから300ms以内かつ同じオブジェクトの場合、ダブルクリック+ドラッグ候補
             if (timeSinceLastClick < 300 && isSameObject && e.button === 0) {
-                console.log('[VirtualObjectList] ダブルクリック+ドラッグ候補を検出:', obj.link_name);
-                this.dblClickDragState.isDblClickDragCandidate = true;
+                logger.debug('[VirtualObjectList] ダブルクリック+ドラッグ候補を検出:', obj.link_name);
+                this.setDoubleClickDragCandidate(vobjElement, e);  // 共通メソッド使用
+                // プラグイン固有のプロパティ設定
                 this.dblClickDragState.dblClickedObject = obj;
-                this.dblClickDragState.dblClickedElement = vobjElement;
-                this.dblClickDragState.startX = e.clientX;
-                this.dblClickDragState.startY = e.clientY;
             } else {
                 // 通常のクリック：時刻とオブジェクトを記録
-                this.dblClickDragState.lastClickTime = now;
+                this.resetDoubleClickTimer();  // 共通メソッド使用
+                // プラグイン固有のプロパティ設定
                 this.dblClickDragState.lastClickedObject = obj;
-                this.dblClickDragState.isDblClickDragCandidate = false;
             }
 
             // コンテキストメニューを閉じた直後はドラッグを無効化
             if (this.justClosedContextMenu) {
-                console.log('[VirtualObjectList] コンテキストメニュー直後のためドラッグをスキップ');
+                logger.debug('[VirtualObjectList] コンテキストメニュー直後のためドラッグをスキップ');
                 return;
             }
 
@@ -5920,7 +5777,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // 保護チェック：固定化または背景化されている場合はドラッグを無効化
             if (obj.isFixed || obj.isBackground) {
-                console.log('[VirtualObjectList] 保護されているため移動できません:', obj.link_name,
+                logger.debug('[VirtualObjectList] 保護されているため移動できません:', obj.link_name,
                     obj.isFixed ? '固定化' : '', obj.isBackground ? '背景化' : '');
                 return;
             }
@@ -5942,11 +5799,11 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // mousedown時点で即座に全iframeを無効化（iframe上でもドラッグ開始可能に）
             this.setIframesPointerEvents(false);
-            console.log('[VirtualObjectList] mousedown: iframeを無効化（ドラッグ準備）');
+            logger.debug('[VirtualObjectList] mousedown: iframeを無効化（ドラッグ準備）');
 
             // 左クリック → 移動モード
             this.draggingState.dragMode = 'move';
-            console.log('[VirtualObjectList] 移動モード設定');
+            logger.debug('[VirtualObjectList] 移動モード設定');
 
             // 位置変更用の準備とドラッグ状態の開始
             this.draggingState.hasMoved = false;
@@ -5978,10 +5835,10 @@ class VirtualObjectListApp extends window.PluginBase {
                     top: v.obj.vobjtop
                 }));
 
-                console.log('[VirtualObjectList] mousedown: 複数選択ドラッグ準備完了', this.draggingState.selectedObjects.length, '個の仮身');
+                logger.debug('[VirtualObjectList] mousedown: 複数選択ドラッグ準備完了', this.draggingState.selectedObjects.length, '個の仮身');
             } else {
                 // ドラッグする仮身が未選択の場合、まず選択状態にする
-                console.log('[VirtualObjectList] mousedown: 未選択の仮身をドラッグ開始 → まず選択');
+                logger.debug('[VirtualObjectList] mousedown: 未選択の仮身をドラッグ開始 → まず選択');
                 this.selectVirtualObject(obj, vobjElement, e);
 
                 // mousedownで選択した直後にclickイベントが発火するのを防ぐフラグ
@@ -6004,7 +5861,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     top: v.obj.vobjtop
                 }));
 
-                console.log('[VirtualObjectList] mousedown: ドラッグ準備完了 isDragging=true 選択数:', this.draggingState.selectedObjects.length, obj.link_name);
+                logger.debug('[VirtualObjectList] mousedown: ドラッグ準備完了 isDragging=true 選択数:', this.draggingState.selectedObjects.length, obj.link_name);
             }
         }, { capture: true });
     }
@@ -6048,7 +5905,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // 保護チェック：固定化または背景化されている場合はリサイズを無効化
             if (obj.isFixed || obj.isBackground) {
-                console.log('[VirtualObjectList] 保護されているためリサイズできません:', obj.link_name,
+                logger.debug('[VirtualObjectList] 保護されているためリサイズできません:', obj.link_name,
                     obj.isFixed ? '固定化' : '', obj.isBackground ? '背景化' : '');
                 return;
             }
@@ -6065,7 +5922,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // リサイズ中は新しいリサイズを開始しない
             if (this.isResizing) {
-                console.log('[VirtualObjectList] リサイズ中のため、新しいリサイズを無視');
+                logger.debug('[VirtualObjectList] リサイズ中のため、新しいリサイズを無視');
                 return;
             }
 
@@ -6115,7 +5972,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 currentHeight = startHeight;
             }
 
-            console.log('[VirtualObjectList] 仮身リサイズ開始:', obj.link_name, 'startWidth:', startWidth, 'startHeight:', startHeight, 'currentHeight:', currentHeight, 'hasContentArea:', hasContentArea, 'chsz:', chsz, 'minClosedHeight:', minClosedHeight, 'minOpenHeight:', minOpenHeight);
+            logger.debug('[VirtualObjectList] 仮身リサイズ開始:', obj.link_name, 'startWidth:', startWidth, 'startHeight:', startHeight, 'currentHeight:', currentHeight, 'hasContentArea:', hasContentArea, 'chsz:', chsz, 'minClosedHeight:', minClosedHeight, 'minOpenHeight:', minOpenHeight);
 
             // リサイズプレビュー枠を作成
             const previewBox = document.createElement('div');
@@ -6206,7 +6063,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 obj.vobjright = obj.vobjleft + finalWidth;
                 obj.vobjbottom = obj.vobjtop + finalHeight;
 
-                console.log('[VirtualObjectList] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
+                logger.debug('[VirtualObjectList] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
 
                 // XMLを更新
                 this.updateVirtualObjectInXml(obj);
@@ -6223,7 +6080,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
                 if (wasOpen !== isNowOpen) {
                     // 判定が変わった場合は、少し待ってから仮身要素を再作成
-                    console.log('[VirtualObjectList] 開いた仮身/閉じた仮身の判定が変わりました。少し待ってから再作成します。');
+                    logger.debug('[VirtualObjectList] 開いた仮身/閉じた仮身の判定が変わりました。少し待ってから再作成します。');
 
                     // 既存のタイマーをクリア（連続したリサイズで最後の一回だけ実行）
                     if (this.recreateVirtualObjectTimer) {
@@ -6239,7 +6096,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         obj.heightPx = minClosedHeight_resize;
                         obj.vobjbottom = obj.vobjtop + minClosedHeight_resize;
                         vobjElement.style.height = `${minClosedHeight_resize}px`;
-                        console.log('[VirtualObjectList] 閉じた仮身に変更、高さを調整:', minClosedHeight_resize);
+                        logger.debug('[VirtualObjectList] 閉じた仮身に変更、高さを調整:', minClosedHeight_resize);
                         // XMLを再更新
                         this.updateVirtualObjectInXml(obj);
                     }
@@ -6248,11 +6105,11 @@ class VirtualObjectListApp extends window.PluginBase {
                     // 要素への参照をクロージャでキャプチャ
                     const elementToReplace = vobjElement;
                     this.recreateVirtualObjectTimer = setTimeout(() => {
-                        console.log('[VirtualObjectList] 仮身を再作成します。');
+                        logger.debug('[VirtualObjectList] 仮身を再作成します。');
 
                         // 要素がまだDOMに存在するかチェック
                         if (!elementToReplace.parentNode) {
-                            console.warn('[VirtualObjectList] 再作成対象の仮身要素がDOMから削除されています');
+                            logger.warn('[VirtualObjectList] 再作成対象の仮身要素がDOMから削除されています');
                             this.recreateVirtualObjectTimer = null;
                             return;
                         }
@@ -6267,30 +6124,30 @@ class VirtualObjectListApp extends window.PluginBase {
                         if (isNowOpen) {
                             // 既存のiframeがあれば再利用
                             if (existingIframe && existingIframe.contentWindow) {
-                                console.log('[VirtualObjectList] 既存のiframeを再利用します:', obj.link_name);
+                                logger.debug('[VirtualObjectList] 既存のiframeを再利用します:', obj.link_name);
                                 const contentArea = newElement.querySelector('.virtual-object-content-area');
                                 if (contentArea) {
                                     contentArea.appendChild(existingIframe);
-                                    console.log('[VirtualObjectList] iframeを新しい要素に移動しました');
+                                    logger.debug('[VirtualObjectList] iframeを新しい要素に移動しました');
                                 } else {
-                                    console.warn('[VirtualObjectList] コンテンツエリアが見つかりません、通常展開します');
+                                    logger.warn('[VirtualObjectList] コンテンツエリアが見つかりません、通常展開します');
                                     this.expandVirtualObject(newElement, obj, {
                                         readonly: true,
                                         noScrollbar: true,
                                         bgcol: obj.bgcol
                                     }).catch(err => {
-                                        console.error('[VirtualObjectList] 展開エラー:', err);
+                                        logger.error('[VirtualObjectList] 展開エラー:', err);
                                     });
                                 }
                             } else {
                                 // 既存のiframeがない場合は新規展開
-                                console.log('[VirtualObjectList] 新規展開します:', obj.link_name);
+                                logger.debug('[VirtualObjectList] 新規展開します:', obj.link_name);
                                 this.expandVirtualObject(newElement, obj, {
                                     readonly: true,
                                     noScrollbar: true,
                                     bgcol: obj.bgcol
                                 }).catch(err => {
-                                    console.error('[VirtualObjectList] 展開エラー:', err);
+                                    logger.error('[VirtualObjectList] 展開エラー:', err);
                                 });
                             }
                         }
@@ -6324,7 +6181,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     updateVirtualObjectPosition(obj) {
         if (!this.xmlData) {
-            console.warn('[VirtualObjectList] xmlDataがありません');
+            logger.warn('[VirtualObjectList] xmlDataがありません');
             return;
         }
 
@@ -6352,13 +6209,13 @@ class VirtualObjectListApp extends window.PluginBase {
                     linkRight === obj.originalRight &&
                     linkBottom === obj.originalBottom) {
                     targetLink = link;
-                    console.log('[VirtualObjectList] link要素を発見:', obj.link_id, '元の位置:', obj.originalLeft, obj.originalTop);
+                    logger.debug('[VirtualObjectList] link要素を発見:', obj.link_id, '元の位置:', obj.originalLeft, obj.originalTop);
                     break;
                 }
             }
 
             if (!targetLink) {
-                console.warn('[VirtualObjectList] link要素が見つかりません:', obj.link_id, '元の位置:', obj.originalLeft, obj.originalTop);
+                logger.warn('[VirtualObjectList] link要素が見つかりません:', obj.link_id, '元の位置:', obj.originalLeft, obj.originalTop);
                 return;
             }
 
@@ -6378,7 +6235,7 @@ class VirtualObjectListApp extends window.PluginBase {
             const serializer = new XMLSerializer();
             this.xmlData = serializer.serializeToString(xmlDoc);
 
-            console.log('[VirtualObjectList] xmlTAD更新完了:', obj.link_id, '新しい位置:', obj.vobjleft, obj.vobjtop);
+            logger.debug('[VirtualObjectList] xmlTAD更新完了:', obj.link_id, '新しい位置:', obj.vobjleft, obj.vobjtop);
 
             // 自動保存
             this.notifyXmlDataChanged();
@@ -6388,7 +6245,7 @@ class VirtualObjectListApp extends window.PluginBase {
             this.messageBus.send('update-scrollbars');
 
         } catch (error) {
-            console.error('[VirtualObjectList] xmlTAD更新エラー:', error);
+            logger.error('[VirtualObjectList] xmlTAD更新エラー:', error);
         }
     }
 
@@ -6398,7 +6255,7 @@ class VirtualObjectListApp extends window.PluginBase {
     updateCanvasSize() {
         const canvas = document.querySelector('.virtual-canvas');
         if (!canvas) {
-            console.warn('[VirtualObjectList] キャンバス要素が見つかりません');
+            logger.warn('[VirtualObjectList] キャンバス要素が見つかりません');
             return;
         }
 
@@ -6406,13 +6263,13 @@ class VirtualObjectListApp extends window.PluginBase {
         let maxRight = 0;
         let maxBottom = 0;
 
-        console.log('[VirtualObjectList] 仮身数:', this.virtualObjects.length);
+        logger.debug('[VirtualObjectList] 仮身数:', this.virtualObjects.length);
 
         this.virtualObjects.forEach((obj, index) => {
             const right = obj.vobjright || (obj.vobjleft + (obj.width || 100));
             const bottom = obj.vobjbottom || (obj.vobjtop + (obj.heightPx || 100));
 
-            console.log(`[VirtualObjectList] 仮身${index} (${obj.link_name}): left=${obj.vobjleft}, top=${obj.vobjtop}, right=${right}, bottom=${bottom}`);
+            logger.debug(`[VirtualObjectList] 仮身${index} (${obj.link_name}): left=${obj.vobjleft}, top=${obj.vobjtop}, right=${right}, bottom=${bottom}`);
 
             maxRight = Math.max(maxRight, right);
             maxBottom = Math.max(maxBottom, bottom);
@@ -6435,7 +6292,7 @@ class VirtualObjectListApp extends window.PluginBase {
         canvas.style.width = finalWidth + 'px';
         canvas.style.height = finalHeight + 'px';
 
-        console.log('[VirtualObjectList] キャンバスサイズ更新:', finalWidth, 'x', finalHeight, '(コンテンツ:', maxRight, 'x', maxBottom, ', ウィンドウ:', windowWidth, 'x', windowHeight, ')');
+        logger.debug('[VirtualObjectList] キャンバスサイズ更新:', finalWidth, 'x', finalHeight, '(コンテンツ:', maxRight, 'x', maxBottom, ', ウィンドウ:', windowWidth, 'x', windowHeight, ')');
 
         // スクロールバー更新を通知
         // MessageBus Phase 2: messageBus.send()を使用
@@ -6449,7 +6306,7 @@ class VirtualObjectListApp extends window.PluginBase {
     shrinkCanvasIfNeeded() {
         const canvas = document.querySelector('.virtual-canvas');
         if (!canvas) {
-            console.warn('[VirtualObjectList] キャンバス要素が見つかりません');
+            logger.warn('[VirtualObjectList] キャンバス要素が見つかりません');
             return;
         }
 
@@ -6474,7 +6331,7 @@ class VirtualObjectListApp extends window.PluginBase {
         const windowWidth = pluginContent ? pluginContent.clientWidth : 300;
         const windowHeight = pluginContent ? pluginContent.clientHeight : 200;
 
-        console.log('[VirtualObjectList] shrinkCanvasIfNeeded - コンテンツ:', maxRight, 'x', maxBottom, ', ウィンドウ:', windowWidth, 'x', windowHeight);
+        logger.debug('[VirtualObjectList] shrinkCanvasIfNeeded - コンテンツ:', maxRight, 'x', maxBottom, ', ウィンドウ:', windowWidth, 'x', windowHeight);
 
         // コンテンツがウィンドウより小さければウィンドウサイズに縮小、大きければコンテンツサイズを維持
         const finalWidth = Math.max(maxRight, windowWidth);
@@ -6484,7 +6341,7 @@ class VirtualObjectListApp extends window.PluginBase {
         canvas.style.width = finalWidth + 'px';
         canvas.style.height = finalHeight + 'px';
 
-        console.log('[VirtualObjectList] キャンバスサイズ調整完了:', finalWidth, 'x', finalHeight);
+        logger.debug('[VirtualObjectList] キャンバスサイズ調整完了:', finalWidth, 'x', finalHeight);
 
         // スクロールバー更新を通知
         // MessageBus Phase 2: messageBus.send()を使用
@@ -6495,17 +6352,17 @@ class VirtualObjectListApp extends window.PluginBase {
      * autoopen属性がtrueの仮身を自動的に開く
      */
     async autoOpenVirtualObjects() {
-        console.log('[VirtualObjectList] 自動起動処理開始, 仮身数:', this.virtualObjects.length);
+        logger.debug('[VirtualObjectList] 自動起動処理開始, 仮身数:', this.virtualObjects.length);
 
         for (const virtualObj of this.virtualObjects) {
             if (virtualObj.autoopen === 'true') {
-                console.log('[VirtualObjectList] 自動起動する仮身:', virtualObj.link_id);
+                logger.debug('[VirtualObjectList] 自動起動する仮身:', virtualObj.link_id);
 
                 try {
                     // applistを確認
                     const applist = virtualObj.applist;
                     if (!applist || typeof applist !== 'object') {
-                        console.warn('[VirtualObjectList] applistが存在しません:', virtualObj.link_id);
+                        logger.warn('[VirtualObjectList] applistが存在しません:', virtualObj.link_id);
                         continue;
                     }
 
@@ -6524,11 +6381,11 @@ class VirtualObjectListApp extends window.PluginBase {
                     }
 
                     if (!defaultPluginId) {
-                        console.warn('[VirtualObjectList] 開くためのプラグインが見つかりません:', virtualObj.link_id);
+                        logger.warn('[VirtualObjectList] 開くためのプラグインが見つかりません:', virtualObj.link_id);
                         continue;
                     }
 
-                    console.log('[VirtualObjectList] プラグインを決定:', defaultPluginId);
+                    logger.debug('[VirtualObjectList] プラグインを決定:', defaultPluginId);
 
                     // 選択中の仮身を一時的に設定
                     const previousSelection = new Set(this.selectedVirtualObjects);
@@ -6536,7 +6393,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     const vobjIndex = this.virtualObjects.indexOf(virtualObj);
                     this.selectedVirtualObjects.add(vobjIndex);
 
-                    console.log('[VirtualObjectList] 仮身を開く処理を開始:', virtualObj.link_id);
+                    logger.debug('[VirtualObjectList] 仮身を開く処理を開始:', virtualObj.link_id);
 
                     // 実身を開く
                     await this.executeVirtualObjectWithPlugin(defaultPluginId);
@@ -6544,15 +6401,15 @@ class VirtualObjectListApp extends window.PluginBase {
                     // 選択を元に戻す
                     this.selectedVirtualObjects = previousSelection;
 
-                    console.log('[VirtualObjectList] 自動起動完了:', virtualObj.link_id, 'with', defaultPluginId);
+                    logger.debug('[VirtualObjectList] 自動起動完了:', virtualObj.link_id, 'with', defaultPluginId);
                 } catch (error) {
-                    console.error('[VirtualObjectList] 自動起動エラー:', virtualObj.link_id, error);
+                    logger.error('[VirtualObjectList] 自動起動エラー:', virtualObj.link_id, error);
                     // エラーが発生しても次の仮身の起動を続行
                 }
             }
         }
 
-        console.log('[VirtualObjectList] 自動起動処理完了');
+        logger.debug('[VirtualObjectList] 自動起動処理完了');
     }
 
     /**
@@ -6565,7 +6422,7 @@ class VirtualObjectListApp extends window.PluginBase {
             xmlData: this.xmlData
         });
 
-        console.log('[VirtualObjectList] xmlTAD変更を通知, realId:', this.realId);
+        logger.debug('[VirtualObjectList] xmlTAD変更を通知, realId:', this.realId);
     }
 
     /**
@@ -6580,7 +6437,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 windowConfig: windowConfig
             });
 
-            console.log('[VirtualObjectList] ウィンドウ設定を更新:', windowConfig);
+            logger.debug('[VirtualObjectList] ウィンドウ設定を更新:', windowConfig);
         }
     }
 
@@ -6589,7 +6446,7 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     log(...args) {
         if (this.debug) {
-            console.log('[VirtualObjectList]', ...args);
+            logger.debug('[VirtualObjectList]', ...args);
         }
     }
 
@@ -6597,14 +6454,14 @@ class VirtualObjectListApp extends window.PluginBase {
      * エラーログ出力（常に出力）
      */
     error(...args) {
-        console.error('[VirtualObjectList]', ...args);
+        logger.error('[VirtualObjectList]', ...args);
     }
 
     /**
      * 警告ログ出力（常に出力）
      */
     warn(...args) {
-        console.warn('[VirtualObjectList]', ...args);
+        logger.warn('[VirtualObjectList]', ...args);
     }
 
 }
@@ -6626,7 +6483,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pluginContent = document.querySelector('.plugin-content');
     if (pluginContent) {
         pluginContent.addEventListener('wheel', (e) => {
-            console.log('[VirtualObjectList] wheel イベント:', e.deltaX, e.deltaY, e.shiftKey);
+            logger.debug('[VirtualObjectList] wheel イベント:', e.deltaX, e.deltaY, e.shiftKey);
 
             // 明示的にスクロール位置を更新
             if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {

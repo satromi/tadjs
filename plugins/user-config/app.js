@@ -1,11 +1,18 @@
 /**
  * ユーザ環境設定プラグイン
  */
-class UserConfigApp {
+const logger = window.getLogger('UserConfig');
+
+class UserConfigApp extends window.PluginBase {
     constructor() {
+        super('UserConfig');
+        logger.info('[UserConfig] 初期化開始');
+
         this.timeUpdateInterval = null;
-        this.realId = null; // 実身ID
-        this.messageBus = null;
+        this.dataFolderChanged = false; // データフォルダが変更されたかどうか
+        // this.realId, this.messageBus は PluginBase で定義済み
+
+        // MessageBus初期化
         if (window.MessageBus) {
             this.messageBus = new window.MessageBus({
                 debug: false,
@@ -17,7 +24,7 @@ class UserConfigApp {
     }
 
     init() {
-        console.log('[UserConfig] 初期化開始');
+        logger.info('[UserConfig] 初期化開始');
 
         // MessageBusのハンドラを登録
         if (this.messageBus) {
@@ -43,6 +50,25 @@ class UserConfigApp {
         this.loadConfig();
     }
 
+    /**
+     * sendWithCallbackをPromiseでラップするヘルパーメソッド
+     * @param {string} type - メッセージタイプ
+     * @param {Object} data - 送信データ
+     * @param {number} timeout - タイムアウト（ミリ秒）
+     * @returns {Promise<Object>} レスポンスデータ
+     */
+    sendWithCallbackAsync(type, data = {}, timeout = 5000) {
+        return new Promise((resolve, reject) => {
+            this.messageBus.sendWithCallback(type, data, (result) => {
+                if (result.error) {
+                    reject(new Error(result.error));
+                } else {
+                    resolve(result);
+                }
+            }, timeout);
+        });
+    }
+
     setupMessageBusHandlers() {
         // init メッセージ
         this.messageBus.on('init', (data) => {
@@ -50,7 +76,7 @@ class UserConfigApp {
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;
                 this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
-                console.log('[UserConfig] fileId設定:', this.realId, '(元:', rawId, ')');
+                logger.info('[UserConfig] fileId設定:', this.realId, '(元:', rawId, ')');
             }
         });
 
@@ -118,7 +144,7 @@ class UserConfigApp {
                 break;
             case 'find-replace':
                 // 検索/置換は未実装
-                console.log('[UserConfig] 検索/置換は未実装です');
+                logger.info('[UserConfig] 検索/置換は未実装です');
                 break;
         }
     }
@@ -183,6 +209,7 @@ class UserConfigApp {
         const applyButton = document.getElementById('apply-button');
         const cancelButton = document.getElementById('cancel-button');
         const kanaKanjiButton = document.getElementById('kana-kanji-button');
+        const selectFolderButton = document.getElementById('select-folder-button');
 
         applyButton.addEventListener('click', () => {
             this.apply();
@@ -201,11 +228,17 @@ class UserConfigApp {
                 defaultButton: 0
             }, (result) => {
                 if (result.error) {
-                    console.warn('[UserConfig] Message dialog error:', result.error);
+                    logger.warn('[UserConfig] Message dialog error:', result.error);
                 }
                 // 結果は特に使用しない
             });
         });
+
+        if (selectFolderButton) {
+            selectFolderButton.addEventListener('click', () => {
+                this.selectDataFolder();
+            });
+        }
 
         // 表示属性のスライダーと数値入力の連動
         this.setupDisplaySliders();
@@ -301,6 +334,9 @@ class UserConfigApp {
 
         // 表示属性の読み込み
         this.loadDisplayConfig();
+
+        // データフォルダの読み込み
+        this.loadDataFolderConfig();
     }
 
     loadDisplayConfig() {
@@ -343,7 +379,7 @@ class UserConfigApp {
         });
     }
 
-    apply() {
+    async apply() {
         const usernameInput = document.getElementById('username');
         const inputMethodSelect = document.getElementById('input-method');
 
@@ -357,7 +393,10 @@ class UserConfigApp {
         // 表示属性を保存
         this.saveDisplayConfig();
 
-        console.log('[UserConfig] 設定を適用しました:', { username, inputMethod });
+        // データフォルダを保存
+        await this.saveDataFolder();
+
+        logger.info('[UserConfig] 設定を適用しました:', { username, inputMethod });
 
         // 親ウィンドウに設定適用を通知
         if (this.messageBus) {
@@ -415,6 +454,119 @@ class UserConfigApp {
     }
 
     /**
+     * フォルダ選択ダイアログを開く
+     */
+    async selectDataFolder() {
+        try {
+            // 親ウィンドウにフォルダ選択ダイアログを要求
+            const result = await this.sendWithCallbackAsync('open-folder-dialog', {});
+
+            if (result && result.folderPath) {
+                // フォルダアクセス権限をチェック
+                const accessCheck = await this.sendWithCallbackAsync('check-folder-access', {
+                    folderPath: result.folderPath
+                });
+
+                if (accessCheck.success) {
+                    // 表示を更新
+                    const folderDisplay = document.getElementById('folder-path-display');
+                    if (folderDisplay) {
+                        folderDisplay.textContent = result.folderPath;
+                        folderDisplay.classList.remove('not-set');
+                    }
+                    // フォルダが変更されたフラグを設定
+                    this.dataFolderChanged = true;
+                    logger.info('[UserConfig] データフォルダ変更フラグを設定:', this.dataFolderChanged);
+                } else {
+                    // エラーダイアログを表示
+                    await this.sendWithCallbackAsync('show-message-dialog', {
+                        message: `フォルダへのアクセスに失敗しました:\n${accessCheck.error}`,
+                        buttons: [
+                            { label: '了　解', value: 'ok' }
+                        ],
+                        defaultButton: 0
+                    });
+                }
+            }
+        } catch (error) {
+            logger.error('[UserConfig] フォルダ選択エラー:', error);
+        }
+    }
+
+    /**
+     * データフォルダ設定を読み込む
+     */
+    async loadDataFolderConfig() {
+        try {
+            const result = await this.sendWithCallbackAsync('get-data-folder', {});
+
+            const folderDisplay = document.getElementById('folder-path-display');
+            if (folderDisplay && result && result.dataFolder) {
+                folderDisplay.textContent = result.dataFolder;
+                folderDisplay.classList.remove('not-set');
+            } else if (folderDisplay) {
+                logger.warn('[UserConfig] データフォルダが取得できませんでした');
+                folderDisplay.textContent = '未設定';
+                folderDisplay.classList.add('not-set');
+            }
+        } catch (error) {
+            logger.error('[UserConfig] データフォルダ設定の読み込みに失敗:', error);
+            // エラー時も「未設定」と表示
+            const folderDisplay = document.getElementById('folder-path-display');
+            if (folderDisplay) {
+                folderDisplay.textContent = '未設定';
+                folderDisplay.classList.add('not-set');
+            }
+        }
+    }
+
+    /**
+     * データフォルダを保存
+     */
+    async saveDataFolder() {
+        logger.info('[UserConfig] saveDataFolder呼び出し, dataFolderChanged:', this.dataFolderChanged);
+        // フォルダが変更されていない場合は何もしない
+        if (!this.dataFolderChanged) {
+            logger.info('[UserConfig] フォルダ変更なし、スキップ');
+            return;
+        }
+
+        const folderDisplay = document.getElementById('folder-path-display');
+        const folderPath = folderDisplay?.textContent;
+
+        if (folderPath && folderPath !== '未設定') {
+            try {
+                const result = await this.sendWithCallbackAsync('set-data-folder', {
+                    dataFolder: folderPath
+                });
+
+                if (result.success) {
+                    // 再起動通知を表示
+                    await this.sendWithCallbackAsync('show-message-dialog', {
+                        message: 'データフォルダが変更されました。\n変更を反映するには再起動が必要です。',
+                        buttons: [
+                            { label: '了　解', value: 'ok' }
+                        ],
+                        defaultButton: 0
+                    });
+                } else {
+                    logger.error('[UserConfig] データフォルダの保存に失敗:', result.error);
+                    // エラーダイアログを表示
+                    await this.sendWithCallbackAsync('show-message-dialog', {
+                        message: `データフォルダの設定に失敗しました:\n${result.error}`,
+                        buttons: [
+                            { label: '了　解', value: 'ok' }
+                        ],
+                        defaultButton: 0
+                    });
+                }
+            } catch (error) {
+                logger.error('[UserConfig] データフォルダの保存に失敗:', error);
+            }
+        }
+    }
+
+    /**
      * ウィンドウ設定を更新
      * @param {Object} windowConfig - ウィンドウ設定
      */
@@ -425,7 +577,7 @@ class UserConfigApp {
                 windowConfig: windowConfig
             });
 
-            console.log('[UserConfig] ウィンドウ設定を更新:', windowConfig);
+            logger.info('[UserConfig] ウィンドウ設定を更新:', windowConfig);
         }
     }
 }

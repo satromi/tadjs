@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.15
+ * TADjs Ver0.17
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -70,6 +70,8 @@ let isXmlTad = false; // XMLTADフラグ
 let isXmlFig = false; // XMLFIGフラグ
 let currentIndentLevel = 0; // XMLインデントレベル
 
+// 図形セグメント内のz-index管理用カウンタ
+let figureZIndexCounter = 0;
 
 // セグメントタイプ管理用
 const SEGMENT_TYPE = {
@@ -1640,7 +1642,13 @@ function tsTextStart(tadSeg) {
         textChar.bpat = Number(tadSeg[11]);
 
         if (isXmlDumpEnabled()) {
-            xmlBuffer.push(`<text viewleft="${textChar.view.left}" viewtop="${textChar.view.top}" viewright="${textChar.view.right}" viewbottom="${textChar.view.bottom}" drawleft="${textChar.draw.left}" drawtop="${textChar.draw.top}" drawright="${textChar.draw.right}" drawbottom="${textChar.draw.bottom}" h_unit="${textChar.h_unit}" v_unit="${textChar.v_unit}" lang="${textChar.lang}" bpat="${textChar.bpat}"/>\r\n`);
+            // 図形セグメント内のテキストの場合はz-indexを付与
+            if (currentSegmentType === SEGMENT_TYPE.FIGURE) {
+                figureZIndexCounter++;
+                xmlBuffer.push(`<text viewleft="${textChar.view.left}" viewtop="${textChar.view.top}" viewright="${textChar.view.right}" viewbottom="${textChar.view.bottom}" drawleft="${textChar.draw.left}" drawtop="${textChar.draw.top}" drawright="${textChar.draw.right}" drawbottom="${textChar.draw.bottom}" h_unit="${textChar.h_unit}" v_unit="${textChar.v_unit}" lang="${textChar.lang}" bpat="${textChar.bpat}" zIndex="${figureZIndexCounter}"/>\r\n`);
+            } else {
+                xmlBuffer.push(`<text viewleft="${textChar.view.left}" viewtop="${textChar.view.top}" viewright="${textChar.view.right}" viewbottom="${textChar.view.bottom}" drawleft="${textChar.draw.left}" drawtop="${textChar.draw.top}" drawright="${textChar.draw.right}" drawbottom="${textChar.draw.bottom}" h_unit="${textChar.h_unit}" v_unit="${textChar.v_unit}" lang="${textChar.lang}" bpat="${textChar.bpat}"/>\r\n`);
+            }
         }
     }
 }
@@ -3283,8 +3291,9 @@ function tsImageSegment(segLen, tadSeg) {
     if (isXmlDumpEnabled() && imageSeg.bitmap) {
         const filename = generatePngImage(imageSeg);
 
-        // XMLタグを追加
-        const xmlTag = `<image src="${filename}" width="${width}" height="${height}" planes="${imageSeg.planes}" pixbits="${imageSeg.pixbits}"/>`;
+        // XMLタグを追加（図形セグメント内のz-index管理）
+        figureZIndexCounter++;
+        const xmlTag = `<image src="${filename}" width="${width}" height="${height}" planes="${imageSeg.planes}" pixbits="${imageSeg.pixbits}" zIndex="${figureZIndexCounter}"/>`;
         xmlBuffer.push(xmlTag);
     }
 }
@@ -3507,11 +3516,13 @@ function textLigatureFusenEnd(segLen, tadSeg) {
  * @param {0x0000[]} tadSeg 
  */
 function tsFigStart(tadSeg) {
-    
+
     // セグメントスタックに図形セグメントを追加
     segmentStack.push(SEGMENT_TYPE.FIGURE);
     currentSegmentType = SEGMENT_TYPE.FIGURE;
 
+    // z-indexカウンタを初期化
+    figureZIndexCounter = 0;
 
     let figSeg = new STARTFIGSEG();
     figSeg.view.left = Number(uh2h(tadSeg[0]));
@@ -3565,7 +3576,8 @@ function tsFigRectAngleDraw(segLen, tadSeg) {
     const figH = Number(tadSeg[8]) - figY;
 
     if(isXmlDumpEnabled()) {
-        xmlBuffer.push(`<rect round="0" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}" />\r\n`);
+        figureZIndexCounter++;
+        xmlBuffer.push(`<rect round="0" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}" zIndex="${figureZIndexCounter}" />\r\n`);
     }
 }
 
@@ -3591,7 +3603,8 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
     const figH = Number(tadSeg[10]) - figY;
 
     if(isXmlDumpEnabled()) {
-        xmlBuffer.push(`<rect round="1" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" figRH="${figRH}" figRV="${figRV}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}" />\r\n`);
+        figureZIndexCounter++;
+        xmlBuffer.push(`<rect round="1" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" figRH="${figRH}" figRV="${figRV}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}" zIndex="${figureZIndexCounter}" />\r\n`);
     }
 }
 
@@ -3626,7 +3639,8 @@ function tsFigPolygonDraw(segLen, tadSeg) {
             const py = Number(tadSeg[offsetLen+1]);
             pointsArray.push(`${px},${py}`);
         }
-        xmlBuffer.push(`<polygon l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" points="${pointsArray.join(' ')}" />\r\n`);
+        figureZIndexCounter++;
+        xmlBuffer.push(`<polygon l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
     }
 }
 
@@ -3656,7 +3670,8 @@ function tsFigLineDraw(segLen, tadSeg) {
         }
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" />\r\n`);
+        figureZIndexCounter++;
+        xmlBuffer.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
     }
 }
 
@@ -3685,7 +3700,8 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     const frameCenterY = frameTop + radiusY;
 
     if(isXmlDumpEnabled()) {
-        xmlBuffer.push(`<ellipse l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" />\r\n`);
+        figureZIndexCounter++;
+        xmlBuffer.push(`<ellipse l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" zIndex="${figureZIndexCounter}" />\r\n`);
     }
 }
 
@@ -3729,7 +3745,8 @@ function tsFigArcDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<arc l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" />\r\n`);
+        figureZIndexCounter++;
+        xmlBuffer.push(`<arc l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" zIndex="${figureZIndexCounter}" />\r\n`);
     }
 }
 
@@ -3786,7 +3803,8 @@ function tsFigChordDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<chord l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startXOnEllipse}" startY="${startYOnEllipse}" endX="${endXOnEllipse}" endY="${endYOnEllipse}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" />\r\n`);
+        figureZIndexCounter++;
+        xmlBuffer.push(`<chord l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startXOnEllipse}" startY="${startYOnEllipse}" endX="${endXOnEllipse}" endY="${endYOnEllipse}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" zIndex="${figureZIndexCounter}" />\r\n`);
     }
 }
 
@@ -3822,7 +3840,8 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<elliptical_arc l_atr="${l_atr}" l_pat="${l_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${radianStart}" endAngle="${radianEnd}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" />\r\n`);
+        figureZIndexCounter++;
+        xmlBuffer.push(`<elliptical_arc l_atr="${l_atr}" l_pat="${l_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${radianStart}" endAngle="${radianEnd}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" zIndex="${figureZIndexCounter}" />\r\n`);
     }
 }
 
@@ -3860,7 +3879,8 @@ function tsFigPolylineDraw(segLen, tadSeg) {
         }
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<polyline l_atr="${l_atr}" l_pat="${l_pat}" round="${round}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" />\r\n`);
+        figureZIndexCounter++;
+        xmlBuffer.push(`<polyline l_atr="${l_atr}" l_pat="${l_pat}" round="${round}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
     }
 }
 
@@ -3925,7 +3945,8 @@ function tsFigCurveDraw(segLen, tadSeg) {
         }
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" type="${type}" closed="${isClosed ? '1' : '0'}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" />\r\n`);
+        figureZIndexCounter++;
+        xmlBuffer.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" type="${type}" closed="${isClosed ? '1' : '0'}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
     }
 }
 
@@ -4612,7 +4633,9 @@ function tsVirtualObjSegment(segLen, tadSeg) {
 
         console.log(`[tsVirtualObjSegment] link_id=${newLink.link_id}, linkedFileIndex=${linkedFileIndex}, realId=${realId}`);
 
-        xmlBuffer.push(`<link id="${realId}_0.xtad" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}">${newLink.link_name || ''}</link>\r\n`);
+        // 図形セグメント内のz-index管理
+        figureZIndexCounter++;
+        xmlBuffer.push(`<link id="${realId}_0.xtad" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}" zIndex="${figureZIndexCounter}">${newLink.link_name || ''}</link>\r\n`);
     }
 
 
