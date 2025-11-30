@@ -45,18 +45,20 @@ export class ToolPanelManager {
      * @param {HTMLIFrameElement} pluginIframe - プラグインのiframe
      * @param {Object} panelpos - パネル位置 {x, y}
      */
-    openToolPanelWindow(pluginId, settings, pluginIframe, panelpos) {
+    openToolPanelWindow(pluginId, settings, pluginIframe, panelpos, panelsize) {
         const pluginPath = `plugins/${pluginId}/tool-panel.html`;
 
         const content = `<iframe src="${pluginPath}" style="width: 100%; height: 100%; border: none;"></iframe>`;
 
         // panelposが指定されていればそれを使用、なければデフォルト位置
         const pos = panelpos || { x: 50, y: 50 };
-        logger.info('[ToolPanelManager] 道具パネル位置:', pos);
+        // panelsizeが指定されていればそれを使用、なければデフォルトサイズ
+        const size = panelsize || { width: 390, height: 80 };
+        logger.info('[ToolPanelManager] 道具パネル位置:', pos, 'サイズ:', size);
 
         const windowId = this.createWindow('道具パネル', content, {
-            width: 390,
-            height: 80,
+            width: size.width,
+            height: size.height,
             x: pos.x,
             y: pos.y,
             resizable: false,

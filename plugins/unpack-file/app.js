@@ -308,13 +308,20 @@ class UnpackFileManager {
                 const realName = file.name || `file_${i}`;
                 const nrec = file.nrec || 1;
                 const recordXmls = file.recordXmls || [];
+                const calcRecordTypes = file.calcRecordTypes || [];
 
                 logger.info(`[UnpackFile] 実身 ${i + 1}/${this.archiveFiles.length}: ${realName} (レコード数: ${nrec})`);
 
                 // 現在の日時を取得
                 const now = new Date().toISOString();
 
-                // JSONデータを生成（標準的な実身管理用セグメント構造）
+                // applistをレコードタイプに応じて設定（配列内に1が含まれるかで判定）
+                const isCalcTad = Array.isArray(calcRecordTypes) && calcRecordTypes.includes(1);
+                if (isCalcTad) {
+                    logger.info(`[UnpackFile] 実身 ${i + 1}: 基本表計算形式TADとして処理`);
+                }
+
+                // JSONデータを生成（実身管理用セグメント構造）
                 const jsonData = {
                     name: realName,
                     linktype: false,
@@ -327,10 +334,7 @@ class UnpackFileManager {
                     readable: true,
                     maker: "satromi",
                     window: {
-                        pos: {
-                            x: 100,
-                            y: 100
-                        },
+                        pos: { x: 100, y: 100 },
                         width: 600,
                         height: 400,
                         minWidth: 200,
@@ -347,19 +351,14 @@ class UnpackFileManager {
                         transparent: false,
                         backgroundColor: "#ffffff"
                     },
-                    applist: {
-                        "basic-text-editor": {
-                            name: "基本文章編集",
-                            defaultOpen: true
-                        },
-                        "basic-figure-editor": {
-                            name: "基本図形編集",
-                            defaultOpen: false
-                        },
-                        "virtual-object-list": {
-                            name: "仮身一覧",
-                            defaultOpen: false
-                        }
+                    applist: isCalcTad ? {
+                        "basic-text-editor": { name: "基本文章編集", defaultOpen: false },
+                        "basic-calc-editor": { name: "基本表計算", defaultOpen: true },
+                        "virtual-object-list": { name: "仮身一覧", defaultOpen: false }
+                    } : {
+                        "basic-text-editor": { name: "基本文章編集", defaultOpen: true },
+                        "basic-figure-editor": { name: "基本図形編集", defaultOpen: false },
+                        "virtual-object-list": { name: "仮身一覧", defaultOpen: false }
                     }
                 };
 
@@ -525,20 +524,42 @@ class UnpackFileManager {
         const rootFile = this.archiveFiles[0];
 
         // applist情報を準備（標準的な実身管理用セグメント構造と同じ）
-        const applist = {
-            "virtual-object-list": {
-                name: "仮身一覧",
-                defaultOpen: true
-            },
-            "basic-text-editor": {
-                name: "基本文章編集",
-                defaultOpen: false
-            },
-            "basic-figure-editor": {
-                name: "基本図形編集",
-                defaultOpen: false
+        // calcRecordTypesは配列なので、1が含まれるかで判定
+        const rootCalcTypes = rootFile.calcRecordTypes || [];
+        const isRootCalcTad = Array.isArray(rootCalcTypes) && rootCalcTypes.includes(1);
+        let applist = {};
+        if (isRootCalcTad) {
+            applist = {
+                "basic-text-editor": {
+                    name: "基本文章編集",
+                    defaultOpen: false
+                },
+                "basic-calc-editor": {
+                    name: "基本表計算",
+                    defaultOpen: true
+                },"virtual-object-list": {
+                    name: "仮身一覧",
+                    defaultOpen: false
+                }
+            };
+        } else {
+            applist = {
+                "virtual-object-list": {
+                    name: "仮身一覧",
+                    defaultOpen: true
+                },
+                "basic-text-editor": {
+                    name: "基本文章編集",
+                    defaultOpen: false
+                },
+                "basic-figure-editor": {
+                    name: "基本図形編集",
+                    defaultOpen: false
+                }
             }
-        };
+        }
+
+        
 
         // MessageBus Phase 2: messageBus.send()を使用
         // virtual-object-listにルート実身配置を要求

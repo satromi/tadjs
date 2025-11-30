@@ -1,0 +1,289 @@
+/* 基本表計算 - スタイルシート */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: "MS Gothic", "MS ゴシック", monospace;
+    font-size: 12px;
+    background-color: #ffffff;
+}
+
+.plugin-content {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.spreadsheet-container {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+}
+
+.spreadsheet-grid {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* ヘッダー行（列番号） */
+.grid-header {
+    display: flex;
+    flex-shrink: 0;
+    background-color: #e8e8e8;
+    border-bottom: 1px solid #999;
+    height: 24px;
+    overflow: hidden;
+}
+
+.header-corner {
+    width: 50px;
+    min-width: 50px;
+    height: 24px;
+    background-color: #d4d4d4;
+    border-right: 1px solid #999;
+    border-bottom: 1px solid #999;
+}
+
+.column-header {
+    width: 80px;
+    min-width: 80px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #e8e8e8;
+    border-right: 1px solid #ccc;
+    font-weight: bold;
+    color: #333;
+    user-select: none;
+    cursor: pointer;
+}
+
+.column-header:hover {
+    background-color: #d0d0d0;
+}
+
+.column-header.selected {
+    background-color: #b0c4de;
+}
+
+/* データ領域 */
+.grid-body {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+}
+
+.grid-row {
+    display: flex;
+    height: 22px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+/* 行ヘッダー（行番号） */
+.row-header {
+    width: 50px;
+    min-width: 50px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #e8e8e8;
+    border-right: 1px solid #999;
+    font-weight: bold;
+    color: #333;
+    user-select: none;
+    cursor: pointer;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+}
+
+.row-header:hover {
+    background-color: #d0d0d0;
+}
+
+.row-header.selected {
+    background-color: #b0c4de;
+}
+
+/* セル */
+.cell {
+    width: 80px;
+    min-width: 80px;
+    height: 22px;
+    border-right: 1px solid #e0e0e0;
+    padding: 2px 4px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    background-color: #ffffff;
+    cursor: cell;
+    display: flex;
+    align-items: center;
+}
+
+.cell:hover {
+    background-color: #f5f5f5;
+}
+
+.cell.selected {
+    background-color: #cce5ff;
+    outline: 2px solid #0066cc;
+    outline-offset: -2px;
+    z-index: 2;
+    position: relative;
+}
+
+.cell.editing {
+    padding: 0;
+    overflow: visible;
+}
+
+.cell.editing input {
+    width: 100%;
+    height: 100%;
+    border: none;
+    outline: none;
+    padding: 2px 4px;
+    font-family: inherit;
+    font-size: inherit;
+    background-color: #fff;
+}
+
+/* 数式セルのスタイル */
+.cell.formula {
+    color: #0066cc;
+}
+
+/* エラーセルのスタイル */
+.cell.error {
+    color: #cc0000;
+    background-color: #ffe0e0;
+}
+
+/* 選択範囲 */
+.cell.in-range {
+    background-color: #e6f0ff;
+}
+
+/* 仮身セル */
+.cell.virtual-object {
+    background-color: #ffffd0;
+}
+
+.cell .virtual-object-icon {
+    width: 16px;
+    height: 16px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+/* セル内の仮身要素 */
+.virtual-object-in-cell {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    height: 18px;
+    vertical-align: middle;
+}
+
+.virtual-object-in-cell img {
+    width: 16px;
+    height: 16px;
+    margin-right: 2px;
+    object-fit: contain;
+}
+
+.virtual-object-in-cell .virtual-object-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+}
+
+/* セル入力ボックス（操作パネル用） */
+.cell-input-box {
+    width: 100%;
+    height: 22px;
+    border: 1px solid #999;
+    padding: 2px 4px;
+    font-family: inherit;
+    font-size: inherit;
+}
+
+/* スクロールバーのカスタマイズ */
+.grid-body::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+.grid-body::-webkit-scrollbar-track {
+    background: #f0f0f0;
+}
+
+.grid-body::-webkit-scrollbar-thumb {
+    background: #c0c0c0;
+    border-radius: 6px;
+}
+
+.grid-body::-webkit-scrollbar-thumb:hover {
+    background: #a0a0a0;
+}
+
+/* リサイズハンドル */
+.column-resize-handle {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 4px;
+    height: 100%;
+    cursor: col-resize;
+    background: transparent;
+}
+
+.column-resize-handle:hover {
+    background: #0066cc;
+}
+
+.row-resize-handle {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 4px;
+    cursor: row-resize;
+    background: transparent;
+}
+
+.row-resize-handle:hover {
+    background: #0066cc;
+}
+
+/* コンテキストメニューはTADjs標準メニューを使用するため、独自スタイルは不要 */
+
+/* フィルハンドル */
+.fill-handle {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    background-color: #0066cc;
+    border: 1px solid #004499;
+    cursor: crosshair;
+    z-index: 10;
+}
+
+.fill-handle:hover {
+    background-color: #0088ff;
+}

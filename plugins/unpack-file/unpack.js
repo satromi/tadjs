@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.17
+ * TADjs Ver0.18
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -63,11 +63,13 @@ let generatedImages = [];  // 生成された画像情報の配列
 let isProcessingBpk = false;  // Flag to indicate BPK processing
 let lheadToCanvasMap = {};  // Map from lHead file index to actual canvas index
 let recordTypeMap = {};  // Map: fileIndex -> array of record types
+let calcRecordTypeMap = {};  // Map for calc TAD: fileIndex -> array of record types    
 let startTadSegment = false;
 let startByImageSegment = false;
 let isTadStarted = false; // TAD開始フラグ
 let isXmlTad = false; // XMLTADフラグ
 let isXmlFig = false; // XMLFIGフラグ
+let isCalcTad = false; // 基本表計算形式TADフラグ
 let currentIndentLevel = 0; // XMLインデントレベル
 
 // 図形セグメント内のz-index管理用カウンタ
@@ -379,6 +381,14 @@ const TS_FAPPL  	= 0xffbf;		// 図形アプリケーション指定付箋
 const packAppId1    = 0x8000;
 const packAppId2    = 0xc003;
 const packAppId3    = 0x8000;
+
+// 基本表計算形式アプリケーションID
+const calcAppId1    = 0x8000;
+const calcAppId2    = 0x0009;
+const calcAppId3    = 0x8000;
+
+//その他のレコードタイプ対応フラグ
+let enableAnotherRecord = false;
 
 // パック形式
 const LH0           = 0;
@@ -1430,7 +1440,7 @@ function pass2(lHead) {
                 }
 
                 // その他のレコードタイプの場合はバイナリXMLを生成
-                if (isXmlDumpEnabled()) {
+                if (isXmlDumpEnabled() && enableAnotherRecord) {
                     // バイナリデータをBase64エンコード
                     const base64Data = btoa(String.fromCharCode(...recordData));
 
@@ -1455,6 +1465,8 @@ function pass2(lHead) {
         const tadFileIndex = lheadToCanvasMap[lheadIndex];
         const nfiles = (typeof gHead !== 'undefined' && gHead.nfiles) ? gHead.nfiles : 1;
 
+        isCalcTad = false
+        
 
         if (tadFileIndex !== undefined) {
             // 各TADレコード処理前にXMLバッファをクリア（連結を防ぐため）
@@ -1475,6 +1487,12 @@ function pass2(lHead) {
         } else {
             console.debug(`Warning: No tadFileIndex mapping found for lHead[${lheadIndex}] during processing`);
         }
+
+        // calcレコードタイプを記録
+        if (!calcRecordTypeMap[i]) {
+            calcRecordTypeMap[i] = [];
+        }
+        calcRecordTypeMap[i].push(isCalcTad ? 1 : 0);
     }
 
     // 解凍が完了したら、実身情報を構築
@@ -1521,6 +1539,7 @@ function processExtractedFiles(lHead) {
 
             // この実身のレコードタイプ情報を取得
             const recordTypes = recordTypeMap[index] || [];
+            const calcRecordTypes = calcRecordTypeMap[index] || [];
 
             // xml配列から各レコードのXMLデータを取得
             const recordXmls = [];
@@ -1554,7 +1573,8 @@ function processExtractedFiles(lHead) {
                 name: lhead.name || `file_${index}`,
                 recordIndex: index,
                 nrec: nrec,
-                recordXmls: recordXmls // レコードごとのXML配列
+                recordXmls: recordXmls, // レコードごとのXML配列
+                calcRecordTypes: calcRecordTypes // 基本表計算形式TADのレコードタイプ配列
             });
 
             console.log(`[UnpackJS] 実身追加: ${lhead.name} (UUID: ${uuid}, nrec: ${nrec}, レコード数: ${recordXmls.length})`);
@@ -4669,13 +4689,6 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
     const appl = IntToHex((tadSeg[12]),4).replace('0x','')
         + IntToHex((tadSeg[13]),4).replace('0x','')
         + IntToHex((tadSeg[14]),4).replace('0x','');
-    
-    if (packAppId1 != tadSeg[12] || packAppId2 != tadSeg[13] || packAppId3 != tadSeg[14]) {
-        console.debug("書庫形式ではない アプリケーションID");
-        console.debug("appl   " + appl);
-        return;
-    }
-    console.debug("書庫形式");
 
     let fileTadName = [];
 
@@ -4686,6 +4699,34 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
 
     const dlen = uh2uw([tadSeg[32], tadSeg[31]]);
     console.debug("dlen   " + dlen[0]);
+    
+    if (calcAppId1 == tadSeg[12] && calcAppId2 == tadSeg[13] && calcAppId3 == tadSeg[14]) {
+        console.debug("基本表計算形式の アプリケーションID");
+        console.debug("appl   " + appl);
+        console.debug("dlen   " + dlen[0]);
+
+        // 基本表計算形式TADフラグを設定
+        isCalcTad = true;
+
+        let dataSeg = [];
+        for(dataLen=0;dataLen<dlen[0];dataLen++) {
+            dataSeg.push(tadSeg[dataLen + 33]);
+        }
+
+        if (isXmlDumpEnabled) {
+            xmlBuffer.push(`<calcPos col="${Number(uh2h(dataSeg[1]))}" row="${Number(uh2h(dataSeg[2]))}"/>`);
+        }
+
+        return;
+    }
+    
+    else if (packAppId1 != tadSeg[12] || packAppId2 != tadSeg[13] || packAppId3 != tadSeg[14]) {
+        console.debug("書庫形式ではない アプリケーションID");
+        console.debug("appl   " + appl);
+        return;
+    }
+    console.debug("書庫形式");
+
 
     // グローバルヘッダの読込 330
     let compSeg = [];
@@ -5147,8 +5188,6 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
     
     console.debug(`*** New tadDataArray: nfiles=${nfiles}, fileIndex=${fileIndex}, isRedrawn=${isRedrawn} ***`);
     
-
-    
     // TADファイルごとのrawデータを保管
     if (!isRedrawn && raw && raw.length > 0) {
         if (!tadRawDataArray[fileIndex]) {
@@ -5163,20 +5202,13 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
         console.debug(`Using saved raw data for file ${fileIndex}, size: ${raw.length}`);
     }
     
-    
     // tabIndexを定義（fileIndexをtabIndexとして使用）
     const tabIndex = fileIndex;
-    
-
 
     // TADセグメント処理
     tadRawArray(raw);
 
     console.debug('TAD processing completed');
-
-    
-    
-
 
     // XML出力の最終処理
     if (isXmlDumpEnabled()) {
@@ -5197,9 +5229,6 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
     } else {
         parseXML = '';
     }
-
-
-
     
     // TAD処理完了のコールバックを呼び出し（最後のファイル処理時のみ）
     const canvasId = window.canvas ? window.canvas.id : 'canvas-0';

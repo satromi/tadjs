@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>操作パネル - 基本表計算</title>
+    <link rel="stylesheet" href="tool-panel.css">
+</head>
+<body>
+    <div class="tool-panel-window">
+        <!-- 1行目: 書式設定 -->
+        <div class="tool-row format-row">
+            <!-- フォント選択 -->
+            <select class="font-select" id="fontSelect" title="フォント">
+                <option value="MS Gothic">MS ゴシック</option>
+                <option value="MS Mincho">MS 明朝</option>
+                <option value="Meiryo">メイリオ</option>
+            </select>
+
+            <!-- フォントサイズ -->
+            <select class="size-select" id="sizeSelect" title="文字サイズ">
+                <option value="9">9</option>
+                <option value="10">10</option>
+                <option value="11">11</option>
+                <option value="12" selected>12</option>
+                <option value="14">14</option>
+                <option value="16">16</option>
+                <option value="18">18</option>
+                <option value="24">24</option>
+            </select>
+
+            <!-- 太字 -->
+            <button class="format-btn" id="boldBtn" title="太字">
+                <span class="btn-icon">B</span>
+            </button>
+
+            <!-- 斜体 -->
+            <button class="format-btn" id="italicBtn" title="斜体">
+                <span class="btn-icon italic">I</span>
+            </button>
+
+            <!-- 下線 -->
+            <button class="format-btn" id="underlineBtn" title="下線">
+                <span class="btn-icon underline">U</span>
+            </button>
+
+            <!-- 文字色 -->
+            <div class="color-picker-wrapper" title="文字色">
+                <label for="textColorPicker" class="color-label">A</label>
+                <input type="color" id="textColorPicker" class="color-input" value="#000000">
+            </div>
+
+            <!-- 背景色 -->
+            <div class="color-picker-wrapper" title="背景色">
+                <label for="bgColorPicker" class="color-label">⬛</label>
+                <input type="color" id="bgColorPicker" class="color-input" value="#ffffff">
+            </div>
+
+            <!-- 配置 -->
+            <button class="format-btn" id="alignLeftBtn" title="左揃え">
+                <span class="btn-icon">≡</span>
+            </button>
+            <button class="format-btn" id="alignCenterBtn" title="中央揃え">
+                <span class="btn-icon">≡</span>
+            </button>
+            <button class="format-btn" id="alignRightBtn" title="右揃え">
+                <span class="btn-icon">≡</span>
+            </button>
+        </div>
+
+        <!-- 2行目: 罫線設定 -->
+        <div class="tool-row border-row">
+            <!-- 罫線ボタン -->
+            <button class="format-btn" id="borderAllBtn" title="格子">
+                <span class="btn-icon">⊞</span>
+            </button>
+            <button class="format-btn" id="borderOutlineBtn" title="外枠">
+                <span class="btn-icon">□</span>
+            </button>
+            <button class="format-btn" id="borderTopBtn" title="上罫線">
+                <span class="btn-icon">⎺</span>
+            </button>
+            <button class="format-btn" id="borderBottomBtn" title="下罫線">
+                <span class="btn-icon">⎽</span>
+            </button>
+            <button class="format-btn" id="borderLeftBtn" title="左罫線">
+                <span class="btn-icon">⎸</span>
+            </button>
+            <button class="format-btn" id="borderRightBtn" title="右罫線">
+                <span class="btn-icon">⎹</span>
+            </button>
+            <button class="format-btn" id="borderNoneBtn" title="罫線なし">
+                <span class="btn-icon">⌧</span>
+            </button>
+
+            <!-- 線の色 -->
+            <div class="color-picker-wrapper" title="線の色">
+                <label for="borderColorPicker" class="color-label">━</label>
+                <input type="color" id="borderColorPicker" class="color-input" value="#000000">
+            </div>
+
+            <!-- 線種 -->
+            <select class="line-select" id="lineStyleSelect" title="線種">
+                <option value="solid">実線</option>
+                <option value="dashed">破線</option>
+                <option value="dotted">点線</option>
+                <option value="double">二重線</option>
+            </select>
+
+            <!-- 線幅 -->
+            <select class="line-select" id="lineWidthSelect" title="線幅">
+                <option value="1">細</option>
+                <option value="2">中</option>
+                <option value="3">太</option>
+            </select>
+        </div>
+
+        <!-- 3行目: セル参照とセル入力 -->
+        <div class="tool-row input-row">
+            <!-- セル参照 -->
+            <div class="cell-ref" id="cellRef">A1</div>
+
+            <!-- 数式/値ボタン -->
+            <button class="format-btn" id="formulaBtn" title="関数挿入">
+                <span class="btn-icon">fx</span>
+            </button>
+
+            <!-- セル入力ボックス -->
+            <input type="text" class="cell-input" id="cellInput" placeholder="値または数式を入力">
+
+            <!-- 確定ボタン -->
+            <button class="format-btn confirm-btn" id="confirmBtn" title="確定">
+                <span class="btn-icon">✓</span>
+            </button>
+
+            <!-- キャンセルボタン -->
+            <button class="format-btn cancel-btn" id="cancelBtn" title="キャンセル">
+                <span class="btn-icon">✕</span>
+            </button>
+        </div>
+
+    </div>
+
+    <!-- ロガーをグローバル変数として読み込み -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <script type="module" src="tool-panel.js"></script>
+</body>
+</html>

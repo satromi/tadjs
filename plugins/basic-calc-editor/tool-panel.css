@@ -1,0 +1,196 @@
+/* 操作パネル - 基本表計算 */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: "MS UI Gothic", "MS Gothic", sans-serif;
+    font-size: 11px;
+    background-color: #f0f0f0;
+    user-select: none;
+}
+
+.tool-panel-window {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 2px;
+    background: linear-gradient(to bottom, #f8f8f8, #e0e0e0);
+    border: 1px solid #999;
+}
+
+/* ツール行 */
+.tool-row {
+    display: flex;
+    align-items: center;
+    padding: 2px 4px;
+    gap: 4px;
+    border-bottom: 1px solid #ccc;
+}
+
+.tool-row:last-child {
+    border-bottom: none;
+}
+
+/* 書式ボタン */
+.format-btn {
+    width: 24px;
+    height: 22px;
+    border: 1px solid #aaa;
+    background: linear-gradient(to bottom, #fff, #e8e8e8);
+    border-radius: 2px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.format-btn:hover {
+    background: linear-gradient(to bottom, #fff, #d0d0d0);
+    border-color: #888;
+}
+
+.format-btn:active {
+    background: linear-gradient(to bottom, #d0d0d0, #e8e8e8);
+}
+
+.format-btn.active {
+    background: linear-gradient(to bottom, #b0c4de, #8fb0d0);
+    border-color: #6080a0;
+}
+
+.btn-icon {
+    font-size: 12px;
+    font-weight: bold;
+    color: #333;
+}
+
+.btn-icon.italic {
+    font-style: italic;
+}
+
+.btn-icon.underline {
+    text-decoration: underline;
+}
+
+/* カラーピッカー */
+.color-picker-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border: 1px solid #aaa;
+    background: linear-gradient(to bottom, #fff, #e8e8e8);
+    border-radius: 2px;
+    padding: 2px 4px;
+    height: 22px;
+}
+
+.color-label {
+    font-size: 12px;
+    font-weight: bold;
+    color: #333;
+    cursor: pointer;
+}
+
+.color-input {
+    width: 32px;
+    height: 18px;
+    border: 1px solid #999;
+    cursor: pointer;
+    padding: 0;
+}
+
+/* セレクトボックス */
+.font-select {
+    width: 100px;
+    height: 22px;
+    border: 1px solid #aaa;
+    border-radius: 2px;
+    padding: 0 4px;
+    font-size: 11px;
+}
+
+.size-select {
+    width: 50px;
+    height: 22px;
+    border: 1px solid #aaa;
+    border-radius: 2px;
+    padding: 0 4px;
+    font-size: 11px;
+}
+
+.line-select {
+    width: 60px;
+    height: 22px;
+    border: 1px solid #aaa;
+    border-radius: 2px;
+    padding: 0 4px;
+    font-size: 11px;
+}
+
+/* 入力行 */
+.input-row {
+    flex: 1;
+    min-height: 26px;
+}
+
+.cell-ref {
+    width: 60px;
+    height: 22px;
+    border: 1px solid #aaa;
+    background-color: #fff;
+    padding: 2px 4px;
+    font-family: "MS Gothic", monospace;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+}
+
+.cell-input {
+    flex: 1;
+    height: 22px;
+    border: 1px solid #aaa;
+    padding: 2px 4px;
+    font-family: "MS Gothic", monospace;
+    font-size: 11px;
+    min-width: 100px;
+}
+
+.cell-input:focus {
+    outline: none;
+    border-color: #0066cc;
+}
+
+.confirm-btn {
+    background: linear-gradient(to bottom, #d0ffd0, #90d090);
+}
+
+.confirm-btn:hover {
+    background: linear-gradient(to bottom, #c0f0c0, #80c080);
+}
+
+.cancel-btn {
+    background: linear-gradient(to bottom, #ffd0d0, #d09090);
+}
+
+.cancel-btn:hover {
+    background: linear-gradient(to bottom, #f0c0c0, #c08080);
+}
+
+/* ドラッグ領域 */
+.drag-handle {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    cursor: move;
+}

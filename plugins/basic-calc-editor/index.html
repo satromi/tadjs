@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>基本表計算</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="plugin-content">
+        <div class="spreadsheet-container">
+            <!-- スプレッドシートグリッド -->
+            <div class="spreadsheet-grid" id="spreadsheet-grid">
+                <!-- ヘッダー行（列番号） -->
+                <div class="grid-header" id="grid-header">
+                    <div class="header-corner"></div>
+                    <!-- 列ヘッダーはJSで生成 -->
+                </div>
+                <!-- データ領域 -->
+                <div class="grid-body" id="grid-body">
+                    <!-- 行はJSで生成 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Formula.js: 表計算関数ライブラリ（依存: jstat） -->
+    <script src="lib/jstat.min.js"></script>
+    <script src="lib/formula.min.js"></script>
+
+    <!-- ロガーをグローバル変数として読み込み（最初に読み込む必要がある） -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <!-- アイコンキャッシュマネージャー -->
+    <script type="module">
+        import { IconCacheManager } from '../../js/icon-cache-manager.js';
+        window.IconCacheManager = IconCacheManager;
+    </script>
+    <!-- グローバル設定 -->
+    <script type="module">
+        import { CONFIG } from '../../js/config.js';
+        window.TADjsConfig = CONFIG;
+    </script>
+    <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
+    <script type="module">
+        import {
+            convertPtToPx, rgbToHex, hexToRgb, invertColor,
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS
+        } from '../../js/util.js';
+        window.convertPtToPx = convertPtToPx;
+        window.rgbToHex = rgbToHex;
+        window.hexToRgb = hexToRgb;
+        window.invertColor = invertColor;
+        window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+        window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
+        window.ICON_LOAD_TIMEOUT_MS = ICON_LOAD_TIMEOUT_MS;
+    </script>
+    <!-- メッセージバスをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
+    </script>
+    <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
+    <script type="module">
+        import { PluginBase } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+    </script>
+    <!-- VirtualObjectRendererをグローバル変数として読み込み -->
+    <script type="module">
+        import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
+        window.VirtualObjectRenderer = VirtualObjectRenderer;
+    </script>
+    <script type="module" src="editor.js"></script>
+</body>
+</html>

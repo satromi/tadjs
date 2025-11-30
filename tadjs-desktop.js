@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.17
+ * TADjs Ver 0.18
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -1021,6 +1021,10 @@ class TADjsDesktop {
                         for (const [toolPanelWindowId, relation] of Object.entries(this.toolPanelRelations)) {
                             if (relation.editorIframe === editorIframe) {
                                 const toolPanelWindow = document.getElementById(toolPanelWindowId);
+                                if (!toolPanelWindow) {
+                                    // 道具パネルウィンドウが見つからない場合はスキップ
+                                    continue;
+                                }
                                 const toolPanelIframe = toolPanelWindow.querySelector('iframe');
 
                                 if (toolPanelIframe && toolPanelIframe.contentWindow) {
@@ -4205,10 +4209,11 @@ class TADjsDesktop {
      * @param {Object} settings - 設定
      * @param {HTMLIFrameElement} pluginIframe - プラグインのiframe
      * @param {Object} panelpos - パネル位置 {x, y}
+     * @param {Object} panelsize - パネルサイズ {width, height}
      */
-    openToolPanelWindow(pluginId, settings, pluginIframe, panelpos) {
+    openToolPanelWindow(pluginId, settings, pluginIframe, panelpos, panelsize) {
         if (this.toolPanelManager) {
-            this.toolPanelManager.openToolPanelWindow(pluginId, settings, pluginIframe, panelpos);
+            this.toolPanelManager.openToolPanelWindow(pluginId, settings, pluginIframe, panelpos, panelsize);
         } else {
             logger.warn('[TADjs] ToolPanelManagerが利用できません');
         }
@@ -5965,7 +5970,7 @@ class TADjsDesktop {
         logger.info('[TADjs] 道具パネルウィンドウを開く:', data.pluginId);
         // e.sourceからiframe要素を取得
         const pluginIframe = event.source ? event.source.frameElement : null;
-        this.openToolPanelWindow(data.pluginId, data.settings, pluginIframe, data.panelpos);
+        this.openToolPanelWindow(data.pluginId, data.settings, pluginIframe, data.panelpos, data.panelsize);
     }
 
     /**
