@@ -8676,12 +8676,26 @@ class BasicTextEditor extends window.PluginBase {
         // 元の仮身のデータを保存
         const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
 
+        // 先にダイアログで名前を入力してもらう
+        const defaultName = (vo.dataset.linkName || '実身') + 'のコピー';
+        const newName = await this.showInputDialog(
+            '新しい実身の名称を入力してください',
+            defaultName,
+            30
+        );
+
+        // キャンセルされた場合は何もしない（showInputDialogはキャンセル時にnullを返す）
+        if (!newName) {
+            logger.debug('[EDITOR] 実身複製がキャンセルされました');
+            return;
+        }
         const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
 
-        // MessageBus経由で実身複製を要求
+        // MessageBus経由で実身複製を要求（名前を含める）
         this.messageBus.send('duplicate-real-object', {
             realId: realId,
-            messageId: messageId
+            messageId: messageId,
+            newName: newName
         });
 
         try {

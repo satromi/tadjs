@@ -3986,9 +3986,9 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     async insertText(x, y) {
-        const result = await this.showInputDialog('テキストを入力してください', '');
+        const text = await this.showInputDialog('テキストを入力してください', '');
 
-        if (result && result.value) {
+        if (text) {
             // Undo用に状態を保存
             this.saveStateForUndo();
 
@@ -3996,7 +3996,7 @@ class BasicFigureEditor extends window.PluginBase {
                 type: 'text',
                 startX: x,
                 startY: y,
-                text: result.value,
+                text: text,
                 fontSize: '16px sans-serif',
                 strokeColor: this.strokeColor,
                 fillColor: this.fillColor,
@@ -4040,9 +4040,8 @@ class BasicFigureEditor extends window.PluginBase {
         if (isSameWindowDrag && oldShape) {
             logger.debug('[FIGURE EDITOR] 同じウィンドウ内での仮身ドラッグを検出（モード:', effectiveMode, '）');
 
-            // 同じウィンドウ内でのドラッグは、isDuplicateDrag=falseなら常に移動として扱う
-            // （同じrealIdの仮身を同じキャンバス上でコピーするのは意図しない動作）
-            const shouldMove = (effectiveMode === 'move') || !dragData?.isDuplicateDrag;
+            // 移動モードの場合のみ移動、コピーモード（左クリック+右クリック）では仮身コピーを作成
+            const shouldMove = effectiveMode === 'move';
 
             // 移動モードの場合、既存のshapeの座標のみ更新（新しいshapeは作成しない）
             if (shouldMove) {
@@ -7432,10 +7431,10 @@ class BasicFigureEditor extends window.PluginBase {
 
     // === 印刷 ===
     async showPageSetup() {
-        const result = await this.showInputDialog('用紙サイズを入力してください（幅x高さmm）', '210x297');
+        const sizeInput = await this.showInputDialog('用紙サイズを入力してください（幅x高さmm）', '210x297');
 
-        if (result && result.value) {
-            const [width, height] = result.value.split('x').map(v => parseFloat(v.trim()));
+        if (sizeInput) {
+            const [width, height] = sizeInput.split('x').map(v => parseFloat(v.trim()));
             if (width && height) {
                 this.paperWidth = width;
                 this.paperHeight = height;
@@ -7987,10 +7986,10 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     async changeBgColor() {
-        const result = await this.showInputDialog('背景色を入力してください（16進数カラーコード）', this.bgColor);
+        const color = await this.showInputDialog('背景色を入力してください（16進数カラーコード）', this.bgColor);
 
-        if (result && result.value) {
-            this.bgColor = result.value;
+        if (color) {
+            this.bgColor = color;
             this.redraw();
             this.isModified = true;
 
@@ -9946,13 +9945,28 @@ class BasicFigureEditor extends window.PluginBase {
         const dlen = virtualObject.dlen || 0;
         const applist = virtualObject.applist || {};
 
+        // 先にダイアログで名前を入力してもらう
+        const defaultName = (virtualObject.link_name || '実身') + 'のコピー';
+        const newName = await this.showInputDialog(
+            '新しい実身の名称を入力してください',
+            defaultName,
+            30
+        );
+
+        // キャンセルされた場合は何もしない（showInputDialogはキャンセル時にnullを返す）
+        if (!newName) {
+            logger.debug('[FIGURE EDITOR] 実身複製がキャンセルされました');
+            return;
+        }
+
         // メッセージIDを生成
         const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
 
-        // MessageBus経由で実身複製を要求
+        // MessageBus経由で実身複製を要求（名前を含める）
         this.messageBus.send('duplicate-real-object', {
             realId: realId,
-            messageId: messageId
+            messageId: messageId,
+            newName: newName
         });
 
         try {
