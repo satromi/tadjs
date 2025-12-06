@@ -1,6 +1,10 @@
 /**
  * 基本図形編集プラグイン
  *  道具パネル（別ウィンドウ）
+ * @module plugins/basic-figure-editor/tool-panel
+ * @license MIT
+ * @author satromi
+ * @version 1.0.0
  */
 const logger = window.getLogger('ToolPanel');
 

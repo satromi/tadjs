@@ -5,7 +5,11 @@
  * 実身のxtadファイルから拡張子情報を読み取り、実身名+拡張子のファイルを開く
  * 外部ファイルを開いた後、ウィンドウを閉じる
  *
- * PluginBase継承版
+ * @module ExistingDataExec
+ * @extends PluginBase
+ * @license MIT
+ * @author satromi
+ * @version 1.0.0
  */
 const logger = window.getLogger('ExistingDataExec');
 
@@ -33,7 +37,8 @@ class ExistingDataExec extends window.PluginBase {
     }
 
     /**
-     * MessageBus Phase 2: MessageBusのハンドラを設定
+     * MessageBusのハンドラを登録
+     * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
         // 初期化メッセージ
@@ -114,7 +119,6 @@ class ExistingDataExec extends window.PluginBase {
 
         logger.info('[ExistingDataExec] xtadテキストを読み込みます:', this.realId);
 
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('read-xtad-text', {
             realId: this.realId,
             windowId: this.windowId
@@ -163,7 +167,6 @@ class ExistingDataExec extends window.PluginBase {
 
         logger.info('[ExistingDataExec] 外部ファイルを開きます:', this.baseRealId, this.extension);
 
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('open-external-file', {
             realId: this.baseRealId,
             extension: this.extension,
@@ -178,8 +181,7 @@ class ExistingDataExec extends window.PluginBase {
         logger.info('[ExistingDataExec] ウィンドウを閉じます');
 
         if (this.windowId) {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('close-window', {
+                this.messageBus.send('close-window', {
                 windowId: this.windowId
             });
         } else {

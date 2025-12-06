@@ -1,6 +1,11 @@
 /**
  * 基本図形編集プラグイン
  * TADファイルの図形セグメントを編集
+ * @module BasicFigureEditor
+ * @extends PluginBase
+ * @license MIT
+ * @author satromi
+ * @version 1.0.0
  */
 const logger = window.getLogger('BasicFigureEditor');
 
@@ -134,12 +139,7 @@ class BasicFigureEditor extends window.PluginBase {
         this.dblClickDragState.dblClickedShape = null;   // ダブルクリックされた図形
         this.dblClickDragState.previewElement = null;    // ドラッグ中のプレビュー要素
 
-        // 通常のドラッグ用の状態管理
-        this.dragState = {
-            dragMode: 'move', // 'move' または 'copy'
-            isDragging: false,
-            hasMoved: false // 5px以上移動したかどうか
-        };
+        // 通常のドラッグ用の状態管理はPluginBase.virtualObjectDragStateを使用
 
         // ユーザ環境設定（選択枠）
         this.selectionWidth = 2; // 選択枠太さ
@@ -166,7 +166,7 @@ class BasicFigureEditor extends window.PluginBase {
 
     /**
      * MessageBusのハンドラを登録
-     * Phase 2: MessageBusのみで動作
+     * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
         // init メッセージ
@@ -422,7 +422,7 @@ class BasicFigureEditor extends window.PluginBase {
                 // 自分宛のメッセージなので、cross-window-drop-successとして処理
                 if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
                     const shape = this.draggingVirtualObjectShape;
-                    const dragMode = this.dragState.dragMode;
+                    const dragMode = this.virtualObjectDragState.dragMode;
 
                     logger.debug(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
 
@@ -455,54 +455,9 @@ class BasicFigureEditor extends window.PluginBase {
             }
         });
 
-        // cross-window-drop-success メッセージ
-        this.messageBus.on('cross-window-drop-success', (data) => {
-            // 他のウィンドウへのドロップが成功した通知（直接受信した場合）
-            logger.debug('[FIGURE EDITOR] [MessageBus] cross-window-drop-success受信:', data);
-
-            // 同じウィンドウ内でのドロップの場合は無視
-            if (data.sourceWindowId === this.windowId) {
-                logger.debug('[FIGURE EDITOR] 同じウィンドウ内でのドロップ: 処理をスキップ');
-                return;
-            }
-
-            if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
-                const shape = this.draggingVirtualObjectShape;
-                const dragMode = data.mode || this.dragState.dragMode;
-
-                logger.debug(`[FIGURE EDITOR] ドロップ成功（モード: ${dragMode}）:`, shape.virtualObject.link_name);
-
-                // タイムアウトをキャンセル
-                if (this.virtualObjectDragTimeout) {
-                    clearTimeout(this.virtualObjectDragTimeout);
-                    this.virtualObjectDragTimeout = null;
-                }
-
-                // 移動モードの場合のみ元の仮身を削除
-                if (dragMode === 'move') {
-                    // 選択中の仮身を取得
-                    const selectedVirtualObjectShapes = this.selectedShapes.filter(s => s.type === 'vobj');
-                    const shapesToDelete = selectedVirtualObjectShapes.includes(shape)
-                        ? selectedVirtualObjectShapes
-                        : [shape];
-
-                    logger.debug('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
-
-                    // 共通メソッドで仮身を削除
-                    this.deleteVirtualObjectShapes(shapesToDelete);
-                } else {
-                    logger.debug('[FIGURE EDITOR] コピーモード: 元の仮身を保持');
-                }
-
-                // フラグをリセット
-                this.isDraggingVirtualObjectShape = false;
-                this.draggingVirtualObjectShape = null;
-
-                // ドラッグモードをリセット（次のドラッグのため）
-                this.dragState.dragMode = 'move';
-                logger.debug('[FIGURE EDITOR] cross-window-drop-success: dragModeをmoveにリセット');
-            }
-        });
+        // cross-window-drop-success ハンドラはPluginBaseの共通機能に移行
+        // onDeleteSourceVirtualObject()とonCrossWindowDropSuccess()フックで処理を実装
+        this.setupCrossWindowDropSuccessHandler();
 
         // ===== データ読み込み関連メッセージ =====
 
@@ -682,6 +637,7 @@ class BasicFigureEditor extends window.PluginBase {
         this.setupContextMenu();
         this.setupWindowActivation();
         this.setupGlobalMouseHandlers();
+        this.setupVirtualObjectRightButtonHandlers();
 
         // 選択枠点滅アニメーション開始
         this.startSelectionBlinkAnimation();
@@ -815,7 +771,6 @@ class BasicFigureEditor extends window.PluginBase {
 
         // クリックイベントで親ウィンドウのコンテキストメニューを閉じる
         document.addEventListener('click', (e) => {
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('close-context-menu');
         });
 
@@ -838,9 +793,17 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     setupDragAndDrop() {
+        // 重複登録を防ぐ
+        if (this._dragDropSetup) {
+            return;
+        }
+        this._dragDropSetup = true;
+
         // ドラッグオーバー
         this.canvas.addEventListener('dragover', (e) => {
             e.preventDefault();
+            // ドラッグ移動を検出（hasMovedフラグ設定）
+            this.detectVirtualObjectDragMove(e);
             // copy と move の両方を受け付ける
             if (e.dataTransfer.effectAllowed === 'move' || e.dataTransfer.effectAllowed === 'copyMove') {
                 e.dataTransfer.dropEffect = 'move';
@@ -875,72 +838,57 @@ class BasicFigureEditor extends window.PluginBase {
                     }
                 }
 
-                const data = e.dataTransfer.getData('text/plain');
-                if (data) {
-                    // JSON形式かどうかチェック
-                    try {
-                        const dragData = JSON.parse(data);
+                // PluginBase共通メソッドでdragDataをパース
+                const dragData = this.parseDragData(e.dataTransfer);
+                if (dragData) {
+                    if (dragData.type === 'virtual-object-drag') {
+                        // 仮身ドロップ（仮身一覧、基本文章編集などから）
+                        logger.info(`[FIGURE EDITOR] 仮身ドロップを検出: source=${dragData.source}, isDuplicateDrag=${dragData.isDuplicateDrag}`);
+                        const rect = this.canvas.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
 
-                        if (dragData.type === 'virtual-object-drag') {
-                            // 仮身ドロップ（仮身一覧、基本文章編集などから）
-                            const rect = this.canvas.getBoundingClientRect();
-                            const x = e.clientX - rect.left;
-                            const y = e.clientY - rect.top;
+                        const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
+                        logger.debug('[FIGURE EDITOR] 仮身ドロップ受信:', virtualObjects.length, '個');
 
-                            const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
-                            logger.debug('[FIGURE EDITOR] 仮身ドロップ受信:', virtualObjects.length, '個');
+                        for (let index = 0; index < virtualObjects.length; index++) {
+                            const virtualObject = virtualObjects[index];
+                            let targetVirtualObject = virtualObject;
 
-                            // 複数の仮身を配置（相対位置オフセットを使用して元の空間的な関係を保持）
-                            virtualObjects.forEach((virtualObject, index) => {
-                                const offsetX = virtualObject.offsetX || 0; // マウスが掴んだ位置の仮身内オフセット
-                                const offsetY = virtualObject.offsetY || 0; // マウスが掴んだ位置の仮身内オフセット
-                                // ドロップ位置からオフセットを引いて、正しい位置に配置
-                                this.insertVirtualObject(x - offsetX, y - offsetY, virtualObject);
-                            });
-
-                            // クロスウィンドウドラッグの場合のみメッセージを送信
-                            if (dragData.sourceWindowId !== this.windowId) {
-                                // ドラッグ元のウィンドウに「クロスウィンドウドロップ進行中」を通知
-                                // これによりdragendハンドラでfinishDrag()がスキップされる
-                                this.messageBus.send('cross-window-drop-in-progress', {
-                                    targetWindowId: this.windowId,
-                                    sourceWindowId: dragData.sourceWindowId
-                                });
-
-                                // ドラッグ元のウィンドウに「クロスウィンドウドロップ成功」を通知
-                                // MessageBus Phase 2: messageBus.send()を使用
-                                this.messageBus.send('cross-window-drop-success', {
-                                    mode: dragData.mode,
-                                    source: dragData.source,
-                                    sourceWindowId: dragData.sourceWindowId,
-                                    virtualObjects: virtualObjects, // 仮身一覧プラグインでの削除用
-                                    virtualObjectId: virtualObjects[0].link_id // 最初の仮身のIDを通知（後方互換性）
-                                });
+                            // ダブルクリックドラッグ（実身複製）の場合
+                            if (dragData.isDuplicateDrag) {
+                                logger.info('[FIGURE EDITOR] 実身複製ドラッグを検出');
+                                try {
+                                    targetVirtualObject = await this.duplicateRealObjectForDrag(virtualObject);
+                                    logger.info(`[FIGURE EDITOR] 実身複製成功: ${virtualObject.link_id} -> ${targetVirtualObject.link_id}`);
+                                } catch (error) {
+                                    logger.error('[FIGURE EDITOR] 実身複製エラー:', error);
+                                    continue;
+                                }
                             }
-                            return;
-                        } else if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
-                            // 原紙箱からのコピー
-                            logger.debug('[FIGURE EDITOR] 原紙箱からのドロップを親ウィンドウに委譲');
 
-                            // ドロップ位置を取得
-                            const rect = this.canvas.getBoundingClientRect();
-                            const x = e.clientX - rect.left;
-                            const y = e.clientY - rect.top;
-
-                            // 親ウィンドウにメッセージを送信
-                            if (this.messageBus) {
-                                this.messageBus.send('base-file-drop-request', {
-                                    dragData: dragData,
-                                    dropPosition: { x, y },
-                                    clientX: e.clientX,
-                                    clientY: e.clientY
-                                });
-                            }
-                            return;
+                            const offsetX = targetVirtualObject.offsetX || 0;
+                            const offsetY = targetVirtualObject.offsetY || 0;
+                            // dragDataを渡してmode判定を正確に行う
+                            await this.insertVirtualObject(x - offsetX, y - offsetY, targetVirtualObject, dragData);
                         }
-                    } catch (_jsonError) {
-                        // JSON形式でない場合は無視
-                        logger.debug('[FIGURE EDITOR] 通常のテキストドロップ（無視）');
+
+                        if (dragData.sourceWindowId !== this.windowId) {
+                            this.messageBus.send('cross-window-drop-in-progress', {
+                                targetWindowId: this.windowId,
+                                sourceWindowId: dragData.sourceWindowId
+                            });
+                            this.notifyCrossWindowDropSuccess(dragData, virtualObjects);
+                        }
+                        return;
+                    } else if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
+                        // 原紙箱からのコピー
+                        logger.debug('[FIGURE EDITOR] 原紙箱からのドロップを親ウィンドウに委譲');
+                        const rect = this.canvas.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
+                        this.handleBaseFileDrop(dragData, e.clientX, e.clientY, { dropPosition: { x, y } });
+                        return;
                     }
                 }
             } catch (error) {
@@ -1231,7 +1179,6 @@ class BasicFigureEditor extends window.PluginBase {
      * スクロールバー更新通知（即座実行版）
      */
     notifyScrollbarUpdateImmediate() {
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('update-scrollbars');
     }
 
@@ -4066,20 +4013,40 @@ class BasicFigureEditor extends window.PluginBase {
         this.isDrawing = false;
     }
 
-    async insertVirtualObject(x, y, virtualObject) {
+    async insertVirtualObject(x, y, virtualObject, dragData = null) {
         logger.debug('[FIGURE EDITOR] 仮身を配置:', virtualObject.link_name, 'at', x, y);
-        logger.debug('[FIGURE EDITOR] ドラッグ状態チェック: isDraggingVirtualObjectShape=', this.isDraggingVirtualObjectShape, 'draggingVirtualObjectShape=', this.draggingVirtualObjectShape ? this.draggingVirtualObjectShape.virtualObject.link_name : 'null', 'dragMode=', this.dragState.dragMode);
+        // dragDataがある場合はそのmodeを優先、なければローカル状態を使用
+        const effectiveMode = dragData?.mode || this.virtualObjectDragState.dragMode;
+        // 同一ウィンドウ判定: isDraggingVirtualObjectShapeまたはdragDataのsourceWindowId
+        const isSameWindowDrag = this.isDraggingVirtualObjectShape ||
+            (dragData && dragData.sourceWindowId === this.windowId);
+        logger.debug('[FIGURE EDITOR] ドラッグ状態チェック: isDraggingVirtualObjectShape=', this.isDraggingVirtualObjectShape, 'draggingVirtualObjectShape=', this.draggingVirtualObjectShape ? this.draggingVirtualObjectShape.virtualObject.link_name : 'null', 'effectiveMode=', effectiveMode, 'isSameWindowDrag=', isSameWindowDrag);
 
         // 同じウィンドウ内での移動かチェック
-        if (this.isDraggingVirtualObjectShape && this.draggingVirtualObjectShape) {
-            const oldShape = this.draggingVirtualObjectShape;
-            const dragMode = this.dragState.dragMode;
+        // draggingVirtualObjectShapeがnullでも、link_idから既存shapeを探して移動処理を行う
+        let oldShape = this.draggingVirtualObjectShape;
+        if (isSameWindowDrag && !oldShape && virtualObject.link_id) {
+            // link_idから既存のshapeを探す
+            oldShape = this.shapes.find(s =>
+                s.type === 'vobj' &&
+                s.virtualObject &&
+                s.virtualObject.link_id === virtualObject.link_id
+            );
+            if (oldShape) {
+                logger.debug('[FIGURE EDITOR] draggingVirtualObjectShapeがnull、link_idから既存shapeを発見:', virtualObject.link_name);
+            }
+        }
 
-            logger.debug('[FIGURE EDITOR] 同じウィンドウ内での仮身ドラッグを検出（モード:', dragMode, '）');
+        if (isSameWindowDrag && oldShape) {
+            logger.debug('[FIGURE EDITOR] 同じウィンドウ内での仮身ドラッグを検出（モード:', effectiveMode, '）');
+
+            // 同じウィンドウ内でのドラッグは、isDuplicateDrag=falseなら常に移動として扱う
+            // （同じrealIdの仮身を同じキャンバス上でコピーするのは意図しない動作）
+            const shouldMove = (effectiveMode === 'move') || !dragData?.isDuplicateDrag;
 
             // 移動モードの場合、既存のshapeの座標のみ更新（新しいshapeは作成しない）
-            if (dragMode === 'move') {
-                logger.debug('[FIGURE EDITOR] 移動モード: 既存shapeの座標を更新');
+            if (shouldMove) {
+                logger.debug('[FIGURE EDITOR] 移動モード（shouldMove=true）: 既存shapeの座標を更新');
 
                 // Undo用に状態を保存
                 this.saveStateForUndo();
@@ -4170,6 +4137,17 @@ class BasicFigureEditor extends window.PluginBase {
         };
 
         this.shapes.push(voShape);
+
+        // refCount+1が必要なケース:
+        // 1. コピーモードでのドロップ
+        // 2. ペースト操作（dragDataなし、ドラッグ中でない）
+        // 注: 移動モードのクロスウィンドウドロップはソース側でdeleteVirtualObjectShapesを使用し、
+        //     refCountは変更しない（移動は参照の移動であり、増減ではない）
+        const shouldIncrementRefCount = effectiveMode === 'copy' ||
+            (!dragData && !this.isDraggingVirtualObjectShape);
+        if (shouldIncrementRefCount) {
+            this.requestCopyVirtualObject(virtualObject.link_id);
+        }
 
         this.isModified = true;
         this.setStatus(`仮身「${virtualObject.link_name}」を配置しました`);
@@ -4428,15 +4406,16 @@ class BasicFigureEditor extends window.PluginBase {
                 // vobjElement（仮身のDOM要素）を削除
                 if (shape.vobjElement && shape.vobjElement.parentNode) {
                     shape.vobjElement.parentNode.removeChild(shape.vobjElement);
-                    logger.debug('[FIGURE EDITOR] 仮身DOM要素を削除:', shape.virtualObject.link_name);
                 }
 
                 // expandedElement（開いた仮身のiframe要素）を削除
                 if (shape.expanded && shape.expandedElement) {
                     shape.expandedElement.remove();
                     delete shape.expandedElement;
-                    logger.debug('[FIGURE EDITOR] 開いた仮身のiframe要素を削除:', shape.virtualObject.link_name);
                 }
+
+                // refCount-1（ユーザーによる削除/カット）
+                this.requestDeleteVirtualObject(shape.virtualObject.link_id);
             }
 
             const index = this.shapes.indexOf(shape);
@@ -6213,8 +6192,7 @@ class BasicFigureEditor extends window.PluginBase {
 
             if (window.parent && window.parent !== window) {
                 const rect = window.frameElement.getBoundingClientRect();
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('context-menu-request', {
+                    this.messageBus.send('context-menu-request', {
                     x: rect.left + e.clientX,
                     y: rect.top + e.clientY
                 });
@@ -6222,23 +6200,9 @@ class BasicFigureEditor extends window.PluginBase {
         });
     }
 
-    setupWindowActivation() {
-        document.addEventListener('mousedown', () => {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('activate-window');
-        });
-    }
+    // setupWindowActivation() は PluginBase 共通メソッドを使用
 
-    updateWindowConfig(config) {
-        // ウィンドウ設定を更新
-        if (this.messageBus && this.realId) {
-            this.messageBus.send('update-window-config', {
-                fileId: this.realId,
-                windowConfig: config
-            });
-            logger.debug('[FIGURE EDITOR] ウィンドウ設定を更新:', this.realId, config);
-        }
-    }
+    // updateWindowConfig() は基底クラス PluginBase で定義
 
     updatePanelPosition(pos) {
         // 道具パネルの位置を更新
@@ -6409,8 +6373,7 @@ class BasicFigureEditor extends window.PluginBase {
 
             // contextMenuVirtualObjectから仮身情報を取得
             if (this.contextMenuVirtualObject && this.contextMenuVirtualObject.virtualObj) {
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('open-virtual-object-real', {
+                    this.messageBus.send('open-virtual-object-real', {
                     virtualObj: this.contextMenuVirtualObject.virtualObj,
                     pluginId: pluginId
                 });
@@ -7987,7 +7950,6 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     toggleFullscreen() {
-        // MessageBus Phase 2: messageBus.send()を使用
         if (this.messageBus) {
             this.messageBus.send('toggle-maximize');
 
@@ -8344,7 +8306,6 @@ class BasicFigureEditor extends window.PluginBase {
                 }
             }, 5000);
 
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('get-image-file-path', {
                 messageId: messageId,
                 fileName: fileName
@@ -8592,27 +8553,7 @@ class BasicFigureEditor extends window.PluginBase {
         return null;
     }
 
-    /**
-     * 実身データを読み込む
-     */
-    async loadRealObjectData(realId) {
-        const messageId = `load-real-${Date.now()}-${Math.random()}`;
-
-        window.top.postMessage({
-            type: 'load-real-object',
-            realId: realId,
-            messageId: messageId
-        }, '*');
-
-        try {
-            const result = await this.messageBus.waitFor('real-object-loaded', window.DEFAULT_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-            return result.realObject;
-        } catch (error) {
-            throw new Error('実身データ読み込みタイムアウト: ' + error.message);
-        }
-    }
+    // loadRealObjectData() は基底クラス PluginBase で定義
 
     /**
      * 親ウィンドウからファイルデータを読み込む
@@ -8843,11 +8784,6 @@ class BasicFigureEditor extends window.PluginBase {
             this.isExpandingVirtualObject = false;
         }
     }
-
-    /**
-     * 実身データを読み込む
-     */
-    // loadRealObjectData() は基底クラス PluginBase で定義
 
     /**
      * defaultOpenプラグインを取得
@@ -9146,6 +9082,11 @@ class BasicFigureEditor extends window.PluginBase {
         // pointer-eventsを明示的にautoに設定（dragend後のリセットを確実にする）
         vobjElement.style.pointerEvents = 'auto';
 
+        // selectstartイベントを防止してテキスト選択ドラッグを完全に無効化
+        vobjElement.addEventListener('selectstart', (e) => {
+            e.preventDefault();
+        });
+
         // CRITICAL: 仮身内部の全要素のドラッグを無効化（画像ドラッグとの競合を防ぐ）
         const allInnerElements = vobjElement.querySelectorAll('*');
         allInnerElements.forEach(el => {
@@ -9156,10 +9097,8 @@ class BasicFigureEditor extends window.PluginBase {
             // 全ての内部要素のテキスト選択を無効化（文字部分のドラッグ時の問題を防止）
             el.style.userSelect = 'none';
             el.style.webkitUserSelect = 'none';
-            // 画像要素の場合、追加でwebkitUserDragも無効化
-            if (el.tagName === 'IMG') {
-                el.style.webkitUserDrag = 'none';
-            }
+            // 全ての内部要素のwebkitUserDragを無効化（テキスト/画像ドラッグ防止）
+            el.style.webkitUserDrag = 'none';
         });
         logger.debug('[FIGURE EDITOR] 仮身内部要素のドラッグを無効化:', allInnerElements.length, '個の要素');
 
@@ -9319,8 +9258,7 @@ class BasicFigureEditor extends window.PluginBase {
                 return;
             }
 
-            // 左クリック → 移動モード
-            this.dragState.dragMode = 'move';
+            // dragModeはinitializeVirtualObjectDragStart()で設定
 
             // リサイズエリアのチェック（リサイズエリア内ではドラッグしない）
             const rect = vobjElement.getBoundingClientRect();
@@ -9358,7 +9296,7 @@ class BasicFigureEditor extends window.PluginBase {
                 // 5px以上動いたらドラッグ開始マーク
                 if (!vobjElement._dragStarted && (dx > 5 || dy > 5)) {
                     vobjElement._dragStarted = true;
-                    this.dragState.hasMoved = true; // 移動フラグを立てる
+                    // hasMovedはPluginBaseで管理
                 }
             };
 
@@ -9372,12 +9310,12 @@ class BasicFigureEditor extends window.PluginBase {
                     vobjElement._handlerTimeout = null;
                 }
                 vobjElement._dragStarted = false;
-                this.dragState.hasMoved = false;
+                // hasMovedはPluginBaseで管理
                 vobjElement._cleanupMouseHandlers = null; // 参照をクリア
             };
 
             const mouseupHandler = (upEvent) => {
-                logger.debug('[FIGURE EDITOR] 要素レベルmouseup: button=' + upEvent.button + ', hasMoved=' + this.dragState.hasMoved + ', _dragStarted=' + vobjElement._dragStarted);
+                logger.debug('[FIGURE EDITOR] 要素レベルmouseup: button=' + upEvent.button + ', _dragStarted=' + vobjElement._dragStarted);
 
                 // 左+右同時押しのコピーモード検出はdragstartで行うため、ここでは常にクリーンアップを実行
                 logger.debug('[FIGURE EDITOR] 要素レベルmouseup: ハンドラ削除、状態リセット');
@@ -9442,11 +9380,8 @@ class BasicFigureEditor extends window.PluginBase {
                 return;
             }
 
-            // 左+右同時押し検出（e.buttons: 1=左, 2=右, 3=左+右）
-            if (e.buttons === 3) {
-                this.dragState.dragMode = 'copy';
-                logger.debug('[FIGURE EDITOR] 左+右同時押し検出、コピーモードに変更');
-            }
+            // PluginBase共通メソッドでドラッグ状態を初期化
+            this.initializeVirtualObjectDragStart(e);
 
             // 選択中の仮身を取得（複数選択ドラッグのサポート）
             const selectedVirtualObjectShapes = this.selectedShapes.filter(s => s.type === 'vobj');
@@ -9478,22 +9413,15 @@ class BasicFigureEditor extends window.PluginBase {
                 };
             });
 
-            const dragData = {
-                type: 'virtual-object-drag',
-                source: 'basic-figure-editor',
-                sourceWindowId: this.windowId,
-                mode: this.dragState.dragMode, // 'move' または 'copy'
-                virtualObjects: virtualObjects,
-                virtualObject: virtualObjects[0] // 後方互換性のため
-            };
-
-            e.dataTransfer.setData('text/plain', JSON.stringify(dragData));
-            e.dataTransfer.effectAllowed = this.dragState.dragMode === 'copy' ? 'copy' : 'move';
+            // PluginBase共通メソッドでdragDataを設定
+            // ダブルクリック+ドラッグ（実身複製）判定を追加
+            const isDuplicateDrag = this.dblClickDragState.isDblClickDragCandidate || this.dblClickDragState.isDblClickDrag;
+            this.setVirtualObjectDragData(e, virtualObjects, 'basic-figure-editor', isDuplicateDrag);
 
             // フラグを設定
             this.isDraggingVirtualObjectShape = true;
             this.draggingVirtualObjectShape = shape;
-            this.dragState.isDragging = true;
+            // isDraggingはinitializeVirtualObjectDragStart()で設定済み
 
             // 半透明にする
             vobjElement.style.opacity = '0.5';
@@ -9570,9 +9498,12 @@ class BasicFigureEditor extends window.PluginBase {
                 logger.debug('[FIGURE EDITOR] ドラッグクールダウン解除');
             }, 200);
 
-            // ドラッグモードをリセット（次のドラッグのため）
-            this.dragState.dragMode = 'move';
-            logger.debug('[FIGURE EDITOR] dragend: dragModeをmoveにリセット');
+            // PluginBase共通メソッドでドラッグ状態をクリーンアップ
+            this.cleanupVirtualObjectDragState();
+
+            // ダブルクリックドラッグ状態もクリーンアップ（意図しない複製を防止）
+            this.cleanupDblClickDragState();
+            this.dblClickDragState.lastClickedShape = null;
 
             // タイムアウトを設定（2秒以内にcross-window-drop-successが来なければリセット）
             if (this.virtualObjectDragTimeout) {
@@ -10073,8 +10004,6 @@ class BasicFigureEditor extends window.PluginBase {
                 // 変更フラグを立てる
                 this.isModified = true;
                 this.hasUnsavedChanges = true;
-
-                logger.debug('[FIGURE EDITOR] 新しい仮身を配置:', newName, 'ドロップ位置:', newShape.startX, newShape.startY);
             } else {
                 logger.error('[FIGURE EDITOR] 実身複製失敗:', result.error);
             }
@@ -10105,6 +10034,60 @@ class BasicFigureEditor extends window.PluginBase {
     warn(...args) {
         logger.warn('[FIGURE EDITOR]', ...args);
     }
+
+    /**
+     * 元の仮身オブジェクトを削除するフック（PluginBase共通機能）
+     * cross-window-drop-successでmoveモード時に呼ばれる
+     */
+    onDeleteSourceVirtualObject(data) {
+        // このメソッドはドラッグ元で呼ばれるので、sourceWindowId === this.windowIdは常にtrue
+        // クロスウィンドウドロップの場合のみ削除処理を行う（targetWindowIdが存在し、自分と異なる場合）
+        if (data.targetWindowId && data.targetWindowId === this.windowId) {
+            // ターゲットウィンドウで呼ばれた場合はスキップ（通常はありえない）
+            logger.debug('[FIGURE EDITOR] ターゲットウィンドウでの呼び出し: 処理をスキップ');
+            return;
+        }
+
+        if (!this.isDraggingVirtualObjectShape || !this.draggingVirtualObjectShape) {
+            logger.debug('[FIGURE EDITOR] ドラッグ中の仮身がない: 処理をスキップ');
+            return;
+        }
+
+        const shape = this.draggingVirtualObjectShape;
+        logger.debug(`[FIGURE EDITOR] 移動モード: 仮身を削除:`, shape.virtualObject.link_name);
+
+        // タイムアウトをキャンセル
+        if (this.virtualObjectDragTimeout) {
+            clearTimeout(this.virtualObjectDragTimeout);
+            this.virtualObjectDragTimeout = null;
+        }
+
+        // 選択中の仮身を取得
+        const selectedVirtualObjectShapes = this.selectedShapes.filter(s => s.type === 'vobj');
+        const shapesToDelete = selectedVirtualObjectShapes.includes(shape)
+            ? selectedVirtualObjectShapes
+            : [shape];
+
+        logger.debug('[FIGURE EDITOR] 移動モード: ', shapesToDelete.length, '個の仮身を削除');
+
+        // 共通メソッドで仮身を削除
+        this.deleteVirtualObjectShapes(shapesToDelete);
+    }
+
+    /**
+     * cross-window-drop-success処理完了後のフック（PluginBase共通機能）
+     * ドラッグ状態のクリーンアップ後に呼ばれる
+     */
+    onCrossWindowDropSuccess(data) {
+        // フラグをリセット
+        this.isDraggingVirtualObjectShape = false;
+        this.draggingVirtualObjectShape = null;
+
+        // ドラッグモードはcleanupVirtualObjectDragState()で既にリセット済み
+    }
+
+    // requestCopyVirtualObject() と requestDeleteVirtualObject() は
+    // PluginBase共通メソッドに移行済み
 
 }
 

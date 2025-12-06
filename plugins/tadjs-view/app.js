@@ -3,6 +3,13 @@
  * TADファイルとBPKファイルを表示するプラグイン
  *
  * 描画は親ウィンドウのtad.jsを使用し、iframe内のcanvasに描画する
+ * 仮身リンクのクリックは親ウィンドウに通知し、親ウィンドウで新しいTADウィンドウを開く
+ * 
+ * @module TADjsView
+ * @extends PluginBase
+ * @license MIT
+ * @author satromi
+ * @version 1.0.0
  */
 const logger = window.getLogger('TADjsView');
 
@@ -64,7 +71,6 @@ class TADjsViewPlugin extends window.PluginBase {
         // Canvasに右クリックメニューイベントを設定
         this.setupContextMenu();
 
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('plugin-ready', {
             pluginId: 'tadjs-view'
         });
@@ -74,7 +80,7 @@ class TADjsViewPlugin extends window.PluginBase {
 
     /**
      * MessageBusのハンドラを登録
-     * Phase 2: MessageBusのみで動作
+     * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
         // init メッセージ
@@ -168,15 +174,7 @@ class TADjsViewPlugin extends window.PluginBase {
         logger.debug('[TADjsView] MessageBusハンドラ登録完了');
     }
 
-    /**
-     * ウィンドウアクティベーション設定
-     */
-    setupWindowActivation() {
-        document.addEventListener('mousedown', () => {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('activate-window');
-        });
-    }
+    // setupWindowActivation() は PluginBase 共通メソッドを使用
 
     /**
      * TADファイルをプラグイン内で描画
@@ -348,7 +346,6 @@ class TADjsViewPlugin extends window.PluginBase {
 
             logger.debug('[TADjsView] Sending context menu request to parent at:', parentX, parentY);
 
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('context-menu-request', {
                 x: parentX,
                 y: parentY
@@ -359,21 +356,7 @@ class TADjsViewPlugin extends window.PluginBase {
         this.canvas.addEventListener('contextmenu', this.canvas._contextMenuHandler);
     }
 
-    /**
-     * ウィンドウ設定を更新
-     * @param {Object} windowConfig - ウィンドウ設定
-     */
-    updateWindowConfig(windowConfig) {
-        if (this.realId) {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('update-window-config', {
-                fileId: this.realId,
-                windowConfig: windowConfig
-            });
-
-            logger.debug('[TADjsView] ウィンドウ設定を更新:', windowConfig);
-        }
-    }
+    // updateWindowConfig() は基底クラス PluginBase で定義
 
     /**
      * 仮身リンククリックを親ウィンドウに通知
@@ -425,7 +408,6 @@ class TADjsViewPlugin extends window.PluginBase {
         if (linkData) {
             // 親ウィンドウに通知（linkRecordListも一緒に送る）
             logger.debug('[TADjsView] Sending linkRecordList:', this.linkRecordList ? this.linkRecordList.length : 'null', 'files');
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('open-tad-link', {
                 linkData: linkData,
                 linkRecordList: this.linkRecordList  // BPK全体のlinkRecordListを渡す
@@ -532,8 +514,7 @@ class TADjsViewPlugin extends window.PluginBase {
                             };
 
                             logger.debug('[TADjsView] Opening link with raw data:', linkData.title);
-                            // MessageBus Phase 2: messageBus.send()を使用
-                            this.messageBus.send('open-tad-link', {
+                                            this.messageBus.send('open-tad-link', {
                                 linkData: linkData,
                                 linkRecordList: this.linkRecordList,
                                 tadRecordDataArray: this.tadRecordDataArray
@@ -555,8 +536,7 @@ class TADjsViewPlugin extends window.PluginBase {
                                 };
 
                                 logger.debug('[TADjsView] Opening linked entry:', linkData.title);
-                                // MessageBus Phase 2: messageBus.send()を使用
-                                this.messageBus.send('open-tad-link', {
+                                                    this.messageBus.send('open-tad-link', {
                                     linkData: linkData,
                                     linkRecordList: this.linkRecordList,
                                     tadRecordDataArray: this.tadRecordDataArray

@@ -81,6 +81,10 @@ html, body {
     text-decoration: underline;
 }
 
+.btn-icon.strikethrough {
+    text-decoration: line-through;
+}
+
 /* カラーピッカー */
 .color-picker-wrapper {
     display: flex;

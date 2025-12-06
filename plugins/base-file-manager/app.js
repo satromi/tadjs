@@ -1,22 +1,25 @@
 /**
  * 原紙箱プラグイン
  * 原紙ファイルを仮身形式で一覧表示し、ドラッグ&ドロップでコピー配置を実現
+ * @module BaseFileManager
+ * @extends PluginBase
+ * @license MIT
+ * @author satromi
+ * @version 1.0.0
  */
 const logger = window.getLogger('BaseFileManager');
 
-class BaseFileManager {
+class BaseFileManager extends window.PluginBase {
     constructor() {
+        super('BaseFileManager');
+
         this.baseFiles = [];
         this.pluginConfig = null;
-        this.realId = null; // 実身ID
         this.fileData = null; // ファイルデータ
         this.isFullscreen = false; // 全画面表示フラグ
-        this.virtualObjectRenderer = null; // VirtualObjectRenderer
         this.iconCache = new Map(); // アイコンキャッシュ (realId -> base64)
-        this.debug = window.TADjsConfig?.debug || false; // デバッグモード（config.jsで管理）
 
         // MessageBusの初期化（即座に開始）
-        this.messageBus = null;
         if (window.MessageBus) {
             this.messageBus = new window.MessageBus({
                 debug: this.debug,
@@ -31,18 +34,16 @@ class BaseFileManager {
     }
 
     init() {
-        // VirtualObjectRendererの初期化
-        if (window.VirtualObjectRenderer) {
-            this.virtualObjectRenderer = new window.VirtualObjectRenderer();
-        }
+        // VirtualObjectRendererの初期化（PluginBase共通）
+        this.initializeCommonComponents('[BaseFileManager]');
 
         // 親ウィンドウからのメッセージを受信
         this.setupMessageHandler();
 
-        // ウィンドウアクティベーション
+        // ウィンドウアクティベーション（PluginBase共通）
         this.setupWindowActivation();
 
-        // 右クリックメニュー
+        // 右クリックメニュー（PluginBase共通）
         this.setupContextMenu();
 
         // キーボードショートカット
@@ -50,7 +51,7 @@ class BaseFileManager {
     }
 
     setupMessageHandler() {
-        // MessageBusのハンドラを登録（Phase 2: MessageBusのみ使用）
+        // MessageBusのハンドラを登録
         if (this.messageBus) {
             this.setupMessageBusHandlers();
         } else {
@@ -60,7 +61,7 @@ class BaseFileManager {
 
     /**
      * MessageBusのハンドラを登録
-     * Phase 2: MessageBusのみで動作
+     * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
         // init メッセージ
@@ -123,12 +124,12 @@ class BaseFileManager {
         });
 
         // custom-dialog-response メッセージ (MessageBusが自動処理)
-        this.messageBus.on('custom-dialog-response', (data) => {
+        this.messageBus.on('custom-dialog-response', () => {
             // sendWithCallback使用時は自動的にコールバックが実行される
         });
 
         // input-dialog-response メッセージ (MessageBusが自動処理)
-        this.messageBus.on('input-dialog-response', (data) => {
+        this.messageBus.on('input-dialog-response', () => {
             // sendWithCallback使用時は自動的にコールバックが実行される
         });
     }
@@ -163,37 +164,11 @@ class BaseFileManager {
                 await this.changeBgColor();
                 break;
             case 'toggle-fullscreen':
-                this.toggleFullscreen();
+                this.toggleFullscreenWithState();
                 break;
             default:
                 logger.warn('[BaseFileManager] 未知のアクション:', action);
         }
-    }
-
-    setupContextMenu() {
-        document.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-
-            const rect = window.frameElement.getBoundingClientRect();
-
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('context-menu-request', {
-                x: rect.left + e.clientX,
-                y: rect.top + e.clientY
-            });
-        });
-
-        document.addEventListener('click', () => {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('close-context-menu');
-        });
-    }
-
-    setupWindowActivation() {
-        document.addEventListener('mousedown', () => {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('activate-window');
-        });
     }
 
     setupKeyboardShortcuts() {
@@ -215,7 +190,6 @@ class BaseFileManager {
     }
 
     requestCloseWindow() {
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('close-window', {
             windowId: this.windowId
         });
@@ -551,26 +525,11 @@ class BaseFileManager {
      * 原紙ファイルを開く
      */
     openBaseFile(baseFile) {
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('open-base-file', {
             pluginId: baseFile.pluginId,
             basefile: baseFile.basefile,
             displayName: baseFile.displayName
         });
-    }
-
-    /**
-     * ウィンドウ設定（位置・サイズ・最大化状態）を更新
-     * @param {Object} windowConfig - { pos: {x, y}, width, height, maximize }
-     */
-    updateWindowConfig(windowConfig) {
-        if (this.realId) {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('update-window-config', {
-                fileId: this.realId,
-                windowConfig: windowConfig
-            });
-        }
     }
 
     /**
@@ -617,13 +576,10 @@ class BaseFileManager {
             `;
 
             const handleResponse = (result) => {
-                logger.info('[BaseFileManager] 背景色変更ダイアログコールバック実行:', result);
-
                 // Dialog result is wrapped in result.result
                 const dialogResult = result.result || result;
 
                 if (dialogResult.button === 'ok') {
-                    logger.info('[BaseFileManager] OKボタンが押されました');
                     const inputColor = dialogResult.input;
 
                     // 入力された色を検証
@@ -644,7 +600,6 @@ class BaseFileManager {
 
                         // 実身管理用セグメントのbackgroundColorを更新
                         if (this.realId) {
-                            // MessageBus Phase 2: messageBus.send()を使用
                             this.messageBus.send('update-background-color', {
                                 fileId: this.realId,
                                 backgroundColor: newBgColor
@@ -653,7 +608,6 @@ class BaseFileManager {
 
                         // this.fileDataを更新（再表示時に正しい色を適用するため）
                         if (!this.fileData) {
-                            logger.warn('[BaseFileManager] fileDataが未定義、初期化します');
                             this.fileData = {};
                         }
                         if (!this.fileData.windowConfig) {
@@ -663,8 +617,6 @@ class BaseFileManager {
                     } else {
                         logger.warn('[BaseFileManager] 無効な色形式:', inputColor);
                     }
-                } else {
-                    logger.info('[BaseFileManager] OKボタンが押されませんでした。button:', dialogResult.button);
                 }
                 resolve(result);
             };
@@ -685,45 +637,21 @@ class BaseFileManager {
     }
 
     /**
-     * 全画面表示を切り替え
+     * 全画面表示を切り替え（状態管理付き）
      */
-    toggleFullscreen() {
-        // MessageBus Phase 2: messageBus.send()を使用
-        this.messageBus.send('toggle-maximize');
+    toggleFullscreenWithState() {
+        // PluginBase共通のtoggleFullscreen()を使用
+        this.toggleFullscreen();
 
         this.isFullscreen = !this.isFullscreen;
 
         // 実身管理用セグメントのfullscreenフラグを更新
         if (this.realId) {
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('update-fullscreen-state', {
                 fileId: this.realId,
                 isFullscreen: this.isFullscreen
             });
         }
-    }
-
-    /**
-     * デバッグログ出力（デバッグモード時のみ）
-     */
-    log(...args) {
-        if (this.debug) {
-            logger.info('[BaseFileManager]', ...args);
-        }
-    }
-
-    /**
-     * エラーログ出力（常に出力）
-     */
-    error(...args) {
-        logger.error('[BaseFileManager]', ...args);
-    }
-
-    /**
-     * 警告ログ出力（常に出力）
-     */
-    warn(...args) {
-        logger.warn('[BaseFileManager]', ...args);
     }
 }
 

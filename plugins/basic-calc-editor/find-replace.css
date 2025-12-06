@@ -1,0 +1,89 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'MS UI Gothic', 'MS Gothic', sans-serif;
+    font-size: 12px;
+    background-color: #c0c0c0;
+    overflow: hidden;
+    user-select: none;
+}
+
+.find-replace-container {
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.input-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.input-row label:first-child {
+    width: 36px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.text-input {
+    flex: 1;
+    height: 20px;
+    padding: 2px 4px;
+    border: 1px solid #808080;
+    border-right-color: #ffffff;
+    border-bottom-color: #ffffff;
+    font-family: inherit;
+    font-size: 12px;
+}
+
+.text-input:focus {
+    outline: none;
+}
+
+.regex-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.regex-toggle input[type="checkbox"] {
+    margin: 0;
+}
+
+.regex-toggle span {
+    font-size: 11px;
+}
+
+.button-row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.action-btn {
+    min-width: 60px;
+    height: 22px;
+    padding: 0 8px;
+    font-family: inherit;
+    font-size: 12px;
+    background-color: #c0c0c0;
+    border: 2px outset #ffffff;
+    cursor: pointer;
+}
+
+.action-btn:hover {
+    background-color: #d0d0d0;
+}
+
+.action-btn:active {
+    border-style: inset;
+}

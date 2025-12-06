@@ -1,6 +1,12 @@
 /**
  * 基本文章編集プラグイン
  * TADファイルをリッチテキストエディタで編集
+ * 
+ * @module BasicTextEditor
+ * @extends PluginBase
+ * @license MIT
+ * @author satromi
+ * @version 1.0.0
  */
 const logger = window.getLogger('BasicTextEditor');
 
@@ -31,14 +37,8 @@ class BasicTextEditor extends window.PluginBase {
         this.dragStartX = 0; // ドラッグ開始X座標
         this.dragStartY = 0; // ドラッグ開始Y座標
 
-        // 仮身ドラッグ用の詳細状態管理
-        this.virtualObjectDragState = {
-            dragMode: 'move',              // 'move' または 'copy'
-            isRightButtonPressed: false,   // 右ボタンが押されているか
-            hasMoved: false,               // ドラッグで移動したか（5px以上）
-            startX: 0,                     // ドラッグ開始X座標
-            startY: 0                      // ドラッグ開始Y座標
-        };
+        // 仮身ドラッグ用の詳細状態管理（PluginBaseで定義済み）
+        // virtualObjectDragState: { dragMode, isRightButtonPressed, hasMoved, startX, startY, isDragging, dragThreshold }
 
         // ダブルクリック+ドラッグ（実身複製）用の状態管理
         // PluginBaseで共通プロパティ（lastClickTime, isDblClickDragCandidate, isDblClickDrag, dblClickedElement, startX, startY）を初期化済み
@@ -52,7 +52,7 @@ class BasicTextEditor extends window.PluginBase {
         this.recentFonts = []; // 最近使用したフォント（最大10個）
         this.systemFonts = []; // システムフォント一覧
         this.virtualObjectDropSuccess = false; // 仮身ドロップ成功フラグ
-        this.windowId = 'editor-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9); // 一意なウィンドウID
+        // this.windowId はPluginBaseで定義済み
         this.imagePathCallbacks = {}; // 画像パス取得コールバック（messageId -> callback）
         this.imagePathMessageId = 0; // 画像パス取得メッセージID
 
@@ -92,6 +92,9 @@ class BasicTextEditor extends window.PluginBase {
         this.setupContextMenu();
         this.setupWindowActivation();
 
+        // 仮身ドラッグ用の右ボタンハンドラーを設定（PluginBase共通機能）
+        this.setupVirtualObjectRightButtonHandlers();
+
         // MessageBusのハンドラを登録
         if (this.messageBus) {
             this.setupMessageBusHandlers();
@@ -102,7 +105,7 @@ class BasicTextEditor extends window.PluginBase {
 
     /**
      * MessageBusのハンドラを登録
-     * Phase 2: MessageBusのみで動作
+     * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
         // init メッセージ
@@ -235,8 +238,8 @@ class BasicTextEditor extends window.PluginBase {
             const clientX = data.clientX;
             const clientY = data.clientY;
 
-            // 仮身一覧からの仮身ドロップの場合
-            if (dragData.type === 'virtual-object-drag' && dragData.source === 'virtual-object-list') {
+            // 任意のプラグインからの仮身ドロップ
+            if (dragData.type === 'virtual-object-drag') {
                 const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
 
                 // ドロップ位置にカーソルを設定
@@ -255,16 +258,19 @@ class BasicTextEditor extends window.PluginBase {
                     }
                 });
 
+                // コピーモードの場合はrefCount+1（移動モードは変更なし）
+                if (dragData.mode === 'copy') {
+                    virtualObjects.forEach(virtualObject => {
+                        this.requestCopyVirtualObject(virtualObject.link_id);
+                    });
+                }
+
                 this.isModified = true;
                 this.updateContentHeight();
 
                 // ドラッグ元のウィンドウに成功を通知
-                this.messageBus.send('cross-window-drop-success', {
-                    mode: dragData.mode,
-                    source: dragData.source,
-                    sourceWindowId: dragData.sourceWindowId,
-                    virtualObjectId: virtualObjects[0].link_id
-                });
+                // PluginBaseの共通メソッドを使用
+                this.notifyCrossWindowDropSuccess(dragData, virtualObjects);
             }
         });
 
@@ -375,38 +381,25 @@ class BasicTextEditor extends window.PluginBase {
             });
         });
 
-        // cross-window-drop-success メッセージ
-        this.messageBus.on('cross-window-drop-success', (data) => {
-            // 他のウィンドウへのドロップが成功した通知
-            // ドラッグ中の仮身情報を確認
-            if (this.draggingVirtualObject) {
-                const dragMode = data.mode || 'move';
+        // cross-window-drop-success ハンドラはPluginBaseの共通機能に移行
+        // onDeleteSourceVirtualObject()フックで仮身削除処理を実装
+        this.setupCrossWindowDropSuccessHandler();
 
-                // 移動モードの場合のみ元の仮身を削除
-                if (dragMode === 'move') {
-                    // エディタから仮身を削除（draggingVirtualObjectはDOM要素）
-                    if (this.draggingVirtualObject.parentNode) {
-                        this.draggingVirtualObject.remove();
-                    }
+        // 検索/置換ウィンドウからのメッセージ
+        this.messageBus.on('find-replace-window-created', (data) => {
+            this.findReplaceWindowId = data.windowId;
+        });
 
-                    this.isModified = true;
-                    this.updateContentHeight();
-                } else if (dragMode === 'copy') {
-                    // コピーモードの場合は元の仮身の透明度を元に戻す
-                    logger.debug('[EDITOR] コピーモードでクロスウィンドウドロップ: 元の仮身を保持');
-                    if (this.draggingVirtualObject) {
-                        this.draggingVirtualObject.style.opacity = '1';
-                    }
-                }
+        this.messageBus.on('find-next-request', (data) => {
+            this.findTextInEditor(data.searchText, data.isRegex);
+        });
 
-                // クロスウィンドウドロップ成功フラグを立てる（dragendでの重複削除を防ぐため）
-                this.crossWindowDropSuccess = true;
+        this.messageBus.on('replace-next-request', (data) => {
+            this.replaceTextInEditor(data.searchText, data.replaceText, data.isRegex);
+        });
 
-                // ドラッグ状態をクリア
-                this.isDraggingVirtualObject = false;
-                this.draggingVirtualObject = null;
-                this.draggingVirtualObjectData = null;
-            }
+        this.messageBus.on('replace-all-request', (data) => {
+            this.replaceAllTextInEditor(data.searchText, data.replaceText, data.isRegex);
         });
 
         logger.debug('[EDITOR] MessageBusハンドラ登録完了');
@@ -611,115 +604,66 @@ class BasicTextEditor extends window.PluginBase {
                     }
                 }
 
-                const data = e.dataTransfer.getData('text/plain');
-                if (data) {
-                    // JSON形式かどうかチェック
-                    try {
-                        const dragData = JSON.parse(data);
+                // PluginBase共通メソッドでdragDataをパース
+                const dragData = this.parseDragData(e.dataTransfer);
+                if (dragData) {
+                    if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
+                        // 原紙管理からのコピー - 親ウィンドウに処理を委譲                        this.setCursorAtDropPosition(e);
+                        this.handleBaseFileDrop(dragData, e.clientX, e.clientY);
+                        return;
+                    } else if (dragData.type === 'archive-file-extract' && dragData.source === 'unpack-file') {
+                        // 書庫解凍からのファイル展開
+                        this.extractArchiveFile(dragData.file, dragData.fileIdMap);
+                        return;
+                    } else if (dragData.type === 'virtual-object-drag') {
+                        // 任意のプラグインからの仮身ドロップ
+                        logger.info(`[EDITOR] 仮身ドロップを検出: source=${dragData.source}, isDuplicateDrag=${dragData.isDuplicateDrag}`);
+                        const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
 
-                        if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
-                            // 原紙管理からのコピー - 親ウィンドウに処理を委譲
-                            // 親ウィンドウが新規実身を生成し、仮身として挿入
-                            // ドロップ位置にカーソルを設定
-                            this.setCursorAtDropPosition(e);
+                        // ドロップ位置にカーソルを設定
+                        this.setCursorAtDropPosition(e);
 
-                            // MessageBus Phase 2: messageBus.send()を使用
-                            this.messageBus.send('base-file-drop-request', {
-                                dragData: dragData,
-                                clientX: e.clientX,
-                                clientY: e.clientY
-                            });
-                            return; // 処理を親ウィンドウに任せる
-                        } else if (dragData.type === 'archive-file-extract' && dragData.source === 'unpack-file') {
-                            // 書庫解凍からのファイル展開
-                            this.extractArchiveFile(dragData.file, dragData.fileIdMap);
-                            return; // 処理完了
-                        } else if (dragData.type === 'virtual-object-drag' && dragData.source === 'virtual-object-list') {
-                            // 仮身一覧からの仮身ドロップ
-                            const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
+                        // 複数の仮身を順番に挿入
+                        for (let index = 0; index < virtualObjects.length; index++) {
+                            const virtualObject = virtualObjects[index];
+                            let targetVirtualObject = virtualObject;
 
-                            // ドロップ位置にカーソルを設定
-                            this.setCursorAtDropPosition(e);
-
-                            // 複数の仮身を順番に挿入
-                            virtualObjects.forEach((virtualObject, index) => {
-                                this.insertVirtualObjectLink(virtualObject);
-                                // 仮身の間にスペースを挿入（最後以外）
-                                if (index < virtualObjects.length - 1) {
-                                    document.execCommand('insertText', false, ' ');
+                            // ダブルクリックドラッグ（実身複製）の場合
+                            if (dragData.isDuplicateDrag) {
+                                logger.info('[EDITOR] 実身複製ドラッグを検出');
+                                try {
+                                    targetVirtualObject = await this.duplicateRealObjectForDrag(virtualObject);
+                                    logger.info(`[EDITOR] 実身複製成功: ${virtualObject.link_id} -> ${targetVirtualObject.link_id}`);
+                                } catch (error) {
+                                    logger.error('[EDITOR] 実身複製エラー:', error);
+                                    continue;
                                 }
-                            });
+                            }
 
-                            // 編集状態を記録
-                            this.isModified = true;
+                            this.insertVirtualObjectLink(targetVirtualObject);
+                            if (index < virtualObjects.length - 1) {
+                                document.execCommand('insertText', false, ' ');
+                            }
 
-                            // コンテンツ高さを更新
-                            this.updateContentHeight();
-
-                            // ドラッグ元のウィンドウに「クロスウィンドウドロップ成功」を通知
-                            // MessageBus Phase 2: messageBus.send()を使用
-                            this.messageBus.send('cross-window-drop-success', {
-                                mode: dragData.mode,
-                                source: dragData.source,
-                                sourceWindowId: dragData.sourceWindowId,
-                                virtualObjects: virtualObjects, // 仮身一覧プラグインでの削除用
-                                virtualObjectId: virtualObjects[0].link_id // 最初の仮身のIDを通知（後方互換性）
-                            });
-                            return; // 処理完了
+                            // コピーモードの場合はrefCount+1（移動モードは変更なし）
+                            if (dragData.mode === 'copy') {
+                                this.requestCopyVirtualObject(targetVirtualObject.link_id);
+                            }
                         }
-                    } catch (_jsonError) {
-                        // JSON形式でない場合は通常のテキストとして扱う
-                    }
 
-                    // 通常のテキストドロップの場合は、デフォルト動作を許可
-                    // （ブラウザのデフォルトテキスト挿入が動作する）
+                        this.isModified = true;
+                        this.updateContentHeight();
+                        this.notifyCrossWindowDropSuccess(dragData, virtualObjects);
+                        return;
+                    }
                 }
+                // 通常のテキストドロップの場合は、デフォルト動作を許可
             } catch (error) {
                 logger.error('[EDITOR] ドロップ処理エラー:', error);
             }
         });
 
-        // document全体でのmousedown（仮身ドラッグ中の右ボタン検出用）
-        document.addEventListener('mousedown', (e) => {
-            // 右ボタン（button === 2）の押下を検出
-            if (e.button === 2) {
-                this.virtualObjectDragState.isRightButtonPressed = true;
-                logger.debug('[EDITOR] 右ボタン押下検出');
-
-                // 左ボタンドラッグ中で既に移動している場合、即座にコピーモードに切り替え
-                if (this.isDraggingVirtualObject && this.virtualObjectDragState.hasMoved) {
-                    this.virtualObjectDragState.dragMode = 'copy';
-                    logger.debug('[EDITOR] 左ボタンドラッグ中（移動済み）に右ボタン押下 → コピーモードに変更');
-                }
-            }
-        }, { capture: true });
-
-        // document全体でのmouseup
-        document.addEventListener('mouseup', (e) => {
-            // 右ボタンのmouseupを検出してフラグをクリア
-            if (e.button === 2) {
-                this.virtualObjectDragState.isRightButtonPressed = false;
-                logger.debug('[EDITOR] 右ボタンアップ検出、フラグクリア');
-
-                // 右ボタンアップ時、ドラッグ中でコピーモードなら何もせずreturn（左ボタンのmouseupを待つ）
-                if (this.isDraggingVirtualObject && this.virtualObjectDragState.dragMode === 'copy') {
-                    logger.debug('[EDITOR] コピーモードのドラッグ中、左ボタンのmouseupを待つ');
-                    return;
-                }
-            }
-
-            // 左ボタンmouseup時の最終判定
-            if (this.isDraggingVirtualObject && e.button === 0) {
-                // e.buttons & 2 で右ボタンがまだ押されているか確認
-                const isRightStillPressed = (e.buttons & 2) !== 0 || this.virtualObjectDragState.isRightButtonPressed;
-
-                if (this.virtualObjectDragState.hasMoved && isRightStillPressed) {
-                    this.virtualObjectDragState.dragMode = 'copy';
-                    logger.debug('[EDITOR] 左ボタンアップ時に右ボタンがまだ押されている → コピーモードに変更');
-                    return; // 右ボタンのmouseupを待つ
-                }
-            }
-        });
+        // 右ボタン処理はPluginBaseのsetupVirtualObjectRightButtonHandlers()で処理
 
         // ダブルクリック+ドラッグ用のグローバルmousemoveハンドラー
         document.addEventListener('mousemove', (e) => {
@@ -962,14 +906,19 @@ class BasicTextEditor extends window.PluginBase {
             range.deleteContents();
             range.insertNode(vobjElement);
 
+            // 仮身が<p>要素内に配置されていることを確認
+            this.ensureInsideParagraph(vobjElement);
+
             // カーソルを仮身の後ろに移動
             range.setStartAfter(vobjElement);
             range.setEndAfter(vobjElement);
             selection.removeAllRanges();
             selection.addRange(range);
         } else {
-            // カーソル位置がない場合は末尾に追加
-            this.editor.appendChild(vobjElement);
+            // カーソル位置がない場合は新しい段落を作成して末尾に追加
+            const p = document.createElement('p');
+            p.appendChild(vobjElement);
+            this.editor.appendChild(p);
         }
 
         this.updateContentHeight();
@@ -977,8 +926,6 @@ class BasicTextEditor extends window.PluginBase {
         // 仮身のイベントハンドラをセットアップ（選択、移動、リサイズを可能にする）
         this.setupVirtualObjectEventHandlers();
     }
-
-    // 注: このメソッドは行2576で再定義されています（実際に使用されるのはそちら）
 
     /**
      * 原紙箱から仮身を追加
@@ -1156,8 +1103,7 @@ class BasicTextEditor extends window.PluginBase {
             if (defaultOpen) {
                 const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
 
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('open-virtual-object-real', {
+                    this.messageBus.send('open-virtual-object-real', {
                     virtualObj: virtualObj,
                     pluginId: defaultOpen
                 });
@@ -1189,7 +1135,6 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         // 親ウィンドウにメッセージを送信して仮身リンク先を開く
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('open-virtual-object-real', {
             virtualObj: virtualObject,
             pluginId: defaultPluginId
@@ -1308,11 +1253,9 @@ class BasicTextEditor extends window.PluginBase {
                 message.width = contentWidth;
             }
 
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send(message.type, message);
 
             // スクロールバー更新要求を送信
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('update-scrollbars');
         }
     }
@@ -1558,6 +1501,24 @@ class BasicTextEditor extends window.PluginBase {
         if (e.ctrlKey && e.key === 'u') {
             e.preventDefault();
             document.execCommand('underline');
+            return;
+        }
+
+        // Ctrl+F: 検索/置換
+        if (e.ctrlKey && e.key === 'f') {
+            e.preventDefault();
+            this.findReplace();
+            return;
+        }
+
+        // Ctrl+9: 仮身化
+        if (e.ctrlKey && e.key === '9') {
+            e.preventDefault();
+            const selection = window.getSelection();
+            if (selection && selection.toString().trim().length > 0) {
+                this.virtualizeSelection();
+            }
+            return;
         }
     }
 
@@ -2510,8 +2471,7 @@ class BasicTextEditor extends window.PluginBase {
                         // 親ウィンドウに実身を開くよう要求
                         const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
 
-                        // MessageBus Phase 2: messageBus.send()を使用
-                        this.messageBus.send('open-virtual-object-real', {
+                                    this.messageBus.send('open-virtual-object-real', {
                             virtualObj: virtualObj,
                             pluginId: defaultOpen
                         });
@@ -2549,29 +2509,13 @@ class BasicTextEditor extends window.PluginBase {
                     return;
                 }
 
-                // ドラッグ状態を初期化
-                this.virtualObjectDragState.dragMode = 'move'; // デフォルトは移動
-                this.virtualObjectDragState.hasMoved = false;
-                this.virtualObjectDragState.startX = e.clientX;
-                this.virtualObjectDragState.startY = e.clientY;
+                // PluginBase共通メソッドでドラッグ状態を初期化
+                this.initializeVirtualObjectDragStart(e);
 
-                // 右ボタンが既に押されている場合はコピーモード
-                if (this.virtualObjectDragState.isRightButtonPressed) {
-                    this.virtualObjectDragState.dragMode = 'copy';
-                    logger.debug('[EDITOR] dragstart時点で右ボタンが押されている → コピーモード');
-                }
-
-                // effectAllowedを設定（後で変更される可能性があるため初期値）
-                e.dataTransfer.effectAllowed = this.virtualObjectDragState.dragMode === 'copy' ? 'copy' : 'move';
                 this.isDraggingVirtualObject = true;
                 this.draggingVirtualObject = vo;
 
-                // ドラッグ中はすべてのiframeのpointer-eventsを無効化（開いた仮身内へのドロップを防ぐ）
-                const allIframes = this.editor.querySelectorAll('.virtual-object-content');
-                allIframes.forEach(iframe => {
-                    iframe.style.pointerEvents = 'none';
-                });
-                logger.debug('[EDITOR] ドラッグ中: iframe pointer-events無効化 (', allIframes.length, '個)');
+                // ドラッグ中はすべてのiframeのpointer-eventsを無効化                this.disableIframePointerEvents();
 
                 // 仮身の情報を保存（エディタ内での移動用）
                 // 注: 現在は元の仮身要素をそのまま移動するため、このデータは使用されない
@@ -2605,58 +2549,16 @@ class BasicTextEditor extends window.PluginBase {
                 // 仮身一覧プラグインへのドロップ用にJSON形式のデータを設定
                 const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
 
-                // デバッグ: buildVirtualObjFromDataset結果をログ出力
-                logger.debug('[EDITOR] buildVirtualObjFromDataset結果:', {
-                    link_name: virtualObj.link_name,
-                    link_bgcol: virtualObj.link_bgcol,
-                    link_tbcol: virtualObj.link_tbcol,
-                    link_frcol: virtualObj.link_frcol,
-                    link_chcol: virtualObj.link_chcol,
-                    bgcol: virtualObj.bgcol,
-                    tbcol: virtualObj.tbcol,
-                    frcol: virtualObj.frcol,
-                    chcol: virtualObj.chcol,
-                    chsz: virtualObj.chsz,
-                    width: virtualObj.width,
-                    heightPx: virtualObj.heightPx
-                });
-
-                const dragData = {
-                    type: 'virtual-object-drag',
-                    source: 'basic-text-editor',
-                    sourceWindowId: this.windowId, // 固定のウィンドウID
-                    mode: this.virtualObjectDragState.dragMode, // 状態から取得
-                    virtualObjects: [virtualObj],  // 配列形式（仮身一覧との互換性）
-                    virtualObject: virtualObj
-                };
-                e.dataTransfer.setData('text/plain', JSON.stringify(dragData));
+                // PluginBase共通メソッドでdragDataを設定
+                this.setVirtualObjectDragData(e, [virtualObj], 'basic-text-editor');
 
                 logger.debug('[EDITOR] 仮身ドラッグ開始:', vo.dataset.linkName, 'モード:', this.virtualObjectDragState.dragMode);
             });
 
             // drag イベント: ドラッグ中の移動検知とコピーモード切り替え
             vo.addEventListener('drag', (e) => {
-                // drag中の座標が0,0の場合はスキップ（ドラッグ終了時）
-                if (e.clientX === 0 && e.clientY === 0) {
-                    return;
-                }
-
-                const deltaX = e.clientX - this.virtualObjectDragState.startX;
-                const deltaY = e.clientY - this.virtualObjectDragState.startY;
-
-                // 5px以上移動したらドラッグとみなす
-                if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
-                    if (!this.virtualObjectDragState.hasMoved) {
-                        logger.debug('[EDITOR] drag: 移動を検知 (hasMoved = true)', deltaX, deltaY);
-                        this.virtualObjectDragState.hasMoved = true;
-
-                        // 移動検知時に右ボタンが押されていればコピーモードに切り替え
-                        if (this.virtualObjectDragState.isRightButtonPressed) {
-                            this.virtualObjectDragState.dragMode = 'copy';
-                            logger.debug('[EDITOR] 移動検知時に右ボタンが押されている → コピーモードに変更');
-                        }
-                    }
-                }
+                // PluginBase共通メソッドでドラッグ移動を検知
+                this.detectVirtualObjectDragMove(e);
             });
 
             vo.addEventListener('dragend', (e) => {
@@ -2705,12 +2607,12 @@ class BasicTextEditor extends window.PluginBase {
                     this.draggingVirtualObjectData = null;
                     this.virtualObjectDropSuccess = false; // フラグをリセット
 
-                    // virtualObjectDragState をクリア
-                    this.virtualObjectDragState.dragMode = 'move';
-                    this.virtualObjectDragState.hasMoved = false;
-                    this.virtualObjectDragState.startX = 0;
-                    this.virtualObjectDragState.startY = 0;
-                    // 注: isRightButtonPressed は mouseup でクリアされるのでここでは触らない
+                    // PluginBase共通メソッドでドラッグ状態をクリーンアップ
+                    this.cleanupVirtualObjectDragState();
+
+                    // ダブルクリックドラッグ状態もクリーンアップ（意図しない複製を防止）
+                    this.cleanupDblClickDragState();
+                    this.dblClickDragState.lastClickedShape = null;
                 }, 500);
             });
 
@@ -3102,7 +3004,6 @@ class BasicTextEditor extends window.PluginBase {
         // 仮身情報も一緒に送信
         const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
 
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('show-virtual-object-context-menu', {
             x: rect.left + e.clientX,
             y: rect.top + e.clientY,
@@ -3191,61 +3092,102 @@ class BasicTextEditor extends window.PluginBase {
             this.extractTADXMLFromElement(this.editor, xmlParts, defaultFontState);
             xmlParts.push('\r\n</p>\r\n');
         } else {
-            // async/awaitを使用するためfor...ofループを使用
-            for (const p of paragraphs) {
-                xmlParts.push('<p>\r\n');
+            // エディタの直接の子要素を走査（段落外の仮身も処理するため）
+            const editorChildren = Array.from(this.editor.childNodes);
 
-                // 段落のスタイルを解析してタグに変換
-                const fontSize = this.extractFontSize(p);
-                const fontFamily = this.extractFontFamily(p);
-                const color = this.extractColor(p);
-                const textAlign = this.extractTextAlign(p);
-                const indentPx = this.extractIndentPx(p);
+            // デフォルトのフォント状態
+            const defaultFontState = {
+                size: '14',
+                color: '#000000',
+                face: ''
+            };
 
-                // text-align情報を自己閉じタグとして追加
-                if (textAlign && textAlign !== 'left') {
-                    xmlParts.push(`<text align="${textAlign}"/>`);
+            for (const child of editorChildren) {
+                // 段落要素の処理
+                if (child.nodeType === Node.ELEMENT_NODE && child.nodeName.toLowerCase() === 'p') {
+                    const p = child;
+                    xmlParts.push('<p>\r\n');
+
+                    // 段落のスタイルを解析してタグに変換
+                    const fontSize = this.extractFontSize(p);
+                    const fontFamily = this.extractFontFamily(p);
+                    const color = this.extractColor(p);
+                    const textAlign = this.extractTextAlign(p);
+                    const indentPx = this.extractIndentPx(p);
+
+                    // text-align情報を自己閉じタグとして追加
+                    if (textAlign && textAlign !== 'left') {
+                        xmlParts.push(`<text align="${textAlign}"/>`);
+                    }
+
+                    // 段落レベルでフォント情報を出力
+                    if (fontFamily) {
+                        xmlParts.push(`<font face="${fontFamily}"/>`);
+                    }
+                    if (fontSize) {
+                        xmlParts.push(`<font size="${fontSize}"/>`);
+                    }
+                    if (color) {
+                        xmlParts.push(`<font color="${color}"/>`);
+                    }
+
+                    // 段落のフォント状態を設定
+                    const paragraphFontState = {
+                        size: fontSize || '14',
+                        color: color || '#000000',
+                        face: fontFamily || ''
+                    };
+
+                    // 段落の内容を取得（TAD XMLタグをそのまま保持）
+                    const xmlPartsLengthBefore = xmlParts.length;
+
+                    this.extractTADXMLFromElement(p, xmlParts, paragraphFontState);
+
+                    // extractTADXMLFromElement()が追加した内容を取得
+                    const paragraphContentParts = xmlParts.slice(xmlPartsLengthBefore);
+                    const paragraphContent = paragraphContentParts.join('');
+
+                    // 追加された内容を一旦削除
+                    xmlParts.length = xmlPartsLengthBefore;
+
+                    // インデントタグを適切な位置に挿入（実測による文字位置特定）
+                    let finalContent = paragraphContent;
+                    if (indentPx > 0) {
+                        const indentCharCount = await this.findIndentCharPositionByWidth(paragraphContent, indentPx);
+                        finalContent = this.insertIndentTagAtPosition(paragraphContent, indentCharCount);
+                    }
+                    xmlParts.push(finalContent);
+
+                    xmlParts.push('\r\n</p>\r\n');
                 }
-
-                // 段落レベルでフォント情報を出力
-                if (fontFamily) {
-                    xmlParts.push(`<font face="${fontFamily}"/>`);
+                // 段落外の仮身要素を処理（新しい段落として出力）
+                else if (child.nodeType === Node.ELEMENT_NODE &&
+                         child.classList &&
+                         child.classList.contains('virtual-object')) {
+                    xmlParts.push('<p>\r\n');
+                    // 仮身単体をラッパーで包んで処理
+                    const tempWrapper = document.createElement('div');
+                    tempWrapper.appendChild(child.cloneNode(true));
+                    this.extractTADXMLFromElement(tempWrapper, xmlParts, defaultFontState);
+                    xmlParts.push('\r\n</p>\r\n');
                 }
-                if (fontSize) {
-                    xmlParts.push(`<font size="${fontSize}"/>`);
+                // その他の要素ノード（div等）も段落として処理
+                else if (child.nodeType === Node.ELEMENT_NODE &&
+                         child.nodeName.toLowerCase() !== 'br') {
+                    xmlParts.push('<p>\r\n');
+                    this.extractTADXMLFromElement(child, xmlParts, defaultFontState);
+                    xmlParts.push('\r\n</p>\r\n');
                 }
-                if (color) {
-                    xmlParts.push(`<font color="${color}"/>`);
+                // テキストノードがある場合も段落として処理
+                else if (child.nodeType === Node.TEXT_NODE && child.textContent.trim()) {
+                    xmlParts.push('<p>\r\n');
+                    xmlParts.push(this.escapeXml(child.textContent));
+                    xmlParts.push('\r\n</p>\r\n');
                 }
-
-                // 段落のフォント状態を設定
-                const paragraphFontState = {
-                    size: fontSize || '14',
-                    color: color || '#000000',
-                    face: fontFamily || ''
-                };
-
-                // 段落の内容を取得（TAD XMLタグをそのまま保持）
-                const xmlPartsLengthBefore = xmlParts.length;
-
-                this.extractTADXMLFromElement(p, xmlParts, paragraphFontState);
-
-                // extractTADXMLFromElement()が追加した内容を取得
-                const paragraphContentParts = xmlParts.slice(xmlPartsLengthBefore);
-                const paragraphContent = paragraphContentParts.join('');
-
-                // 追加された内容を一旦削除
-                xmlParts.length = xmlPartsLengthBefore;
-
-                // インデントタグを適切な位置に挿入（実測による文字位置特定）
-                let finalContent = paragraphContent;
-                if (indentPx > 0) {
-                    const indentCharCount = await this.findIndentCharPositionByWidth(paragraphContent, indentPx);
-                    finalContent = this.insertIndentTagAtPosition(paragraphContent, indentCharCount);
+                // BRは改行として処理（段落間の空行）
+                else if (child.nodeType === Node.ELEMENT_NODE && child.nodeName.toLowerCase() === 'br') {
+                    xmlParts.push('<p>\r\n<br/>\r\n</p>\r\n');
                 }
-                xmlParts.push(finalContent);
-
-                xmlParts.push('\r\n</p>\r\n');
             }
         }
 
@@ -4086,7 +4028,6 @@ class BasicTextEditor extends window.PluginBase {
             // tadDataを更新
             this.tadData = xmlContent;
 
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('xml-data-changed', {
                 fileId: this.realId,
                 xmlData: xmlContent
@@ -4200,8 +4141,6 @@ class BasicTextEditor extends window.PluginBase {
                     updatedisp: vobjAttributes.updatedisp
                 };
 
-                logger.debug('[EDITOR] 新しい仮身の属性:', newVirtualObject);
-
                 // insertVirtualObjectLinkを使って仮身を挿入
                 this.insertVirtualObjectLink(newVirtualObject);
 
@@ -4241,7 +4180,6 @@ class BasicTextEditor extends window.PluginBase {
         logger.debug(`[基本文章編集] ${message}`);
 
         // 親ウィンドウにステータスメッセージを送信
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('status-message', {
             message: message
         });
@@ -4265,16 +4203,7 @@ class BasicTextEditor extends window.PluginBase {
      */
     // showMessageDialog() は基底クラス PluginBase で定義
 
-    /**
-     * ウィンドウアクティベーションのセットアップ
-     */
-    setupWindowActivation() {
-        // ウィンドウ内のクリックでウィンドウを最前面に
-        document.addEventListener('mousedown', (e) => {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('activate-window');
-        });
-    }
+    // setupWindowActivation() は PluginBase 共通メソッドを使用
 
     /**
      * 右クリックメニューのセットアップ
@@ -4297,8 +4226,7 @@ class BasicTextEditor extends window.PluginBase {
                 // iframeの位置を取得
                 const rect = window.frameElement.getBoundingClientRect();
 
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('context-menu-request', {
+                    this.messageBus.send('context-menu-request', {
                     x: rect.left + e.clientX,
                     y: rect.top + e.clientY
                 });
@@ -4310,6 +4238,10 @@ class BasicTextEditor extends window.PluginBase {
      * メニュー定義
      */
     async getMenuDefinition() {
+        // 選択範囲の有無を確認（仮身化メニューの有効/無効判定用）
+        const selection = window.getSelection();
+        const hasSelection = selection && selection.toString().trim().length > 0;
+
         const menuDef = [
             {
                 label: '保存',
@@ -4342,7 +4274,9 @@ class BasicTextEditor extends window.PluginBase {
                     { separator: true },
                     { label: 'すべて選択', action: 'select-all' },
                     { separator: true },
-                    { label: '検索/置換', action: 'find-replace' }
+                    { label: '検索/置換', action: 'find-replace', shortcut: 'Ctrl+F' },
+                    { separator: true },
+                    { label: '仮身化', action: 'virtualize', shortcut: 'Ctrl+9', disabled: !hasSelection }
                 ]
             },
             {
@@ -4582,8 +4516,7 @@ class BasicTextEditor extends window.PluginBase {
 
             // contextMenuVirtualObjectから仮身情報を取得
             if (this.contextMenuVirtualObject && this.contextMenuVirtualObject.virtualObj) {
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('open-virtual-object-real', {
+                    this.messageBus.send('open-virtual-object-real', {
                     virtualObj: this.contextMenuVirtualObject.virtualObj,
                     pluginId: pluginId
                 });
@@ -4700,6 +4633,9 @@ class BasicTextEditor extends window.PluginBase {
                 break;
             case 'find-replace':
                 this.findReplace();
+                break;
+            case 'virtualize':
+                this.virtualizeSelection();
                 break;
 
             // 書体
@@ -4979,7 +4915,6 @@ class BasicTextEditor extends window.PluginBase {
      */
     toggleFullscreen() {
         // 親ウィンドウ（tadjs-desktop.js）にメッセージを送信してウィンドウを最大化/元に戻す
-        // MessageBus Phase 2: messageBus.send()を使用
         if (this.messageBus) {
             this.messageBus.send('toggle-maximize');
 
@@ -5226,8 +5161,7 @@ class BasicTextEditor extends window.PluginBase {
 
             // 親ウィンドウに背景色更新を通知（管理用セグメントに保存）
             if (window.parent && window.parent !== window && this.realId) {
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('update-background-color', {
+                    this.messageBus.send('update-background-color', {
                     fileId: this.realId,
                     backgroundColor: color
                 });
@@ -5266,24 +5200,579 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
-     * 検索/置換
+     * 検索/置換ウィンドウを開く
      */
     async findReplace() {
-        const searchText = await this.showInputDialog('検索する文字列を入力してください', '', 30);
-        if (searchText) {
-            const replaceText = await this.showInputDialog('置換後の文字列を入力してください（キャンセルで検索のみ）', '', 30);
-            const content = this.editor.innerHTML;
+        // 選択中のテキストがあれば初期検索文字列として使用
+        const selection = window.getSelection();
+        let initialSearchText = '';
+        if (selection && selection.toString().trim()) {
+            initialSearchText = selection.toString().trim();
+        }
 
-            if (replaceText !== null) {
-                const newContent = content.split(searchText).join(replaceText);
-                this.editor.innerHTML = newContent;
-                this.setStatus(`"${searchText}" を "${replaceText}" に置換しました`);
+        // 検索/置換ウィンドウを開く
+        this.messageBus.send('open-find-replace-window', {
+            initialSearchText: initialSearchText,
+            iconData: this.iconData || null
+        });
+    }
+
+    /**
+     * 選択範囲を仮身化（新しい実身として切り出し、仮身に置換）
+     */
+    async virtualizeSelection() {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0 || selection.toString().trim().length === 0) {
+            this.setStatus('選択範囲がありません');
+            return;
+        }
+
+        // 選択テキストの先頭10文字を取得（ダイアログ初期値用）
+        const selectedText = selection.toString().trim();
+        const defaultName = selectedText.substring(0, 10);
+
+        // 選択範囲をXTAD形式に変換（画像情報も収集）
+        const range = selection.getRangeAt(0);
+        const extractResult = this.extractSelectionAsXtad(range);
+        if (!extractResult || !extractResult.xtad) {
+            this.setStatus('選択範囲の変換に失敗しました');
+            return;
+        }
+
+        // 親ウィンドウに仮身化を要求
+        const messageId = 'virtualize-' + Date.now() + '-' + Math.random().toString(36).substring(2, 11);
+
+        this.messageBus.send('virtualize-selection', {
+            messageId: messageId,
+            defaultName: defaultName,
+            xtadContent: extractResult.xtad,
+            imageFiles: extractResult.imageFiles,
+            sourceRealId: this.realId
+        });
+
+        try {
+            // レスポンスを待つ
+            const result = await this.messageBus.waitFor('virtualize-selection-completed', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.cancelled) {
+                this.setStatus('仮身化がキャンセルされました');
+                return;
+            }
+
+            if (result.success) {
+                // 選択範囲を削除
+                range.deleteContents();
+
+                // 新しい仮身を挿入
+                const virtualObject = {
+                    link_id: `${result.newRealId}_0.xtad`,
+                    link_name: result.newName,
+                    chsz: 14,
+                    frcol: '#000000',
+                    chcol: '#000000',
+                    tbcol: '#ffffff',
+                    bgcol: '#ffffff',
+                    pictdisp: 'true',
+                    namedisp: 'true',
+                    framedisp: 'true'
+                };
+
+                // 仮身要素を作成
+                const vobjElement = this.virtualObjectRenderer.createInlineElement(virtualObject, {
+                    loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIcon(realId) : Promise.resolve(null)
+                });
+
+                // カーソル位置に挿入
+                range.insertNode(vobjElement);
+
+                // 仮身が<p>要素内に配置されていることを確認（段落外の場合は修正）
+                this.ensureInsideParagraph(vobjElement);
+
+                // 仮身のイベントハンドラをセットアップ
+                this.setupVirtualObjectEventHandlers();
+
+                // 変更を通知
+                this.notifyXmlDataChanged();
+
+                this.setStatus('仮身化しました: ' + result.newName);
             } else {
-                if (content.includes(searchText)) {
-                    this.setStatus(`"${searchText}" が見つかりました`);
-                } else {
-                    this.setStatus(`"${searchText}" は見つかりませんでした`);
+                this.setStatus('仮身化に失敗しました: ' + (result.error || '不明なエラー'));
+            }
+        } catch (error) {
+            this.setStatus('仮身化に失敗しました');
+        }
+    }
+
+    /**
+     * 要素が<p>要素内に配置されていることを確認し、必要に応じて修正
+     * 仮身挿入後にDOMが段落外に配置された場合に修正する
+     * @param {HTMLElement} element - 確認対象の要素
+     */
+    ensureInsideParagraph(element) {
+        // 要素の親を確認
+        const parent = element.parentNode;
+
+        // 親がエディタ自体の場合（<p>の外に配置されている）
+        if (parent === this.editor) {
+            // 新しい<p>要素を作成して仮身を包む
+            const p = document.createElement('p');
+            parent.insertBefore(p, element);
+            p.appendChild(element);
+        }
+    }
+
+    /**
+     * 選択範囲をXTAD形式に変換（画像情報も収集）
+     * @param {Range} range - 選択範囲
+     * @returns {{ xtad: string, imageFiles: Array }} XTAD文字列と画像ファイル情報
+     */
+    extractSelectionAsXtad(range) {
+        // TODO: Phase 2で実装
+        const container = range.cloneContents();
+
+        // 簡易実装: 選択範囲のHTMLからXTADを生成
+        const tempDiv = document.createElement('div');
+        tempDiv.appendChild(container);
+
+        const xmlParts = [];
+        const imageFiles = [];
+        let imageIndex = 0;
+
+        // フォント状態の初期値
+        const fontState = {
+            size: '14',
+            color: '#000000',
+            face: ''
+        };
+
+        // 選択範囲内の要素を走査してXTADに変換
+        this.extractTADXMLFromSelectionNode(tempDiv, xmlParts, imageFiles, imageIndex, fontState);
+
+        return {
+            xtad: xmlParts.join(''),
+            imageFiles: imageFiles
+        };
+    }
+
+    /**
+     * 選択範囲のノードからTAD XMLを抽出（画像情報も収集）
+     */
+    extractTADXMLFromSelectionNode(element, xmlParts, imageFiles, imageIndex, fontState) {
+        const nodes = element.childNodes;
+
+        nodes.forEach(node => {
+            if (node.nodeType === Node.TEXT_NODE) {
+                xmlParts.push(this.escapeXml(node.textContent));
+            } else if (node.nodeName === 'BR') {
+                xmlParts.push('<br/>\r\n');
+            } else if (node.nodeName === 'IMG') {
+                // 画像タグを処理
+                const savedFileName = node.getAttribute('data-saved-filename') || '';
+                if (savedFileName) {
+                    // 画像ファイル情報を収集
+                    imageFiles.push({
+                        originalFilename: savedFileName,
+                        newFilename: `__IMAGE_${imageFiles.length}__`, // プレースホルダー
+                        imageIndex: imageFiles.length
+                    });
                 }
+
+                // 画像サイズを取得
+                let displayWidth = node.naturalWidth || 100;
+                let displayHeight = node.naturalHeight || 100;
+                if (node.style.width && node.style.width.endsWith('px')) {
+                    displayWidth = parseInt(node.style.width);
+                }
+                if (node.style.height && node.style.height.endsWith('px')) {
+                    displayHeight = parseInt(node.style.height);
+                }
+
+                xmlParts.push(`<image src="__IMAGE_${imageFiles.length - 1}__" width="${displayWidth}" height="${displayHeight}"/>`);
+            } else if (node.classList && node.classList.contains('virtual-object')) {
+                // 仮身要素を処理
+                const linkId = node.dataset.linkId || '';
+                const linkName = node.dataset.linkName || '';
+                const attrs = [];
+
+                if (linkId) attrs.push(`id="${this.escapeXml(linkId)}"`);
+                if (linkName) attrs.push(`name="${this.escapeXml(linkName)}"`);
+
+                // その他の属性も保持
+                const attrNames = ['tbcol', 'frcol', 'chcol', 'bgcol', 'chsz', 'framedisp', 'namedisp', 'pictdisp', 'roledisp', 'typedisp', 'updatedisp'];
+                attrNames.forEach(attrName => {
+                    const value = node.dataset[attrName];
+                    if (value) attrs.push(`${attrName}="${this.escapeXml(value)}"`);
+                });
+
+                xmlParts.push(`<link ${attrs.join(' ')}>${this.escapeXml(linkName)}</link>`);
+            } else if (node.nodeName === 'P') {
+                // 段落
+                xmlParts.push('<p>\r\n');
+                this.extractTADXMLFromSelectionNode(node, xmlParts, imageFiles, imageIndex, fontState);
+                xmlParts.push('\r\n</p>\r\n');
+            } else if (node.nodeName === 'B' || node.nodeName === 'STRONG') {
+                xmlParts.push('<b>');
+                this.extractTADXMLFromSelectionNode(node, xmlParts, imageFiles, imageIndex, fontState);
+                xmlParts.push('</b>');
+            } else if (node.nodeName === 'I' || node.nodeName === 'EM') {
+                xmlParts.push('<i>');
+                this.extractTADXMLFromSelectionNode(node, xmlParts, imageFiles, imageIndex, fontState);
+                xmlParts.push('</i>');
+            } else if (node.nodeName === 'U') {
+                xmlParts.push('<u>');
+                this.extractTADXMLFromSelectionNode(node, xmlParts, imageFiles, imageIndex, fontState);
+                xmlParts.push('</u>');
+            } else if (node.nodeName === 'SPAN' || node.nodeName === 'DIV') {
+                // SPANやDIVは再帰的に処理
+                this.extractTADXMLFromSelectionNode(node, xmlParts, imageFiles, imageIndex, fontState);
+            } else {
+                // その他の要素は再帰的に処理
+                this.extractTADXMLFromSelectionNode(node, xmlParts, imageFiles, imageIndex, fontState);
+            }
+        });
+    }
+
+    /**
+     * テキストを検索して選択状態にする
+     * @param {string} searchText - 検索文字列
+     * @param {boolean} isRegex - 正規表現モード
+     */
+    findTextInEditor(searchText, isRegex) {
+        if (!searchText) return;
+
+        // TreeWalkerでテキストノードからテキストを収集（innerTextとの不一致を回避）
+        const textData = this.getTextNodesData();
+        const text = textData.fullText;
+        let startIndex = 0;
+
+        // 現在の選択位置から検索を開始
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            // 選択範囲の終端位置を取得
+            startIndex = this.getTextOffsetFromNode(textData.nodes, range.endContainer, range.endOffset);
+        }
+
+        let matchIndex = -1;
+        let matchLength = searchText.length;
+
+        try {
+            if (isRegex) {
+                const regex = new RegExp(searchText, 'g');
+                let match;
+                while ((match = regex.exec(text)) !== null) {
+                    if (match.index >= startIndex) {
+                        matchIndex = match.index;
+                        matchLength = match[0].length;
+                        break;
+                    }
+                }
+                // 見つからなければ先頭から再検索
+                if (matchIndex === -1) {
+                    regex.lastIndex = 0;
+                    match = regex.exec(text);
+                    if (match) {
+                        matchIndex = match.index;
+                        matchLength = match[0].length;
+                    }
+                }
+            } else {
+                matchIndex = text.indexOf(searchText, startIndex);
+                // 見つからなければ先頭から再検索
+                if (matchIndex === -1) {
+                    matchIndex = text.indexOf(searchText);
+                }
+            }
+        } catch (e) {
+            this.setStatus('正規表現エラー: ' + e.message);
+            return;
+        }
+
+        if (matchIndex !== -1) {
+            this.selectTextRangeFromNodes(textData.nodes, matchIndex, matchLength);
+            this.setStatus(`"${searchText}" が見つかりました`);
+        } else {
+            this.setStatus(`"${searchText}" は見つかりませんでした`);
+        }
+    }
+
+    /**
+     * テキストノードのデータを取得
+     * @returns {{nodes: Array, fullText: string}} ノード配列と結合テキスト
+     */
+    getTextNodesData() {
+        const walker = document.createTreeWalker(
+            this.editor,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+        );
+
+        const nodes = [];
+        let fullText = '';
+        let node;
+
+        while (node = walker.nextNode()) {
+            nodes.push({
+                node: node,
+                start: fullText.length,
+                length: node.textContent.length
+            });
+            fullText += node.textContent;
+        }
+
+        return { nodes, fullText };
+    }
+
+    /**
+     * ノードとオフセットからテキスト全体での位置を取得
+     * @param {Array} nodes - ノードデータ配列
+     * @param {Node} targetNode - 対象ノード
+     * @param {number} offset - ノード内オフセット
+     * @returns {number} テキスト全体でのオフセット
+     */
+    getTextOffsetFromNode(nodes, targetNode, offset) {
+        for (const nodeData of nodes) {
+            if (nodeData.node === targetNode) {
+                return nodeData.start + offset;
+            }
+        }
+        // テキストノードでない場合は0を返す
+        return 0;
+    }
+
+    /**
+     * ノードデータを使用してテキスト範囲を選択
+     * @param {Array} nodes - ノードデータ配列
+     * @param {number} startOffset - 開始位置
+     * @param {number} length - 選択文字数
+     */
+    selectTextRangeFromNodes(nodes, startOffset, length) {
+        let startNode = null;
+        let startNodeOffset = 0;
+        let endNode = null;
+        let endNodeOffset = 0;
+        const endOffset = startOffset + length;
+
+        for (const nodeData of nodes) {
+            const nodeEnd = nodeData.start + nodeData.length;
+
+            // 開始位置を探す
+            if (!startNode && nodeEnd > startOffset) {
+                startNode = nodeData.node;
+                startNodeOffset = startOffset - nodeData.start;
+            }
+
+            // 終了位置を探す
+            if (startNode && nodeEnd >= endOffset) {
+                endNode = nodeData.node;
+                endNodeOffset = endOffset - nodeData.start;
+                break;
+            }
+        }
+
+        if (startNode && endNode) {
+            const range = document.createRange();
+            range.setStart(startNode, startNodeOffset);
+            range.setEnd(endNode, endNodeOffset);
+
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            // エディタにフォーカスを戻して選択色を青にする
+            this.editor.focus();
+
+            // 選択範囲が見えるようにスクロール
+            const rect = range.getBoundingClientRect();
+            const editorRect = this.editor.getBoundingClientRect();
+            if (rect.top < editorRect.top || rect.bottom > editorRect.bottom) {
+                startNode.parentElement?.scrollIntoView({ block: 'center' });
+            }
+        }
+    }
+
+    /**
+     * テキストを置換（現在選択中のテキストを置換して次を検索）
+     * @param {string} searchText - 検索文字列
+     * @param {string} replaceText - 置換文字列
+     * @param {boolean} isRegex - 正規表現モード
+     */
+    replaceTextInEditor(searchText, replaceText, isRegex) {
+        if (!searchText) return;
+
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0) {
+            const selectedText = selection.toString();
+
+            // 選択中のテキストが検索文字列と一致するか確認
+            let matches = false;
+            try {
+                if (isRegex) {
+                    const regex = new RegExp('^' + searchText + '$');
+                    matches = regex.test(selectedText);
+                } else {
+                    matches = (selectedText === searchText);
+                }
+            } catch (e) {
+                this.setStatus('正規表現エラー: ' + e.message);
+                return;
+            }
+
+            if (matches) {
+                // 置換を実行
+                const range = selection.getRangeAt(0);
+                range.deleteContents();
+                const textNode = document.createTextNode(replaceText);
+                range.insertNode(textNode);
+
+                // カーソルを置換後のテキストの後ろに移動
+                range.setStartAfter(textNode);
+                range.setEndAfter(textNode);
+                selection.removeAllRanges();
+                selection.addRange(range);
+
+                this.isModified = true;
+                this.setStatus(`置換しました`);
+            }
+        }
+
+        // 次を検索
+        this.findTextInEditor(searchText, isRegex);
+    }
+
+    /**
+     * すべて置換
+     * @param {string} searchText - 検索文字列
+     * @param {string} replaceText - 置換文字列
+     * @param {boolean} isRegex - 正規表現モード
+     */
+    replaceAllTextInEditor(searchText, replaceText, isRegex) {
+        if (!searchText) return;
+
+        const text = this.editor.innerText;
+        let count = 0;
+
+        try {
+            if (isRegex) {
+                const regex = new RegExp(searchText, 'g');
+                const matches = text.match(regex);
+                count = matches ? matches.length : 0;
+            } else {
+                let pos = 0;
+                while ((pos = text.indexOf(searchText, pos)) !== -1) {
+                    count++;
+                    pos += searchText.length;
+                }
+            }
+        } catch (e) {
+            this.setStatus('正規表現エラー: ' + e.message);
+            return;
+        }
+
+        if (count === 0) {
+            this.setStatus(`"${searchText}" は見つかりませんでした`);
+            return;
+        }
+
+        // TreeWalkerでテキストノードを走査して置換
+        const walker = document.createTreeWalker(
+            this.editor,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+        );
+
+        const nodesToProcess = [];
+        let node;
+        while (node = walker.nextNode()) {
+            nodesToProcess.push(node);
+        }
+
+        let totalReplaced = 0;
+        try {
+            const regex = isRegex ? new RegExp(searchText, 'g') : null;
+
+            nodesToProcess.forEach(textNode => {
+                const originalText = textNode.textContent;
+                let newText;
+
+                if (isRegex) {
+                    newText = originalText.replace(regex, replaceText);
+                } else {
+                    newText = originalText.split(searchText).join(replaceText);
+                }
+
+                if (originalText !== newText) {
+                    textNode.textContent = newText;
+                }
+            });
+
+            totalReplaced = count;
+        } catch (e) {
+            this.setStatus('正規表現エラー: ' + e.message);
+            return;
+        }
+
+        this.isModified = true;
+        this.setStatus(`${totalReplaced}件置換しました`);
+    }
+
+    /**
+     * テキスト範囲を選択状態にする
+     * @param {number} startOffset - 開始位置（文字インデックス）
+     * @param {number} length - 選択文字数
+     */
+    selectTextRange(startOffset, length) {
+        const walker = document.createTreeWalker(
+            this.editor,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+        );
+
+        let currentOffset = 0;
+        let startNode = null;
+        let startNodeOffset = 0;
+        let endNode = null;
+        let endNodeOffset = 0;
+        let node;
+
+        while (node = walker.nextNode()) {
+            const nodeLength = node.textContent.length;
+
+            // 開始位置を探す
+            if (!startNode && currentOffset + nodeLength > startOffset) {
+                startNode = node;
+                startNodeOffset = startOffset - currentOffset;
+            }
+
+            // 終了位置を探す
+            if (startNode && currentOffset + nodeLength >= startOffset + length) {
+                endNode = node;
+                endNodeOffset = startOffset + length - currentOffset;
+                break;
+            }
+
+            currentOffset += nodeLength;
+        }
+
+        if (startNode && endNode) {
+            const range = document.createRange();
+            range.setStart(startNode, startNodeOffset);
+            range.setEnd(endNode, endNodeOffset);
+
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            // 選択範囲が見えるようにスクロール
+            const rect = range.getBoundingClientRect();
+            const editorRect = this.editor.getBoundingClientRect();
+            if (rect.top < editorRect.top || rect.bottom > editorRect.bottom) {
+                startNode.parentElement?.scrollIntoView({ block: 'center' });
             }
         }
     }
@@ -6331,21 +6820,7 @@ class BasicTextEditor extends window.PluginBase {
         }
     }
 
-    /**
-     * ウィンドウ設定（位置・サイズ・最大化状態）を更新
-     * @param {Object} windowConfig - { pos: {x, y}, width, height, maximize }
-     */
-    updateWindowConfig(windowConfig) {
-        if (window.parent && window.parent !== window && this.realId) {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('update-window-config', {
-                fileId: this.realId,
-                windowConfig: windowConfig
-            });
-
-            logger.debug('[EDITOR] ウィンドウ設定を更新:', windowConfig);
-        }
-    }
+    // updateWindowConfig() は基底クラス PluginBase で定義
 
     /**
      * クローズ前の保存処理フック（PluginBase共通ハンドラから呼ばれる）
@@ -6510,7 +6985,6 @@ class BasicTextEditor extends window.PluginBase {
             const buffer = new Uint8Array(arrayBuffer);
 
             // 親ウィンドウにファイル保存を依頼
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('save-image-file', {
                 fileName: fileName,
                 imageData: Array.from(buffer),
@@ -7054,7 +7528,11 @@ class BasicTextEditor extends window.PluginBase {
         this.selectedVirtualObject = null;
         vo.remove();
 
-        logger.debug('[EDITOR] 仮身を削除し、クリップボードに保存:', this.virtualObjectClipboard);
+        // refCount-1（カット = ドキュメントから参照が削除される）
+        const linkId = attributes.linkId || attributes.linkLinkId;
+        if (linkId) {
+            this.requestDeleteVirtualObject(linkId);
+        }
 
         // 編集状態を記録
         this.isModified = true;
@@ -7117,13 +7595,17 @@ class BasicTextEditor extends window.PluginBase {
         // 新しい仮身にイベントハンドラを設定
         this.setupVirtualObjectEventHandlers();
 
+        // refCount+1（ペースト = 新しい参照が作成される）
+        const linkId = this.virtualObjectClipboard.attributes.linkId ||
+            this.virtualObjectClipboard.attributes.linkLinkId;
+        if (linkId) {
+            this.requestCopyVirtualObject(linkId);
+        }
+
         // 移動モードの場合はクリップボードをクリア
         if (this.virtualObjectClipboard.isCut) {
             this.virtualObjectClipboard = null;
-            logger.debug('[EDITOR] 移動モードのためクリップボードをクリア');
         }
-
-        logger.debug('[EDITOR] 仮身貼り付け完了');
 
         // 編集状態を記録
         this.isModified = true;
@@ -7140,8 +7622,9 @@ class BasicTextEditor extends window.PluginBase {
 
         if (globalClipboard && globalClipboard.link_id) {
             // 仮身データがある場合
-            logger.debug('[EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
             this.insertVirtualObjectLink(globalClipboard);
+            // refCount+1（グローバルクリップボードからのペースト = 新しい参照が作成される）
+            this.requestCopyVirtualObject(globalClipboard.link_id);
             this.setStatus('仮身をクリップボードから貼り付けました');
         } else {
             // 仮身データがない場合は通常のペースト
@@ -8276,8 +8759,6 @@ class BasicTextEditor extends window.PluginBase {
                 // 編集状態を記録
                 this.isModified = true;
                 this.updateContentHeight();
-
-                logger.debug('[EDITOR] 新しい仮身を配置:', newName);
             } else {
                 logger.error('[EDITOR] 実身複製失敗:', result.error);
             }
@@ -8339,6 +8820,43 @@ class BasicTextEditor extends window.PluginBase {
      */
     warn(...args) {
         logger.warn('[EDITOR]', ...args);
+    }
+
+    /**
+     * 元の仮身オブジェクトを削除するフック（PluginBase共通機能）
+     * cross-window-drop-successでmoveモード時に呼ばれる
+     */
+    onDeleteSourceVirtualObject(data) {
+        if (!this.draggingVirtualObject) return;
+
+        // エディタから仮身を削除（draggingVirtualObjectはDOM要素）
+        if (this.draggingVirtualObject.parentNode) {
+            this.draggingVirtualObject.remove();
+        }
+
+        this.isModified = true;
+        this.updateContentHeight();
+    }
+
+    /**
+     * cross-window-drop-success処理完了後のフック（PluginBase共通機能）
+     * ドラッグ状態のクリーンアップ後に呼ばれる
+     */
+    onCrossWindowDropSuccess(data) {
+        // クロスウィンドウドロップ成功フラグを立てる（dragendでの重複削除を防ぐため）
+        this.crossWindowDropSuccess = true;
+
+        // ドラッグ状態をクリア
+        this.isDraggingVirtualObject = false;
+        this.draggingVirtualObject = null;
+        this.draggingVirtualObjectData = null;
+
+        if (data.mode === 'copy') {
+            // コピーモードの場合は元の仮身の透明度を元に戻す
+            logger.debug('[EDITOR] コピーモードでクロスウィンドウドロップ: 元の仮身を保持');
+            // 注: draggingVirtualObjectは既にクリアされているので、
+            // 透明度の復元はdragendハンドラで処理される
+        }
     }
 
 }

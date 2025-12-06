@@ -509,6 +509,7 @@ input[type="text"], input[type="password"], textarea, .config-input {
     border: 2px outset var(--menu-border-color);
     box-shadow: 2px 2px 4px var(--window-shadow-color);
     min-width: 150px;
+    width: max-content;
     z-index: 1001;
 }
 

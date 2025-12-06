@@ -1,6 +1,7 @@
 /**
  * 操作パネル - 基本表計算
  * 書式設定・罫線・セル入力を管理
+ * @module plugins/basic-calc-editor/tool-panel
  */
 const logger = window.getLogger('CalcToolPanel');
 
@@ -16,6 +17,9 @@ class CalcToolPanel {
             bold: false,
             italic: false,
             underline: false,
+            strikethrough: false,
+            superscript: false,
+            subscript: false,
             textColor: '#000000',
             bgColor: '#ffffff',
             borderColor: '#000000',
@@ -59,6 +63,21 @@ class CalcToolPanel {
         // 下線ボタン
         document.getElementById('underlineBtn').addEventListener('click', () => {
             this.toggleFormat('underline');
+        });
+
+        // 取り消し線ボタン
+        document.getElementById('strikethroughBtn').addEventListener('click', () => {
+            this.toggleFormat('strikethrough');
+        });
+
+        // 上付きボタン
+        document.getElementById('superscriptBtn').addEventListener('click', () => {
+            this.toggleVerticalAlign('superscript');
+        });
+
+        // 下付きボタン
+        document.getElementById('subscriptBtn').addEventListener('click', () => {
+            this.toggleVerticalAlign('subscript');
         });
 
         // 文字色ピッカー
@@ -248,9 +267,9 @@ class CalcToolPanel {
             this.formatState.italic = false;
         }
 
-        // 下線
+        // 下線（textDecorationに'underline'が含まれているかチェック）
         const underlineBtn = document.getElementById('underlineBtn');
-        if (style.textDecoration === 'underline') {
+        if (style.textDecoration && style.textDecoration.includes('underline')) {
             underlineBtn.classList.add('active');
             this.formatState.underline = true;
         } else {
@@ -258,38 +277,59 @@ class CalcToolPanel {
             this.formatState.underline = false;
         }
 
-        // 文字色
-        if (style.color) {
-            this.formatState.textColor = style.color;
-            document.getElementById('textColorPicker').value = style.color;
+        // 取り消し線（textDecorationに'line-through'が含まれているかチェック）
+        const strikethroughBtn = document.getElementById('strikethroughBtn');
+        if (style.textDecoration && style.textDecoration.includes('line-through')) {
+            strikethroughBtn.classList.add('active');
+            this.formatState.strikethrough = true;
+        } else {
+            strikethroughBtn.classList.remove('active');
+            this.formatState.strikethrough = false;
         }
 
-        // 背景色
-        if (style.backgroundColor) {
-            this.formatState.bgColor = style.backgroundColor;
-            document.getElementById('bgColorPicker').value = style.backgroundColor;
+        // 上付き
+        const superscriptBtn = document.getElementById('superscriptBtn');
+        if (style.verticalAlign === 'super') {
+            superscriptBtn.classList.add('active');
+            this.formatState.superscript = true;
+        } else {
+            superscriptBtn.classList.remove('active');
+            this.formatState.superscript = false;
         }
 
-        // 枠線の色（上辺の色を優先的に表示）
-        if (style.border) {
-            let borderColor = '#000000';
-            if (style.border.top && style.border.top.color) {
-                borderColor = style.border.top.color;
-            } else if (style.border.bottom && style.border.bottom.color) {
-                borderColor = style.border.bottom.color;
-            } else if (style.border.left && style.border.left.color) {
-                borderColor = style.border.left.color;
-            } else if (style.border.right && style.border.right.color) {
-                borderColor = style.border.right.color;
-            }
-            this.formatState.borderColor = borderColor;
-            document.getElementById('borderColorPicker').value = borderColor;
+        // 下付き
+        const subscriptBtn = document.getElementById('subscriptBtn');
+        if (style.verticalAlign === 'sub') {
+            subscriptBtn.classList.add('active');
+            this.formatState.subscript = true;
+        } else {
+            subscriptBtn.classList.remove('active');
+            this.formatState.subscript = false;
         }
 
-        // 配置
-        if (style.textAlign) {
-            this.setAlignButtonState(style.textAlign);
-        }
+        // 文字色（デフォルトは黒）
+        const textColor = style.color || '#000000';
+        this.formatState.textColor = textColor;
+        document.getElementById('textColorPicker').value = textColor;
+
+        // 背景色（デフォルトは白）
+        const bgColor = style.backgroundColor || '#ffffff';
+        this.formatState.bgColor = bgColor;
+        document.getElementById('bgColorPicker').value = bgColor;
+
+        // フォントサイズ（デフォルトは12）
+        const fontSize = style.fontSize || 12;
+        this.formatState.fontSize = fontSize;
+        document.getElementById('sizeSelect').value = fontSize;
+
+        // フォントファミリー（デフォルトはMS Gothic）
+        const fontFamily = style.fontFamily || 'MS Gothic';
+        this.formatState.fontFamily = fontFamily;
+        document.getElementById('fontSelect').value = fontFamily;
+
+        // 配置（デフォルトは左揃え）
+        const textAlign = style.textAlign || 'left';
+        this.setAlignButtonState(textAlign);
     }
 
     /**
@@ -303,6 +343,40 @@ class CalcToolPanel {
             btn.classList.add('active');
         } else {
             btn.classList.remove('active');
+        }
+
+        this.sendFormatUpdate();
+    }
+
+    /**
+     * 縦方向配置トグル（上付き・下付きは相互排他的）
+     */
+    toggleVerticalAlign(type) {
+        // 上付きと下付きは同時に設定できない
+        if (type === 'superscript') {
+            this.formatState.superscript = !this.formatState.superscript;
+            if (this.formatState.superscript) {
+                this.formatState.subscript = false;
+                document.getElementById('subscriptBtn').classList.remove('active');
+            }
+            const btn = document.getElementById('superscriptBtn');
+            if (this.formatState.superscript) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        } else if (type === 'subscript') {
+            this.formatState.subscript = !this.formatState.subscript;
+            if (this.formatState.subscript) {
+                this.formatState.superscript = false;
+                document.getElementById('superscriptBtn').classList.remove('active');
+            }
+            const btn = document.getElementById('subscriptBtn');
+            if (this.formatState.subscript) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
         }
 
         this.sendFormatUpdate();
@@ -376,16 +450,39 @@ class CalcToolPanel {
      * 書式更新送信
      */
     sendFormatUpdate() {
+        // textDecorationを決定（underline と strikethrough を組み合わせ可能）
+        const decorations = [];
+        if (this.formatState.underline) {
+            decorations.push('underline');
+        }
+        if (this.formatState.strikethrough) {
+            decorations.push('line-through');
+        }
+        const textDecoration = decorations.length > 0 ? decorations.join(' ') : 'none';
+
+        // verticalAlignを決定（superscript と subscript のどちらか、または undefined）
+        let verticalAlign = undefined;
+        if (this.formatState.superscript) {
+            verticalAlign = 'super';
+        } else if (this.formatState.subscript) {
+            verticalAlign = 'sub';
+        }
+
         const style = {
             fontWeight: this.formatState.bold ? 'bold' : 'normal',
             fontStyle: this.formatState.italic ? 'italic' : 'normal',
-            textDecoration: this.formatState.underline ? 'underline' : 'none',
+            textDecoration: textDecoration,
             color: this.formatState.textColor,
             backgroundColor: this.formatState.bgColor,
             textAlign: this.formatState.align,
             fontFamily: this.formatState.fontFamily,
             fontSize: this.formatState.fontSize
         };
+
+        // verticalAlign が定義されている場合のみ追加
+        if (verticalAlign) {
+            style.verticalAlign = verticalAlign;
+        }
 
         this.sendToParent('calc-cell-format', { style });
     }

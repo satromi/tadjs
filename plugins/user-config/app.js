@@ -1,5 +1,10 @@
 /**
  * ユーザ環境設定プラグイン
+ * @module UserConfig
+ * @extends PluginBase
+ * @license MIT
+ * @author satromi
+ * @version 1.0.0
  */
 const logger = window.getLogger('UserConfig');
 
@@ -149,38 +154,7 @@ class UserConfigApp extends window.PluginBase {
         }
     }
 
-    setupContextMenu() {
-        // 右クリックメニューを親ウィンドウに委譲
-        document.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-
-            // 親ウィンドウに座標を送信
-            if (this.messageBus) {
-                // iframeの位置を取得して座標を変換
-                const rect = window.frameElement.getBoundingClientRect();
-
-                this.messageBus.send('context-menu-request', {
-                    x: rect.left + e.clientX,
-                    y: rect.top + e.clientY
-                });
-            }
-        });
-
-        // 左クリックでメニューを閉じる
-        document.addEventListener('click', () => {
-            if (this.messageBus) {
-                this.messageBus.send('close-context-menu', {});
-            }
-        });
-    }
-
-    setupWindowActivation() {
-        document.addEventListener('mousedown', () => {
-            if (this.messageBus) {
-                this.messageBus.send('activate-window', {});
-            }
-        });
-    }
+    // setupContextMenu() と setupWindowActivation() は PluginBase 共通メソッドを使用
 
     setupTabs() {
         const tabs = document.querySelectorAll('.tab');
@@ -566,20 +540,7 @@ class UserConfigApp extends window.PluginBase {
         }
     }
 
-    /**
-     * ウィンドウ設定を更新
-     * @param {Object} windowConfig - ウィンドウ設定
-     */
-    updateWindowConfig(windowConfig) {
-        if (this.messageBus && this.realId) {
-            this.messageBus.send('update-window-config', {
-                fileId: this.realId,
-                windowConfig: windowConfig
-            });
-
-            logger.info('[UserConfig] ウィンドウ設定を更新:', windowConfig);
-        }
-    }
+    // updateWindowConfig() は基底クラス PluginBase で定義
 }
 
 // DOMContentLoaded後に初期化

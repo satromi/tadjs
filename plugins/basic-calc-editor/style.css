@@ -83,6 +83,19 @@ html, body {
     flex: 1;
     overflow: auto;
     position: relative;
+    outline: none; /* フォーカス時の青い枠線を非表示 */
+}
+
+/* IME有効化用の常時フォーカスtextarea */
+.ime-input {
+    position: absolute;
+    top: -9999px;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+    z-index: -1;
 }
 
 .grid-row {
@@ -164,7 +177,8 @@ html, body {
 
 /* 数式セルのスタイル */
 .cell.formula {
-    color: #0066cc;
+    /* color は設定した文字色を使用 */
+
 }
 
 /* エラーセルのスタイル */
@@ -176,6 +190,17 @@ html, body {
 /* 選択範囲 */
 .cell.in-range {
     background-color: #e6f0ff;
+}
+
+/* 結合セル（起点）*/
+.cell.merged-origin {
+    z-index: 1;
+    position: relative;
+}
+
+/* 結合セル（非表示部分）*/
+.cell.merged-hidden {
+    display: none;
 }
 
 /* 仮身セル */

@@ -4,7 +4,11 @@
  * 実身に記載されたURLをブラウザで開くプラグイン
  * 複数行ある場合は、1行ずつ処理してURLを順次開く
  *
- * PluginBase継承版
+ * @module UrlLinkExec
+ * @extends PluginBase
+ * @license MIT
+ * @author satromi
+ * @version 1.0.0
  */
 const logger = window.getLogger('UrlLinkExec');
 
@@ -32,7 +36,8 @@ class UrlLinkExec extends window.PluginBase {
     }
 
     /**
-     * MessageBus Phase 2: MessageBusのハンドラを設定
+     * MessageBusのハンドラを登録
+     * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
         // 初期化メッセージ
@@ -96,7 +101,6 @@ class UrlLinkExec extends window.PluginBase {
 
         logger.info('[UrlLinkExec] xtadテキストを読み込みます:', this.realId);
 
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('read-xtad-text', {
             realId: this.realId,
             windowId: this.windowId
@@ -154,7 +158,6 @@ class UrlLinkExec extends window.PluginBase {
         const url = this.urls[this.currentIndex];
         logger.info('[UrlLinkExec] URLを開きます:', url, `(${this.currentIndex + 1}/${this.urls.length})`);
 
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('open-url-external', {
             url: url,
             windowId: this.windowId
@@ -181,8 +184,7 @@ class UrlLinkExec extends window.PluginBase {
         logger.info('[UrlLinkExec] ウィンドウを閉じます');
 
         if (this.windowId) {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('close-window', {
+                this.messageBus.send('close-window', {
                 windowId: this.windowId
             });
         } else {

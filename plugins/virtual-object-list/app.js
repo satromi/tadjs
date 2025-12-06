@@ -1,5 +1,10 @@
 /**
  * 仮身一覧ビューアプラグイン
+ * @module VirtualObjectList
+ * @extends PluginBase
+ * @license MIT
+ * @author satromi
+ * @version 1.0.0
  */
 const logger = window.getLogger('VirtualObjectList');
 
@@ -20,21 +25,22 @@ class VirtualObjectListApp extends window.PluginBase {
         // this.windowId は基底クラスで定義されるが、このプラグインは独自の形式を使うので上書き
         this.windowId = `window-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-        // ドラッグ状態管理（グローバル）
-        this.draggingState = {
-            isDragging: false,
-            hasMoved: false,
-            currentObject: null,
-            currentElement: null,
-            vobjIndex: null, // ドラッグ中の仮身のインデックス（一意識別用）
-            startX: 0,
-            startY: 0,
-            initialLeft: 0,
-            initialTop: 0,
-            dragMode: 'move', // 'move' or 'copy'
-            isMouseInThisWindow: true, // マウスがこのウィンドウ内にいるかどうか（dragoverで更新）
+        // 仮身ドラッグのプラグイン固有状態管理
+        // 共通状態（isDragging, hasMoved, dragMode, startX/Y, isRightButtonPressed）は
+        // PluginBaseのvirtualObjectDragStateで管理
+        this.vobjDragState = {
+            currentObject: null,         // ドラッグ中の仮身オブジェクト
+            currentElement: null,        // ドラッグ中のDOM要素
+            vobjIndex: null,             // ドラッグ中の仮身のインデックス（一意識別用）
+            initialLeft: 0,              // ドラッグ開始時の要素left位置
+            initialTop: 0,               // ドラッグ開始時の要素top位置
+            isMouseInThisWindow: true,   // マウスがこのウィンドウ内にいるか（dragoverで更新）
             lastMouseOverWindowId: null, // ドラッグ中に最後にマウスがあったウィンドウID
-            isRightButtonPressed: false // 右ボタンが押されているかどうか（コピーモード判定用）
+            dropClientX: 0,              // ドロップ位置X（同一ウィンドウ内ドロップ用）
+            dropClientY: 0,              // ドロップ位置Y（同一ウィンドウ内ドロップ用）
+            selectedObjects: null,       // ドラッグ中の選択仮身配列（finishDrag用）
+            currentDeltaX: 0,            // 現在のドラッグ移動量X
+            currentDeltaY: 0             // 現在のドラッグ移動量Y
         };
 
         // ダブルクリック+ドラッグ（実身複製）用の状態管理
@@ -80,6 +86,9 @@ class VirtualObjectListApp extends window.PluginBase {
             logger.warn('[VirtualObjectList] MessageBus not available');
         }
 
+        // クロスウィンドウドロップ処理の共通化
+        this.setupCrossWindowDropSuccessHandler();
+
         this.init();
     }
 
@@ -111,13 +120,16 @@ class VirtualObjectListApp extends window.PluginBase {
         // キーボードショートカット
         this.setupKeyboardShortcuts();
 
+        // 仮身ドラッグ用の右ボタンハンドラーを設定（PluginBase共通機能）
+        this.setupVirtualObjectRightButtonHandlers();
+
         // グローバルなマウスイベントハンドラー（ドラッグ用）
         this.setupGlobalMouseHandlers();
 
         // グローバルなdragoverイベントリスナー（マウスがウィンドウ内にいるかを追跡）
         document.addEventListener('dragover', (e) => {
             // dragoverが発火している = マウスがこのウィンドウ内にいる
-            this.draggingState.isMouseInThisWindow = true;
+            this.vobjDragState.isMouseInThisWindow = true;
         });
     }
 
@@ -148,7 +160,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // ドラッグ先のウィンドウを判定：別ウィンドウからのドラッグの場合のみ、このウィンドウで仮身を表示
             // このウィンドウがドラッグ元でない場合（別ウィンドウからドラッグされている）、仮身を表示する
-            if (!this.draggingState.isDragging) {
+            if (!this.virtualObjectDragState.isDragging) {
                 // 別のウィンドウからドラッグされている場合
                 // ドラッグ元のcurrentElementを表示する必要があるが、別ウィンドウの要素なのでアクセスできない
                 // そのため、何もしない（ブラウザのデフォルトのドラッグイメージが表示される）
@@ -168,90 +180,48 @@ class VirtualObjectListApp extends window.PluginBase {
             listElement.style.backgroundColor = '';
 
             try {
-                const data = e.dataTransfer.getData('text/plain');
-                if (data) {
-                    // JSON形式かどうかチェック
-                    try {
-                        const dragData = JSON.parse(data);
+                // PluginBase共通メソッドでdragDataをパース
+                const dragData = this.parseDragData(e.dataTransfer);
+                if (dragData) {
+                    if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
+                        // 原紙管理からのコピー                        logger.debug('[VirtualObjectList] 原紙箱からのドロップを親ウィンドウに委譲');
+                        this.handleBaseFileDrop(dragData, e.clientX, e.clientY);
+                        return;
+                    } else if (dragData.type === 'trash-real-object-restore' && dragData.source === 'trash-real-objects') {
+                        // 屑実身操作からの復元 - 親ウィンドウに処理を委譲
+                        logger.debug('[VirtualObjectList] 屑実身操作からのドロップを親ウィンドウに委譲');
+                        this.messageBus.send('trash-real-object-drop-request', {
+                            dragData: dragData,
+                            clientX: e.clientX,
+                            clientY: e.clientY
+                        });
+                        return;
+                    } else if (dragData.type === 'archive-file-extract' && dragData.source === 'unpack-file') {
+                        // 書庫解凍からのファイル抽出
+                        this.insertArchiveFileAsVirtualObject(dragData, e.clientX, e.clientY);
+                        return;
+                    } else if (dragData.type === 'virtual-object-drag') {
+                        // 仮身のドラッグ（仮身一覧または基本文章編集プラグインから）
+                        const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
+                        logger.debug('[VirtualObjectList] 仮身ドロップ受信:', virtualObjects.length, '個');
 
-                        if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
-                            // 原紙管理からのコピー - 親ウィンドウに処理を委譲
-                            // 親ウィンドウのhandleBaseFileDropが実身名入力ダイアログを表示する
-                            logger.debug('[VirtualObjectList] 原紙箱からのドロップを親ウィンドウに委譲');
-
-                            // MessageBus Phase 2: messageBus.send()を使用
-                            this.messageBus.send('base-file-drop-request', {
-                                dragData: dragData,
-                                clientX: e.clientX,
-                                clientY: e.clientY
+                        const isCrossWindow = dragData.sourceWindowId !== this.windowId;
+                        if (isCrossWindow) {
+                            logger.debug('[VirtualObjectList] クロスウィンドウドロップ検知');
+                            this.messageBus.send('notify-cross-window-drop', {
+                                sourceWindowId: dragData.sourceWindowId,
+                                targetWindowId: this.windowId
                             });
-                            return; // 処理を親ウィンドウに任せる
-                        } else if (dragData.type === 'trash-real-object-restore' && dragData.source === 'trash-real-objects') {
-                            // 屑実身操作からの復元 - 親ウィンドウに処理を委譲
-                            logger.debug('[VirtualObjectList] 屑実身操作からのドロップを親ウィンドウに委譲');
-
-                            // MessageBus Phase 2: messageBus.send()を使用
-                            this.messageBus.send('trash-real-object-drop-request', {
-                                dragData: dragData,
-                                clientX: e.clientX,
-                                clientY: e.clientY
-                            });
-                            return; // 処理を親ウィンドウに任せる
-                        } else if (dragData.type === 'archive-file-extract' && dragData.source === 'unpack-file') {
-                            // 書庫解凍からのファイル抽出
-                            this.insertArchiveFileAsVirtualObject(dragData, e.clientX, e.clientY);
-                            return; // 処理完了
-                        } else if (dragData.type === 'virtual-object-drag') {
-                            // 仮身のドラッグ（仮身一覧または基本文章編集プラグインから）
-                            const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
-                            logger.debug('[VirtualObjectList] ========== drop受信 ==========');
-                            logger.debug('[VirtualObjectList] 仮身ドロップ受信:', virtualObjects.length, '個');
-                            logger.debug('[VirtualObjectList] drop: ソース:', dragData.source);
-                            logger.debug('[VirtualObjectList] drop: モード:', dragData.mode);
-                            logger.debug('[VirtualObjectList] drop: ソースウィンドウID:', dragData.sourceWindowId);
-                            logger.debug('[VirtualObjectList] drop: 現在のウィンドウID:', this.windowId);
-
-                            // 異なるウィンドウからのドロップかどうかを判定
-                            // sourceWindowIdが自分のウィンドウIDと異なる場合は別ウィンドウとして扱う
-                            const isCrossWindow = dragData.sourceWindowId !== this.windowId;
-                            logger.debug('[VirtualObjectList] drop: isCrossWindow:', isCrossWindow);
-                            logger.debug('[VirtualObjectList] ======================================');
-
-                            if (isCrossWindow) {
-                                // 別ウィンドウからのドロップ成功をマーク（dragendでfinishDrag()をスキップするため）
-                                logger.debug('[VirtualObjectList] クロスウィンドウドロップ検知、元ウィンドウに通知');
-
-                                // 即座にソースウィンドウに通知（dragendより前に届くように）
-                                this.messageBus.send('notify-cross-window-drop', {
-                                    sourceWindowId: dragData.sourceWindowId,
-                                    targetWindowId: this.windowId
-                                });
-
-                                // ドロップ先（このウィンドウ）で仮身を挿入
-                                this.insertVirtualObjectFromDrag(dragData, e.clientX, e.clientY);
-
-                                // ドラッグ元のウィンドウに「クロスウィンドウドロップ成功」を通知
-                                const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
-                                // MessageBus Phase 2: messageBus.send()を使用
-                                this.messageBus.send('cross-window-drop-success', {
-                                    mode: dragData.mode,
-                                    source: dragData.source,
-                                    sourceWindowId: dragData.sourceWindowId,
-                                    targetWindowId: this.windowId,
-                                    virtualObjects: virtualObjects
-                                });
-                            } else {
-                                // 同じウィンドウ内での移動：ドロップ位置を保存してdragendで使用
-                                logger.debug('[VirtualObjectList] 同じウィンドウ内でのドロップ位置を保存:', e.clientX, e.clientY);
-                                this.draggingState.dropClientX = e.clientX;
-                                this.draggingState.dropClientY = e.clientY;
-                                this.draggingState.hasMoved = true; // ドロップされたので移動したとみなす
-                            }
-                            return; // 処理完了
+                            this.insertVirtualObjectFromDrag(dragData, e.clientX, e.clientY);
+                            dragData.targetWindowId = this.windowId;
+                            this.notifyCrossWindowDropSuccess(dragData, virtualObjects);
+                        } else {
+                            logger.debug('[VirtualObjectList] 同じウィンドウ内でのドロップ');
+                            this.vobjDragState.dropClientX = e.clientX;
+                            this.vobjDragState.dropClientY = e.clientY;
+                            this.virtualObjectDragState.hasMoved = true;
                         }
-                    } catch (_jsonError) {
-                        // JSON形式でない場合はスキップ
-                        logger.debug('[VirtualObjectList] JSON形式でないドロップデータ');
+                        return;
                     }
                 }
             } catch (error) {
@@ -330,7 +300,6 @@ class VirtualObjectListApp extends window.PluginBase {
         const y = clientY - rect.top;
 
         // ドロップ位置情報をunpack-fileに通知（確認ダイアログはunpack-fileが表示）
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('archive-drop-detected', {
             dropPosition: { x, y },
             dragData: dragData,
@@ -515,7 +484,6 @@ class VirtualObjectListApp extends window.PluginBase {
         logger.debug('[VirtualObjectList] ルート実身配置完了');
 
         // unpack-fileに配置完了を通知
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('root-virtual-object-inserted', {
             success: true,
             targetWindowId: sourceWindowId  // unpack-fileのウィンドウIDを指定
@@ -583,15 +551,13 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // 再描画
         this.renderVirtualObjects();
-
-        logger.debug('[VirtualObjectList] 実身IDから仮身を追加完了:', realId, name);
     }
 
     // showMessageDialog() は基底クラス PluginBase で定義
 
     /**
      * MessageBusのハンドラを登録
-     * Phase 2: MessageBusのみで動作
+     * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
         // init メッセージ
@@ -806,45 +772,8 @@ class VirtualObjectListApp extends window.PluginBase {
             this.lastDropWasCrossWindow = true;
         });
 
-        // cross-window-drop-success メッセージ
-        this.messageBus.on('cross-window-drop-success', (data) => {
-            logger.debug('[VirtualObjectList] [MessageBus] cross-window-drop-success受信:', data);
-
-            // moveモードの場合のみ、元ウィンドウから仮身を削除
-            if (data.mode === 'move' && data.virtualObjects) {
-                logger.debug('[VirtualObjectList] クロスウィンドウmove: 元ウィンドウから仮身を削除', data.virtualObjects.length, '個');
-
-                data.virtualObjects.forEach(vobj => {
-                    let index = -1;
-
-                    // originalVobjLeft/Topがある場合は、位置情報も使って厳密に特定
-                    if (vobj.originalVobjLeft !== undefined && vobj.originalVobjTop !== undefined) {
-                        index = this.virtualObjects.findIndex(v =>
-                            v.link_id === vobj.link_id &&
-                            v.vobjleft === vobj.originalVobjLeft &&
-                            v.vobjtop === vobj.originalVobjTop
-                        );
-                        logger.debug('[VirtualObjectList] 位置情報を使って検索:', vobj.link_name, '位置:', vobj.originalVobjLeft, vobj.originalVobjTop, 'index:', index);
-                    } else {
-                        // originalVobjLeft/Topがない場合（基本文章編集プラグインなどから）は、link_idのみで検索
-                        // 同じlink_idの仮身が複数ある場合は最初の一つを削除
-                        index = this.virtualObjects.findIndex(v => v.link_id === vobj.link_id);
-                        logger.debug('[VirtualObjectList] link_idのみで検索:', vobj.link_name, 'index:', index);
-                    }
-
-                    if (index !== -1) {
-                        logger.debug('[VirtualObjectList] 仮身を削除:', vobj.link_name, 'index:', index);
-                        this.virtualObjects.splice(index, 1);
-                        this.removeVirtualObjectFromXml(vobj);
-                    } else {
-                        logger.warn('[VirtualObjectList] 削除対象の仮身が見つかりません:', vobj.link_name);
-                    }
-                });
-
-                this.renderVirtualObjects();
-                this.saveToFile();
-            }
-        });
+        // cross-window-drop-success メッセージハンドラはPluginBaseの共通機能に移行
+        // onDeleteSourceVirtualObject()フックで仮身削除処理を実装
 
         // parent-drop-event メッセージ
         this.messageBus.on('parent-drop-event', (data) => {
@@ -978,20 +907,20 @@ class VirtualObjectListApp extends window.PluginBase {
         // 注: nullでない場合のみ更新（マウスがウィンドウ間を移動中でnullになることがあるため）
         if (data.currentMouseOverWindowId !== undefined && data.currentMouseOverWindowId !== null) {
             // ウィンドウIDが変化した場合のみログ出力
-            if (this.draggingState.lastMouseOverWindowId !== data.currentMouseOverWindowId) {
-                logger.debug('[VirtualObjectList] ドラッグ先ウィンドウ変更:', this.draggingState.lastMouseOverWindowId, '->', data.currentMouseOverWindowId, '(thisWindowId:', this.windowId + ')');
+            if (this.vobjDragState.lastMouseOverWindowId !== data.currentMouseOverWindowId) {
+                logger.debug('[VirtualObjectList] ドラッグ先ウィンドウ変更:', this.vobjDragState.lastMouseOverWindowId, '->', data.currentMouseOverWindowId, '(thisWindowId:', this.windowId + ')');
             }
-            this.draggingState.lastMouseOverWindowId = data.currentMouseOverWindowId;
+            this.vobjDragState.lastMouseOverWindowId = data.currentMouseOverWindowId;
         }
 
         // ドラッグ中でない、または移動していない場合はスキップ
-        if (!this.draggingState.isDragging || !this.draggingState.hasMoved) return;
-        if (!this.draggingState.currentElement) return;
+        if (!this.virtualObjectDragState.isDragging || !this.virtualObjectDragState.hasMoved) return;
+        if (!this.vobjDragState.currentElement) return;
 
         // クロスウィンドウドラッグかどうかを判定
         const isCrossWindowDrag = (
-            this.draggingState.lastMouseOverWindowId !== null &&
-            this.draggingState.lastMouseOverWindowId !== this.windowId
+            this.vobjDragState.lastMouseOverWindowId !== null &&
+            this.vobjDragState.lastMouseOverWindowId !== this.windowId
         );
 
         // 親ウィンドウから通知された isOverThisWindow フラグに基づいて表示/非表示を制御
@@ -999,12 +928,12 @@ class VirtualObjectListApp extends window.PluginBase {
             // クロスウィンドウドラッグの場合は、parent-drag-positionの座標で位置を更新
             if (isCrossWindowDrag && data.relativeX !== undefined && data.relativeY !== undefined) {
                 // relativeX/Yは親ウィンドウから通知されたこのウィンドウ内での相対座標
-                const deltaX = data.relativeX - this.draggingState.startX;
-                const deltaY = data.relativeY - this.draggingState.startY;
+                const deltaX = data.relativeX - this.virtualObjectDragState.startX;
+                const deltaY = data.relativeY - this.virtualObjectDragState.startY;
 
-                if (this.draggingState.selectedObjects && this.draggingState.selectedObjectsInitialPositions) {
-                    this.draggingState.selectedObjects.forEach((item, index) => {
-                        const initialPos = this.draggingState.selectedObjectsInitialPositions[index];
+                if (this.vobjDragState.selectedObjects && this.vobjDragState.selectedObjectsInitialPositions) {
+                    this.vobjDragState.selectedObjects.forEach((item, index) => {
+                        const initialPos = this.vobjDragState.selectedObjectsInitialPositions[index];
                         const newLeft = initialPos.left + deltaX;
                         const newTop = initialPos.top + deltaY;
 
@@ -1017,16 +946,16 @@ class VirtualObjectListApp extends window.PluginBase {
                         }
                     });
                 } else {
-                    const newLeft = this.draggingState.initialLeft + deltaX;
-                    const newTop = this.draggingState.initialTop + deltaY;
-                    this.draggingState.currentElement.style.left = newLeft + 'px';
-                    this.draggingState.currentElement.style.top = newTop + 'px';
-                    this.draggingState.currentElement.style.visibility = 'visible';
+                    const newLeft = this.vobjDragState.initialLeft + deltaX;
+                    const newTop = this.vobjDragState.initialTop + deltaY;
+                    this.vobjDragState.currentElement.style.left = newLeft + 'px';
+                    this.vobjDragState.currentElement.style.top = newTop + 'px';
+                    this.vobjDragState.currentElement.style.visibility = 'visible';
                 }
             } else {
                 // 同じウィンドウ内のドラッグの場合は、visibility の制御のみ
-                if (this.draggingState.selectedObjects) {
-                    this.draggingState.selectedObjects.forEach((item) => {
+                if (this.vobjDragState.selectedObjects) {
+                    this.vobjDragState.selectedObjects.forEach((item) => {
                         // data-vobj-indexを使って特定の仮身要素を取得
                         const element = document.querySelector(`[data-vobj-index="${item.vobjIndex}"]`);
                         if (element) {
@@ -1034,18 +963,18 @@ class VirtualObjectListApp extends window.PluginBase {
                         }
                     });
                 } else {
-                    this.draggingState.currentElement.style.visibility = 'visible';
+                    this.vobjDragState.currentElement.style.visibility = 'visible';
                 }
             }
         } else {
             // このウィンドウの上にマウスがない場合
             // コピーモードの場合は元の仮身を表示したまま、移動モードの場合のみ非表示
-            if (this.draggingState.dragMode === 'copy') {
+            if (this.virtualObjectDragState.dragMode === 'copy') {
                 // コピーモードの場合は元の仮身を表示したまま
-                if (this.draggingState.selectedObjects && this.draggingState.selectedObjectsInitialPositions) {
+                if (this.vobjDragState.selectedObjects && this.vobjDragState.selectedObjectsInitialPositions) {
                     // 複数選択: 全ての選択仮身を元の位置で表示
-                    this.draggingState.selectedObjects.forEach((item, index) => {
-                        const initialPos = this.draggingState.selectedObjectsInitialPositions[index];
+                    this.vobjDragState.selectedObjects.forEach((item, index) => {
+                        const initialPos = this.vobjDragState.selectedObjectsInitialPositions[index];
                         // data-vobj-indexを使って特定の仮身要素を取得
                         const element = document.querySelector(`[data-vobj-index="${item.vobjIndex}"]`);
                         if (element) {
@@ -1056,15 +985,15 @@ class VirtualObjectListApp extends window.PluginBase {
                     });
                 } else {
                     // 単一選択: 元の動作
-                    this.draggingState.currentElement.style.left = this.draggingState.initialLeft + 'px';
-                    this.draggingState.currentElement.style.top = this.draggingState.initialTop + 'px';
-                    this.draggingState.currentElement.style.visibility = 'visible';
+                    this.vobjDragState.currentElement.style.left = this.vobjDragState.initialLeft + 'px';
+                    this.vobjDragState.currentElement.style.top = this.vobjDragState.initialTop + 'px';
+                    this.vobjDragState.currentElement.style.visibility = 'visible';
                 }
             } else {
                 // 移動モードの場合は非表示
-                if (this.draggingState.selectedObjects) {
+                if (this.vobjDragState.selectedObjects) {
                     // 複数選択: 全ての選択仮身を非表示
-                    this.draggingState.selectedObjects.forEach((item) => {
+                    this.vobjDragState.selectedObjects.forEach((item) => {
                         // data-vobj-indexを使って特定の仮身要素を取得
                         const element = document.querySelector(`[data-vobj-index="${item.vobjIndex}"]`);
                         if (element) {
@@ -1073,7 +1002,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     });
                 } else {
                     // 単一選択: 元の動作
-                    this.draggingState.currentElement.style.visibility = 'hidden';
+                    this.vobjDragState.currentElement.style.visibility = 'hidden';
                 }
             }
         }
@@ -1359,8 +1288,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 // realIdから_0.xtadなどのサフィックスを除去して基本実身IDを取得（共通メソッドを使用）
                 const baseRealId = window.RealObjectSystem.extractRealId(realId);
                 const iconPath = `${baseRealId}.ico`;
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('set-window-icon', {
+                    this.messageBus.send('set-window-icon', {
                     windowId: result.windowId,
                     iconPath: iconPath
                 });
@@ -1600,8 +1528,6 @@ class VirtualObjectListApp extends window.PluginBase {
                     applist: selectedVobj.applist || {}
                 };
 
-                logger.debug('[VirtualObjectList] 新しい仮身を追加:', newVirtualObj);
-
                 // XMLに仮身を追加（addVirtualObjectToXmlが自動保存する）
                 this.addVirtualObjectToXml(newVirtualObj);
 
@@ -1610,8 +1536,6 @@ class VirtualObjectListApp extends window.PluginBase {
 
                 // 再描画
                 this.renderVirtualObjects();
-
-                logger.debug('[VirtualObjectList] 新しい仮身を追加しました');
             } else {
                 logger.error('[VirtualObjectList] 新たな実身への保存失敗:', result.error);
             }
@@ -1630,8 +1554,7 @@ class VirtualObjectListApp extends window.PluginBase {
             const windowId = windowElement ? windowElement.id : null;
 
             if (windowId) {
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('close-window', {
+                    this.messageBus.send('close-window', {
                     windowId: windowId
                 });
             }
@@ -1652,7 +1575,6 @@ class VirtualObjectListApp extends window.PluginBase {
         const clipboardData = JSON.parse(JSON.stringify(selectedVirtualObject));
 
         // 親ウィンドウのグローバルクリップボードに設定
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('set-clipboard', {
             clipboardData: clipboardData
         });
@@ -1674,7 +1596,6 @@ class VirtualObjectListApp extends window.PluginBase {
         const clipboardData = JSON.parse(JSON.stringify(selectedVirtualObject));
 
         // 親ウィンドウのグローバルクリップボードに設定
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('set-clipboard', {
             clipboardData: clipboardData
         });
@@ -1685,7 +1606,9 @@ class VirtualObjectListApp extends window.PluginBase {
             this.virtualObjects.splice(index, 1);
             this.selectedVirtualObjects.clear();
             this.renderVirtualObjects();
-            logger.debug('[VirtualObjectList] 仮身をカット:', clipboardData.link_name);
+
+            // refCount-1（カット = ドキュメントから参照が削除される）
+            this.requestDeleteVirtualObject(selectedVirtualObject.link_id);
         }
     }
 
@@ -1919,7 +1842,6 @@ class VirtualObjectListApp extends window.PluginBase {
                     this.renderVirtualObjects();
 
                     this.setStatus(`実身を複製しました: ${result.newName}`);
-                    logger.debug('[VirtualObjectList] 実身複製成功:', selectedVirtualObject.link_id, '->', result.newRealId);
                 }
             } catch (error) {
                 logger.error('[VirtualObjectList] 実身複製エラー:', error);
@@ -2018,8 +1940,6 @@ class VirtualObjectListApp extends window.PluginBase {
 
                 // 再描画
                 this.renderVirtualObjects();
-
-                logger.debug('[VirtualObjectList] 新しい仮身を配置:', newName, '位置:', dropX, dropY);
             } else {
                 logger.error('[VirtualObjectList] 実身複製失敗:', result.error);
             }
@@ -3207,43 +3127,8 @@ class VirtualObjectListApp extends window.PluginBase {
         }
     }
 
-    /**
-     * 親ウィンドウに仮身コピーを通知（refCount+1）
-     * @param {string} realId - 実身ID
-     */
-    requestCopyVirtualObject(realId) {
-        if (window.parent && window.parent !== window) {
-            // link_idの場合、実身IDを抽出（_[recordno].xtad を削除）
-            const actualRealId = realId.replace(/_\d+\.xtad$/, '');
-
-            const messageId = `copy-virtual-${Date.now()}-${Math.random()}`;
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('copy-virtual-object', {
-                realId: actualRealId,
-                messageId: messageId
-            });
-            logger.debug('[VirtualObjectList] 仮身コピー要求:', actualRealId, '(元:', realId, ')');
-        }
-    }
-
-    /**
-     * 親ウィンドウに仮身削除を通知（refCount-1）
-     * @param {string} realId - 実身ID
-     */
-    requestDeleteVirtualObject(realId) {
-        if (window.parent && window.parent !== window) {
-            // link_idの場合、実身IDを抽出（_[recordno].xtad を削除）
-            const actualRealId = realId.replace(/_\d+\.xtad$/, '');
-
-            const messageId = `delete-virtual-${Date.now()}-${Math.random()}`;
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('delete-virtual-object', {
-                realId: actualRealId,
-                messageId: messageId
-            });
-            logger.debug('[VirtualObjectList] 仮身削除要求:', actualRealId, '(元:', realId, ')');
-        }
-    }
+    // requestCopyVirtualObject() と requestDeleteVirtualObject() は
+    // PluginBase共通メソッドに移行済み
 
     setupContextMenu() {
         // 右クリックメニューを開いた直後かどうかのフラグ
@@ -3253,7 +3138,7 @@ class VirtualObjectListApp extends window.PluginBase {
             e.preventDefault();
 
             // ドラッグ中は右クリックメニューを表示しない（コピーモード用の右ボタン操作として使用）
-            if (this.draggingState.isDragging) {
+            if (this.virtualObjectDragState.isDragging) {
                 logger.debug('[VirtualObjectList] ドラッグ中のため右クリックメニューを抑制');
                 return;
             }
@@ -3267,8 +3152,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     this.justOpenedContextMenu = false;
                 }, 100);
 
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('context-menu-request', {
+                    this.messageBus.send('context-menu-request', {
                     x: rect.left + e.clientX,
                     y: rect.top + e.clientY
                 });
@@ -3281,7 +3165,6 @@ class VirtualObjectListApp extends window.PluginBase {
                 return;
             }
 
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('close-context-menu');
 
             // 仮身以外の領域をクリックしたら選択解除
@@ -3299,7 +3182,6 @@ class VirtualObjectListApp extends window.PluginBase {
 
     setupWindowActivation() {
         document.addEventListener('mousedown', () => {
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('activate-window');
 
             // キーボードショートカットが動作するようにbodyにフォーカスを設定
@@ -3398,25 +3280,25 @@ class VirtualObjectListApp extends window.PluginBase {
                 return;
             }
 
-            if (!this.draggingState.isDragging) return;
+            if (!this.virtualObjectDragState.isDragging) return;
 
-            const deltaX = e.clientX - this.draggingState.startX;
-            const deltaY = e.clientY - this.draggingState.startY;
+            const deltaX = e.clientX - this.virtualObjectDragState.startX;
+            const deltaY = e.clientY - this.virtualObjectDragState.startY;
 
             // 5px以上移動したらドラッグとみなす
             if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
-                if (!this.draggingState.hasMoved) {
+                if (!this.virtualObjectDragState.hasMoved) {
                     logger.debug('[VirtualObjectList] mousemove: 移動検知 delta:', deltaX, deltaY);
                 }
-                this.draggingState.hasMoved = true;
+                this.virtualObjectDragState.hasMoved = true;
             }
 
-            if (this.draggingState.hasMoved && this.draggingState.currentElement) {
-                const newLeft = this.draggingState.initialLeft + deltaX;
-                const newTop = this.draggingState.initialTop + deltaY;
+            if (this.virtualObjectDragState.hasMoved && this.vobjDragState.currentElement) {
+                const newLeft = this.vobjDragState.initialLeft + deltaX;
+                const newTop = this.vobjDragState.initialTop + deltaY;
 
-                this.draggingState.currentElement.style.left = newLeft + 'px';
-                this.draggingState.currentElement.style.top = newTop + 'px';
+                this.vobjDragState.currentElement.style.left = newLeft + 'px';
+                this.vobjDragState.currentElement.style.top = newTop + 'px';
             }
         };
 
@@ -3425,19 +3307,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // document全体でのmousedown（iframe上のクリックも検出するため）
         document.addEventListener('mousedown', (e) => {
-            // 右ボタン（button === 2）の押下を検出
-            if (e.button === 2) {
-                this.draggingState.isRightButtonPressed = true;
-                logger.debug('[VirtualObjectList] 右ボタン押下検出');
-
-                // 左ボタンドラッグ中で既に移動している場合、即座にコピーモードに切り替え
-                if (this.draggingState.isDragging && this.draggingState.hasMoved) {
-                    this.draggingState.dragMode = 'copy';
-                    logger.debug('[VirtualObjectList] 左ボタンドラッグ中（移動済み）に右ボタン押下 → コピーモードに変更');
-                }
-                // まだ移動していない場合は、drag イベントで hasMoved=true になった時点で判定
-                return;
-            }
+            // 右ボタン処理はPluginBaseのsetupVirtualObjectRightButtonHandlers()で処理
 
             // 仮身要素内でのmousedownを検出
             const vobjElement = e.target.closest('.virtual-object');
@@ -3453,7 +3323,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     clearTimeout(this.iframeReenableTimeout);
                 }
                 this.iframeReenableTimeout = setTimeout(() => {
-                    if (!this.draggingState.isDragging && !this.draggingState.hasMoved) {
+                    if (!this.virtualObjectDragState.isDragging && !this.virtualObjectDragState.hasMoved) {
                         // 開いた仮身のiframeは常に無効化されたままにするため、再有効化しない
                         // this.setIframesPointerEvents(true);
                         logger.debug('[VirtualObjectList] タイムアウト: ドラッグなし（iframe再有効化はスキップ）');
@@ -3467,7 +3337,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // document全体でのmouseup
         document.addEventListener('mouseup', (e) => {
-            logger.debug('[VirtualObjectList] mouseup検知 isDragging:', this.draggingState.isDragging, 'hasMoved:', this.draggingState.hasMoved, 'button:', e.button);
+            logger.debug('[VirtualObjectList] mouseup検知 isDragging:', this.virtualObjectDragState.isDragging, 'hasMoved:', this.virtualObjectDragState.hasMoved, 'button:', e.button);
 
             // ダブルクリック+ドラッグのプレビュー要素を削除
             const preview = document.querySelector('.dblclick-drag-preview');
@@ -3521,8 +3391,7 @@ class VirtualObjectListApp extends window.PluginBase {
                         if (defaultOpenPlugin) {
                             logger.debug('[VirtualObjectList] defaultOpenプラグイン:', defaultOpenPlugin);
 
-                            // MessageBus Phase 2: messageBus.send()を使用
-                            this.messageBus.send('open-virtual-object-real', {
+                                            this.messageBus.send('open-virtual-object-real', {
                                 virtualObj: obj,
                                 pluginId: defaultOpenPlugin
                             });
@@ -3547,44 +3416,21 @@ class VirtualObjectListApp extends window.PluginBase {
                 this.iframeReenableTimeout = null;
             }
 
-            // 右ボタンのmouseupを検出してフラグをクリア
-            if (e.button === 2) {
-                this.draggingState.isRightButtonPressed = false;
-                logger.debug('[VirtualObjectList] 右ボタンアップ検出、フラグクリア');
-                // 右ボタンアップ時、ドラッグ中でコピーモードなら何もせずreturn（左ボタンのmouseupを待つ）
-                if (this.draggingState.isDragging && this.draggingState.dragMode === 'copy') {
-                    logger.debug('[VirtualObjectList] コピーモードのドラッグ中、左ボタンのmouseupを待つ');
-                    return;
-                }
-            }
+            // 右ボタン処理はPluginBaseのsetupVirtualObjectRightButtonHandlers()で処理
 
-            // BTRONの仕様: 左右両方押してドラッグ中に、左ボタンを先に離した場合はコピーモード
-            // 最終判定: 左ボタンmouseup時に右ボタンがまだ押されているか確認
-            if (this.draggingState.isDragging && e.button === 0) {
-                // 左ボタンが離された
-                // e.buttons & 2 で右ボタンがまだ押されているか確認（ビット演算）
-                const isRightStillPressed = (e.buttons & 2) !== 0 || this.draggingState.isRightButtonPressed;
-
-                if (this.draggingState.hasMoved && isRightStillPressed) {
-                    this.draggingState.dragMode = 'copy';
-                    logger.debug('[VirtualObjectList] 左ボタンアップ時に右ボタンがまだ押されている → コピーモードに変更');
-                    return; // 右ボタンのmouseupを待つ
-                }
-            }
-
-            if (this.draggingState.isDragging) {
-                if (this.draggingState.hasMoved) {
+            if (this.virtualObjectDragState.isDragging) {
+                if (this.virtualObjectDragState.hasMoved) {
                     // 移動があった場合は位置を確定
                     logger.debug('[VirtualObjectList] mouseup: ドラッグ完了、finishDrag()呼び出し');
                     this.finishDrag();
                 } else {
                     // 移動がなかった場合は状態をリセット
                     logger.debug('[VirtualObjectList] mouseup: 移動なし、状態リセット');
-                    this.draggingState.isDragging = false;
-                    this.draggingState.currentObject = null;
-                    this.draggingState.currentElement = null;
-                    this.draggingState.vobjIndex = null;
-                    this.draggingState.isRightButtonPressed = false;
+                    this.virtualObjectDragState.isDragging = false;
+                    this.vobjDragState.currentObject = null;
+                    this.vobjDragState.currentElement = null;
+                    this.vobjDragState.vobjIndex = null;
+                    // isRightButtonPressedはPluginBaseで管理
                     // 開いた仮身のiframeは常に無効化されたままにするため、再有効化しない
                     // this.setIframesPointerEvents(true);
                 }
@@ -3596,18 +3442,18 @@ class VirtualObjectListApp extends window.PluginBase {
      * ドラッグ完了処理（位置の確定、仮身のコピー/移動）
      */
     finishDrag() {
-        if (!this.draggingState.isDragging) return;
+        if (!this.virtualObjectDragState.isDragging) return;
 
         // クロスウィンドウドロップの場合は仮身を削除（moveモードの場合のみ）
         if (this.lastDropWasCrossWindow) {
             logger.debug('[VirtualObjectList] クロスウィンドウドロップ検知');
             this.lastDropWasCrossWindow = false; // フラグをリセット
 
-            if (this.draggingState.dragMode === 'move' && this.draggingState.selectedObjects) {
-                logger.debug('[VirtualObjectList] moveモード: 元ウィンドウから仮身を削除', this.draggingState.selectedObjects.length, '個');
+            if (this.virtualObjectDragState.dragMode === 'move' && this.vobjDragState.selectedObjects) {
+                logger.debug('[VirtualObjectList] moveモード: 元ウィンドウから仮身を削除', this.vobjDragState.selectedObjects.length, '個');
 
                 // selectedObjectsのvobjIndexを降順にソート（後ろから削除するため）
-                const sortedIndexes = this.draggingState.selectedObjects
+                const sortedIndexes = this.vobjDragState.selectedObjects
                     .map(item => item.vobjIndex)
                     .sort((a, b) => b - a);
 
@@ -3622,56 +3468,56 @@ class VirtualObjectListApp extends window.PluginBase {
 
                 this.renderVirtualObjects();
                 this.saveToFile();
-            } else if (this.draggingState.dragMode === 'copy') {
+            } else if (this.virtualObjectDragState.dragMode === 'copy') {
                 logger.debug('[VirtualObjectList] copyモード: 元ウィンドウの仮身は保持');
             }
 
             // ドラッグ状態をリセット
-            this.draggingState.isDragging = false;
-            this.draggingState.hasMoved = false;
-            this.draggingState.currentObject = null;
-            this.draggingState.currentElement = null;
-            this.draggingState.vobjIndex = null;
-            this.draggingState.selectedObjects = null;
-            this.draggingState.selectedObjectsInitialPositions = null;
-            this.draggingState.dragMode = null;
-            this.draggingState.dropClientX = undefined;
-            this.draggingState.dropClientY = undefined;
-            this.draggingState.lastMouseOverWindowId = null;
+            this.virtualObjectDragState.isDragging = false;
+            this.virtualObjectDragState.hasMoved = false;
+            this.vobjDragState.currentObject = null;
+            this.vobjDragState.currentElement = null;
+            this.vobjDragState.vobjIndex = null;
+            this.vobjDragState.selectedObjects = null;
+            this.vobjDragState.selectedObjectsInitialPositions = null;
+            this.virtualObjectDragState.dragMode = null;
+            this.vobjDragState.dropClientX = undefined;
+            this.vobjDragState.dropClientY = undefined;
+            this.vobjDragState.lastMouseOverWindowId = null;
             return;
         }
 
-        logger.debug('[VirtualObjectList] ドラッグ終了:', this.draggingState.currentObject?.link_name, 'モード:', this.draggingState.dragMode, '選択数:', this.draggingState.selectedObjects?.length || 1);
+        logger.debug('[VirtualObjectList] ドラッグ終了:', this.vobjDragState.currentObject?.link_name, 'モード:', this.virtualObjectDragState.dragMode, '選択数:', this.vobjDragState.selectedObjects?.length || 1);
 
-        if (this.draggingState.hasMoved && this.draggingState.currentObject && this.draggingState.currentElement) {
-            const obj = this.draggingState.currentObject;
-            const vobjElement = this.draggingState.currentElement;
+        if (this.virtualObjectDragState.hasMoved && this.vobjDragState.currentObject && this.vobjDragState.currentElement) {
+            const obj = this.vobjDragState.currentObject;
+            const vobjElement = this.vobjDragState.currentElement;
 
             // ドラッグで移動した場合
             let deltaX, deltaY;
 
             // dropイベントで座標が保存されている場合はそれを使用
-            if (this.draggingState.dropClientX !== undefined && this.draggingState.dropClientY !== undefined) {
-                deltaX = this.draggingState.dropClientX - this.draggingState.startX;
-                deltaY = this.draggingState.dropClientY - this.draggingState.startY;
+            if (this.vobjDragState.dropClientX !== undefined && this.vobjDragState.dropClientY !== undefined) {
+                deltaX = this.vobjDragState.dropClientX - this.virtualObjectDragState.startX;
+                deltaY = this.vobjDragState.dropClientY - this.virtualObjectDragState.startY;
                 logger.debug('[VirtualObjectList] dropイベントの座標を使用:',
-                    'drop:', this.draggingState.dropClientX, this.draggingState.dropClientY,
+                    'drop:', this.vobjDragState.dropClientX, this.vobjDragState.dropClientY,
                     'delta:', deltaX, deltaY);
             } else {
                 // dragイベントで更新された style.left/top を使用（従来の方法）
                 const newLeft = parseInt(vobjElement.style.left);
                 const newTop = parseInt(vobjElement.style.top);
-                deltaX = newLeft - this.draggingState.initialLeft;
-                deltaY = newTop - this.draggingState.initialTop;
+                deltaX = newLeft - this.vobjDragState.initialLeft;
+                deltaY = newTop - this.vobjDragState.initialTop;
                 logger.debug('[VirtualObjectList] style.left/topを使用:', newLeft, newTop, 'delta:', deltaX, deltaY);
             }
 
             // 複数選択時は全ての選択仮身を移動、それ以外は単一の仮身を移動
-            const objectsToMove = this.draggingState.selectedObjects
-                ? this.draggingState.selectedObjects.map(item => item.obj)
+            const objectsToMove = this.vobjDragState.selectedObjects
+                ? this.vobjDragState.selectedObjects.map(item => item.obj)
                 : [obj];
 
-            if (this.draggingState.dragMode === 'copy') {
+            if (this.virtualObjectDragState.dragMode === 'copy') {
                 // コピーモード: 元の仮身を元の位置に戻し、新しい仮身を作成
                 logger.debug('[VirtualObjectList] コピーモード: 元の仮身を復元し、新しい仮身を作成 (対象:', objectsToMove.length, '個)');
 
@@ -3681,8 +3527,8 @@ class VirtualObjectListApp extends window.PluginBase {
                     const height = sourceObj.heightPx || (sourceObj.vobjbottom - sourceObj.vobjtop);
 
                     // 移動量を適用
-                    const initialLeft = this.draggingState.selectedObjectsInitialPositions?.[index]?.left || sourceObj.vobjleft;
-                    const initialTop = this.draggingState.selectedObjectsInitialPositions?.[index]?.top || sourceObj.vobjtop;
+                    const initialLeft = this.vobjDragState.selectedObjectsInitialPositions?.[index]?.left || sourceObj.vobjleft;
+                    const initialTop = this.vobjDragState.selectedObjectsInitialPositions?.[index]?.top || sourceObj.vobjtop;
                     const newLeft = initialLeft + deltaX;
                     const newTop = initialTop + deltaY;
 
@@ -3732,8 +3578,8 @@ class VirtualObjectListApp extends window.PluginBase {
                     const height = targetObj.heightPx || (targetObj.vobjbottom - targetObj.vobjtop);
 
                     // 移動量を適用
-                    const initialLeft = this.draggingState.selectedObjectsInitialPositions?.[index]?.left || targetObj.vobjleft;
-                    const initialTop = this.draggingState.selectedObjectsInitialPositions?.[index]?.top || targetObj.vobjtop;
+                    const initialLeft = this.vobjDragState.selectedObjectsInitialPositions?.[index]?.left || targetObj.vobjleft;
+                    const initialTop = this.vobjDragState.selectedObjectsInitialPositions?.[index]?.top || targetObj.vobjtop;
                     const newLeft = initialLeft + deltaX;
                     const newTop = initialTop + deltaY;
 
@@ -3761,17 +3607,17 @@ class VirtualObjectListApp extends window.PluginBase {
         }
 
         // ドラッグ状態をリセット（dragModeも忘れずに）
-        this.draggingState.isDragging = false;
-        this.draggingState.hasMoved = false;
-        this.draggingState.currentObject = null;
-        this.draggingState.currentElement = null;
-        this.draggingState.vobjIndex = null;
-        this.draggingState.selectedObjects = null;
-        this.draggingState.selectedObjectsInitialPositions = null;
-        this.draggingState.dropClientX = undefined;
-        this.draggingState.dropClientY = undefined;
-        this.draggingState.dragMode = 'move'; // デフォルトに戻す
-        this.draggingState.isRightButtonPressed = false; // 右ボタンフラグもリセット
+        this.virtualObjectDragState.isDragging = false;
+        this.virtualObjectDragState.hasMoved = false;
+        this.vobjDragState.currentObject = null;
+        this.vobjDragState.currentElement = null;
+        this.vobjDragState.vobjIndex = null;
+        this.vobjDragState.selectedObjects = null;
+        this.vobjDragState.selectedObjectsInitialPositions = null;
+        this.vobjDragState.dropClientX = undefined;
+        this.vobjDragState.dropClientY = undefined;
+        this.virtualObjectDragState.dragMode = 'move'; // デフォルトに戻す
+        // isRightButtonPressedはPluginBaseで管理
 
         // スクロールを再有効化（念のため）
         const pluginContent = document.querySelector('.plugin-content');
@@ -3800,7 +3646,6 @@ class VirtualObjectListApp extends window.PluginBase {
      * 全画面表示切り替え
      */
     toggleFullscreen() {
-        // MessageBus Phase 2: messageBus.send()を使用
         if (this.messageBus) {
             this.messageBus.send('toggle-maximize');
 
@@ -3809,8 +3654,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // 実身管理用セグメントのfullscreenフラグを更新
             if (this.realId) {
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('update-fullscreen-state', {
+                    this.messageBus.send('update-fullscreen-state', {
                     fileId: this.realId,
                     isFullscreen: this.isFullscreen
                 });
@@ -3959,8 +3803,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
                     // 実身管理用セグメントのbackgroundColorを更新
                     if (this.realId) {
-                        // MessageBus Phase 2: messageBus.send()を使用
-                        this.messageBus.send('update-background-color', {
+                                    this.messageBus.send('update-background-color', {
                             fileId: this.realId,
                             backgroundColor: newBgColor
                         });
@@ -4883,7 +4726,6 @@ class VirtualObjectListApp extends window.PluginBase {
         listElement.appendChild(canvas);
 
         // スクロールバー更新を通知
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('update-scrollbars');
 
         // 背景色を適用
@@ -5395,36 +5237,7 @@ class VirtualObjectListApp extends window.PluginBase {
         }
     }
 
-    /**
-     * 実身データを読み込む
-     */
-    async loadRealObjectData(realId) {
-        const messageId = `load-real-${Date.now()}-${Math.random()}`;
-
-        // 親ウィンドウに実身データ読み込みを要求
-        this.messageBus.send('load-real-object', {
-            realId: realId,
-            messageId: messageId
-        });
-
-        try {
-            // レスポンスを待つ（5秒タイムアウト）
-            const result = await this.messageBus.waitFor('real-object-loaded', window.DEFAULT_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-            return result.realObject;
-        } catch (error) {
-            // エラーレスポンスの可能性もチェック
-            try {
-                const errorResult = await this.messageBus.waitFor('real-object-error', window.ERROR_CHECK_TIMEOUT_MS, (data) => {
-                    return data.messageId === messageId;
-                });
-                throw new Error(errorResult.error);
-            } catch {
-                throw new Error('実身データ読み込みタイムアウト');
-            }
-        }
-    }
+    // loadRealObjectData() は基底クラス PluginBase で定義
 
     /**
      * defaultOpenプラグインを取得
@@ -5445,7 +5258,6 @@ class VirtualObjectListApp extends window.PluginBase {
         logger.debug('[VirtualObjectList] 仮身を開く:', obj.link_name, obj.link_id);
 
         // 親ウィンドウにメッセージを送信して仮身リンク先を開く
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('open-virtual-object', {
             linkId: obj.link_id,
             linkName: obj.link_name
@@ -5464,18 +5276,21 @@ class VirtualObjectListApp extends window.PluginBase {
         // ドラッグ開始（HTML5 Drag&Drop）
         vobjElement.addEventListener('dragstart', (e) => {
             // mousedownで準備したドラッグ状態を確認
-            if (!this.draggingState.currentObject || !this.draggingState.isDragging) {
+            if (!this.vobjDragState.currentObject) {
                 logger.warn('[VirtualObjectList] dragstart: ドラッグ準備ができていません');
                 e.preventDefault();
                 return;
             }
 
+            // PluginBase共通メソッドでドラッグ状態を初期化
+            this.initializeVirtualObjectDragStart(e);
+
             // 別ウィンドウへのドロップフラグをリセット
             this.lastDropWasCrossWindow = false;
             // ドラッグ開始時は自分のウィンドウにマウスがあるので、自分のwindowIdに初期化
-            this.draggingState.lastMouseOverWindowId = this.windowId;
+            this.vobjDragState.lastMouseOverWindowId = this.windowId;
             // マウスは常に自分のウィンドウ内で開始
-            this.draggingState.isMouseInThisWindow = true;
+            this.vobjDragState.isMouseInThisWindow = true;
 
             // ドラッグ中はスクロールを無効化
             const pluginContent = document.querySelector('.plugin-content');
@@ -5484,23 +5299,17 @@ class VirtualObjectListApp extends window.PluginBase {
                 logger.debug('[VirtualObjectList] ドラッグ中: スクロールを無効化');
             }
 
-            // ドラッグ中はすべてのiframeのpointer-eventsを無効化（開いた仮身内へのドロップを防ぐ）
-            // 開いた仮身のコンテンツiframe（.virtual-object-content）を無効化
-            const allIframes = document.querySelectorAll('.virtual-object-content');
-            allIframes.forEach(iframe => {
-                iframe.style.pointerEvents = 'none';
-            });
-            logger.debug('[VirtualObjectList] ドラッグ中: iframe pointer-events無効化 (', allIframes.length, '個)');
+            // ドラッグ中はすべてのiframeのpointer-eventsを無効化            this.disableIframePointerEvents();
 
             logger.debug('[VirtualObjectList] dragstart: HTML5ドラッグ開始', obj.link_name);
-            logger.debug('[VirtualObjectList] ドラッグ開始:', obj.link_name, 'モード:', this.draggingState.dragMode);
+            logger.debug('[VirtualObjectList] ドラッグ開始:', obj.link_name, 'モード:', this.virtualObjectDragState.dragMode);
 
             // 複数選択時は全ての仮身データを含める
             let virtualObjects = [];
-            if (this.draggingState.selectedObjects && this.draggingState.selectedObjects.length > 0) {
+            if (this.vobjDragState.selectedObjects && this.vobjDragState.selectedObjects.length > 0) {
                 // 複数選択時: 選択されたすべての仮身
                 // ドラッグされた仮身（obj）を基準とした相対位置を計算
-                virtualObjects = this.draggingState.selectedObjects.map(item => {
+                virtualObjects = this.vobjDragState.selectedObjects.map(item => {
                     const vobj = item.obj;
                     return {
                         link_id: vobj.link_id,
@@ -5543,21 +5352,11 @@ class VirtualObjectListApp extends window.PluginBase {
                 }];
             }
 
-            // ドラッグデータを設定
-            const dragData = {
-                type: 'virtual-object-drag',
-                source: 'virtual-object-list',
-                sourceWindowId: this.windowId, // ドラッグ元ウィンドウID
-                mode: this.draggingState.dragMode, // 'move' または 'copy'
-                virtualObjects: virtualObjects, // 複数対応
-                // 後方互換性のため、単一仮身の場合はvirtualObjectも設定
-                virtualObject: virtualObjects[0]
-            };
-
-            e.dataTransfer.setData('text/plain', JSON.stringify(dragData));
+            // PluginBase共通メソッドでdragDataを設定
+            const isDuplicateDrag = this.dblClickDragState.isDblClickDragCandidate || this.dblClickDragState.isDblClickDrag;
+            this.setVirtualObjectDragData(e, virtualObjects, 'virtual-object-list', isDuplicateDrag);
             // カスタムタイプとしてウィンドウIDを設定（dragoverで読み取れる）
             e.dataTransfer.setData('application/x-vobj-window-id', this.windowId);
-            e.dataTransfer.effectAllowed = this.draggingState.dragMode === 'copy' ? 'copy' : 'move';
 
             // 半透明にする
             vobjElement.style.opacity = '0.5';
@@ -5568,7 +5367,7 @@ class VirtualObjectListApp extends window.PluginBase {
         vobjElement.addEventListener('drag', (e) => {
             // drag中はmousemoveが発火しないため、ここで位置を更新
             // currentObjectが設定されていればドラッグ準備完了とみなす
-            if (!this.draggingState.currentObject) {
+            if (!this.vobjDragState.currentObject) {
                 return;
             }
 
@@ -5579,35 +5378,25 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // 同じウィンドウ内のドラッグの場合のみ位置を更新
             // クロスウィンドウドラッグの場合はparent-drag-positionで位置を更新
-            const isSameWindowDrag = (this.draggingState.lastMouseOverWindowId === this.windowId);
+            const isSameWindowDrag = (this.vobjDragState.lastMouseOverWindowId === this.windowId);
 
             if (!isSameWindowDrag) {
                 return;
             }
 
-            const deltaX = e.clientX - this.draggingState.startX;
-            const deltaY = e.clientY - this.draggingState.startY;
-
-            // 5px以上移動したらドラッグとみなす
-            if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
-                if (!this.draggingState.hasMoved) {
-                    logger.debug('[VirtualObjectList] drag: 移動を検知 (hasMoved = true)', deltaX, deltaY);
-                    this.draggingState.hasMoved = true;
-
-                    // 移動検知時に右ボタンが押されていればコピーモードに切り替え
-                    if (this.draggingState.isRightButtonPressed) {
-                        this.draggingState.dragMode = 'copy';
-                        logger.debug('[VirtualObjectList] 移動検知時に右ボタンが押されている → コピーモードに変更');
-                    }
-                } else {
-                    this.draggingState.hasMoved = true;
-                }
+            // PluginBase共通メソッドで移動検出
+            const moved = this.detectVirtualObjectDragMove(e);
+            if (moved && !this.virtualObjectDragState.hasMoved) {
+                logger.debug('[VirtualObjectList] drag: 移動を検知 (hasMoved = true)');
             }
 
+            const deltaX = e.clientX - this.virtualObjectDragState.startX;
+            const deltaY = e.clientY - this.virtualObjectDragState.startY;
+
             // 複数選択時は全ての選択仮身を視覚的に移動
-            if (this.draggingState.selectedObjects && this.draggingState.selectedObjectsInitialPositions) {
-                this.draggingState.selectedObjects.forEach((item, index) => {
-                    const initialPos = this.draggingState.selectedObjectsInitialPositions[index];
+            if (this.vobjDragState.selectedObjects && this.vobjDragState.selectedObjectsInitialPositions) {
+                this.vobjDragState.selectedObjects.forEach((item, index) => {
+                    const initialPos = this.vobjDragState.selectedObjectsInitialPositions[index];
                     const newLeft = initialPos.left + deltaX;
                     const newTop = initialPos.top + deltaY;
 
@@ -5621,13 +5410,13 @@ class VirtualObjectListApp extends window.PluginBase {
             }
 
             // 親ウィンドウに現在のマウス位置を保存（handleParentDragPositionで使用）
-            this.draggingState.currentDeltaX = deltaX;
-            this.draggingState.currentDeltaY = deltaY;
+            this.vobjDragState.currentDeltaX = deltaX;
+            this.vobjDragState.currentDeltaY = deltaY;
 
             // 親ウィンドウにドラッグ位置を通知（iframe座標を親座標系に変換）
             // ただし、マウスがこのウィンドウ内にいる場合のみ
             const iframe = window.frameElement;
-            if (iframe && this.draggingState.isMouseInThisWindow) {
+            if (iframe && this.vobjDragState.isMouseInThisWindow) {
                 const rect = iframe.getBoundingClientRect();
                 const parentX = rect.left + e.clientX;
                 const parentY = rect.top + e.clientY;
@@ -5642,7 +5431,7 @@ class VirtualObjectListApp extends window.PluginBase {
             // マウスがウィンドウ内にいる場合、dragover→dragの順で発火するため、
             // dragイベント処理中はisMouseInThisWindowがtrueのまま
             // マウスがウィンドウ外に出た場合、dragoverが発火しないため、falseのまま
-            this.draggingState.isMouseInThisWindow = false;
+            this.vobjDragState.isMouseInThisWindow = false;
         });
 
         // ドラッグ終了
@@ -5657,13 +5446,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 logger.debug('[VirtualObjectList] ドラッグ終了: スクロールを再有効化');
             }
 
-            // ドラッグ終了時にすべてのiframeのpointer-eventsを再有効化
-            // 開いた仮身のコンテンツiframe（.virtual-object-content）を再有効化
-            const allIframes = document.querySelectorAll('.virtual-object-content');
-            allIframes.forEach(iframe => {
-                iframe.style.pointerEvents = 'auto';
-            });
-            logger.debug('[VirtualObjectList] ドラッグ終了: iframe pointer-events再有効化 (', allIframes.length, '個)');
+            // ドラッグ終了時にすべてのiframeのpointer-eventsを再有効化            this.enableIframePointerEvents();
 
             logger.debug('[VirtualObjectList] ========== dragend開始 ==========');
             logger.debug('[VirtualObjectList] dragend: オブジェクト:', obj.link_name);
@@ -5676,9 +5459,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 logger.debug('[VirtualObjectList] ドロップキャンセル: 元の位置に戻す');
 
                 // 複数選択時はすべての選択仮身を元の位置に戻す
-                if (this.draggingState.selectedObjects && this.draggingState.selectedObjectsInitialPositions) {
-                    this.draggingState.selectedObjects.forEach((item, index) => {
-                        const initialPos = this.draggingState.selectedObjectsInitialPositions[index];
+                if (this.vobjDragState.selectedObjects && this.vobjDragState.selectedObjectsInitialPositions) {
+                    this.vobjDragState.selectedObjects.forEach((item, index) => {
+                        const initialPos = this.vobjDragState.selectedObjectsInitialPositions[index];
                         // data-vobj-indexを使って特定の仮身要素を取得
                         const element = document.querySelector(`[data-vobj-index="${item.vobjIndex}"]`);
                         if (element) {
@@ -5687,26 +5470,29 @@ class VirtualObjectListApp extends window.PluginBase {
                             element.style.visibility = 'visible';
                         }
                     });
-                    logger.debug('[VirtualObjectList] ドロップキャンセル: 複数仮身を元の位置に戻しました:', this.draggingState.selectedObjects.length, '個');
+                    logger.debug('[VirtualObjectList] ドロップキャンセル: 複数仮身を元の位置に戻しました:', this.vobjDragState.selectedObjects.length, '個');
                 } else {
-                    vobjElement.style.left = this.draggingState.initialLeft + 'px';
-                    vobjElement.style.top = this.draggingState.initialTop + 'px';
+                    vobjElement.style.left = this.vobjDragState.initialLeft + 'px';
+                    vobjElement.style.top = this.vobjDragState.initialTop + 'px';
                     vobjElement.style.visibility = 'visible';
                 }
 
-                // ドラッグ状態をリセット
-                this.draggingState.isDragging = false;
-                this.draggingState.hasMoved = false;
-                this.draggingState.currentObject = null;
-                this.draggingState.currentElement = null;
-                this.draggingState.vobjIndex = null;
-                this.draggingState.selectedObjects = null;
-                this.draggingState.selectedObjectsInitialPositions = null;
-                this.draggingState.dropClientX = undefined;
-                this.draggingState.dropClientY = undefined;
-                this.draggingState.lastMouseOverWindowId = null;
-                this.draggingState.dragMode = 'move';
-                this.draggingState.isRightButtonPressed = false;
+                // PluginBase共通メソッドでドラッグ状態をクリーンアップ
+                this.cleanupVirtualObjectDragState();
+
+                // ダブルクリックドラッグ状態もクリーンアップ（意図しない複製を防止）
+                this.cleanupDblClickDragState();
+                this.dblClickDragState.lastClickedShape = null;
+
+                // プラグイン固有のステートをクリア
+                this.vobjDragState.currentObject = null;
+                this.vobjDragState.currentElement = null;
+                this.vobjDragState.vobjIndex = null;
+                this.vobjDragState.selectedObjects = null;
+                this.vobjDragState.selectedObjectsInitialPositions = null;
+                this.vobjDragState.dropClientX = undefined;
+                this.vobjDragState.dropClientY = undefined;
+                this.vobjDragState.lastMouseOverWindowId = null;
             } else {
                 // drop成功（dropイベントで処理済み）
                 // 50ms待ってから finishDrag() を実行（cross-window-drop-in-progress メッセージを受信する時間を確保）
@@ -5714,18 +5500,23 @@ class VirtualObjectListApp extends window.PluginBase {
                 setTimeout(() => {
                     if (this.lastDropWasCrossWindow) {
                         logger.debug('[VirtualObjectList] クロスウィンドウドロップ検知: finishDrag()をスキップ');
-                        // ドラッグ状態をリセット
-                        this.draggingState.isDragging = false;
-                        this.draggingState.hasMoved = false;
-                        this.draggingState.currentObject = null;
-                        this.draggingState.currentElement = null;
-                        this.draggingState.vobjIndex = null;
-                        this.draggingState.selectedObjects = null;
-                        this.draggingState.selectedObjectsInitialPositions = null;
-                        this.draggingState.dragMode = null;
-                        this.draggingState.dropClientX = undefined;
-                        this.draggingState.dropClientY = undefined;
-                        this.draggingState.lastMouseOverWindowId = null;
+                        // PluginBase共通メソッドでドラッグ状態をクリーンアップ
+                        this.cleanupVirtualObjectDragState();
+
+                        // ダブルクリックドラッグ状態もクリーンアップ（意図しない複製を防止）
+                        this.cleanupDblClickDragState();
+                        this.dblClickDragState.lastClickedShape = null;
+
+                        // プラグイン固有のステートをクリア
+                        this.vobjDragState.currentObject = null;
+                        this.vobjDragState.currentElement = null;
+                        this.vobjDragState.vobjIndex = null;
+                        this.vobjDragState.selectedObjects = null;
+                        this.vobjDragState.selectedObjectsInitialPositions = null;
+                        this.virtualObjectDragState.dragMode = null;
+                        this.vobjDragState.dropClientX = undefined;
+                        this.vobjDragState.dropClientY = undefined;
+                        this.vobjDragState.lastMouseOverWindowId = null;
                         // フラグをリセット
                         this.lastDropWasCrossWindow = false;
                     } else {
@@ -5801,25 +5592,18 @@ class VirtualObjectListApp extends window.PluginBase {
             this.setIframesPointerEvents(false);
             logger.debug('[VirtualObjectList] mousedown: iframeを無効化（ドラッグ準備）');
 
-            // 左クリック → 移動モード
-            this.draggingState.dragMode = 'move';
-            logger.debug('[VirtualObjectList] 移動モード設定');
-
-            // 位置変更用の準備とドラッグ状態の開始
-            this.draggingState.hasMoved = false;
-            this.draggingState.currentObject = obj;
-            this.draggingState.currentElement = vobjElement;
-            this.draggingState.vobjIndex = parseInt(vobjElement.getAttribute('data-vobj-index')); // 一意のインデックスを保存
-            this.draggingState.startX = e.clientX;
-            this.draggingState.startY = e.clientY;
-            this.draggingState.initialLeft = obj.vobjleft;
-            this.draggingState.initialTop = obj.vobjtop;
-            this.draggingState.isDragging = true; // dragイベントより前に設定
+            // ドラッグ準備（dragstartの前提条件を設定）
+            this.vobjDragState.currentObject = obj;
+            this.vobjDragState.currentElement = vobjElement;
+            this.vobjDragState.vobjIndex = parseInt(vobjElement.getAttribute('data-vobj-index')); // 一意のインデックスを保存
+            this.vobjDragState.initialLeft = obj.vobjleft;
+            this.vobjDragState.initialTop = obj.vobjtop;
+            // 詳細な初期化（dragMode, hasMoved, isDragging, startX/Y）はdragstartで実行
 
             // ドラッグした仮身が選択されている場合、選択中の全仮身を記録
             const draggedVobjIndex = this.virtualObjects.indexOf(obj);
             if (this.selectedVirtualObjects.has(draggedVobjIndex)) {
-                this.draggingState.selectedObjects = Array.from(this.selectedVirtualObjects).map(vobjIndex => {
+                this.vobjDragState.selectedObjects = Array.from(this.selectedVirtualObjects).map(vobjIndex => {
                     const vobj = this.virtualObjects[vobjIndex];
                     if (vobj) {
                         return {
@@ -5830,12 +5614,12 @@ class VirtualObjectListApp extends window.PluginBase {
                     return null;
                 }).filter(v => v !== null);
 
-                this.draggingState.selectedObjectsInitialPositions = this.draggingState.selectedObjects.map(v => ({
+                this.vobjDragState.selectedObjectsInitialPositions = this.vobjDragState.selectedObjects.map(v => ({
                     left: v.obj.vobjleft,
                     top: v.obj.vobjtop
                 }));
 
-                logger.debug('[VirtualObjectList] mousedown: 複数選択ドラッグ準備完了', this.draggingState.selectedObjects.length, '個の仮身');
+                logger.debug('[VirtualObjectList] mousedown: 複数選択ドラッグ準備完了', this.vobjDragState.selectedObjects.length, '個の仮身');
             } else {
                 // ドラッグする仮身が未選択の場合、まず選択状態にする
                 logger.debug('[VirtualObjectList] mousedown: 未選択の仮身をドラッグ開始 → まず選択');
@@ -5845,7 +5629,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 this.justSelectedInMouseDown = true;
 
                 // 選択後、複数選択ドラッグと同じロジックで処理（選択枠もプレビュー移動するため）
-                this.draggingState.selectedObjects = Array.from(this.selectedVirtualObjects).map(vobjIndex => {
+                this.vobjDragState.selectedObjects = Array.from(this.selectedVirtualObjects).map(vobjIndex => {
                     const vobj = this.virtualObjects[vobjIndex];
                     if (vobj) {
                         return {
@@ -5856,12 +5640,12 @@ class VirtualObjectListApp extends window.PluginBase {
                     return null;
                 }).filter(v => v !== null);
 
-                this.draggingState.selectedObjectsInitialPositions = this.draggingState.selectedObjects.map(v => ({
+                this.vobjDragState.selectedObjectsInitialPositions = this.vobjDragState.selectedObjects.map(v => ({
                     left: v.obj.vobjleft,
                     top: v.obj.vobjtop
                 }));
 
-                logger.debug('[VirtualObjectList] mousedown: ドラッグ準備完了 isDragging=true 選択数:', this.draggingState.selectedObjects.length, obj.link_name);
+                logger.debug('[VirtualObjectList] mousedown: ドラッグ準備完了 isDragging=true 選択数:', this.vobjDragState.selectedObjects.length, obj.link_name);
             }
         }, { capture: true });
     }
@@ -5936,7 +5720,6 @@ class VirtualObjectListApp extends window.PluginBase {
             this.setIframesPointerEvents(false);
 
             // ウィンドウのリサイズハンドルを一時的に無効化
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('disable-window-resize');
 
             // リサイズモード開始
@@ -6160,8 +5943,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 this.updateCanvasSize();
 
                 // ウィンドウのリサイズハンドルを再有効化
-                // MessageBus Phase 2: messageBus.send()を使用
-                this.messageBus.send('enable-window-resize');
+                    this.messageBus.send('enable-window-resize');
 
                 // リサイズ終了フラグをリセット
                 this.isResizing = false;
@@ -6241,7 +6023,6 @@ class VirtualObjectListApp extends window.PluginBase {
             this.notifyXmlDataChanged();
 
             // スクロールバー更新を通知
-            // MessageBus Phase 2: messageBus.send()を使用
             this.messageBus.send('update-scrollbars');
 
         } catch (error) {
@@ -6295,7 +6076,6 @@ class VirtualObjectListApp extends window.PluginBase {
         logger.debug('[VirtualObjectList] キャンバスサイズ更新:', finalWidth, 'x', finalHeight, '(コンテンツ:', maxRight, 'x', maxBottom, ', ウィンドウ:', windowWidth, 'x', windowHeight, ')');
 
         // スクロールバー更新を通知
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('update-scrollbars');
     }
 
@@ -6344,7 +6124,6 @@ class VirtualObjectListApp extends window.PluginBase {
         logger.debug('[VirtualObjectList] キャンバスサイズ調整完了:', finalWidth, 'x', finalHeight);
 
         // スクロールバー更新を通知
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('update-scrollbars');
     }
 
@@ -6416,7 +6195,6 @@ class VirtualObjectListApp extends window.PluginBase {
      * xmlTADの変更を親ウィンドウに通知してファイル保存を促す
      */
     notifyXmlDataChanged() {
-        // MessageBus Phase 2: messageBus.send()を使用
         this.messageBus.send('xml-data-changed', {
             fileId: this.realId,
             xmlData: this.xmlData
@@ -6425,21 +6203,7 @@ class VirtualObjectListApp extends window.PluginBase {
         logger.debug('[VirtualObjectList] xmlTAD変更を通知, realId:', this.realId);
     }
 
-    /**
-     * ウィンドウ設定（位置・サイズ・最大化状態）を更新
-     * @param {Object} windowConfig - { pos: {x, y}, width, height, maximize }
-     */
-    updateWindowConfig(windowConfig) {
-        if (this.realId) {
-            // MessageBus Phase 2: messageBus.send()を使用
-            this.messageBus.send('update-window-config', {
-                fileId: this.realId,
-                windowConfig: windowConfig
-            });
-
-            logger.debug('[VirtualObjectList] ウィンドウ設定を更新:', windowConfig);
-        }
-    }
+    // updateWindowConfig() は基底クラス PluginBase で定義
 
     /**
      * デバッグログ出力（デバッグモード時のみ）
@@ -6462,6 +6226,72 @@ class VirtualObjectListApp extends window.PluginBase {
      */
     warn(...args) {
         logger.warn('[VirtualObjectList]', ...args);
+    }
+
+    // ========================================
+    // PluginBase フックメソッド実装
+    // ========================================
+
+    /**
+     * ドラッグモード変更時のフック（PluginBaseから呼び出される）
+     * @param {string} newMode - 新しいドラッグモード ('move' | 'copy')
+     */
+    onDragModeChanged(newMode) {
+        logger.debug('[VirtualObjectList] ドラッグモード変更:', newMode);
+        // virtual-object-listでは特別な処理は不要
+    }
+
+    /**
+     * クロスウィンドウドロップ成功時に元の仮身を削除（PluginBaseから呼び出される）
+     * @param {Object} data - ドロップデータ
+     */
+    onDeleteSourceVirtualObject(data) {
+        logger.debug('[VirtualObjectList] [Hook] onDeleteSourceVirtualObject:', data);
+
+        if (data.virtualObjects) {
+            logger.debug('[VirtualObjectList] クロスウィンドウmove: 元ウィンドウから仮身を削除', data.virtualObjects.length, '個');
+
+            data.virtualObjects.forEach(vobj => {
+                let index = -1;
+
+                // originalVobjLeft/Topがある場合は、位置情報も使って厳密に特定
+                if (vobj.originalVobjLeft !== undefined && vobj.originalVobjTop !== undefined) {
+                    index = this.virtualObjects.findIndex(v =>
+                        v.link_id === vobj.link_id &&
+                        v.vobjleft === vobj.originalVobjLeft &&
+                        v.vobjtop === vobj.originalVobjTop
+                    );
+                    logger.debug('[VirtualObjectList] 位置情報を使って検索:', vobj.link_name, '位置:', vobj.originalVobjLeft, vobj.originalVobjTop, 'index:', index);
+                } else {
+                    // originalVobjLeft/Topがない場合（基本文章編集プラグインなどから）は、link_idのみで検索
+                    // 同じlink_idの仮身が複数ある場合は最初の一つを削除
+                    index = this.virtualObjects.findIndex(v => v.link_id === vobj.link_id);
+                    logger.debug('[VirtualObjectList] link_idのみで検索:', vobj.link_name, 'index:', index);
+                }
+
+                if (index !== -1) {
+                    logger.debug('[VirtualObjectList] 仮身を削除:', vobj.link_name, 'index:', index);
+                    this.virtualObjects.splice(index, 1);
+                    this.removeVirtualObjectFromXml(vobj);
+                } else {
+                    logger.warn('[VirtualObjectList] 削除対象の仮身が見つかりません:', vobj.link_name);
+                }
+            });
+
+            this.renderVirtualObjects();
+            this.saveToFile();
+        }
+    }
+
+    /**
+     * クロスウィンドウドロップ成功後のクリーンアップ（PluginBaseから呼び出される）
+     * @param {Object} data - ドロップデータ
+     */
+    onCrossWindowDropSuccess(data) {
+        logger.debug('[VirtualObjectList] [Hook] onCrossWindowDropSuccess:', data);
+
+        // ドラッグモードはcleanupVirtualObjectDragState()で既にリセット済み
+        // isRightButtonPressedはPluginBaseで管理
     }
 
 }

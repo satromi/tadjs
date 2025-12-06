@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>検索/置換</title>
+    <link rel="stylesheet" href="find-replace.css">
+</head>
+<body>
+    <div class="find-replace-container">
+        <div class="input-row">
+            <label for="searchText">検索:</label>
+            <input type="text" id="searchText" class="text-input" placeholder="">
+            <label class="regex-toggle">
+                <input type="checkbox" id="regexMode">
+                <span>正規表現</span>
+            </label>
+        </div>
+        <div class="input-row">
+            <label for="replaceText">置換:</label>
+            <input type="text" id="replaceText" class="text-input" placeholder="">
+        </div>
+        <div class="button-row">
+            <button id="replaceAllBtn" class="action-btn">全置換</button>
+            <button id="replaceBtn" class="action-btn">置換</button>
+            <button id="findBtn" class="action-btn">検索</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <script type="module" src="find-replace.js"></script>
+</body>
+</html>

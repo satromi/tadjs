@@ -24,6 +24,11 @@
         import { MessageBus } from '../../js/message-bus.js';
         window.MessageBus = MessageBus;
     </script>
+    <!-- PluginBaseをグローバル変数として読み込み -->
+    <script type="module">
+        import { PluginBase } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+    </script>
     <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -2,7 +2,11 @@
  * ファイル取込プラグイン
  * 外部ファイルを実身として取り込むためのプラグイン
  *
- * PluginBase継承版
+ * @module FileImport
+ * @extends PluginBase
+ * @license MIT
+ * @author satromi
+ * @version 1.0.0
  */
 const logger = window.getLogger('FileImport');
 

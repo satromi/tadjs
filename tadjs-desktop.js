@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.18
+ * TADjs Ver 0.19
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -110,14 +110,14 @@ class TADjsDesktop {
             mode: 'parent'
         });
         this.parentMessageBus.start();
-        logger.info('[TADjs] Phase 2: 親MessageBus初期化完了');
+        logger.info('[TADjs] 親MessageBus初期化完了');
 
-        // Phase 1: MessageRouter初期化
+        // MessageRouter初期化（プラグインからのメッセージをルーティング）
         if (typeof window.MessageRouter !== 'undefined') {
             this.messageRouter = new window.MessageRouter(this);
-            logger.info('[TADjs] Phase 1: MessageRouter初期化完了');
+            logger.info('[TADjs] MessageRouter初期化完了');
         } else {
-            logger.warn('[TADjs] MessageRouterが利用できません - Phase 2移行は無効です');
+            logger.warn('[TADjs] MessageRouterが利用できません');
             this.messageRouter = null;
         }
 
@@ -265,7 +265,7 @@ class TADjsDesktop {
         this.fileImportManager = new window.FileImportManager(this);
         logger.info('[TADjs] FileImportManager初期化完了');
 
-        // Phase 2: MessageRouter ハンドラー登録
+        // MessageRouterハンドラー登録
         this.registerMessageRouterHandlers();
 
         // プラグインマネージャーは既に初期化されているので、直接初期ウィンドウを作成
@@ -454,11 +454,11 @@ class TADjsDesktop {
     }
 
     /**
-     * Phase 2: 親MessageBusのハンドラを登録
-     * プラグインからのメッセージを親側で処理
+     * 親MessageBusのハンドラを登録
+     * プラグイン(iframe)からのメッセージを親ウィンドウ側で処理
      */
     setupParentMessageBusHandlers() {
-        logger.info('[TADjs] Phase 2: 親MessageBusハンドラ登録開始');
+        logger.info('[TADjs] 親MessageBusハンドラ登録開始');
 
         // activate-window: ウィンドウをアクティブ化
         this.parentMessageBus.on('activate-window', (_data, event) => {
@@ -554,7 +554,7 @@ class TADjsDesktop {
             });
         });
 
-        logger.info('[TADjs] Phase 2: 親MessageBusハンドラ登録完了');
+        logger.info('[TADjs] 親MessageBusハンドラ登録完了');
     }
 
     /**
@@ -949,11 +949,7 @@ class TADjsDesktop {
             'apply-user-config': { handler: () => this.applyUserConfig() },
             'disable-window-resize': { handler: () => this.disableAllWindowResize() },
             'enable-window-resize': { handler: () => this.enableAllWindowResize() },
-            'load-image-file': { handler: 'handleLoadImageFile', async: true },
-            'save-image-file': { handler: 'handleSaveImageFile', async: true },
-            'get-image-file-path': { handler: 'handleGetImageFilePath', async: true },
             'get-current-user': { handler: (_, e) => this.handleGetCurrentUser(e) },
-            'duplicate-real-object': { handler: 'handleDuplicateRealObject', async: true },
             'import-files': { handler: 'handleImportFiles', async: true },
         };
     }
@@ -997,7 +993,7 @@ class TADjsDesktop {
 
         // プラグインからのメッセージを受信
         window.addEventListener('message', async (e) => {
-            // ===== Phase 2: MessageRouter優先処理 =====
+            // ===== MessageRouter優先処理 =====
             if (this.messageRouter) {
                 const handled = await this.messageRouter.route(e);
                 if (handled) {
@@ -1326,19 +1322,28 @@ class TADjsDesktop {
 
             element.addEventListener('drop', (e) => {
                 e.preventDefault();
-                e.stopPropagation();
-                dropZone.classList.remove('drop-zone-hover');
-                dropZone.classList.remove('drop-zone-active');
+                if (dropZone) {
+                    dropZone.classList.remove('drop-zone-hover');
+                    dropZone.classList.remove('drop-zone-active');
+                }
 
-                logger.debug('Drop event:', e.dataTransfer);
+                logger.info('[TADjs] Drop event on element:', element.id, e.dataTransfer);
 
                 // 原紙箱からのドラッグデータをチェック
                 const textData = e.dataTransfer.getData('text/plain');
                 if (textData) {
                     try {
                         const dragData = JSON.parse(textData);
+
+                        // 仮身ドラッグの場合は、documentのdropハンドラーに処理を委譲
+                        if (dragData.type === 'virtual-object-drag') {
+                            logger.debug('[TADjs] 仮身ドラッグを検出、documentハンドラーに委譲');
+                            return; // stopPropagation()を呼ばずにreturn
+                        }
+
                         if (dragData.type === 'base-file-copy') {
                             logger.info('[TADjs] 原紙箱からのドロップ:', dragData);
+                            e.stopPropagation();
                             this.handleBaseFileDrop(dragData, e);
                             return false;
                         }
@@ -1350,6 +1355,7 @@ class TADjsDesktop {
                 const files = Array.from(e.dataTransfer.files);
                 if (files.length > 0) {
                     logger.debug(`Dropped ${files.length} files:`, files);
+                    e.stopPropagation();
                     this.handleFilesDrop(files);
                 } else {
                     logger.debug('No files in drop event');
@@ -1369,10 +1375,12 @@ class TADjsDesktop {
             });
             
             document.addEventListener('drop', (e) => {
+                logger.info('[TADjs] Document drop event fired');
+
                 // ドロップ位置のウィンドウとiframeを取得
                 const dropX = e.clientX;
                 const dropY = e.clientY;
-                
+
                 // ドロップ位置にあるウィンドウを見つける
                 const windows = Array.from(document.querySelectorAll('.window')).reverse(); // z-indexの高い順
                 let targetWindow = null;
@@ -2756,6 +2764,39 @@ class TADjsDesktop {
                         }
                         delete this.toolPanelRelations[toolPanelWindowId];
                     }
+                }
+            }
+        }
+
+        // 検索/置換ウィンドウが存在する場合は閉じる
+        if (this.findReplaceRelations) {
+            for (const [findReplaceWindowId, relation] of Object.entries(this.findReplaceRelations)) {
+                if (relation.editorWindowId === windowId) {
+                    // 親ウィンドウが閉じられるので、検索/置換ウィンドウも閉じる
+                    logger.info('[TADjs] 検索/置換ウィンドウを閉じる:', findReplaceWindowId);
+                    const findReplaceWindow = document.getElementById(findReplaceWindowId);
+                    if (findReplaceWindow) {
+                        this.parentMessageBus.unregisterChild(findReplaceWindowId);
+                        findReplaceWindow.remove();
+                        this.windows.delete(findReplaceWindowId);
+                    }
+                    delete this.findReplaceRelations[findReplaceWindowId];
+                }
+            }
+        }
+
+        // 基本表計算用 検索/置換ウィンドウが存在する場合は閉じる
+        if (this.calcFindReplaceRelations) {
+            for (const [findReplaceWindowId, relation] of Object.entries(this.calcFindReplaceRelations)) {
+                if (relation.editorWindowId === windowId) {
+                    logger.info('[TADjs] 基本表計算 検索/置換ウィンドウを閉じる:', findReplaceWindowId);
+                    const findReplaceWindow = document.getElementById(findReplaceWindowId);
+                    if (findReplaceWindow) {
+                        this.parentMessageBus.unregisterChild(findReplaceWindowId);
+                        findReplaceWindow.remove();
+                        this.windows.delete(findReplaceWindowId);
+                    }
+                    delete this.calcFindReplaceRelations[findReplaceWindowId];
                 }
             }
         }
@@ -4278,116 +4319,6 @@ class TADjsDesktop {
     }
 
     /**
-     * MessageBus Phase 2: 画像ファイル読み込みハンドラ
-     */
-    async handleLoadImageFile(data) {
-        logger.info('[TADjs] [MessageBus] 画像ファイル読み込み要求:', data.fileName);
-
-        try {
-            // XTADファイルと同じディレクトリから読み込み
-            const basePath = this.getDataBasePath();
-            const filePath = this.path.join(basePath, data.fileName);
-
-            logger.info('[TADjs] [MessageBus] 画像ファイル読み込み:', filePath);
-
-            // ファイルが存在するかチェック
-            if (!this.fs.existsSync(filePath)) {
-                logger.error('[TADjs] [MessageBus] 画像ファイルが見つかりません:', filePath);
-                this.messageBus.send('load-image-response', {
-                    messageId: data.messageId,
-                    success: false,
-                    error: 'File not found'
-                });
-                return;
-            }
-
-            // ファイルを読み込み
-            const buffer = this.fs.readFileSync(filePath);
-            const imageData = Array.from(buffer);
-
-            // MIMEタイプを推測
-            const ext = this.path.extname(data.fileName).toLowerCase();
-            let mimeType = 'image/png';
-            if (ext === '.jpg' || ext === '.jpeg') {
-                mimeType = 'image/jpeg';
-            } else if (ext === '.gif') {
-                mimeType = 'image/gif';
-            } else if (ext === '.bmp') {
-                mimeType = 'image/bmp';
-            }
-
-            this.messageBus.send('load-image-response', {
-                messageId: data.messageId,
-                success: true,
-                imageData: imageData,
-                mimeType: mimeType
-            });
-
-            logger.info('[TADjs] [MessageBus] 画像ファイル読み込み成功:', filePath, '(', buffer.length, 'bytes)');
-        } catch (error) {
-            logger.error('[TADjs] [MessageBus] 画像ファイル読み込みエラー:', error);
-            this.messageBus.send('load-image-response', {
-                messageId: data.messageId,
-                success: false,
-                error: error.message
-            });
-        }
-    }
-
-    /**
-     * MessageBus Phase 2: 画像ファイル保存ハンドラ
-     */
-    async handleSaveImageFile(data) {
-        logger.info('[TADjs] [MessageBus] 画像ファイル保存要求:', data.fileName);
-
-        try {
-            // XTADファイルと同じディレクトリ（実行ファイルのディレクトリ）に保存
-            const basePath = this.getDataBasePath();
-            const filePath = this.path.join(basePath, data.fileName);
-
-            // Uint8Arrayに変換して保存
-            const buffer = Buffer.from(data.imageData);
-            this.fs.writeFileSync(filePath, buffer);
-
-            logger.info('[TADjs] [MessageBus] 画像ファイル保存成功:', filePath);
-
-            if (data.messageId) {
-                this.messageBus.send('save-image-response', {
-                    messageId: data.messageId,
-                    success: true
-                });
-            }
-        } catch (error) {
-            logger.error('[TADjs] [MessageBus] 画像ファイル保存エラー:', error);
-
-            if (data.messageId) {
-                this.messageBus.send('save-image-response', {
-                    messageId: data.messageId,
-                    success: false,
-                    error: error.message
-                });
-            }
-        }
-    }
-
-    /**
-     * MessageBus Phase 2: 画像ファイルパス取得ハンドラ
-     */
-    async handleGetImageFilePath(data) {
-        logger.info('[TADjs] [MessageBus] 画像ファイルパス取得要求:', data.fileName);
-
-        const filePath = this.getImageFilePath(data.fileName);
-
-        this.messageBus.send('image-file-path-response', {
-            messageId: data.messageId,
-            fileName: data.fileName,
-            filePath: filePath
-        });
-
-        logger.info('[TADjs] [MessageBus] 画像ファイルパス返送:', filePath);
-    }
-
-    /**
      * メッセージダイアログを表示（DialogManagerに委譲）
      * @param {string} message - 表示するメッセージ
      * @param {Array<{label: string, value: any}>} buttons - ボタン定義の配列
@@ -5035,6 +4966,12 @@ class TADjsDesktop {
         );
 
         this.messageRouter.register(
+            'virtualize-selection',
+            this.handleVirtualizeSelection.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
             'change-virtual-object-attributes',
             this.handleChangeVirtualObjectAttributesRouter.bind(this),
             { autoResponse: false }
@@ -5184,6 +5121,60 @@ class TADjsDesktop {
         // 特殊フラグ系はカスタムルーティングが必要なため、個別処理を維持
         logger.info('[TADjs] Phase 4 Batch 6: 道具パネル系ハンドラー登録完了 (4件)');
         logger.info('[TADjs] 特殊フラグ系 (fromEditor, fromToolPanel) は個別処理を維持');
+
+        // 検索/置換ウィンドウ系ハンドラー登録
+        this.messageRouter.register(
+            'open-find-replace-window',
+            this.handleOpenFindReplaceWindow.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'find-next',
+            this.handleFindNext.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'replace-next',
+            this.handleReplaceNext.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'replace-all',
+            this.handleReplaceAll.bind(this),
+            { autoResponse: false }
+        );
+
+        logger.info('[TADjs] 検索/置換ウィンドウ系ハンドラー登録完了 (4件)');
+
+        // 基本表計算用 検索/置換ウィンドウ系ハンドラー登録
+        this.messageRouter.register(
+            'open-calc-find-replace-window',
+            this.handleOpenCalcFindReplaceWindow.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'calc-find-next',
+            this.handleCalcFindNext.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'calc-replace-next',
+            this.handleCalcReplaceNext.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'calc-replace-all',
+            this.handleCalcReplaceAll.bind(this),
+            { autoResponse: false }
+        );
+
+        logger.info('[TADjs] 基本表計算用 検索/置換ウィンドウ系ハンドラー登録完了 (4件)');
     }
 
     // ========================================
@@ -5537,16 +5528,92 @@ class TADjsDesktop {
      * @returns {Promise<void>}
      */
     async handleDuplicateRealObjectRouter(data, event) {
+        if (!this.realObjectSystem) {
+            logger.error('[TADjs] 実身仮身システムが初期化されていません');
+            return;
+        }
+
+        const source = event?.source;
         logger.info('[TADjs] duplicate-real-objectメッセージ受信:', {
             messageId: data.messageId,
             realId: data.realId,
-            hasSource: !!event.source,
-            sourceType: event.source ? typeof event.source : 'undefined'
+            hasSource: !!source
         });
-        // 既存のhandleDuplicateRealObjectメソッドを呼び出し（Phase 2形式: data, event）
-        await this.handleDuplicateRealObject(data, event).catch(err => {
-            logger.error('[TADjs] 実身複製エラー:', err);
-        });
+
+        if (!source) {
+            logger.error('[TADjs] sourceが取得できませんでした');
+            return;
+        }
+
+        const { realId: fullRealId, messageId } = data;
+
+        // 実身IDを抽出（_0.xtad を除去）
+        let realId = fullRealId;
+        if (realId.match(/_\d+\.xtad$/i)) {
+            realId = realId.replace(/_\d+\.xtad$/i, '');
+        }
+
+        try {
+            // 元の実身のメタデータを取得
+            const sourceRealObject = await this.realObjectSystem.loadRealObject(realId);
+            const defaultName = (sourceRealObject.metadata.name || sourceRealObject.metadata.realName || '実身') + 'のコピー';
+
+            // 名前入力ダイアログを表示
+            const result = await this.showInputDialog(
+                '新しい実身の名称を入力してください',
+                defaultName,
+                30,
+                [
+                    { label: '取消', value: 'cancel' },
+                    { label: '設定', value: 'ok' }
+                ],
+                1
+            );
+
+            // キャンセルされた場合
+            if (result.button === 'cancel' || !result.value) {
+                logger.info('[TADjs] 実身複製がキャンセルされました');
+                this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
+                    messageId: messageId,
+                    success: false,
+                    cancelled: true
+                });
+                return;
+            }
+
+            const newName = result.value;
+
+            // RealObjectSystemの実身コピー機能を使用（再帰的コピー）
+            const newRealId = await this.realObjectSystem.copyRealObject(realId);
+
+            // 新しい実身のメタデータを取得
+            const newRealObject = await this.realObjectSystem.loadRealObject(newRealId);
+
+            // 名前を更新
+            newRealObject.metadata.realName = newName;
+            await this.realObjectSystem.saveRealObject(newRealId, newRealObject);
+
+            // JSONファイルにもrefCountを書き込む
+            await this.updateJsonFileRefCount(newRealId);
+
+            // 成功を通知
+            this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
+                messageId: messageId,
+                success: true,
+                newRealId: newRealId,
+                newName: newName
+            });
+
+            logger.info('[TADjs] 実身複製完了:', realId, '->', newRealId, '名前:', newName);
+            this.setStatusMessage(`実身を複製しました: ${newName}`);
+        } catch (error) {
+            logger.error('[TADjs] 実身複製エラー:', error);
+            this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
+                messageId: messageId,
+                success: false,
+                error: error.message
+            });
+        }
     }
 
     /**
@@ -6008,6 +6075,339 @@ class TADjsDesktop {
                 this.startToolPanelDrag(toolPanelWindow, data.clientX, data.clientY);
             }
         }
+    }
+
+    // ========================================
+    // 検索/置換ウィンドウ関連
+    // ========================================
+
+    /**
+     * open-find-replace-window ハンドラー
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleOpenFindReplaceWindow(data, event) {
+        logger.info('[TADjs] 検索/置換ウィンドウを開く');
+
+        const pluginIframe = event.source ? event.source.frameElement : null;
+        if (!pluginIframe) {
+            logger.warn('[TADjs] プラグインのiframeが見つかりません');
+            return;
+        }
+
+        const editorWindowId = this.parentMessageBus.getWindowIdFromIframe(pluginIframe);
+        if (!editorWindowId) {
+            logger.warn('[TADjs] エディタのwindowIdが見つかりません');
+            return;
+        }
+
+        // エディタウィンドウの位置を取得
+        const editorWindow = document.getElementById(editorWindowId);
+        if (!editorWindow) {
+            logger.warn('[TADjs] エディタウィンドウ要素が見つかりません');
+            return;
+        }
+
+        const editorRect = editorWindow.getBoundingClientRect();
+
+        // 検索/置換ウィンドウのコンテンツ
+        const pluginPath = 'plugins/basic-text-editor/find-replace.html';
+        const content = `<iframe src="${pluginPath}" style="width: 100%; height: 100%; border: none;"></iframe>`;
+
+        // ウィンドウ位置: エディタの右上付近
+        const windowWidth = 350;
+        const windowHeight = 110;
+        const pos = {
+            x: editorRect.right - windowWidth - 20,
+            y: editorRect.top + 30
+        };
+
+        const windowId = this.createWindow('検索/置換', content, {
+            width: windowWidth,
+            height: windowHeight,
+            x: pos.x,
+            y: pos.y,
+            resizable: false,
+            maximizable: false,
+            closable: true,
+            alwaysOnTop: true,
+            cssClass: 'find-replace-window',
+            scrollable: false,
+            iconData: data.iconData || null
+        });
+
+        // 検索/置換ウィンドウとエディタの関連付けを保存
+        if (!this.findReplaceRelations) {
+            this.findReplaceRelations = {};
+        }
+        this.findReplaceRelations[windowId] = {
+            editorWindowId: editorWindowId,
+            editorIframe: pluginIframe
+        };
+
+        // 検索/置換ウィンドウに初期設定を送信
+        setTimeout(() => {
+            const windowElement = document.getElementById(windowId);
+            if (windowElement) {
+                const iframe = windowElement.querySelector('iframe');
+                if (iframe && iframe.contentWindow) {
+                    // MessageBusにiframeを登録
+                    this.parentMessageBus.registerChild(windowId, iframe, {
+                        windowId: windowId,
+                        pluginId: 'basic-text-editor-find-replace'
+                    });
+
+                    this.parentMessageBus.sendToWindow(windowId, 'init-find-replace', {
+                        editorWindowId: editorWindowId,
+                        initialSearchText: data.initialSearchText || ''
+                    });
+                }
+            }
+
+            // エディタに検索/置換ウィンドウが開いたことを通知
+            this.parentMessageBus.sendToWindow(editorWindowId, 'find-replace-window-created', {
+                windowId: windowId
+            });
+        }, 100);
+
+        logger.info('[TADjs] 検索/置換ウィンドウ作成:', windowId);
+    }
+
+    /**
+     * find-next ハンドラー - 検索/置換ウィンドウからエディタへ転送
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleFindNext(data, event) {
+        const relation = this.getFindReplaceRelation(event.source);
+        if (relation) {
+            this.parentMessageBus.sendToWindow(relation.editorWindowId, 'find-next-request', {
+                searchText: data.searchText,
+                isRegex: data.isRegex
+            });
+        }
+    }
+
+    /**
+     * replace-next ハンドラー - 検索/置換ウィンドウからエディタへ転送
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleReplaceNext(data, event) {
+        const relation = this.getFindReplaceRelation(event.source);
+        if (relation) {
+            this.parentMessageBus.sendToWindow(relation.editorWindowId, 'replace-next-request', {
+                searchText: data.searchText,
+                replaceText: data.replaceText,
+                isRegex: data.isRegex
+            });
+        }
+    }
+
+    /**
+     * replace-all ハンドラー - 検索/置換ウィンドウからエディタへ転送
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleReplaceAll(data, event) {
+        const relation = this.getFindReplaceRelation(event.source);
+        if (relation) {
+            this.parentMessageBus.sendToWindow(relation.editorWindowId, 'replace-all-request', {
+                searchText: data.searchText,
+                replaceText: data.replaceText,
+                isRegex: data.isRegex
+            });
+        }
+    }
+
+    /**
+     * 検索/置換ウィンドウの関連情報を取得
+     * @param {Window} source - 検索/置換ウィンドウのcontentWindow
+     * @returns {Object|null} 関連情報 {editorWindowId, editorIframe}
+     */
+    getFindReplaceRelation(source) {
+        if (!source || !source.frameElement || !this.findReplaceRelations) {
+            return null;
+        }
+
+        const findReplaceFrame = source.frameElement;
+        const findReplaceWindowElement = findReplaceFrame.closest('.window');
+        if (!findReplaceWindowElement) {
+            return null;
+        }
+
+        const findReplaceWindowId = findReplaceWindowElement.id;
+        return this.findReplaceRelations[findReplaceWindowId] || null;
+    }
+
+    // ========================================
+    // 基本表計算用 検索/置換ウィンドウ
+    // ========================================
+
+    /**
+     * open-calc-find-replace-window ハンドラー
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleOpenCalcFindReplaceWindow(data, event) {
+        logger.info('[TADjs] 基本表計算 検索/置換ウィンドウを開く');
+
+        const pluginIframe = event.source ? event.source.frameElement : null;
+        if (!pluginIframe) {
+            logger.warn('[TADjs] プラグインのiframeが見つかりません');
+            return;
+        }
+
+        const editorWindowId = this.parentMessageBus.getWindowIdFromIframe(pluginIframe);
+        if (!editorWindowId) {
+            logger.warn('[TADjs] エディタのwindowIdが見つかりません');
+            return;
+        }
+
+        // エディタウィンドウの位置を取得
+        const editorWindow = document.getElementById(editorWindowId);
+        if (!editorWindow) {
+            logger.warn('[TADjs] エディタウィンドウ要素が見つかりません');
+            return;
+        }
+
+        const editorRect = editorWindow.getBoundingClientRect();
+
+        // 検索/置換ウィンドウのコンテンツ
+        const pluginPath = 'plugins/basic-calc-editor/find-replace.html';
+        const content = `<iframe src="${pluginPath}" style="width: 100%; height: 100%; border: none;"></iframe>`;
+
+        // ウィンドウ位置: エディタの右上付近
+        const windowWidth = 350;
+        const windowHeight = 110;
+        const pos = {
+            x: editorRect.right - windowWidth - 20,
+            y: editorRect.top + 30
+        };
+
+        const windowId = this.createWindow('検索/置換', content, {
+            width: windowWidth,
+            height: windowHeight,
+            x: pos.x,
+            y: pos.y,
+            resizable: false,
+            maximizable: false,
+            closable: true,
+            alwaysOnTop: true,
+            cssClass: 'find-replace-window',
+            scrollable: false
+        });
+
+        // 検索/置換ウィンドウとエディタの関連付けを保存
+        if (!this.calcFindReplaceRelations) {
+            this.calcFindReplaceRelations = {};
+        }
+        this.calcFindReplaceRelations[windowId] = {
+            editorWindowId: editorWindowId,
+            editorIframe: pluginIframe
+        };
+
+        // 検索/置換ウィンドウに初期設定を送信
+        setTimeout(() => {
+            const windowElement = document.getElementById(windowId);
+            if (windowElement) {
+                const iframe = windowElement.querySelector('iframe');
+                if (iframe && iframe.contentWindow) {
+                    // MessageBusにiframeを登録
+                    this.parentMessageBus.registerChild(windowId, iframe, {
+                        windowId: windowId,
+                        pluginId: 'basic-calc-editor-find-replace'
+                    });
+
+                    this.parentMessageBus.sendToWindow(windowId, 'init-find-replace', {
+                        editorWindowId: editorWindowId,
+                        initialSearchText: data.initialSearchText || ''
+                    });
+                }
+            }
+
+            // エディタに検索/置換ウィンドウが開いたことを通知
+            this.parentMessageBus.sendToWindow(editorWindowId, 'find-replace-window-created', {
+                windowId: windowId
+            });
+        }, 100);
+
+        logger.info('[TADjs] 基本表計算 検索/置換ウィンドウ作成:', windowId);
+    }
+
+    /**
+     * calc-find-next ハンドラー - 検索/置換ウィンドウからエディタへ転送
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleCalcFindNext(data, event) {
+        const relation = this.getCalcFindReplaceRelation(event.source);
+        if (relation) {
+            this.parentMessageBus.sendToWindow(relation.editorWindowId, 'calc-find-next-request', {
+                searchText: data.searchText,
+                isRegex: data.isRegex
+            });
+        }
+    }
+
+    /**
+     * calc-replace-next ハンドラー - 検索/置換ウィンドウからエディタへ転送
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleCalcReplaceNext(data, event) {
+        const relation = this.getCalcFindReplaceRelation(event.source);
+        if (relation) {
+            this.parentMessageBus.sendToWindow(relation.editorWindowId, 'calc-replace-next-request', {
+                searchText: data.searchText,
+                replaceText: data.replaceText,
+                isRegex: data.isRegex
+            });
+        }
+    }
+
+    /**
+     * calc-replace-all ハンドラー - 検索/置換ウィンドウからエディタへ転送
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleCalcReplaceAll(data, event) {
+        const relation = this.getCalcFindReplaceRelation(event.source);
+        if (relation) {
+            this.parentMessageBus.sendToWindow(relation.editorWindowId, 'calc-replace-all-request', {
+                searchText: data.searchText,
+                replaceText: data.replaceText,
+                isRegex: data.isRegex
+            });
+        }
+    }
+
+    /**
+     * 基本表計算 検索/置換ウィンドウの関連情報を取得
+     * @param {Window} source - 検索/置換ウィンドウのcontentWindow
+     * @returns {Object|null} 関連情報 {editorWindowId, editorIframe}
+     */
+    getCalcFindReplaceRelation(source) {
+        if (!source || !source.frameElement || !this.calcFindReplaceRelations) {
+            return null;
+        }
+
+        const findReplaceFrame = source.frameElement;
+        const findReplaceWindowElement = findReplaceFrame.closest('.window');
+        if (!findReplaceWindowElement) {
+            return null;
+        }
+
+        const findReplaceWindowId = findReplaceWindowElement.id;
+        return this.calcFindReplaceRelations[findReplaceWindowId] || null;
     }
 
     // ========================================
@@ -6754,104 +7154,6 @@ class TADjsDesktop {
     }
 
     /**
-     * 実身複製ハンドラー
-     * MessageBus Phase 2: data と event の2引数形式に対応
-     */
-    async handleDuplicateRealObject(dataOrEvent, event) {
-        if (!this.realObjectSystem) {
-            logger.error('[TADjs] 実身仮身システムが初期化されていません');
-            return;
-        }
-
-        // MessageBus経由 (data, event)
-        const data = dataOrEvent;
-        const source = event?.source;
-        logger.info('[TADjs] handleDuplicateRealObject: MessageBus経由で呼び出されました');
-
-        // sourceの検証
-        if (!source) {
-            logger.error('[TADjs] handleDuplicateRealObject: sourceが取得できませんでした', {
-                hasEvent: !!event,
-                hasEventSource: !!(event && event.source),
-                hasDataOrEventSource: !!(dataOrEvent && dataOrEvent.source),
-                dataOrEventType: typeof dataOrEvent
-            });
-            return;
-        }
-
-        const { realId: fullRealId, messageId } = data;
-
-        // 実身IDを抽出（_0.xtad を除去）
-        let realId = fullRealId;
-        if (realId.match(/_\d+\.xtad$/i)) {
-            realId = realId.replace(/_\d+\.xtad$/i, '');
-        }
-        logger.info('[TADjs] 実身ID抽出:', realId, 'フルID:', fullRealId, 'messageId:', messageId, 'source:', !!source);
-
-        try {
-            // 元の実身のメタデータを取得
-            const sourceRealObject = await this.realObjectSystem.loadRealObject(realId);
-            const defaultName = (sourceRealObject.metadata.name || sourceRealObject.metadata.realName || '実身') + 'のコピー';
-
-            // 名前入力ダイアログを表示
-            const result = await this.showInputDialog(
-                '新しい実身の名称を入力してください',
-                defaultName,
-                30,
-                [
-                    { label: '取消', value: 'cancel' },
-                    { label: '設定', value: 'ok' }
-                ],
-                1 // デフォルトは「設定」ボタン
-            );
-
-            // キャンセルされた場合
-            if (result.button === 'cancel' || !result.value) {
-                logger.info('[TADjs] 実身複製がキャンセルされました');
-                this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
-                    messageId: messageId,
-                    success: false,
-                    cancelled: true
-                });
-                return;
-            }
-
-            const newName = result.value;
-
-            // RealObjectSystemの実身コピー機能を使用（再帰的コピー）
-            const newRealId = await this.realObjectSystem.copyRealObject(realId);
-
-            // 新しい実身のメタデータを取得
-            const newRealObject = await this.realObjectSystem.loadRealObject(newRealId);
-
-            // 名前を更新
-            newRealObject.metadata.realName = newName;
-            await this.realObjectSystem.saveRealObject(newRealId, newRealObject);
-
-            // JSONファイルにもrefCountを書き込む
-            await this.updateJsonFileRefCount(newRealId);
-
-            // 成功を通知
-            this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
-                messageId: messageId,
-                success: true,
-                newRealId: newRealId,
-                newName: newName
-            });
-
-            logger.info('[TADjs] 実身複製完了:', realId, '->', newRealId, '名前:', newName);
-            this.setStatusMessage(`実身を複製しました: ${newName}`);
-        } catch (error) {
-            logger.error('[TADjs] 実身複製エラー:', error);
-            this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
-                messageId: messageId,
-                success: false,
-                error: error.message
-            });
-        }
-    }
-
-    /**
      * ファイル取り込みハンドラー
      * file-import プラグインから呼び出される
      * @param {Object} dataOrEvent - イベント（汎用ハンドラー経由）またはデータ
@@ -7019,6 +7321,154 @@ class TADjsDesktop {
             logger.error('[TADjs] 新たな実身に保存エラー:', error);
             if (source) {
                 this.parentMessageBus.respondTo(source, 'save-as-new-real-object-completed', {
+                    messageId: messageId,
+                    success: false,
+                    error: error.message
+                });
+            }
+        }
+    }
+
+    /**
+     * 選択範囲を仮身化（新しい実身として切り出し）ハンドラー
+     */
+    async handleVirtualizeSelection(data, event) {
+        if (!this.realObjectSystem) {
+            logger.error('[TADjs] 実身仮身システムが初期化されていません');
+            return;
+        }
+
+        const source = event?.source;
+        const { messageId, defaultName, xtadContent, imageFiles, sourceRealId } = data;
+
+        try {
+            // 名前入力ダイアログを表示
+            const result = await this.showInputDialog(
+                '新しい実身の名称を入力してください',
+                defaultName || '新規実身',
+                30,
+                [
+                    { label: '取消', value: 'cancel' },
+                    { label: '設定', value: 'ok' }
+                ],
+                1
+            );
+
+            // キャンセルされた場合
+            if (result.button === 'cancel' || !result.value) {
+                logger.info('[TADjs] 仮身化がキャンセルされました');
+                if (source) {
+                    this.parentMessageBus.respondTo(source, 'virtualize-selection-completed', {
+                        messageId: messageId,
+                        success: false,
+                        cancelled: true
+                    });
+                }
+                return;
+            }
+
+            const newName = result.value;
+
+            // 新しい実身IDを生成
+            const newRealId = this.realObjectSystem.generateUUIDv7();
+            logger.info('[TADjs] 仮身化: 新実身ID生成:', newRealId);
+
+            // 画像ファイルのコピーとXTAD内参照の置換
+            let finalXtad = xtadContent;
+            const basePath = this.realObjectSystem._basePath;
+
+            if (imageFiles && imageFiles.length > 0) {
+                for (let i = 0; i < imageFiles.length; i++) {
+                    const imgInfo = imageFiles[i];
+                    const newFilename = `${newRealId}_0_${i}.png`;
+
+                    // 元画像ファイルをコピー
+                    const sourceImagePath = this.realObjectSystem.path.join(basePath, imgInfo.originalFilename);
+                    const destImagePath = this.realObjectSystem.path.join(basePath, newFilename);
+
+                    if (this.realObjectSystem.fs.existsSync(sourceImagePath)) {
+                        try {
+                            this.realObjectSystem.fs.copyFileSync(sourceImagePath, destImagePath);
+                            logger.debug('[TADjs] 画像ファイルコピー:', imgInfo.originalFilename, '->', newFilename);
+                        } catch (copyError) {
+                            logger.error('[TADjs] 画像ファイルコピーエラー:', copyError);
+                        }
+                    }
+
+                    // XTAD内のプレースホルダーを実際のファイル名に置換
+                    finalXtad = finalXtad.replace(new RegExp(`__IMAGE_${i}__`, 'g'), newFilename);
+                }
+            }
+
+            // XTAD全体をラップ
+            const wrappedXtad = `<tad version="1.0" encoding="UTF-8">\r\n<document>\r\n<p>\r\n${finalXtad}\r\n</p>\r\n</document>\r\n</tad>`;
+
+            // 新規実身を保存
+            const newRealObject = {
+                metadata: {
+                    realId: newRealId,
+                    realName: newName,
+                    name: newName,
+                    recordCount: 1,
+                    refCount: 1,
+                    createDate: new Date().toISOString(),
+                    updateDate: new Date().toISOString(),
+                    accessDate: new Date().toISOString(),
+                    applist: {
+                        'basic-text-editor': {
+                            name: '基本文章編集',
+                            defaultOpen: true
+                        }
+                    }
+                },
+                records: [{ xtad: wrappedXtad }]
+            };
+
+            await this.realObjectSystem.saveRealObject(newRealId, newRealObject);
+
+            // 基本文章編集プラグインのアイコンをコピー（fs.readFileSyncを使用）
+            try {
+                // プログラムベースパス（plugins フォルダがある場所）を使用
+                const programBasePath = this._programBasePath;
+                // plugin.json の basefile.ico を参照
+                const baseIconPath = this.path.join(programBasePath, 'plugins/basic-text-editor/019a1132-762b-7b02-ba2a-a918a9b37c39.ico');
+
+                if (this.fs.existsSync(baseIconPath)) {
+                    const iconData = this.fs.readFileSync(baseIconPath);
+                    const newIconFileName = `${newRealId}.ico`;
+                    const iconSaved = await this.saveDataFile(newIconFileName, iconData);
+                    if (iconSaved) {
+                        logger.info('[TADjs] 仮身化: アイコンファイルコピー完了:', newIconFileName);
+                    } else {
+                        logger.warn('[TADjs] 仮身化: アイコンファイル保存失敗');
+                    }
+                } else {
+                    logger.warn('[TADjs] 仮身化: アイコンファイルが見つかりません:', baseIconPath);
+                }
+            } catch (iconError) {
+                logger.warn('[TADjs] 仮身化: アイコンファイルコピー失敗:', iconError);
+            }
+
+            // JSONファイルにrefCountを書き込む
+            await this.updateJsonFileRefCount(newRealId);
+
+            // 成功を通知
+            if (source) {
+                this.parentMessageBus.respondTo(source, 'virtualize-selection-completed', {
+                    messageId: messageId,
+                    success: true,
+                    newRealId: newRealId,
+                    newName: newName
+                });
+            }
+
+            logger.info('[TADjs] 仮身化完了:', newRealId, '名前:', newName);
+            this.setStatusMessage(`仮身化しました: ${newName}`);
+
+        } catch (error) {
+            logger.error('[TADjs] 仮身化エラー:', error);
+            if (source) {
+                this.parentMessageBus.respondTo(source, 'virtualize-selection-completed', {
                     messageId: messageId,
                     success: false,
                     error: error.message
