@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.19
+ * TADjs Ver 0.20
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -5537,6 +5537,7 @@ class TADjsDesktop {
         logger.info('[TADjs] duplicate-real-objectメッセージ受信:', {
             messageId: data.messageId,
             realId: data.realId,
+            newName: data.newName,
             hasSource: !!source
         });
 
@@ -5554,34 +5555,39 @@ class TADjsDesktop {
         }
 
         try {
-            // 元の実身のメタデータを取得
-            const sourceRealObject = await this.realObjectSystem.loadRealObject(realId);
-            const defaultName = (sourceRealObject.metadata.name || sourceRealObject.metadata.realName || '実身') + 'のコピー';
+            let newName = data.newName;
 
-            // 名前入力ダイアログを表示
-            const result = await this.showInputDialog(
-                '新しい実身の名称を入力してください',
-                defaultName,
-                30,
-                [
-                    { label: '取消', value: 'cancel' },
-                    { label: '設定', value: 'ok' }
-                ],
-                1
-            );
+            // newNameがメッセージに含まれていない場合のみダイアログを表示（後方互換性）
+            if (!newName) {
+                // 元の実身のメタデータを取得
+                const sourceRealObject = await this.realObjectSystem.loadRealObject(realId);
+                const defaultName = (sourceRealObject.metadata.name || sourceRealObject.metadata.realName || '実身') + 'のコピー';
 
-            // キャンセルされた場合
-            if (result.button === 'cancel' || !result.value) {
-                logger.info('[TADjs] 実身複製がキャンセルされました');
-                this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
-                    messageId: messageId,
-                    success: false,
-                    cancelled: true
-                });
-                return;
+                // 名前入力ダイアログを表示
+                const result = await this.showInputDialog(
+                    '新しい実身の名称を入力してください',
+                    defaultName,
+                    30,
+                    [
+                        { label: '取消', value: 'cancel' },
+                        { label: '設定', value: 'ok' }
+                    ],
+                    1
+                );
+
+                // キャンセルされた場合
+                if (result.button === 'cancel' || !result.value) {
+                    logger.info('[TADjs] 実身複製がキャンセルされました');
+                    this.parentMessageBus.respondTo(source, 'real-object-duplicated', {
+                        messageId: messageId,
+                        success: false,
+                        cancelled: true
+                    });
+                    return;
+                }
+
+                newName = result.value;
             }
-
-            const newName = result.value;
 
             // RealObjectSystemの実身コピー機能を使用（再帰的コピー）
             const newRealId = await this.realObjectSystem.copyRealObject(realId);

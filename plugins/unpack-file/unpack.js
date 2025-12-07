@@ -1547,13 +1547,19 @@ function processExtractedFiles(lHead) {
                 for (let recNo = 0; recNo < nrec; recNo++) {
                     const recType = recordTypes[recNo];
 
-                    if (recType === 0 || recType === 8) {
-                        // type=0 (リンクレコード) と type=8 (実行機能付箋) はXML不要
-                        // リンクレコードは tsVirtualObjSegment() で linkRecordList から解釈されて<link>要素が生成される
+                    // XMLが生成されるレコードタイプかどうかを判定
+                    // type=0 (リンクレコード): XML不要
+                    // type=1 (TAD): XMLあり
+                    // type=8 (実行機能付箋): XML不要
+                    // その他のタイプ: enableAnotherRecordがtrueの場合のみXMLあり
+                    const hasXml = (recType === 1) || (recType !== 0 && recType !== 8 && enableAnotherRecord);
+
+                    if (!hasXml) {
+                        // XML不要なレコードタイプ
                         recordXmls.push(null);
                         console.log(`[UnpackJS] 実身 ${index}, レコード ${recNo}: type=${recType} (XML不要)`);
                     } else {
-                        // type=1 (TAD) やその他のタイプはXMLあり
+                        // XMLありのレコードタイプ
                         if (xmlIndex < xml.length) {
                             recordXmls.push(xml[xmlIndex]);
                             console.log(`[UnpackJS] 実身 ${index}, レコード ${recNo}: type=${recType}, xml[${xmlIndex}] (長さ: ${xml[xmlIndex] ? xml[xmlIndex].length : 0})`);
