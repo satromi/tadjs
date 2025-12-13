@@ -11,6 +11,7 @@ window.electronAPI = {
 
     // ファイル操作
     openFileDialog: () => ipcRenderer.invoke('open-file-dialog'),
+    openFolderDialog: () => ipcRenderer.invoke('open-folder-dialog'),
     saveFileDialog: (defaultName) => ipcRenderer.invoke('save-file-dialog', defaultName),
     saveFile: (filePath, data) => ipcRenderer.invoke('save-file', filePath, data),
     readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),

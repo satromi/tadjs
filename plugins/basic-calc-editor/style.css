@@ -219,9 +219,9 @@ html, body {
 .virtual-object-in-cell {
     display: inline-flex;
     align-items: center;
-    max-width: 100%;
-    height: 18px;
     vertical-align: middle;
+    box-sizing: border-box;
+    overflow: visible;
 }
 
 .virtual-object-in-cell img {
@@ -235,7 +235,19 @@ html, body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 11px;
+    font-size: inherit;
+}
+
+/* 仮身の選択状態 */
+.virtual-object-in-cell.selected {
+    box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.5);
+    outline: 2px solid #ff8f00;
+    outline-offset: -2px;
+    border-radius: 2px;
+}
+
+.virtual-object-in-cell.selected:hover {
+    box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.7);
 }
 
 /* セル入力ボックス（操作パネル用） */

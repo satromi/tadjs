@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.18
+ * TADjs Ver0.21
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -4676,6 +4676,91 @@ function tsVirtualObjSegment(segLen, tadSeg) {
 }
 
 /**
+ * 表計算形式のデータセット
+ * @param {int} segLen
+ * @param {0x0000[]} tadSeg
+ */
+function tsSpecitySegmentCalc(dataSeg) {
+
+    if (isXmlDumpEnabled()) {
+        // セル位置 (列番号をA,B,C...形式に変換)
+        const row = Number(uh2h(dataSeg[1]));  // 1始まり
+        const col = Number(uh2h(dataSeg[2]));  // 1始まり
+        // 列番号を英字に変換 (1=A, 2=B, ... 26=Z, 27=AA, ...)
+        let colLetter = '';
+        let c = col - 1;  // 0始まりに変換
+        do {
+            colLetter = String.fromCharCode(65 + (c % 26)) + colLetter;
+            c = Math.floor(c / 26) - 1;
+        } while (c >= 0);
+        const cellRef = colLetter + row;  // rowはそのまま使用
+        xmlBuffer.push(`<calcPos cell="${cellRef}"/>`);
+        console.debug(`calcPos cell=${cellRef} (col=${col} row=${row})`);
+
+        // dataSeg[4], dataSeg[5]から各バイトを取得（直接ビット演算で抽出）
+        // dataSeg[4]: 下位バイト=文字サイズ, 上位バイト=文字修飾
+        const fontSizeCode = dataSeg[4] & 0xFF;  // 下位バイト
+        const deco = (dataSeg[4] >> 8) & 0xFF;   // 上位バイト
+        // dataSeg[5]: 下位バイト=罫線, 上位バイト=文字色
+        const border = dataSeg[5] & 0xFF;         // 下位バイト
+        const colorCode = (dataSeg[5] >> 8) & 0xFF;             // 上位バイト
+
+        // デバッグ: 生データをダンプ
+        console.log(`[tsSpecitySegmentCalc] cell=${cellRef} dataSeg[4]=0x${dataSeg[4].toString(16).padStart(4,'0')} dataSeg[5]=0x${dataSeg[5].toString(16).padStart(4,'0')}`);
+        console.log(`  fontSizeCode=0x${fontSizeCode.toString(16)} deco=0x${deco.toString(16)} border=0x${border.toString(16)} colorCode=0x${colorCode.toString(16)}`);
+
+        // 文字サイズ: 0=無指定(12), 1=1/2倍(6), 2=3/4倍(9), 3=1倍(12), 4=2倍(24), 5=3倍(36), 6=4倍(48)
+        // デフォルト(12)以外の場合のみ出力
+        if (fontSizeCode !== 0 && fontSizeCode !== 3) {
+            const fontSizeMap = {1:6, 2:9, 4:24, 5:36, 6:48};
+            const fontSize = fontSizeMap[fontSizeCode];
+            if (fontSize) {
+                xmlBuffer.push(`<font size="${fontSize}"/>`);
+            }
+        }
+
+        // 文字修飾: 1=太字, 2=斜体, 4=下線, 0x20=網掛け, 0x40=反転
+        if (deco !== 0) {
+            if (deco & 1) xmlBuffer.push('<bold/>');
+            if (deco & 2) xmlBuffer.push('<italic/>');
+            if (deco & 4) xmlBuffer.push('<underline/>');
+            if (deco & 0x20) xmlBuffer.push('<mesh/>');
+            if (deco & 0x40) xmlBuffer.push('<invert/>');
+        }
+
+        // 罫線: 下位4ビット=縦線(左), 上位4ビット=横線(上), 0=なし, 1=細線, 2=太線, 3=点線
+        if (border !== 0) {
+            const vLine = border & 0x0F;  // 下位4ビット
+            const hLine = (border >> 4) & 0x0F;  // 上位4ビット
+            const lineTypeMap = {1:'line', 2:'double', 3:'dot'};
+            let calcCellAttrs = [];
+            if (vLine > 0) {
+                calcCellAttrs.push(`borderLeft="1" borderLeftType="${lineTypeMap[vLine] || 'line'}"`);
+            }
+            if (hLine > 0) {
+                calcCellAttrs.push(`borderTop="1" borderTopType="${lineTypeMap[hLine] || 'line'}"`);
+            }
+            if (calcCellAttrs.length > 0) {
+                xmlBuffer.push(`<calcCell ${calcCellAttrs.join(' ')}/>`);
+            }
+        }
+
+        // 文字色: 0=白, 1=黒, 2=赤, 3=黄緑, 4=青, 5=黄, 6=ピンク, 7=水色
+        // デフォルト(黒=#000000)以外の場合のみ出力
+        if (colorCode !== 1) {
+            const colorMap = {
+                0:'#ffffff', 2:'#ff0000', 3:'#00ff00',
+                4:'#0000ff', 5:'#ffff00', 6:'#ff00ff', 7:'#00ffff'
+            };
+            const color = colorMap[colorCode];
+            if (color) {
+                xmlBuffer.push(`<font color="${color}"/>`);
+            }
+        }
+    }
+}
+
+/**
  * 指定付箋セグメントを処理
  * @param {*} segLen 
  * @param {*} tadSeg 
@@ -4719,9 +4804,8 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
             dataSeg.push(tadSeg[dataLen + 33]);
         }
 
-        if (isXmlDumpEnabled) {
-            xmlBuffer.push(`<calcPos col="${Number(uh2h(dataSeg[1]))}" row="${Number(uh2h(dataSeg[2]))}"/>`);
-        }
+        tsSpecitySegmentCalc(dataSeg);
+
 
         return;
     }

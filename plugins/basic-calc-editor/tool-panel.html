@@ -10,24 +10,17 @@
     <div class="tool-panel-window">
         <!-- 1行目: 書式設定 -->
         <div class="tool-row format-row">
-            <!-- フォント選択 -->
-            <select class="font-select" id="fontSelect" title="フォント">
-                <option value="MS Gothic">MS ゴシック</option>
-                <option value="MS Mincho">MS 明朝</option>
-                <option value="Meiryo">メイリオ</option>
-            </select>
+            <!-- フォント選択（ポップアップ） -->
+            <button class="dropdown-btn font-dropdown" id="fontDropdownBtn" title="フォント">
+                <span id="fontDisplay">ゴシック</span>
+                <span class="dropdown-arrow">▼</span>
+            </button>
 
-            <!-- フォントサイズ -->
-            <select class="size-select" id="sizeSelect" title="文字サイズ">
-                <option value="9">9</option>
-                <option value="10">10</option>
-                <option value="11">11</option>
-                <option value="12" selected>12</option>
-                <option value="14">14</option>
-                <option value="16">16</option>
-                <option value="18">18</option>
-                <option value="24">24</option>
-            </select>
+            <!-- フォントサイズ（ポップアップ） -->
+            <button class="dropdown-btn size-dropdown" id="sizeDropdownBtn" title="文字サイズ">
+                <span id="sizeDisplay">12</span>
+                <span class="dropdown-arrow">▼</span>
+            </button>
 
             <!-- 太字 -->
             <button class="format-btn" id="boldBtn" title="太字">
@@ -71,15 +64,16 @@
                 <input type="color" id="bgColorPicker" class="color-input" value="#ffffff">
             </div>
 
-            <!-- 配置 -->
-            <button class="format-btn" id="alignLeftBtn" title="左揃え">
-                <span class="btn-icon">≡</span>
+            <!-- 水平配置 -->
+            <button class="dropdown-btn align-dropdown" id="hAlignDropdownBtn" title="水平配置">
+                <span id="hAlignDisplay">☰</span>
+                <span class="dropdown-arrow">▼</span>
             </button>
-            <button class="format-btn" id="alignCenterBtn" title="中央揃え">
-                <span class="btn-icon">≡</span>
-            </button>
-            <button class="format-btn" id="alignRightBtn" title="右揃え">
-                <span class="btn-icon">≡</span>
+
+            <!-- 垂直配置 -->
+            <button class="dropdown-btn align-dropdown" id="vAlignDropdownBtn" title="垂直配置">
+                <span id="vAlignDisplay">↕</span>
+                <span class="dropdown-arrow">▼</span>
             </button>
         </div>
 
@@ -114,20 +108,17 @@
                 <input type="color" id="borderColorPicker" class="color-input" value="#000000">
             </div>
 
-            <!-- 線種 -->
-            <select class="line-select" id="lineStyleSelect" title="線種">
-                <option value="solid">実線</option>
-                <option value="dashed">破線</option>
-                <option value="dotted">点線</option>
-                <option value="double">二重線</option>
-            </select>
+            <!-- 線種（ポップアップ） -->
+            <button class="dropdown-btn line-dropdown" id="lineStyleDropdownBtn" title="線種">
+                <span id="lineStyleDisplay">実線</span>
+                <span class="dropdown-arrow">▼</span>
+            </button>
 
-            <!-- 線幅 -->
-            <select class="line-select" id="lineWidthSelect" title="線幅">
-                <option value="1">細</option>
-                <option value="2">中</option>
-                <option value="3">太</option>
-            </select>
+            <!-- 線幅（ポップアップ） -->
+            <button class="dropdown-btn line-dropdown" id="lineWidthDropdownBtn" title="線幅">
+                <span id="lineWidthDisplay">細</span>
+                <span class="dropdown-arrow">▼</span>
+            </button>
         </div>
 
         <!-- 3行目: セル参照とセル入力 -->

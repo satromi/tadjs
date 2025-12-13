@@ -1,11 +1,19 @@
-// electron/main.js
+/**
+ * electron/main.js
+ * TADjs Desktop アプリケーションのメインプロセス
+ * 
+ * 
+ */
 
 const electron = require('electron');
+const { getLogger } = require('./logger.cjs');
+
+const logger = getLogger('Main');
 
 // Electronモジュールの型を確認（パスが返される場合がある）
 if (typeof electron === 'string') {
-    console.error('Electronが文字列として読み込まれました:', electron);
-    console.error('Electronアプリとして正しく実行されていません');
+    logger.error('Electronが文字列として読み込まれました:', electron);
+    logger.error('Electronアプリとして正しく実行されていません');
     process.exit(1);
 }
 
@@ -58,8 +66,8 @@ class PluginManager {
             }
         }
 
-        console.log('アプリケーションルート:', this.appRoot);
-        console.log('プラグインディレクトリ:', this.pluginDirs);
+        logger.info('アプリケーションルート:', this.appRoot);
+        logger.info('プラグインディレクトリ:', this.pluginDirs);
     }
 
     // プラグインディレクトリをスキャン
@@ -70,13 +78,13 @@ class PluginManager {
                 const defaultPluginDir = path.join(this.appRoot, 'plugins');
                 fs.mkdirSync(defaultPluginDir, { recursive: true });
                 this.pluginDirs.push(defaultPluginDir);
-                console.log('プラグインディレクトリを作成しました:', defaultPluginDir);
+                logger.info('プラグインディレクトリを作成しました:', defaultPluginDir);
                 return;
             }
 
             // すべてのプラグインディレクトリをスキャン
             for (const pluginDir of this.pluginDirs) {
-                console.log('プラグインディレクトリをスキャン:', pluginDir);
+                logger.debug('プラグインディレクトリをスキャン:', pluginDir);
 
                 const pluginFolders = fs.readdirSync(pluginDir, { withFileTypes: true })
                     .filter(dirent => dirent.isDirectory())
@@ -87,9 +95,9 @@ class PluginManager {
                 }
             }
 
-            console.log(`${this.plugins.size}個のプラグインを読み込みました`);
+            logger.info(`${this.plugins.size}個のプラグインを読み込みました`);
         } catch (error) {
-            console.error('プラグイン読み込みエラー:', error);
+            logger.error('プラグイン読み込みエラー:', error);
         }
     }
 
@@ -100,7 +108,7 @@ class PluginManager {
             const manifestPath = path.join(pluginPath, 'plugin.json');
 
             if (!fs.existsSync(manifestPath)) {
-                console.warn(`${folderName}: plugin.jsonが見つかりません`);
+                logger.warn(`${folderName}: plugin.jsonが見つかりません`);
                 return;
             }
 
@@ -108,7 +116,7 @@ class PluginManager {
 
             // 既に同じIDのプラグインが読み込まれている場合はスキップ
             if (this.plugins.has(manifest.id)) {
-                console.log(`プラグイン ${manifest.id} は既に読み込まれています。スキップします。`);
+                logger.debug(`プラグイン ${manifest.id} は既に読み込まれています。スキップします。`);
                 return;
             }
 
@@ -129,9 +137,9 @@ class PluginManager {
                 manifest: manifest
             });
 
-            console.log(`プラグイン読み込み成功: ${manifest.name} (${manifest.id}) from ${pluginDir}`);
+            logger.debug(`プラグイン読み込み成功: ${manifest.name} (${manifest.id}) from ${pluginDir}`);
         } catch (error) {
-            console.error(`プラグイン読み込みエラー (${folderName}):`, error);
+            logger.error(`プラグイン読み込みエラー (${folderName}):`, error);
         }
     }
 
@@ -162,10 +170,10 @@ function createWindow() {
         iconPath = path.join(appRoot, 'favicon.svg');
     }
 
-    console.log('HTMLファイルパス:', htmlPath);
-    console.log('アイコンパス:', iconPath);
-    console.log('ファイル存在確認 - HTML:', fs.existsSync(htmlPath));
-    console.log('ファイル存在確認 - Icon:', fs.existsSync(iconPath));
+    logger.debug('HTMLファイルパス:', htmlPath);
+    logger.debug('アイコンパス:', iconPath);
+    logger.debug('ファイル存在確認 - HTML:', fs.existsSync(htmlPath));
+    logger.debug('ファイル存在確認 - Icon:', fs.existsSync(iconPath));
 
     mainWindow = new BrowserWindow({
         width: 1200,
@@ -231,20 +239,37 @@ function createWindow() {
 // カラープロファイル設定（色が紫っぽくなる問題の対策）
 app.commandLine.appendSwitch('force-color-profile', 'srgb');
 
-// アプリケーション起動
-app.whenReady().then(async () => {
-    // プラグインマネージャーを初期化
-    pluginManager = new PluginManager();
-    await pluginManager.loadPlugins();
+// 二重起動防止
+const gotTheLock = app.requestSingleInstanceLock();
 
-    createWindow();
-
-    app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) {
-            createWindow();
+if (!gotTheLock) {
+    // 既に別のインスタンスが起動している場合、即座に終了
+    app.quit();
+} else {
+    // 2つ目のインスタンスが起動しようとした時
+    app.on('second-instance', (event, commandLine, workingDirectory) => {
+        // 最初のインスタンスのウィンドウにフォーカスを当てる
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.focus();
         }
     });
-});
+
+    // アプリケーション起動
+    app.whenReady().then(async () => {
+        // プラグインマネージャーを初期化
+        pluginManager = new PluginManager();
+        await pluginManager.loadPlugins();
+
+        createWindow();
+
+        app.on('activate', () => {
+            if (BrowserWindow.getAllWindows().length === 0) {
+                createWindow();
+            }
+        });
+    });
+}
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
@@ -280,6 +305,22 @@ ipcMain.handle('open-file-dialog', async () => {
             path: filePath,
             name: path.basename(filePath),
             data: Array.from(fileData)
+        };
+    }
+
+    return null;
+});
+
+// IPC通信: フォルダ選択ダイアログ
+ipcMain.handle('open-folder-dialog', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openDirectory'],
+        title: 'データ配置フォルダを選択'
+    });
+
+    if (!result.canceled && result.filePaths.length > 0) {
+        return {
+            folderPath: result.filePaths[0]
         };
     }
 
@@ -392,7 +433,7 @@ function getFontAllNames(fontPath, debugFontName = null) {
 
         return names;
     } catch (error) {
-        console.error('[Main] フォント名取得エラー:', fontPath, error.message);
+        logger.error('フォント名取得エラー:', fontPath, error.message);
         return null;
     }
 }
@@ -504,7 +545,7 @@ async function getSystemFontsViaDirectWrite() {
     `;
 
     try {
-        console.log('[Main] PowerShell DirectWrite APIでフォント取得開始');
+        logger.debug('PowerShell DirectWrite APIでフォント取得開始');
 
         const output = execSync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`, {
             encoding: 'utf8',
@@ -512,18 +553,18 @@ async function getSystemFontsViaDirectWrite() {
         });
 
         if (!output || output.trim().length === 0) {
-            console.error('[Main] PowerShell出力が空です');
+            logger.error('PowerShell出力が空です');
             return [];
         }
 
         const items = JSON.parse(output);
         const itemsArray = Array.isArray(items) ? items : [items];
 
-        console.log('[Main] DirectWriteから取得:', itemsArray.length, 'フォント');
+        logger.debug('DirectWriteから取得:', itemsArray.length, 'フォント');
 
         return itemsArray;
     } catch (error) {
-        console.error('[Main] DirectWriteフォント取得エラー:', error.message);
+        logger.error('DirectWriteフォント取得エラー:', error.message);
         return [];
     }
 }
@@ -531,11 +572,11 @@ async function getSystemFontsViaDirectWrite() {
 // IPC通信: システムフォント一覧取得（日本語名付き）
 ipcMain.handle('get-system-fonts', async () => {
     try {
-        console.log('[Main] システムフォント一覧を取得中...');
+        logger.info('システムフォント一覧を取得中...');
 
         // font-list ライブラリで取得（日本語名対応済み）
         const fontNames = await fontList.getFonts({ disableQuoting: true });
-        console.log('[Main] font-listから取得:', fontNames.length, 'フォント');
+        logger.debug('font-listから取得:', fontNames.length, 'フォント');
 
         // フォント情報を整形
         const fonts = fontNames.map(name => ({
@@ -544,10 +585,10 @@ ipcMain.handle('get-system-fonts', async () => {
             allNames: [name]
         }));
 
-        console.log('[Main] フォント情報取得完了:', fonts.length);
+        logger.info('フォント情報取得完了:', fonts.length);
         return { success: true, fonts: fonts };
     } catch (error) {
-        console.error('[Main] システムフォント取得エラー:', error);
+        logger.error('システムフォント取得エラー:', error);
         return { success: false, fonts: [], error: error.message };
     }
 });

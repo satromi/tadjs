@@ -117,7 +117,7 @@ class FileImportManager {
             try {
                 const metadata = {
                     realId: newRealId,
-                    realName: newName,
+                    name: newName,
                     recordCount: 1,
                     refCount: 1,
                     createdAt: new Date().toISOString(),

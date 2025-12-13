@@ -10,8 +10,30 @@ import { UI_UPDATE_DELAY_MS } from './util.js';
 const logger = getLogger('DialogManager');
 
 export class DialogManager {
-    constructor() {
+    /**
+     * @param {Object} parentMessageBus - 親ウィンドウのMessageBus（オプション）
+     */
+    constructor(parentMessageBus = null) {
+        this.parentMessageBus = parentMessageBus;
         logger.debug('DialogManager initialized');
+    }
+
+    /**
+     * ダイアログ表示を全プラグインに通知
+     */
+    notifyDialogOpened() {
+        if (this.parentMessageBus && typeof this.parentMessageBus.broadcast === 'function') {
+            this.parentMessageBus.broadcast('parent-dialog-opened', {});
+        }
+    }
+
+    /**
+     * ダイアログ非表示を全プラグインに通知
+     */
+    notifyDialogClosed() {
+        if (this.parentMessageBus && typeof this.parentMessageBus.broadcast === 'function') {
+            this.parentMessageBus.broadcast('parent-dialog-closed', {});
+        }
     }
 
     /**
@@ -64,6 +86,9 @@ export class DialogManager {
             };
             document.addEventListener('keydown', handleKeyDown);
 
+            // プラグインにダイアログ表示を通知
+            this.notifyDialogOpened();
+
             // ダイアログを表示
             overlay.style.display = 'block';
             dialog.style.display = 'block';
@@ -84,6 +109,8 @@ export class DialogManager {
         const dialog = document.getElementById('message-dialog');
         overlay.style.display = 'none';
         dialog.style.display = 'none';
+        // プラグインにダイアログ非表示を通知
+        this.notifyDialogClosed();
     }
 
     /**
@@ -96,12 +123,28 @@ export class DialogManager {
      * @returns {Promise<{button: any, value: string}>} - 選択されたボタンと入力値
      */
     showInputDialog(message, defaultValue = '', inputWidth = window.DEFAULT_INPUT_WIDTH, buttons = [{ label: '取消', value: 'cancel' }, { label: 'OK', value: 'ok' }], defaultButton = 1) {
+        logger.info('[DialogManager] showInputDialog called:', { message, defaultValue, inputWidth });
+
         return new Promise((resolve) => {
             const overlay = document.getElementById('dialog-overlay');
             const dialog = document.getElementById('input-dialog');
             const messageText = document.getElementById('input-dialog-message');
             const inputField = document.getElementById('dialog-input-field');
             const buttonsContainer = document.getElementById('input-dialog-buttons');
+
+            logger.info('[DialogManager] DOM elements:', {
+                hasOverlay: !!overlay,
+                hasDialog: !!dialog,
+                hasMessageText: !!messageText,
+                hasInputField: !!inputField,
+                hasButtonsContainer: !!buttonsContainer
+            });
+
+            if (!overlay || !dialog || !messageText || !inputField || !buttonsContainer) {
+                logger.error('[DialogManager] Missing required DOM elements!');
+                resolve({ button: 'cancel', value: '' });
+                return;
+            }
 
             // メッセージを設定
             messageText.textContent = message;
@@ -150,6 +193,9 @@ export class DialogManager {
             };
             document.addEventListener('keydown', handleKeyDown);
 
+            // プラグインにダイアログ表示を通知
+            this.notifyDialogOpened();
+
             // ダイアログを表示
             overlay.style.display = 'block';
             dialog.style.display = 'block';
@@ -169,6 +215,8 @@ export class DialogManager {
         const overlay = document.getElementById('dialog-overlay');
         const dialog = document.getElementById('input-dialog');
         overlay.style.display = 'none';
+        // プラグインにダイアログ非表示を通知
+        this.notifyDialogClosed();
         dialog.style.display = 'none';
     }
 
@@ -301,6 +349,9 @@ export class DialogManager {
                 }
             };
             document.addEventListener('keydown', handleKeyDown);
+
+            // プラグインにダイアログ表示を通知
+            this.notifyDialogOpened();
 
             // ダイアログを表示
             overlay.style.display = 'block';

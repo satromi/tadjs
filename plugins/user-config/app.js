@@ -77,6 +77,11 @@ class UserConfigApp extends window.PluginBase {
     setupMessageBusHandlers() {
         // init メッセージ
         this.messageBus.on('init', (data) => {
+            // MessageBusにwindowIdを設定（レスポンスルーティング用）
+            if (data.windowId) {
+                this.messageBus.setWindowId(data.windowId);
+            }
+
             // fileIdを保存（拡張子を除去）
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;

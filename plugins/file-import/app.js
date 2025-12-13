@@ -51,6 +51,10 @@ class FileImportApp extends window.PluginBase {
         this.messageBus.on('init', (data) => {
             logger.info('[FileImport] init受信', data);
             this.windowId = data.windowId;
+            // MessageBusにwindowIdを設定（レスポンスルーティング用）
+            if (data.windowId) {
+                this.messageBus.setWindowId(data.windowId);
+            }
         });
 
         // メニュー定義要求（空のメニューを返す）

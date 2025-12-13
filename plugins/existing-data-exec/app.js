@@ -72,9 +72,14 @@ class ExistingDataExec extends window.PluginBase {
     async handleInit(data) {
         logger.info('[ExistingDataExec] init受信', data);
 
+        // MessageBusにwindowIdを設定（レスポンスルーティング用）
+        if (data.windowId) {
+            this.messageBus.setWindowId(data.windowId);
+        }
+
         this.fileData = data.fileData || {};
         this.realId = data.fileData.realId || data.fileData.fileId;
-        this.realName = data.fileData.name || data.fileData.realName || '';
+        this.realName = data.fileData.name || '';
         this.windowId = data.windowId;
 
         // realIdから実身ID部分を抽出（PluginBaseの共通メソッドを使用）

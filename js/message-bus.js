@@ -20,13 +20,18 @@ export class MessageBus {
      */
     constructor(options = {}) {
         this.pluginName = options.pluginName || 'Plugin';
-        this.mode = options.mode || 'child';  // Phase 2: 親モードと子モード
+        this.mode = options.mode || 'child';  // 'child' または 'parent'
         this.handlers = new Map();           // type -> handler
         this.callbacks = new Map();          // messageId -> callback
         this.waiters = new Map();            // type -> array of { filter, resolve, reject, timeoutId }
         this.callbackCounter = 0;
         this.isListening = false;
         this._boundHandler = null;          // イベントリスナーの参照を保持（削除用）
+
+        // 子モードの場合: windowIdを保持（レスポンスルーティング用）
+        if (this.mode === 'child') {
+            this.windowId = null;            // 親から割り当てられたwindowId
+        }
 
         // Logger初期化（pluginName + MessageBus をモジュール名として使用）
         this.logger = getLogger(`${this.pluginName} MessageBus`);
@@ -35,12 +40,26 @@ export class MessageBus {
             this.logger.setLevel(LogLevel.DEBUG);
         }
 
-        // Phase 2: 親モードの場合のみ使用
+        // 親モードの場合のみ子iframe管理用Mapを初期化
         if (this.mode === 'parent') {
             this.children = new Map();       // id -> { iframe, windowId, pluginId }
             this.windowToChild = new Map();  // windowId -> id
             this.pluginToChild = new Map();  // pluginId -> id
         }
+    }
+
+    /**
+     * 子モードでwindowIdを設定
+     * initメッセージ受信時に呼び出す
+     * @param {string} windowId - 親から割り当てられたwindowId
+     */
+    setWindowId(windowId) {
+        if (this.mode !== 'child') {
+            this.warn('setWindowId() is only available in child mode');
+            return;
+        }
+        this.windowId = windowId;
+        this.log(`WindowId set: ${windowId}`);
     }
 
     /**
@@ -135,7 +154,12 @@ export class MessageBus {
         }
 
         try {
-            window.parent.postMessage({ type, ...data }, '*');
+            // 子モードの場合、windowIdを自動的に含める（レスポンスルーティング用）
+            const messageData = { type, ...data };
+            if (this.mode === 'child' && this.windowId && !data.sourceWindowId) {
+                messageData.sourceWindowId = this.windowId;
+            }
+            window.parent.postMessage(messageData, '*');
             this.log(`Sent message: ${type}`, data);
         } catch (error) {
             this.error(`Failed to send message ${type}:`, error);
@@ -149,7 +173,7 @@ export class MessageBus {
      * @param {string} type - 送信メッセージタイプ
      * @param {Object} data - 送信データ
      * @param {Function} callback - レスポンス受信時のコールバック (data) => void
-     * @param {number} timeout - タイムアウト（ミリ秒、デフォルト5000）
+     * @param {number} timeout - タイムアウト（ミリ秒、デフォルト5000、0またはnullでタイムアウト無効）
      * @returns {string} messageId - コールバックをキャンセルする際に使用
      */
     sendWithCallback(type, data, callback, timeout = 5000) {
@@ -160,19 +184,22 @@ export class MessageBus {
 
         const messageId = `${type}_${++this.callbackCounter}_${Date.now()}`;
 
-        // タイムアウト設定
-        const timeoutId = setTimeout(() => {
-            if (this.callbacks.has(messageId)) {
-                this.callbacks.delete(messageId);
-                this.warn(`Callback timeout for messageId: ${messageId} (${timeout}ms)`);
-                // タイムアウト時にコールバックを呼び出す（エラー情報付き）
-                try {
-                    callback({ error: 'timeout', messageId, timeout });
-                } catch (error) {
-                    this.error(`Error in timeout callback for ${messageId}:`, error);
+        // タイムアウト設定（timeout が 0 または null の場合はタイムアウトを無効化）
+        let timeoutId = null;
+        if (timeout && timeout > 0) {
+            timeoutId = setTimeout(() => {
+                if (this.callbacks.has(messageId)) {
+                    this.callbacks.delete(messageId);
+                    this.warn(`Callback timeout for messageId: ${messageId} (${timeout}ms)`);
+                    // タイムアウト時にコールバックを呼び出す（エラー情報付き）
+                    try {
+                        callback({ error: 'timeout', messageId, timeout });
+                    } catch (error) {
+                        this.error(`Error in timeout callback for ${messageId}:`, error);
+                    }
                 }
-            }
-        }, timeout);
+            }, timeout);
+        }
 
         // コールバックとタイムアウトIDを保存
         this.callbacks.set(messageId, {
@@ -181,7 +208,8 @@ export class MessageBus {
         });
 
         this.send(type, { messageId, ...data });
-        this.log(`Registered callback for messageId: ${messageId} (timeout: ${timeout}ms)`);
+        const timeoutInfo = timeout && timeout > 0 ? `${timeout}ms` : 'no timeout';
+        this.log(`Registered callback for messageId: ${messageId} (${timeoutInfo})`);
         return messageId;
     }
 
@@ -208,17 +236,21 @@ export class MessageBus {
      * タイムアウト機能付き
      *
      * @param {string} messageType - 待つメッセージタイプ
-     * @param {number} timeout - タイムアウト（ミリ秒、デフォルト5000）
+     * @param {number} timeout - タイムアウト（ミリ秒、デフォルト5000、0またはnullでタイムアウト無効）
      * @param {Function} filter - オプション：メッセージをフィルタリングする関数 (data) => boolean
      * @returns {Promise<Object>} メッセージデータ
      */
     waitFor(messageType, timeout = 5000, filter = null) {
         return new Promise((resolve, reject) => {
-            const timeoutId = setTimeout(() => {
-                // タイムアウト時にwaitersから削除
-                this._removeWaiter(messageType, waiterEntry);
-                reject(new Error(`Timeout waiting for message: ${messageType} (${timeout}ms)`));
-            }, timeout);
+            // タイムアウト設定（timeout が 0 または null の場合はタイムアウトを無効化）
+            let timeoutId = null;
+            if (timeout && timeout > 0) {
+                timeoutId = setTimeout(() => {
+                    // タイムアウト時にwaitersから削除
+                    this._removeWaiter(messageType, waiterEntry);
+                    reject(new Error(`Timeout waiting for message: ${messageType} (${timeout}ms)`));
+                }, timeout);
+            }
 
             const waiterEntry = { filter, resolve, reject, timeoutId };
 
@@ -227,7 +259,8 @@ export class MessageBus {
                 this.waiters.set(messageType, []);
             }
             this.waiters.get(messageType).push(waiterEntry);
-            this.log(`Waiter added for: ${messageType} (total: ${this.waiters.get(messageType).length})`);
+            const timeoutInfo = timeout && timeout > 0 ? `${timeout}ms` : 'no timeout';
+            this.log(`Waiter added for: ${messageType} (${timeoutInfo}, total: ${this.waiters.get(messageType).length})`);
         });
     }
 
@@ -355,7 +388,7 @@ export class MessageBus {
     }
 
     // ========================================
-    // Phase 2: 親モード専用メソッド
+    // 親モード専用メソッド（子iframe管理・送信）
     // ========================================
 
     /**
@@ -605,27 +638,24 @@ export class MessageBus {
      * @param {Window} source - メッセージイベントのe.source
      * @param {string} type - レスポンスメッセージタイプ
      * @param {Object} data - レスポンスデータ
+     * @param {string} sourceWindowId - 送信元のwindowId（オプション、source解決失敗時のフォールバック）
      */
-    respondTo(source, type, data = {}) {
+    respondTo(source, type, data = {}, sourceWindowId = null) {
         if (this.mode !== 'parent') {
             this.error('respondTo() can only be called in parent mode');
             return;
         }
 
-        // sourceの検証を強化
-        if (!source) {
-            this.error(`Cannot send response: source is null/undefined for ${type}`, {
-                type: type,
-                hasData: !!data,
-                messageId: data.messageId
-            });
-            return;
+        // e.sourceからwindowIdを取得
+        let windowId = source ? this.getWindowIdFromSource(source) : null;
+
+        // sourceから取得できない場合、sourceWindowIdをフォールバックとして使用
+        if (!windowId && sourceWindowId) {
+            windowId = sourceWindowId;
+            this.logger.debug(`[respondTo] Using sourceWindowId fallback: ${windowId}`);
         }
 
-        // e.sourceからwindowIdを取得
-        const windowId = this.getWindowIdFromSource(source);
-
-        this.log(`respondTo: type=${type}, windowId=${windowId}, hasSource=${!!source}`, {
+        this.log(`respondTo: type=${type}, windowId=${windowId}, hasSource=${!!source}, sourceWindowId=${sourceWindowId}`, {
             messageId: data.messageId,
             success: data.success,
             error: data.error
@@ -635,23 +665,23 @@ export class MessageBus {
             // MessageBus経由で送信
             this.sendToWindow(windowId, type, data);
             this.logger.debug(`[respondTo] Response sent via MessageBus: ${type}, windowId=${windowId}`);
-        } else {
+        } else if (source && source.postMessage) {
             // フォールバック: 旧postMessage方式（openable: false のプラグインでは正常動作）
             this.logger.debug(`[respondTo] Using fallback postMessage (windowId not found)`);
-            if (source && source.postMessage) {
-                try {
-                    source.postMessage({ type, ...data }, '*');
-                    this.logger.debug(`[respondTo] Response sent via fallback postMessage: ${type}`);
-                } catch (error) {
-                    this.error(`[respondTo] Failed to send response via fallback: ${type}`, error);
-                }
-            } else {
-                this.error(`[respondTo] Cannot send response: invalid source for ${type}`, {
-                    hasSource: !!source,
-                    hasPostMessage: !!(source && source.postMessage),
-                    messageId: data.messageId
-                });
+            try {
+                source.postMessage({ type, ...data }, '*');
+                this.logger.debug(`[respondTo] Response sent via fallback postMessage: ${type}`);
+            } catch (error) {
+                this.error(`[respondTo] Failed to send response via fallback: ${type}`, error);
             }
+        } else {
+            this.error(`[respondTo] Cannot send response: no valid target for ${type}`, {
+                hasSource: !!source,
+                hasPostMessage: !!(source && source.postMessage),
+                windowId: windowId,
+                sourceWindowId: sourceWindowId,
+                messageId: data.messageId
+            });
         }
     }
 }

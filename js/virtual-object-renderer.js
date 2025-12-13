@@ -7,6 +7,9 @@ import {
     DEFAULT_FONT_SIZE,
     DEFAULT_LINE_HEIGHT
 } from './util.js';
+import { getLogger } from './logger.js';
+
+const logger = getLogger('VirtualObjectRenderer');
 
 /**
  * VirtualObjectRenderer
@@ -95,7 +98,7 @@ export class VirtualObjectRenderer {
                 resolve(img);
             };
             img.onerror = (error) => {
-                console.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
+                logger.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
                 reject(error);
             };
             img.src = `data:image/x-icon;base64,${base64Data}`;
@@ -192,7 +195,7 @@ export class VirtualObjectRenderer {
                     }
                     // アイコンがない場合でもdisplay:noneにせず、スペースを確保
                 }).catch(error => {
-                    console.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
+                    logger.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
                     // エラーでもdisplay:noneにせず、スペースを確保
                 });
             }
@@ -383,7 +386,7 @@ export class VirtualObjectRenderer {
                     }
                     // アイコンがない場合でもdisplay:noneにせず、スペースを確保
                 }).catch(error => {
-                    console.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
+                    logger.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
                     // エラーでもdisplay:noneにせず、スペースを確保
                 });
             }
@@ -520,7 +523,7 @@ export class VirtualObjectRenderer {
         const showUpdate = virtualObject.updatedisp === 'true';
 
         // デバッグログ: 開いた仮身の表示設定を確認
-        console.log('[VirtualObjectRenderer] 開いた仮身の表示設定:', {
+        logger.debug('[VirtualObjectRenderer] 開いた仮身の表示設定:', {
             link_id: virtualObject.link_id,
             link_name: virtualObject.link_name,
             pictdisp: virtualObject.pictdisp,
@@ -579,7 +582,7 @@ export class VirtualObjectRenderer {
 
             // ピクトグラム（アイコン）用のスペース確保
             if (showPict) {
-                console.log('[VirtualObjectRenderer] 開いた仮身のアイコン作成開始:', virtualObject.link_id);
+                logger.debug('[VirtualObjectRenderer] 開いた仮身のアイコン作成開始:', virtualObject.link_id);
                 const iconImg = document.createElement('img');
                 iconImg.className = 'virtual-object-icon';
                 const iconSize = Math.round(styles.chszPx * 1.0);
@@ -592,33 +595,33 @@ export class VirtualObjectRenderer {
 
                 // link_idから実身IDを抽出（_0.xtadなどを削除）
                 const realId = virtualObject.link_id.replace(/_\d+\.xtad$/i, '');
-                console.log('[VirtualObjectRenderer] 実身ID抽出:', realId, 'iconBasePathあり:', !!(options.iconBasePath), 'loadIconCallbackあり:', !!(options.loadIconCallback));
+                logger.debug('[VirtualObjectRenderer] 実身ID抽出:', realId, 'iconBasePathあり:', !!(options.iconBasePath), 'loadIconCallbackあり:', !!(options.loadIconCallback));
 
                 // アイコンを読み込む
                 if (options.iconData && options.iconData[realId]) {
                     // 事前にロードされたアイコンデータを使用（同期的に設定）
-                    console.log('[VirtualObjectRenderer] 事前ロード済みアイコンを使用:', realId);
+                    logger.debug('[VirtualObjectRenderer] 事前ロード済みアイコンを使用:', realId);
                     iconImg.src = `data:image/x-icon;base64,${options.iconData[realId]}`;
                 } else if (options.iconBasePath !== undefined) {
                     // 直接ファイルパスを使用
                     const iconPath = `${options.iconBasePath}${realId}.ico`;
-                    console.log('[VirtualObjectRenderer] アイコンパス直接読み込み:', iconPath);
+                    logger.debug('[VirtualObjectRenderer] アイコンパス直接読み込み:', iconPath);
                     iconImg.src = iconPath;
                 } else if (options.loadIconCallback && typeof options.loadIconCallback === 'function') {
                     // 従来のコールバック方式（後方互換性のため）
-                    console.log('[VirtualObjectRenderer] アイコン読み込み開始:', realId);
+                    logger.debug('[VirtualObjectRenderer] アイコン読み込み開始:', realId);
                     options.loadIconCallback(realId).then(iconData => {
-                        console.log('[VirtualObjectRenderer] アイコン読み込み完了:', realId, 'データあり:', !!iconData);
+                        logger.debug('[VirtualObjectRenderer] アイコン読み込み完了:', realId, 'データあり:', !!iconData);
                         if (iconData) {
                             iconImg.src = `data:image/x-icon;base64,${iconData}`;
                         }
                         // アイコンがない場合でもdisplay:noneにせず、スペースを確保
                     }).catch(error => {
-                        console.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
+                        logger.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
                         // エラーでもdisplay:noneにせず、スペースを確保
                     });
                 } else {
-                    console.warn('[VirtualObjectRenderer] loadIconCallbackが提供されていません:', virtualObject.link_id);
+                    logger.warn('[VirtualObjectRenderer] loadIconCallbackが提供されていません:', virtualObject.link_id);
                     // loadIconCallbackがない場合でもスペースを確保
                 }
 
@@ -800,7 +803,7 @@ export class VirtualObjectRenderer {
                     try {
                         ctx.drawImage(iconImg, currentX, iconY, iconSize, iconSize);
                     } catch (error) {
-                        console.error('[VirtualObjectRenderer] アイコン描画エラー:', realId, error);
+                        logger.error('[VirtualObjectRenderer] アイコン描画エラー:', realId, error);
                     }
                 }
                 // アイコンがあってもなくてもスペースを確保
@@ -917,7 +920,7 @@ export class VirtualObjectRenderer {
                     try {
                         ctx.drawImage(iconImg, currentX, iconY, iconSize, iconSize);
                     } catch (error) {
-                        console.error('[VirtualObjectRenderer] アイコン描画エラー:', realId, error);
+                        logger.error('[VirtualObjectRenderer] アイコン描画エラー:', realId, error);
                     }
                 }
                 // アイコンがあってもなくてもスペースを確保

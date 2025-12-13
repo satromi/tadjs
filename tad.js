@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.14
+ * TADjs Ver0.21
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -23,7 +23,10 @@
  * @license https://www.apache.org/licenses/LICENSE-2.0 Apache-2.0
 */
 
-const logger = window.getLogger('TADParser');
+// getLoggerが存在しない場合（ブラウザ直接実行時）のフォールバック
+const logger = typeof window.getLogger === 'function'
+    ? window.getLogger('TADParser')
+    : { debug: () => {}, info: () => {}, warn: console.warn, error: console.error };
 
 // global
 let ctx;

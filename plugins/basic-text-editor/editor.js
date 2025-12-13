@@ -113,6 +113,8 @@ class BasicTextEditor extends window.PluginBase {
             // ウィンドウIDを保存（親から渡されたIDを使用）
             if (data.windowId) {
                 this.windowId = data.windowId;
+                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
+                this.messageBus.setWindowId(data.windowId);
             }
 
             // realIdを保存（拡張子を除去）
@@ -152,10 +154,39 @@ class BasicTextEditor extends window.PluginBase {
             setTimeout(() => {
                 document.body.focus();
             }, 100);
+
+            // スクロール位置を復元（DOM更新完了を待つ）
+            if (data.fileData && data.fileData.windowConfig && data.fileData.windowConfig.scrollPos) {
+                setTimeout(() => {
+                    this.setScrollPosition(data.fileData.windowConfig.scrollPos);
+                }, 150);
+            }
+
+            // 折り返し設定を復元（未定義の場合はtrue）
+            if (data.fileData && data.fileData.windowConfig) {
+                const wordWrap = data.fileData.windowConfig.wordWrap !== undefined
+                    ? data.fileData.windowConfig.wordWrap
+                    : true;
+                this.wrapMode = wordWrap;
+                if (this.wrapMode) {
+                    this.editor.style.whiteSpace = 'pre-wrap';
+                    this.editor.style.wordWrap = 'break-word';
+                } else {
+                    this.editor.style.whiteSpace = 'pre';
+                    this.editor.style.wordWrap = 'normal';
+                }
+                // 段落要素のインラインスタイルも更新（DOM更新完了を待つ）
+                setTimeout(() => {
+                    const paragraphs = this.editor.querySelectorAll('p');
+                    paragraphs.forEach(p => {
+                        p.style.whiteSpace = this.wrapMode ? 'pre-wrap' : 'pre';
+                    });
+                }, 200);
+            }
         });
 
         // load-virtual-object メッセージ（開いた仮身表示用）
-        this.messageBus.on('load-virtual-object', (data) => {
+        this.messageBus.on('load-virtual-object', async (data) => {
 
             // 初期メッセージをクリア（開いた仮身表示では不要）
             if (this.editor.innerHTML === '<p>ここに文章を入力してください...</p>') {
@@ -195,11 +226,56 @@ class BasicTextEditor extends window.PluginBase {
                     this.realId = rawId.replace(/_\d+\.xtad$/i, '');
                 }
 
-                // データを読み込む
-                this.loadFile({
+                // データを読み込む（完了を待つ）
+                await this.loadFile({
                     realId: this.realId,
                     xmlData: realObject.xtad || realObject.records?.[0]?.xtad || realObject.xmlData
                 });
+
+                // 折り返し設定を適用（管理用セグメントJSONのwindowから取得）
+                const windowConfig = realObject.metadata?.window;
+                if (windowConfig) {
+                    const wordWrap = windowConfig.wordWrap !== undefined
+                        ? windowConfig.wordWrap
+                        : true;
+                    this.wrapMode = wordWrap;
+
+                    // wordWrap=trueの場合、エディタ幅を元のウインドウサイズに固定
+                    // これにより折り返し位置が元のウインドウ表示と一致する
+                    if (this.wrapMode && windowConfig.width) {
+                        this.editor.style.width = windowConfig.width + 'px';
+                        this.editor.style.minWidth = windowConfig.width + 'px';
+                        this.editor.style.maxWidth = windowConfig.width + 'px';
+                    }
+
+                    if (this.wrapMode) {
+                        this.editor.style.whiteSpace = 'pre-wrap';
+                        this.editor.style.wordWrap = 'break-word';
+                    } else {
+                        this.editor.style.whiteSpace = 'pre';
+                        this.editor.style.wordWrap = 'normal';
+                    }
+                    // 段落要素のインラインスタイルも更新（DOM更新完了を待つ）
+                    setTimeout(() => {
+                        const paragraphs = this.editor.querySelectorAll('p');
+                        paragraphs.forEach(p => {
+                            p.style.whiteSpace = this.wrapMode ? 'pre-wrap' : 'pre';
+                        });
+                    }, 100);
+
+                    // スクロール位置を復元（DOM更新完了を待つ）
+                    // noScrollbar時は直接editorのscrollTopを設定
+                    if (windowConfig.scrollPos) {
+                        // 複数のrequestAnimationFrameで確実にDOMレンダリング完了を待つ
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => {
+                                // editorに直接スクロール位置を設定
+                                this.editor.scrollLeft = windowConfig.scrollPos.x || 0;
+                                this.editor.scrollTop = windowConfig.scrollPos.y || 0;
+                            });
+                        });
+                    }
+                }
             }
         });
 
@@ -607,8 +683,9 @@ class BasicTextEditor extends window.PluginBase {
                 // PluginBase共通メソッドでdragDataをパース
                 const dragData = this.parseDragData(e.dataTransfer);
                 if (dragData) {
-                    if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
-                        // 原紙管理からのコピー - 親ウィンドウに処理を委譲                        this.setCursorAtDropPosition(e);
+                    if ((dragData.type === 'base-file-copy' || dragData.type === 'user-base-file-copy') && dragData.source === 'base-file-manager') {
+                        // 原紙管理からのコピー（システム原紙またはユーザ原紙）- 親ウィンドウに処理を委譲
+                        this.setCursorAtDropPosition(e);
                         this.handleBaseFileDrop(dragData, e.clientX, e.clientY);
                         return;
                     } else if (dragData.type === 'archive-file-extract' && dragData.source === 'unpack-file') {
@@ -1553,6 +1630,9 @@ class BasicTextEditor extends window.PluginBase {
 
                 // DOM更新後にスクロールバーを更新
                 setTimeout(() => this.updateContentHeight(), 0);
+
+                // autoopen属性がtrueの仮身を自動的に開く
+                await this.autoOpenVirtualObjects();
             }
             // rawDataがある場合は変換を試みる
             else if (fileData.rawData) {
@@ -1565,6 +1645,9 @@ class BasicTextEditor extends window.PluginBase {
 
                     // DOM更新後にスクロールバーを更新
                     setTimeout(() => this.updateContentHeight(), 0);
+
+                    // autoopen属性がtrueの仮身を自動的に開く
+                    await this.autoOpenVirtualObjects();
                 } else {
                     this.editor.innerHTML = '<p>TADファイルの解析に失敗しました</p>';
                     this.setStatus('XMLの生成に失敗しました');
@@ -1581,6 +1664,66 @@ class BasicTextEditor extends window.PluginBase {
             logger.error('エラースタック:', error.stack);
             this.editor.innerHTML = '<p>ファイル読み込みエラー</p><pre>' + this.escapeHtml(error.message + '\n' + error.stack) + '</pre>';
             this.setStatus('ファイルの読み込みに失敗しました');
+        }
+    }
+
+    /**
+     * autoopen属性がtrueの仮身を自動的に開く
+     */
+    async autoOpenVirtualObjects() {
+        const virtualObjects = this.editor.querySelectorAll('.virtual-object');
+
+        for (const vo of virtualObjects) {
+            const autoopen = vo.dataset.linkAutoopen;
+            if (autoopen === 'true') {
+                try {
+                    // applistを取得
+                    let applist = null;
+                    if (vo.dataset.linkApplist) {
+                        try {
+                            applist = JSON.parse(this.decodeHtml(vo.dataset.linkApplist));
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+
+                    if (!applist || typeof applist !== 'object') {
+                        continue;
+                    }
+
+                    // defaultOpen=trueのプラグインを探す
+                    let defaultPluginId = null;
+                    for (const [pluginId, config] of Object.entries(applist)) {
+                        if (config.defaultOpen === true) {
+                            defaultPluginId = pluginId;
+                            break;
+                        }
+                    }
+
+                    if (!defaultPluginId) {
+                        // defaultOpen=trueがない場合は最初のプラグインを使用
+                        defaultPluginId = Object.keys(applist)[0];
+                    }
+
+                    if (!defaultPluginId) {
+                        continue;
+                    }
+
+                    // 仮身オブジェクトを構築
+                    const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
+
+                    // 実身を開く
+                    if (this.messageBus) {
+                        this.messageBus.send('open-virtual-object-real', {
+                            virtualObj: virtualObj,
+                            pluginId: defaultPluginId
+                        });
+                    }
+                } catch (error) {
+                    logger.error('[EDITOR] 自動起動エラー:', vo.dataset.linkId, error);
+                    // エラーが発生しても次の仮身の起動を続行
+                }
+            }
         }
     }
 
@@ -1614,7 +1757,7 @@ class BasicTextEditor extends window.PluginBase {
             this.realId = rawRealId ? rawRealId.replace(/_\d+\.xtad$/i, '') : null;
             this.currentFile = {
                 realId: this.realId,
-                fileName: realObject.metadata.realName || '無題'
+                fileName: realObject.metadata.name || '無題'
             };
 
             // XTADデータ（XML形式）をそのまま使用
@@ -1781,13 +1924,35 @@ class BasicTextEditor extends window.PluginBase {
                     pictdisp: attrMap.pictdisp || 'true',
                     roledisp: attrMap.roledisp || 'false',
                     typedisp: attrMap.typedisp || 'false',
-                    updatedisp: attrMap.updatedisp || 'false'
+                    updatedisp: attrMap.updatedisp || 'false',
+                    autoopen: attrMap.autoopen || 'false'
                 };
 
                 // アイコンデータを渡す（同期的に設定される）
+                // readonlyモード（開いた仮身表示）ではiconDataが空のため、iconBasePathで直接読み込み
                 const options = {
                     iconData: iconData
                 };
+
+                // readonlyモード（開いた仮身表示）の場合、iconBasePathを使用
+                // MessageBusリレーを使わず、直接ファイルパスを指定
+                if (isReadonly && typeof require !== 'undefined') {
+                    try {
+                        const path = require('path');
+                        // __dirnameはindex.htmlのディレクトリ: plugins/basic-text-editor/
+                        // dataフォルダは: ../../../../data/
+                        const dataPath = path.join(__dirname, '..', '..', '..', '..', 'data') + path.sep;
+                        options.iconBasePath = dataPath;
+                        logger.debug('[EDITOR] readonlyモード: iconBasePath設定:', dataPath);
+                    } catch (e) {
+                        // Electron環境でない場合はloadIconCallbackをフォールバックとして使用
+                        options.loadIconCallback = (realId) => this.iconManager.loadIcon(realId);
+                        logger.debug('[EDITOR] iconBasePath設定失敗、loadIconCallbackを使用:', e.message);
+                    }
+                } else if (!isReadonly) {
+                    // 通常モードではloadIconCallbackを使用
+                    options.loadIconCallback = (realId) => this.iconManager.loadIcon(realId);
+                }
 
                 // DOM要素を作成
                 const vobjElement = this.virtualObjectRenderer.createInlineElement(virtualObject, options);
@@ -4021,6 +4186,10 @@ class BasicTextEditor extends window.PluginBase {
      * 親ウインドウにXMLデータの変更を通知（自動保存用）
      */
     async notifyXmlDataChanged() {
+        // 保存時にスクロール位置と折り返し設定も保存
+        this.saveScrollPosition();
+        this.updateWindowConfig({ wordWrap: this.wrapMode });
+
         if (window.parent && window.parent !== window) {
             // エディタの内容をTAD XML形式に変換
             const xmlContent = await this.convertEditorToXML();
@@ -4057,8 +4226,8 @@ class BasicTextEditor extends window.PluginBase {
         logger.debug('[EDITOR] 新たな実身への保存要求:', this.realId);
 
         try {
-            // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
-            const result = await this.messageBus.waitFor('save-as-new-real-object-completed', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
+            // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
+            const result = await this.messageBus.waitFor('save-as-new-real-object-completed', 0, (data) => {
                 return data.messageId === messageId;
             });
 
@@ -4260,7 +4429,7 @@ class BasicTextEditor extends window.PluginBase {
                     { label: '再表示', action: 'refresh' },
                     { label: '背景色変更', action: 'change-bg-color' },
                     { separator: true },
-                    { label: 'ウインドウ幅で折り返し', action: 'toggle-wrap' }
+                    { label: 'ウインドウ幅で折り返しオンオフ', action: 'toggle-wrap' }
                 ]
             },
             {
@@ -5194,6 +5363,15 @@ class BasicTextEditor extends window.PluginBase {
             this.editor.style.wordWrap = 'normal';
             this.setStatus('ウインドウ幅で折り返し: OFF');
         }
+
+        // 段落要素のインラインスタイルも更新
+        const paragraphs = this.editor.querySelectorAll('p');
+        paragraphs.forEach(p => {
+            p.style.whiteSpace = this.wrapMode ? 'pre-wrap' : 'pre';
+        });
+
+        // 折り返し設定を保存
+        this.updateWindowConfig({ wordWrap: this.wrapMode });
 
         // 折り返しモード変更後に高さを更新
         setTimeout(() => this.updateContentHeight(), window.UI_UPDATE_DELAY_MS);

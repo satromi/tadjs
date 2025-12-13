@@ -115,7 +115,7 @@ export class RealObjectSystem {
             logger.debug(`検出されたレコード数: ${count}`);
         }
 
-        logger.info(`メタデータ読み込み: name=${metadata.name || metadata.realName}, recordCount=${metadata.recordCount}`);
+        logger.info(`メタデータ読み込み: name=${metadata.name}, recordCount=${metadata.recordCount}`);
 
         // レコード読み込み
         const records = [];
@@ -259,9 +259,10 @@ export class RealObjectSystem {
         // メタデータをコピーして更新
         const newMetadata = { ...sourceRealObject.metadata };
         newMetadata.realId = newRealId;
-        newMetadata.realName = sourceRealObject.metadata.realName + (isRootCall ? 'のコピー' : '');
-        newMetadata.refCount = 0;
-        newMetadata.createDate = new Date().toISOString();
+        newMetadata.name = (sourceRealObject.metadata.name || '') + (isRootCall ? 'のコピー' : '');
+        // 新規実身は作成時点で必ず1つのvobjから参照されるため、refCount = 1 で開始
+        newMetadata.refCount = 1;
+        newMetadata.makeDate = new Date().toISOString();
         newMetadata.updateDate = new Date().toISOString();
         newMetadata.accessDate = new Date().toISOString();
 
@@ -364,9 +365,10 @@ export class RealObjectSystem {
         // メタデータをコピーして更新
         const newMetadata = { ...sourceRealObject.metadata };
         newMetadata.realId = newRealId;
-        newMetadata.realName = newName;
-        newMetadata.refCount = 0;
-        newMetadata.createDate = new Date().toISOString();
+        newMetadata.name = newName;
+        // 新規実身は作成時点で必ず1つのvobjから参照されるため、refCount = 1 で開始
+        newMetadata.refCount = 1;
+        // リネーム（別名保存）時は元のmakeDateを維持
         newMetadata.updateDate = new Date().toISOString();
         newMetadata.accessDate = new Date().toISOString();
 
@@ -554,6 +556,14 @@ export class RealObjectSystem {
 
         await this.updateRefCount(realId, newRefCount);
         logger.debug(`仮身コピー完了: ${realId} (refCount: ${currentRefCount} -> ${newRefCount})`);
+    }
+
+    /**
+     * 参照カウントを1増やす（copyVirtualObjectのエイリアス）
+     * @param {string} realId - 実身ID
+     */
+    async incrementRefCount(realId) {
+        await this.copyVirtualObject(realId);
     }
 
     /**
@@ -825,8 +835,8 @@ export class RealObjectSystem {
         logger.debug('仮身属性変更ダイアログ要求');
 
         try {
-            // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
-            const result = await plugin.messageBus.waitFor('virtual-object-attributes-changed', LONG_OPERATION_TIMEOUT_MS, (data) => {
+            // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
+            const result = await plugin.messageBus.waitFor('virtual-object-attributes-changed', 0, (data) => {
                 return data.messageId === messageId;
             });
 
@@ -865,8 +875,8 @@ export class RealObjectSystem {
         logger.debug('実身名変更要求:', realId, currentName);
 
         try {
-            // レスポンスを待つ（タイムアウト30秒、ユーザー操作待ち）
-            const result = await plugin.messageBus.waitFor('real-object-renamed', LONG_OPERATION_TIMEOUT_MS, (data) => {
+            // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
+            const result = await plugin.messageBus.waitFor('real-object-renamed', 0, (data) => {
                 return data.messageId === messageId;
             });
 
@@ -915,8 +925,8 @@ export class RealObjectSystem {
         logger.debug('実身複製要求:', realId);
 
         try {
-            // レスポンスを待つ（デフォルトタイムアウト5秒）
-            const result = await plugin.messageBus.waitFor('real-object-duplicated', DEFAULT_TIMEOUT_MS, (data) => {
+            // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
+            const result = await plugin.messageBus.waitFor('real-object-duplicated', 0, (data) => {
                 return data.messageId === messageId;
             });
 

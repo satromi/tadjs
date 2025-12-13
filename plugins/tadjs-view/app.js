@@ -86,6 +86,10 @@ class TADjsViewPlugin extends window.PluginBase {
         // init メッセージ
         this.messageBus.on('init', (data) => {
             logger.debug('[TADjsView] [MessageBus] init受信:', data);
+            // MessageBusにwindowIdを設定（レスポンスルーティング用）
+            if (data.windowId) {
+                this.messageBus.setWindowId(data.windowId);
+            }
             this.fileData = data.fileData;
 
             // realIdを保存（拡張子を除去）

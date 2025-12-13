@@ -99,7 +99,7 @@ export class ContextMenuManager {
 
         // context-menu-request: コンテキストメニュー表示
         this.parentMessageBus.on('context-menu-request', (data, event) => {
-            logger.info('[ContextMenuManager] Phase 2: context-menu-request受信:', data);
+            logger.info('[ContextMenuManager] context-menu-request受信:', data);
             const target = event.source.frameElement;
             if (!target) {
                 logger.warn('[ContextMenuManager] target frameElementが見つかりません');

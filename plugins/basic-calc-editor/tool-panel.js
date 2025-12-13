@@ -24,8 +24,61 @@ class CalcToolPanel {
             bgColor: '#ffffff',
             borderColor: '#000000',
             align: 'left',
+            vAlign: 'middle',
             fontFamily: 'MS Gothic',
-            fontSize: 12
+            fontSize: 12,
+            lineStyle: 'solid',
+            lineWidth: 1
+        };
+
+        // フォントマップ
+        this.fontMap = {
+            'MS Gothic': 'ゴシック',
+            'MS Mincho': '明朝',
+            'Meiryo': 'メイリオ'
+        };
+
+        // 線種マップ
+        this.lineStyleMap = {
+            'solid': '実線',
+            'dashed': '破線',
+            'dotted': '点線',
+            'double': '二重線'
+        };
+
+        // 線幅マップ
+        this.lineWidthMap = {
+            1: '細',
+            2: '中',
+            3: '太'
+        };
+
+        // 水平配置マップ
+        this.hAlignMap = {
+            'left': '左',
+            'center': '中央',
+            'right': '右'
+        };
+
+        // 垂直配置マップ
+        this.vAlignMap = {
+            'top': '上',
+            'middle': '中',
+            'bottom': '下'
+        };
+
+        // 水平配置アイコン
+        this.hAlignIcons = {
+            'left': '☰',
+            'center': '☰',
+            'right': '☰'
+        };
+
+        // 垂直配置アイコン
+        this.vAlignIcons = {
+            'top': '↕',
+            'middle': '↕',
+            'bottom': '↕'
         };
 
         // ドラッグ状態
@@ -92,15 +145,14 @@ class CalcToolPanel {
             this.sendFormatUpdate();
         });
 
-        // 配置ボタン
-        document.getElementById('alignLeftBtn').addEventListener('click', () => {
-            this.setAlign('left');
+        // 水平配置ドロップダウン
+        document.getElementById('hAlignDropdownBtn').addEventListener('click', (e) => {
+            this.showHAlignPopup(e.currentTarget);
         });
-        document.getElementById('alignCenterBtn').addEventListener('click', () => {
-            this.setAlign('center');
-        });
-        document.getElementById('alignRightBtn').addEventListener('click', () => {
-            this.setAlign('right');
+
+        // 垂直配置ドロップダウン
+        document.getElementById('vAlignDropdownBtn').addEventListener('click', (e) => {
+            this.showVAlignPopup(e.currentTarget);
         });
 
         // 罫線ボタン
@@ -132,14 +184,24 @@ class CalcToolPanel {
             logger.debug(`[CalcToolPanel] 線の色変更: ${e.target.value}`);
         });
 
-        // フォント選択
-        document.getElementById('fontSelect').addEventListener('change', (e) => {
-            this.setFontFamily(e.target.value);
+        // フォント選択（ポップアップ）
+        document.getElementById('fontDropdownBtn').addEventListener('click', (e) => {
+            this.showFontPopup(e.currentTarget);
         });
 
-        // フォントサイズ選択
-        document.getElementById('sizeSelect').addEventListener('change', (e) => {
-            this.setFontSize(parseInt(e.target.value));
+        // フォントサイズ選択（ポップアップ）
+        document.getElementById('sizeDropdownBtn').addEventListener('click', (e) => {
+            this.showSizePopup(e.currentTarget);
+        });
+
+        // 線種選択（ポップアップ）
+        document.getElementById('lineStyleDropdownBtn').addEventListener('click', (e) => {
+            this.showLineStylePopup(e.currentTarget);
+        });
+
+        // 線幅選択（ポップアップ）
+        document.getElementById('lineWidthDropdownBtn').addEventListener('click', (e) => {
+            this.showLineWidthPopup(e.currentTarget);
         });
 
         // セル入力
@@ -198,6 +260,37 @@ class CalcToolPanel {
 
                 case 'calc-cell-input':
                     this.handleCellInput(data);
+                    break;
+
+                // ポップアップからの選択
+                case 'popup-calc-font-select':
+                    this.setFontFamily(data.fontFamily);
+                    document.getElementById('fontDisplay').textContent = this.fontMap[data.fontFamily] || data.fontFamily;
+                    break;
+
+                case 'popup-calc-size-select':
+                    this.setFontSize(data.fontSize);
+                    document.getElementById('sizeDisplay').textContent = data.fontSize;
+                    break;
+
+                case 'popup-calc-line-style-select':
+                    this.formatState.lineStyle = data.lineStyle;
+                    document.getElementById('lineStyleDisplay').textContent = this.lineStyleMap[data.lineStyle] || data.lineStyle;
+                    break;
+
+                case 'popup-calc-line-width-select':
+                    this.formatState.lineWidth = data.lineWidth;
+                    document.getElementById('lineWidthDisplay').textContent = this.lineWidthMap[data.lineWidth] || data.lineWidth;
+                    break;
+
+                case 'popup-calc-halign-select':
+                    this.setAlign(data.align);
+                    this.setHAlignDisplay(data.align);
+                    break;
+
+                case 'popup-calc-valign-select':
+                    this.setVAlign(data.vAlign);
+                    this.setVAlignDisplay(data.vAlign);
                     break;
             }
         });
@@ -320,16 +413,22 @@ class CalcToolPanel {
         // フォントサイズ（デフォルトは12）
         const fontSize = style.fontSize || 12;
         this.formatState.fontSize = fontSize;
-        document.getElementById('sizeSelect').value = fontSize;
+        document.getElementById('sizeDisplay').textContent = fontSize;
 
         // フォントファミリー（デフォルトはMS Gothic）
         const fontFamily = style.fontFamily || 'MS Gothic';
         this.formatState.fontFamily = fontFamily;
-        document.getElementById('fontSelect').value = fontFamily;
+        document.getElementById('fontDisplay').textContent = this.fontMap[fontFamily] || fontFamily;
 
-        // 配置（デフォルトは左揃え）
+        // 水平配置（デフォルトは左揃え）
         const textAlign = style.textAlign || 'left';
-        this.setAlignButtonState(textAlign);
+        this.formatState.align = textAlign;
+        this.setHAlignDisplay(textAlign);
+
+        // 垂直配置（デフォルトは中揃え）
+        const vAlign = style.vAlign || 'middle';
+        this.formatState.vAlign = vAlign;
+        this.setVAlignDisplay(vAlign);
     }
 
     /**
@@ -383,29 +482,37 @@ class CalcToolPanel {
     }
 
     /**
-     * 配置設定
+     * 水平配置設定
      */
     setAlign(align) {
         this.formatState.align = align;
-        this.setAlignButtonState(align);
+        this.setHAlignDisplay(align);
         this.sendFormatUpdate();
     }
 
     /**
-     * 配置ボタン状態更新
+     * 垂直配置設定
      */
-    setAlignButtonState(align) {
-        document.getElementById('alignLeftBtn').classList.remove('active');
-        document.getElementById('alignCenterBtn').classList.remove('active');
-        document.getElementById('alignRightBtn').classList.remove('active');
+    setVAlign(vAlign) {
+        this.formatState.vAlign = vAlign;
+        this.setVAlignDisplay(vAlign);
+        this.sendFormatUpdate();
+    }
 
-        if (align === 'left') {
-            document.getElementById('alignLeftBtn').classList.add('active');
-        } else if (align === 'center') {
-            document.getElementById('alignCenterBtn').classList.add('active');
-        } else if (align === 'right') {
-            document.getElementById('alignRightBtn').classList.add('active');
-        }
+    /**
+     * 水平配置表示更新
+     */
+    setHAlignDisplay(align) {
+        this.formatState.align = align;
+        document.getElementById('hAlignDisplay').textContent = this.hAlignIcons[align] || '☰';
+    }
+
+    /**
+     * 垂直配置表示更新
+     */
+    setVAlignDisplay(vAlign) {
+        this.formatState.vAlign = vAlign;
+        document.getElementById('vAlignDisplay').textContent = this.vAlignIcons[vAlign] || '↕';
     }
 
     /**
@@ -430,8 +537,8 @@ class CalcToolPanel {
     setBorder(type) {
         logger.debug(`[CalcToolPanel] 罫線設定: ${type}`);
 
-        const lineStyle = document.getElementById('lineStyleSelect').value;
-        const lineWidth = document.getElementById('lineWidthSelect').value;
+        const lineStyle = this.formatState.lineStyle;
+        const lineWidth = this.formatState.lineWidth;
         const lineColor = this.formatState.borderColor;
 
         this.sendToParent('calc-cell-format', {
@@ -439,7 +546,7 @@ class CalcToolPanel {
                 border: {
                     type: type,
                     style: lineStyle,
-                    width: parseInt(lineWidth),
+                    width: lineWidth,
                     color: lineColor
                 }
             }
@@ -475,6 +582,7 @@ class CalcToolPanel {
             color: this.formatState.textColor,
             backgroundColor: this.formatState.bgColor,
             textAlign: this.formatState.align,
+            vAlign: this.formatState.vAlign,
             fontFamily: this.formatState.fontFamily,
             fontSize: this.formatState.fontSize
         };
@@ -558,6 +666,189 @@ class CalcToolPanel {
                 clientX: e.clientX,
                 clientY: e.clientY
             });
+        });
+    }
+
+    /**
+     * ポップアップ座標を計算
+     */
+    getPopupPosition(buttonElement) {
+        const rect = buttonElement.getBoundingClientRect();
+        const iframeRect = window.frameElement.getBoundingClientRect();
+        return {
+            x: iframeRect.left + rect.left,
+            y: iframeRect.top + rect.bottom + 2
+        };
+    }
+
+    /**
+     * フォント選択ポップアップを表示
+     */
+    showFontPopup(buttonElement) {
+        const pos = this.getPopupPosition(buttonElement);
+
+        const fonts = [
+            { value: 'MS Gothic', label: 'MS ゴシック' },
+            { value: 'MS Mincho', label: 'MS 明朝' },
+            { value: 'Meiryo', label: 'メイリオ' }
+        ];
+
+        const htmlContent = fonts.map(font => `
+            <div class="popup-item" data-font="${font.value}"
+                 style="padding: 4px 8px; cursor: pointer; ${this.formatState.fontFamily === font.value ? 'background: #b0c4de;' : ''}"
+                 onmouseover="this.style.background='#d0e0f0'"
+                 onmouseout="this.style.background='${this.formatState.fontFamily === font.value ? '#b0c4de' : 'transparent'}'">
+                ${font.label}
+            </div>
+        `).join('');
+
+        this.sendToParent('show-tool-panel-popup', {
+            popupType: 'calc-font',
+            htmlContent: `<div style="min-width: 100px;">${htmlContent}</div>`,
+            x: pos.x,
+            y: pos.y
+        });
+    }
+
+    /**
+     * フォントサイズ選択ポップアップを表示
+     */
+    showSizePopup(buttonElement) {
+        const pos = this.getPopupPosition(buttonElement);
+
+        const sizes = [9, 10, 11, 12, 14, 16, 18, 24, 32];
+
+        const htmlContent = sizes.map(size => `
+            <div class="popup-item" data-size="${size}"
+                 style="padding: 4px 8px; cursor: pointer; ${this.formatState.fontSize === size ? 'background: #b0c4de;' : ''}"
+                 onmouseover="this.style.background='#d0e0f0'"
+                 onmouseout="this.style.background='${this.formatState.fontSize === size ? '#b0c4de' : 'transparent'}'">
+                ${size}
+            </div>
+        `).join('');
+
+        this.sendToParent('show-tool-panel-popup', {
+            popupType: 'calc-size',
+            htmlContent: `<div style="min-width: 50px;">${htmlContent}</div>`,
+            x: pos.x,
+            y: pos.y
+        });
+    }
+
+    /**
+     * 線種選択ポップアップを表示
+     */
+    showLineStylePopup(buttonElement) {
+        const pos = this.getPopupPosition(buttonElement);
+
+        const styles = [
+            { value: 'solid', label: '実線' },
+            { value: 'dashed', label: '破線' },
+            { value: 'dotted', label: '点線' },
+            { value: 'double', label: '二重線' }
+        ];
+
+        const htmlContent = styles.map(style => `
+            <div class="popup-item" data-linestyle="${style.value}"
+                 style="padding: 4px 8px; cursor: pointer; ${this.formatState.lineStyle === style.value ? 'background: #b0c4de;' : ''}"
+                 onmouseover="this.style.background='#d0e0f0'"
+                 onmouseout="this.style.background='${this.formatState.lineStyle === style.value ? '#b0c4de' : 'transparent'}'">
+                ${style.label}
+            </div>
+        `).join('');
+
+        this.sendToParent('show-tool-panel-popup', {
+            popupType: 'calc-line-style',
+            htmlContent: `<div style="min-width: 60px;">${htmlContent}</div>`,
+            x: pos.x,
+            y: pos.y
+        });
+    }
+
+    /**
+     * 線幅選択ポップアップを表示
+     */
+    showLineWidthPopup(buttonElement) {
+        const pos = this.getPopupPosition(buttonElement);
+
+        const widths = [
+            { value: 1, label: '細' },
+            { value: 2, label: '中' },
+            { value: 3, label: '太' }
+        ];
+
+        const htmlContent = widths.map(width => `
+            <div class="popup-item" data-linewidth="${width.value}"
+                 style="padding: 4px 8px; cursor: pointer; ${this.formatState.lineWidth === width.value ? 'background: #b0c4de;' : ''}"
+                 onmouseover="this.style.background='#d0e0f0'"
+                 onmouseout="this.style.background='${this.formatState.lineWidth === width.value ? '#b0c4de' : 'transparent'}'">
+                ${width.label}
+            </div>
+        `).join('');
+
+        this.sendToParent('show-tool-panel-popup', {
+            popupType: 'calc-line-width',
+            htmlContent: `<div style="min-width: 50px;">${htmlContent}</div>`,
+            x: pos.x,
+            y: pos.y
+        });
+    }
+
+    /**
+     * 水平配置選択ポップアップを表示
+     */
+    showHAlignPopup(buttonElement) {
+        const pos = this.getPopupPosition(buttonElement);
+
+        const aligns = [
+            { value: 'left', label: '左揃え' },
+            { value: 'center', label: '中央揃え' },
+            { value: 'right', label: '右揃え' }
+        ];
+
+        const htmlContent = aligns.map(align => `
+            <div class="popup-item" data-halign="${align.value}"
+                 style="padding: 4px 8px; cursor: pointer; ${this.formatState.align === align.value ? 'background: #b0c4de;' : ''}"
+                 onmouseover="this.style.background='#d0e0f0'"
+                 onmouseout="this.style.background='${this.formatState.align === align.value ? '#b0c4de' : 'transparent'}'">
+                ${align.label}
+            </div>
+        `).join('');
+
+        this.sendToParent('show-tool-panel-popup', {
+            popupType: 'calc-halign',
+            htmlContent: `<div style="min-width: 70px;">${htmlContent}</div>`,
+            x: pos.x,
+            y: pos.y
+        });
+    }
+
+    /**
+     * 垂直配置選択ポップアップを表示
+     */
+    showVAlignPopup(buttonElement) {
+        const pos = this.getPopupPosition(buttonElement);
+
+        const aligns = [
+            { value: 'top', label: '上揃え' },
+            { value: 'middle', label: '中揃え' },
+            { value: 'bottom', label: '下揃え' }
+        ];
+
+        const htmlContent = aligns.map(align => `
+            <div class="popup-item" data-valign="${align.value}"
+                 style="padding: 4px 8px; cursor: pointer; ${this.formatState.vAlign === align.value ? 'background: #b0c4de;' : ''}"
+                 onmouseover="this.style.background='#d0e0f0'"
+                 onmouseout="this.style.background='${this.formatState.vAlign === align.value ? '#b0c4de' : 'transparent'}'">
+                ${align.label}
+            </div>
+        `).join('');
+
+        this.sendToParent('show-tool-panel-popup', {
+            popupType: 'calc-valign',
+            htmlContent: `<div style="min-width: 60px;">${htmlContent}</div>`,
+            x: pos.x,
+            y: pos.y
         });
     }
 }

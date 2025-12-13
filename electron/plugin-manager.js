@@ -1,6 +1,8 @@
 /**
  * プラグインマネージャー (レンダラープロセス用)
  * ブラウザ環境でプラグインを管理
+ * @module electron/plugin-manager
+ *
  */
 class PluginManager {
     constructor() {
@@ -620,29 +622,9 @@ class PluginManager {
                 }
             }, 50); // iframe作成を待つ
 
-            // Phase 2: 親MessageBusに子を登録
-            // IMPORTANT: registerChildを早期に実行して、プラグインからのメッセージを確実に受信できるようにする
-            if (window.tadjsDesktop.parentMessageBus) {
-                // 即座に登録を試みる（iframe要素が存在する場合）
-                const tryRegisterChild = (attemptNumber = 1) => {
-                    const iframe = document.getElementById(iframeId);
-                    if (iframe) {
-                        window.tadjsDesktop.parentMessageBus.registerChild(windowId, iframe, {
-                            windowId: windowId,
-                            pluginId: plugin.id
-                        });
-                        console.log(`[PluginManager] Phase 2: 子を登録 windowId=${windowId}, pluginId=${plugin.id} (attempt ${attemptNumber})`);
-                    } else if (attemptNumber < 5) {
-                        // iframeがまだ存在しない場合は、最大5回まで20msごとにリトライ
-                        setTimeout(() => tryRegisterChild(attemptNumber + 1), 20);
-                    } else {
-                        console.error(`[PluginManager] Phase 2: iframeが見つかりません windowId=${windowId}, iframeId=${iframeId}`);
-                    }
-                };
-
-                // 同期的に1回目の登録を試み、失敗した場合は非同期でリトライ
-                setTimeout(() => tryRegisterChild(), 0);
-            }
+            // 親MessageBusに子(iframe)を登録
+            // IMPORTANT: initメッセージ送信前に登録する必要があるため、initializePluginMessaging内で登録
+            // registerChildの呼び出しはinitializePluginMessagingに移動
 
             // プラグインへのメッセージ送信を初期化
             this.initializePluginMessaging(iframeId, plugin, fileData, windowId);
@@ -686,9 +668,39 @@ class PluginManager {
             const iframe = document.getElementById(iframeId);
             console.log('iframe検索:', iframeId, 'found:', !!iframe);
             if (iframe) {
-                // loadイベントが既に発火している可能性があるため、即座に送信も試みる
+                // 親MessageBusに子(iframe)を登録する関数
+                // IMPORTANT: initメッセージ送信直前に登録することで、
+                // プラグインからのメッセージを確実に受信できるようにする
+                const registerChildIfNeeded = () => {
+                    if (window.tadjsDesktop.parentMessageBus && iframe.contentWindow) {
+                        // 既に登録されているかチェック
+                        const existingChild = window.tadjsDesktop.parentMessageBus.children?.get(windowId);
+                        if (!existingChild || existingChild.iframe !== iframe) {
+                            window.tadjsDesktop.parentMessageBus.registerChild(windowId, iframe, {
+                                windowId: windowId,
+                                pluginId: plugin.id
+                            });
+                            console.log(`[PluginManager] 子を登録 windowId=${windowId}, pluginId=${plugin.id}`);
+                        }
+                    }
+                };
+
+                let messageSent = false; // 二重送信防止フラグ
+                let pluginReadyReceived = false; // plugin-ready受信フラグ
+                let fallbackTimeoutId = null; // フォールバックタイムアウトID
+
                 const sendMessage = () => {
+                    if (messageSent) return; // 既に送信済みの場合はスキップ
                     if (iframe.contentWindow) {
+                        messageSent = true; // 送信済みフラグを立てる
+                        // フォールバックタイムアウトをクリア
+                        if (fallbackTimeoutId) {
+                            clearTimeout(fallbackTimeoutId);
+                            fallbackTimeoutId = null;
+                        }
+                        // initメッセージ送信直前に子を登録
+                        registerChildIfNeeded();
+
                         console.log('postMessage送信:', {
                             type: 'init',
                             pluginId: plugin.id,
@@ -696,7 +708,8 @@ class PluginManager {
                             fileName: fileData ? fileData.fileName : null,
                             xmlDataLength: fileData && fileData.xmlData ? fileData.xmlData.length : 0,
                             rawDataLength: fileData && fileData.rawData ? fileData.rawData.length : 0,
-                            fileDataKeys: fileData ? Object.keys(fileData) : []
+                            fileDataKeys: fileData ? Object.keys(fileData) : [],
+                            triggeredBy: pluginReadyReceived ? 'plugin-ready' : 'fallback-timeout'
                         });
                         iframe.contentWindow.postMessage({
                             type: 'init',
@@ -707,16 +720,46 @@ class PluginManager {
                     }
                 };
 
+                // plugin-readyメッセージを待つリスナー
+                const handlePluginReady = (event) => {
+                    // このiframeからのメッセージかチェック
+                    if (event.source !== iframe.contentWindow) return;
+                    if (event.data && event.data.type === 'plugin-ready') {
+                        console.log(`[PluginManager] plugin-ready受信: ${iframeId}`);
+                        pluginReadyReceived = true;
+                        window.removeEventListener('message', handlePluginReady);
+                        sendMessage();
+                    }
+                };
+                window.addEventListener('message', handlePluginReady);
+
                 // loadイベントを待つ
                 iframe.addEventListener('load', () => {
                     console.log('iframe loaded:', iframeId);
-                    setTimeout(sendMessage, 50); // 少し待ってから送信
+                    // plugin-readyを待つが、フォールバックタイムアウトも設定
+                    if (!messageSent && !fallbackTimeoutId) {
+                        fallbackTimeoutId = setTimeout(() => {
+                            if (!messageSent) {
+                                console.log(`[PluginManager] plugin-readyタイムアウト、フォールバック送信: ${iframeId}`);
+                                window.removeEventListener('message', handlePluginReady);
+                                sendMessage();
+                            }
+                        }, 500); // 500ms待ってもplugin-readyが来なければフォールバック
+                    }
                 });
 
-                // 既に読み込まれている場合に備えて即座にも送信
+                // 既に読み込まれている場合に備えてフォールバックタイムアウトを設定
                 if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
-                    console.log('iframe already loaded, sending immediately');
-                    setTimeout(sendMessage, 100);
+                    console.log('iframe already loaded, waiting for plugin-ready:', iframeId);
+                    if (!fallbackTimeoutId) {
+                        fallbackTimeoutId = setTimeout(() => {
+                            if (!messageSent) {
+                                console.log(`[PluginManager] plugin-readyタイムアウト、フォールバック送信: ${iframeId}`);
+                                window.removeEventListener('message', handlePluginReady);
+                                sendMessage();
+                            }
+                        }, 500); // 500ms待ってもplugin-readyが来なければフォールバック
+                    }
                 }
             }
         }, 100);

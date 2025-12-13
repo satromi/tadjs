@@ -80,6 +80,11 @@ class TrashRealObjectsApp extends window.PluginBase {
         this.messageBus.on('init', async (data) => {
             logger.info('[TrashRealObjects] init受信');
 
+            // MessageBusにwindowIdを設定（レスポンスルーティング用）
+            if (data.windowId) {
+                this.messageBus.setWindowId(data.windowId);
+            }
+
             // refCount=0の実身を読み込む
             await this.loadTrashRealObjects();
 
@@ -243,7 +248,7 @@ class TrashRealObjectsApp extends window.PluginBase {
 
         // タイトルテキスト
         const title = document.createElement('span');
-        title.textContent = obj.name || obj.realName || '無題';
+        title.textContent = obj.name || '無題';
         title.style.fontSize = '14px';
         title.style.color = '#000000';
         title.style.whiteSpace = 'nowrap';
@@ -372,7 +377,7 @@ class TrashRealObjectsApp extends window.PluginBase {
         if (!this.selectedObject) return;
 
         const realId = this.selectedObject.realId;
-        const realName = this.selectedObject.realName || '無題';
+        const realName = this.selectedObject.name || '無題';
 
         // 確認ダイアログを表示
         this.messageBus.sendWithCallback('show-message-dialog', {

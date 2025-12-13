@@ -58,6 +58,10 @@ class UnpackFileManager extends window.PluginBase {
 
             // ウィンドウIDを保存
             this.windowId = data.windowId;
+            // MessageBusにもwindowIdを設定（レスポンスルーティング用）
+            if (data.windowId) {
+                this.messageBus.setWindowId(data.windowId);
+            }
 
             if (data.fileData) {
                 this.rawData = data.fileData.rawData;

@@ -176,6 +176,8 @@ class BasicFigureEditor extends window.PluginBase {
             // ウィンドウIDを保存（親から渡されたIDを使用）
             if (data.windowId) {
                 this.windowId = data.windowId;
+                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
+                this.messageBus.setWindowId(data.windowId);
                 logger.debug('[FIGURE EDITOR] [MessageBus] windowId更新:', this.windowId);
             }
 
@@ -218,6 +220,13 @@ class BasicFigureEditor extends window.PluginBase {
                     this.openToolPanelWindow();
                 }
             }, 500);
+
+            // スクロール位置を復元（DOM更新完了を待つ）
+            if (data.fileData && data.fileData.windowConfig && data.fileData.windowConfig.scrollPos) {
+                setTimeout(() => {
+                    this.setScrollPosition(data.fileData.windowConfig.scrollPos);
+                }, 200);
+            }
         });
 
         // 共通MessageBusハンドラを登録（PluginBaseで定義）
@@ -495,7 +504,7 @@ class BasicFigureEditor extends window.PluginBase {
         });
 
         // load-virtual-object メッセージ
-        this.messageBus.on('load-virtual-object', (data) => {
+        this.messageBus.on('load-virtual-object', async (data) => {
             logger.debug('[FIGURE EDITOR] [MessageBus] load-virtual-object受信:', data);
 
             // readonlyモードの設定
@@ -523,11 +532,19 @@ class BasicFigureEditor extends window.PluginBase {
                     logger.debug('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId, '(元:', rawId, ')');
                 }
 
-                // データを読み込む
-                this.loadFile({
+                // データを読み込む（完了を待つ）
+                await this.loadFile({
                     realId: this.realId,
                     xmlData: realObject.xtad || realObject.records?.[0]?.xtad || realObject.xmlData
                 });
+
+                // スクロール位置を復元（DOM更新完了を待つ）
+                const windowConfig = realObject.metadata?.window;
+                if (windowConfig && windowConfig.scrollPos) {
+                    setTimeout(() => {
+                        this.setScrollPosition(windowConfig.scrollPos);
+                    }, 200);
+                }
             }
         });
 
@@ -881,9 +898,8 @@ class BasicFigureEditor extends window.PluginBase {
                             this.notifyCrossWindowDropSuccess(dragData, virtualObjects);
                         }
                         return;
-                    } else if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
-                        // 原紙箱からのコピー
-                        logger.debug('[FIGURE EDITOR] 原紙箱からのドロップを親ウィンドウに委譲');
+                    } else if ((dragData.type === 'base-file-copy' || dragData.type === 'user-base-file-copy') && dragData.source === 'base-file-manager') {
+                        // 原紙箱からのコピー（システム原紙またはユーザ原紙）
                         const rect = this.canvas.getBoundingClientRect();
                         const x = e.clientX - rect.left;
                         const y = e.clientY - rect.top;
@@ -1575,7 +1591,11 @@ class BasicFigureEditor extends window.PluginBase {
                 this.drawShape(this.currentShape);
             } else {
                 // 2つ目以降の頂点追加
-                this.currentShape.points.push({ x: this.startX, y: this.startY });
+                // 重複チェック: 前の頂点と同じ位置なら追加しない（ダブルクリック対策）
+                const lastPoint = this.currentShape.points[this.currentShape.points.length - 1];
+                if (!(lastPoint && lastPoint.x === this.startX && lastPoint.y === this.startY)) {
+                    this.currentShape.points.push({ x: this.startX, y: this.startY });
+                }
                 this.currentShape.tempEndX = this.startX;
                 this.currentShape.tempEndY = this.startY;
                 this.redraw();
@@ -2014,7 +2034,12 @@ class BasicFigureEditor extends window.PluginBase {
                 const rect = this.canvas.getBoundingClientRect();
                 const endX = e.clientX - rect.left;
                 const endY = e.clientY - rect.top;
-                this.currentShape.points.push({ x: endX, y: endY });
+
+                // 重複チェック: 前の頂点と同じ位置なら追加しない（ドラッグなしの場合）
+                const lastPoint = this.currentShape.points[this.currentShape.points.length - 1];
+                if (!(lastPoint && lastPoint.x === endX && lastPoint.y === endY)) {
+                    this.currentShape.points.push({ x: endX, y: endY });
+                }
                 this.currentShape.tempEndX = endX;
                 this.currentShape.tempEndY = endY;
                 this.isFirstPolygonLine = false;
@@ -2207,6 +2232,11 @@ class BasicFigureEditor extends window.PluginBase {
 
         editor.addEventListener('blur', finishEdit);
         editor.addEventListener('keydown', (e) => {
+            // システムショートカット（Ctrl+E, Ctrl+S, Ctrl+L等）は伝播させる
+            if (e.ctrlKey && ['e', 's', 'l', 'o'].includes(e.key.toLowerCase())) {
+                // Document levelのハンドラで処理するため伝播させる
+                return;
+            }
             if (e.key === 'Escape') {
                 e.preventDefault();
                 finishEdit();
@@ -2391,13 +2421,44 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     isPointInShape(x, y, shape) {
-        // 簡易的な当たり判定
-        const minX = Math.min(shape.startX, shape.endX);
-        const maxX = Math.max(shape.startX, shape.endX);
-        const minY = Math.min(shape.startY, shape.endY);
-        const maxY = Math.max(shape.startY, shape.endY);
+        // バウンディングボックスを取得して当たり判定
+        const bounds = this.getShapeBoundingBox(shape);
+        if (!bounds) return false;
 
-        return x >= minX && x <= maxX && y >= minY && y <= maxY;
+        return x >= bounds.minX && x <= bounds.maxX && y >= bounds.minY && y <= bounds.maxY;
+    }
+
+    /**
+     * 図形のバウンディングボックスを取得
+     * @param {Object} shape - 図形オブジェクト
+     * @returns {Object|null} { minX, maxX, minY, maxY } または null
+     */
+    getShapeBoundingBox(shape) {
+        let minX, maxX, minY, maxY;
+
+        if (shape.points && shape.points.length > 0) {
+            // polygon: points配列からバウンディングボックスを計算
+            minX = Math.min(...shape.points.map(p => p.x));
+            maxX = Math.max(...shape.points.map(p => p.x));
+            minY = Math.min(...shape.points.map(p => p.y));
+            maxY = Math.max(...shape.points.map(p => p.y));
+        } else if (shape.path && shape.path.length > 0) {
+            // pencil/curve: path配列からバウンディングボックスを計算
+            minX = Math.min(...shape.path.map(p => p.x));
+            maxX = Math.max(...shape.path.map(p => p.x));
+            minY = Math.min(...shape.path.map(p => p.y));
+            maxY = Math.max(...shape.path.map(p => p.y));
+        } else if (shape.startX !== undefined && shape.endX !== undefined) {
+            // 既存: startX/endX/startY/endY を使用
+            minX = Math.min(shape.startX, shape.endX);
+            maxX = Math.max(shape.startX, shape.endX);
+            minY = Math.min(shape.startY, shape.endY);
+            maxY = Math.max(shape.startY, shape.endY);
+        } else {
+            return null;
+        }
+
+        return { minX, maxX, minY, maxY };
     }
 
     getShapesInRectangle(x1, y1, x2, y2) {
@@ -2409,14 +2470,13 @@ class BasicFigureEditor extends window.PluginBase {
 
         const shapesInRect = [];
         for (const shape of this.shapes) {
-            const shapeMinX = Math.min(shape.startX, shape.endX);
-            const shapeMaxX = Math.max(shape.startX, shape.endX);
-            const shapeMinY = Math.min(shape.startY, shape.endY);
-            const shapeMaxY = Math.max(shape.startY, shape.endY);
+            // バウンディングボックスを取得
+            const bounds = this.getShapeBoundingBox(shape);
+            if (!bounds) continue;
 
             // 矩形同士の重なり判定
-            if (!(shapeMaxX < rectMinX || shapeMinX > rectMaxX ||
-                  shapeMaxY < rectMinY || shapeMinY > rectMaxY)) {
+            if (!(bounds.maxX < rectMinX || bounds.minX > rectMaxX ||
+                  bounds.maxY < rectMinY || bounds.minY > rectMaxY)) {
                 shapesInRect.push(shape);
             }
         }
@@ -3807,18 +3867,20 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
+        // getShapeBoundingBox を使用してバウンディングボックスを取得
+        const bounds = this.getShapeBoundingBox(shape);
+        if (!bounds) {
+            return; // バウンディングボックスが取得できない場合はスキップ
+        }
+
         this.ctx.strokeStyle = '#ff8f00';
         this.ctx.lineWidth = this.selectionWidth; // ユーザ環境設定の太さを使用
         this.ctx.setLineDash([5, 5]);
 
-        const minX = Math.min(shape.startX, shape.endX);
-        const minY = Math.min(shape.startY, shape.endY);
-        const maxX = Math.max(shape.startX, shape.endX);
-        const maxY = Math.max(shape.startY, shape.endY);
-        const width = Math.abs(shape.endX - shape.startX);
-        const height = Math.abs(shape.endY - shape.startY);
+        const width = bounds.maxX - bounds.minX;
+        const height = bounds.maxY - bounds.minY;
 
-        this.ctx.strokeRect(minX, minY, width, height);
+        this.ctx.strokeRect(bounds.minX, bounds.minY, width, height);
         this.ctx.setLineDash([]);
 
         // 仮身の場合は専用リサイズを使うため、通常のリサイズハンドルは描画しない
@@ -3831,8 +3893,8 @@ class BasicFigureEditor extends window.PluginBase {
         this.ctx.fillStyle = '#ffffff';
         this.ctx.strokeStyle = '#ff8f00';
         this.ctx.lineWidth = this.selectionWidth; // ユーザ環境設定の太さを使用
-        this.ctx.fillRect(maxX - handleSize / 2, maxY - handleSize / 2, handleSize, handleSize);
-        this.ctx.strokeRect(maxX - handleSize / 2, maxY - handleSize / 2, handleSize, handleSize);
+        this.ctx.fillRect(bounds.maxX - handleSize / 2, bounds.maxY - handleSize / 2, handleSize, handleSize);
+        this.ctx.strokeRect(bounds.maxX - handleSize / 2, bounds.maxY - handleSize / 2, handleSize, handleSize);
     }
 
     drawPixelmap(shape) {
@@ -4668,6 +4730,9 @@ class BasicFigureEditor extends window.PluginBase {
 
             this.redraw();
 
+            // autoopen属性がtrueの仮身を自動的に開く
+            await this.autoOpenVirtualObjects();
+
         } catch (error) {
             logger.error('[FIGURE EDITOR] XML解析エラー:', error);
             this.shapes = [];
@@ -4675,6 +4740,56 @@ class BasicFigureEditor extends window.PluginBase {
         }
     }
 
+    /**
+     * autoopen属性がtrueの仮身を自動的に開く
+     */
+    async autoOpenVirtualObjects() {
+        const virtualObjectShapes = this.shapes.filter(shape =>
+            shape.type === 'vobj' && shape.virtualObject
+        );
+
+        for (const shape of virtualObjectShapes) {
+            const vobj = shape.virtualObject;
+            if (vobj.autoopen === 'true') {
+                try {
+                    // applistを確認
+                    const applist = vobj.applist;
+                    if (!applist || typeof applist !== 'object') {
+                        continue;
+                    }
+
+                    // defaultOpen=trueのプラグインを探す
+                    let defaultPluginId = null;
+                    for (const [pluginId, config] of Object.entries(applist)) {
+                        if (config.defaultOpen === true) {
+                            defaultPluginId = pluginId;
+                            break;
+                        }
+                    }
+
+                    if (!defaultPluginId) {
+                        // defaultOpen=trueがない場合は最初のプラグインを使用
+                        defaultPluginId = Object.keys(applist)[0];
+                    }
+
+                    if (!defaultPluginId) {
+                        continue;
+                    }
+
+                    // 実身を開く
+                    if (this.messageBus) {
+                        this.messageBus.send('open-virtual-object-real', {
+                            virtualObj: vobj,
+                            pluginId: defaultPluginId
+                        });
+                    }
+                } catch (error) {
+                    logger.error('[FIGURE EDITOR] 自動起動エラー:', vobj.link_id, error);
+                    // エラーが発生しても次の仮身の起動を続行
+                }
+            }
+        }
+    }
 
     parseLineElement(elem) {
         // tad.js形式: <line l_atr="..." points="x1,y1 x2,y2">
@@ -5641,6 +5756,9 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     async saveFile() {
+        // 保存時にスクロール位置も保存
+        this.saveScrollPosition();
+
         try {
             logger.debug('[FIGURE EDITOR] 保存処理開始');
 
@@ -5710,7 +5828,8 @@ class BasicFigureEditor extends window.PluginBase {
 
             this.setStatus('新しい実身への保存を準備中...');
 
-            const result = await this.messageBus.waitFor('save-as-new-real-object-completed', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
+            // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
+            const result = await this.messageBus.waitFor('save-as-new-real-object-completed', 0, (data) => {
                 return data.messageId === messageId;
             });
 
@@ -7837,7 +7956,8 @@ class BasicFigureEditor extends window.PluginBase {
             logger.debug('[FIGURE EDITOR] 仮身属性変更ダイアログ要求');
 
             try {
-                const result = await this.messageBus.waitFor('virtual-object-attributes-changed', window.LONG_OPERATION_TIMEOUT_MS, (data) => {
+                // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
+                const result = await this.messageBus.waitFor('virtual-object-attributes-changed', 0, (data) => {
                     return data.messageId === messageId;
                 });
 
@@ -7915,10 +8035,10 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     /**
-     * 仮身属性変更ダイアログを表示（基本文章編集プラグインから適応）
+     * 仮身属性変更ダイアログを表示
      */
     async changeVirtualObjectAttributes() {
-        await window.RealObjectSystem.changeVirtualObjectAttributes(this);
+        await this.showVirtualAttributes();
     }
 
     /**

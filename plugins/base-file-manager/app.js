@@ -13,11 +13,14 @@ class BaseFileManager extends window.PluginBase {
     constructor() {
         super('BaseFileManager');
 
-        this.baseFiles = [];
+        this.userBaseFiles = [];    // ユーザ原紙リスト
+        this.systemBaseFiles = [];  // システム原紙リスト
+        this.displayFilter = 'all'; // フィルタ状態: 'all' | 'user' | 'system'
         this.pluginConfig = null;
         this.fileData = null; // ファイルデータ
         this.isFullscreen = false; // 全画面表示フラグ
         this.iconCache = new Map(); // アイコンキャッシュ (realId -> base64)
+        this.isLoadingBaseFiles = false; // 原紙ファイル読み込み中フラグ（二重呼び出し防止）
 
         // MessageBusの初期化（即座に開始）
         if (window.MessageBus) {
@@ -64,8 +67,16 @@ class BaseFileManager extends window.PluginBase {
      * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
+        // PluginBase共通ハンドラを登録（plugin-readyシグナル送信含む）
+        this.setupCommonMessageBusHandlers();
+
         // init メッセージ
         this.messageBus.on('init', async (data) => {
+            // MessageBusにwindowIdを設定（レスポンスルーティング用）
+            if (data.windowId) {
+                this.messageBus.setWindowId(data.windowId);
+            }
+
             // fileDataを保存
             if (data.fileData) {
                 this.fileData = data.fileData;
@@ -135,12 +146,21 @@ class BaseFileManager extends window.PluginBase {
     }
 
     getMenuDefinition() {
+        // フィルタ状態に応じてチェックマークを表示
+        const userMark = this.displayFilter === 'user' ? '● ' : '  ';
+        const systemMark = this.displayFilter === 'system' ? '● ' : '  ';
+        const allMark = this.displayFilter === 'all' ? '● ' : '  ';
+
         return [
             {
                 text: '表示',
                 submenu: [
                     { text: '全画面表示', action: 'toggle-fullscreen', shortcut: 'Ctrl+L' },
-                    { text: '背景色変更', action: 'change-bg-color' }
+                    { text: '背景色変更', action: 'change-bg-color' },
+                    { separator: true },
+                    { text: `${userMark}ユーザ原紙のみ`, action: 'filter-user' },
+                    { text: `${systemMark}システム原紙のみ`, action: 'filter-system' },
+                    { text: `${allMark}すべて`, action: 'filter-all' }
                 ]
             },
             {
@@ -165,6 +185,18 @@ class BaseFileManager extends window.PluginBase {
                 break;
             case 'toggle-fullscreen':
                 this.toggleFullscreenWithState();
+                break;
+            case 'filter-user':
+                this.displayFilter = 'user';
+                this.renderBaseFiles();
+                break;
+            case 'filter-system':
+                this.displayFilter = 'system';
+                this.renderBaseFiles();
+                break;
+            case 'filter-all':
+                this.displayFilter = 'all';
+                this.renderBaseFiles();
                 break;
             default:
                 logger.warn('[BaseFileManager] 未知のアクション:', action);
@@ -197,34 +229,48 @@ class BaseFileManager extends window.PluginBase {
 
     /**
      * 原紙ファイルを読み込む
-     * プラグインの type="base" で basefile が指定されているものを対象
+     * システム原紙: プラグインの type="base" で basefile が指定されているもの
+     * ユーザ原紙: 原紙箱のXTAD内の<link>要素
      */
     async loadBaseFiles() {
-        try {
-            // MessageBus使用
-            this.messageBus.send('request-base-plugins');
+        // 二重呼び出し防止（initメッセージが複数回来た場合の対策）
+        if (this.isLoadingBaseFiles) {
+            return;
+        }
+        this.isLoadingBaseFiles = true;
 
-            // レスポンスを待つ
+        try {
+            // 1. システム原紙を読み込み
+            this.messageBus.send('request-base-plugins');
             const response = await this.messageBus.waitFor('base-plugins-response', window.DEFAULT_TIMEOUT_MS);
 
             if (response && response.plugins) {
-                // 原紙ファイルを読み込んで表示
-                await this.loadAndDisplayBaseFiles(response.plugins);
+                await this.loadAndDisplaySystemBaseFiles(response.plugins);
             } else {
                 logger.warn('[BaseFileManager] 原紙プラグインが見つかりません');
+                this.systemBaseFiles = [];
             }
+
+            // 2. ユーザ原紙を読み込み
+            await this.loadUserBaseFiles();
+
+            // 3. 表示
+            this.renderBaseFiles();
 
         } catch (error) {
             logger.error('[BaseFileManager] 原紙ファイル読み込みエラー:', error);
+        } finally {
+            this.isLoadingBaseFiles = false;
         }
     }
 
 
     /**
-     * 原紙ファイルを読み込んで表示
+     * システム原紙ファイルを読み込む
+     * プラグインの type="base" で basefile が指定されているものを対象
      */
-    async loadAndDisplayBaseFiles(plugins) {
-        this.baseFiles = [];
+    async loadAndDisplaySystemBaseFiles(plugins) {
+        this.systemBaseFiles = [];
 
         for (const plugin of plugins) {
             if (plugin.type === 'base' && plugin.basefile) {
@@ -266,7 +312,8 @@ class BaseFileManager extends window.PluginBase {
                             iconFile = plugin.basefile.ico || null;
                         }
 
-                        this.baseFiles.push({
+                        this.systemBaseFiles.push({
+                            type: 'system',
                             pluginId: plugin.id,
                             pluginName: plugin.name,
                             displayName: displayName,
@@ -283,9 +330,82 @@ class BaseFileManager extends window.PluginBase {
                 }
             }
         }
+    }
 
-        // 仮身一覧を表示
-        this.renderBaseFiles();
+    /**
+     * ユーザ原紙を読み込む
+     * 原紙箱のXTAD内の<link>要素から読み込み
+     */
+    async loadUserBaseFiles() {
+        this.userBaseFiles = [];
+
+        // fileDataにxmlDataがない場合はスキップ
+        if (!this.fileData || !this.fileData.xmlData) {
+            return;
+        }
+
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(this.fileData.xmlData, 'text/xml');
+            const linkElements = xmlDoc.getElementsByTagName('link');
+
+            for (const link of linkElements) {
+                const linkId = link.getAttribute('id');
+                if (!linkId) continue;
+
+                // 実身IDを抽出（_0.xtad を除去）
+                const realId = linkId.replace(/_\d+\.xtad$/, '');
+                const displayName = link.textContent.trim() || '無題';
+
+                // メタデータを読み込み
+                const metadata = await this.loadRealObjectMetadata(realId);
+
+                this.userBaseFiles.push({
+                    type: 'user',
+                    realId: realId,
+                    displayName: metadata?.name || displayName,
+                    iconFile: null,
+                    metadata: metadata
+                });
+            }
+        } catch (error) {
+            logger.error('[BaseFileManager] ユーザ原紙読み込みエラー:', error);
+        }
+    }
+
+    /**
+     * 実身のメタデータを読み込む
+     * @param {string} realId - 実身ID
+     * @returns {Promise<Object|null>} メタデータ、または読み込み失敗時はnull
+     */
+    async loadRealObjectMetadata(realId) {
+        try {
+            const jsonFileName = `${realId}.json`;
+
+            // HTTP fetchでJSONファイルを読み込む（iframe内なのでfetchを使用）
+            // プラグインは resources/app/plugins/base-file-manager/ にあり、
+            // データは ../../../../data/ にある
+            const urlsToTry = [
+                `../../../../data/${jsonFileName}`,
+                `../../../../${jsonFileName}`
+            ];
+
+            for (const url of urlsToTry) {
+                try {
+                    const response = await fetch(url);
+                    if (response.ok) {
+                        return await response.json();
+                    }
+                } catch (e) {
+                    // 次のURLを試す
+                }
+            }
+
+            return null;
+        } catch (error) {
+            logger.warn('[BaseFileManager] メタデータ読み込み失敗:', realId, error);
+            return null;
+        }
     }
 
     /**
@@ -318,6 +438,7 @@ class BaseFileManager extends window.PluginBase {
 
     /**
      * 原紙ファイルを仮身形式で表示
+     * displayFilterに応じてユーザ原紙/システム原紙を表示
      */
     renderBaseFiles() {
         const listElement = document.getElementById('baseFileList');
@@ -325,7 +446,16 @@ class BaseFileManager extends window.PluginBase {
 
         listElement.innerHTML = '';
 
-        if (this.baseFiles.length === 0) {
+        // フィルタに応じて表示対象を決定（ユーザ原紙が先、システム原紙が後）
+        let filesToDisplay = [];
+        if (this.displayFilter === 'all' || this.displayFilter === 'user') {
+            filesToDisplay = filesToDisplay.concat(this.userBaseFiles);
+        }
+        if (this.displayFilter === 'all' || this.displayFilter === 'system') {
+            filesToDisplay = filesToDisplay.concat(this.systemBaseFiles);
+        }
+
+        if (filesToDisplay.length === 0) {
             const emptyMessage = document.createElement('div');
             emptyMessage.className = 'empty-message';
             emptyMessage.textContent = '原紙ファイルがありません';
@@ -334,7 +464,7 @@ class BaseFileManager extends window.PluginBase {
         }
 
         // 各原紙ファイルを仮身として表示
-        this.baseFiles.forEach((baseFile, index) => {
+        filesToDisplay.forEach((baseFile, index) => {
             const vobjElement = this.createVirtualObject(baseFile, index);
             listElement.appendChild(vobjElement);
         });
@@ -452,19 +582,26 @@ class BaseFileManager extends window.PluginBase {
             return this.iconCache.get(realId);
         }
 
-        // iconFileがない場合
-        if (!baseFile.iconFile) {
-            return null;
-        }
-
         try {
-            // アイコンファイルのパスを構築
-            const iconPath = `../../plugins/${baseFile.pluginId}/${baseFile.iconFile}`;
+            let iconPath = null;
+
+            if (baseFile.type === 'user') {
+                // ユーザ原紙: 実身IDからアイコンファイルパスを構築
+                // プラグインは resources/app/plugins/base-file-manager/ にあり、
+                // データは ../../../../data/ にある
+                iconPath = `../../../../data/${realId}.ico`;
+            } else if (baseFile.iconFile && baseFile.pluginId) {
+                // システム原紙: プラグインフォルダ内のアイコン
+                iconPath = `../../plugins/${baseFile.pluginId}/${baseFile.iconFile}`;
+            }
+
+            if (!iconPath) {
+                return null;
+            }
 
             // アイコンファイルを読み込む
             const response = await fetch(iconPath);
             if (!response.ok) {
-                logger.warn('[BaseFileManager] アイコンファイルが見つかりません:', iconPath);
                 return null;
             }
 
@@ -494,17 +631,34 @@ class BaseFileManager extends window.PluginBase {
      */
     handleDragStart(event, baseFile, index) {
         // ドラッグデータを設定（コピー用）
-        const dragData = {
-            type: 'base-file-copy',
-            source: 'base-file-manager',
-            baseFile: {
-                pluginId: baseFile.pluginId,
-                pluginName: baseFile.pluginName,
-                displayName: baseFile.displayName,
-                basefile: baseFile.basefile,
-                xmlData: baseFile.xmlData
-            }
-        };
+        let dragData;
+
+        if (baseFile.type === 'user') {
+            // ユーザ原紙: 実身IDベースのドラッグデータ
+            dragData = {
+                type: 'user-base-file-copy',
+                source: 'base-file-manager',
+                baseFile: {
+                    type: 'user',
+                    realId: baseFile.realId,
+                    displayName: baseFile.displayName
+                }
+            };
+        } else {
+            // システム原紙: 従来のドラッグデータ
+            dragData = {
+                type: 'base-file-copy',
+                source: 'base-file-manager',
+                baseFile: {
+                    type: 'system',
+                    pluginId: baseFile.pluginId,
+                    pluginName: baseFile.pluginName,
+                    displayName: baseFile.displayName,
+                    basefile: baseFile.basefile,
+                    xmlData: baseFile.xmlData
+                }
+            };
+        }
 
         event.dataTransfer.setData('text/plain', JSON.stringify(dragData));
         event.dataTransfer.effectAllowed = 'copy';
@@ -525,11 +679,20 @@ class BaseFileManager extends window.PluginBase {
      * 原紙ファイルを開く
      */
     openBaseFile(baseFile) {
-        this.messageBus.send('open-base-file', {
-            pluginId: baseFile.pluginId,
-            basefile: baseFile.basefile,
-            displayName: baseFile.displayName
-        });
+        if (baseFile.type === 'user') {
+            // ユーザ原紙: 実身IDで開く
+            this.messageBus.send('open-real-object', {
+                realId: baseFile.realId,
+                displayName: baseFile.displayName
+            });
+        } else {
+            // システム原紙: プラグイン経由で開く
+            this.messageBus.send('open-base-file', {
+                pluginId: baseFile.pluginId,
+                basefile: baseFile.basefile,
+                displayName: baseFile.displayName
+            });
+        }
     }
 
     /**

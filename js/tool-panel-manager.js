@@ -211,8 +211,10 @@ export class ToolPanelManager {
                     const editorWindowId = this.parentMessageBus.getWindowIdFromIframe(editorIframe);
                     if (editorWindowId) {
                         this.parentMessageBus.sendToWindow(editorWindowId, 'tool-panel-window-moved', {
-                            x: rect.left,
-                            y: rect.top
+                            pos: {
+                                x: rect.left,
+                                y: rect.top
+                            }
                         });
 
                         logger.debug('[ToolPanelManager] 道具パネル移動終了を通知:', { x: rect.left, y: rect.top });
@@ -344,6 +346,48 @@ export class ToolPanelManager {
                 this.sendToToolPanelSource(source, 'popup-material-tool-click', {
                     materialTool: tool
                 });
+            } else if (e.target.dataset.font) {
+                // 基本表計算: フォント選択
+                e.preventDefault();
+                this.sendToToolPanelSource(source, 'popup-calc-font-select', {
+                    fontFamily: e.target.dataset.font
+                });
+                this.hideToolPanelPopup();
+            } else if (e.target.dataset.size) {
+                // 基本表計算: フォントサイズ選択
+                e.preventDefault();
+                this.sendToToolPanelSource(source, 'popup-calc-size-select', {
+                    fontSize: parseInt(e.target.dataset.size)
+                });
+                this.hideToolPanelPopup();
+            } else if (e.target.dataset.linestyle) {
+                // 基本表計算: 線種選択
+                e.preventDefault();
+                this.sendToToolPanelSource(source, 'popup-calc-line-style-select', {
+                    lineStyle: e.target.dataset.linestyle
+                });
+                this.hideToolPanelPopup();
+            } else if (e.target.dataset.linewidth) {
+                // 基本表計算: 線幅選択
+                e.preventDefault();
+                this.sendToToolPanelSource(source, 'popup-calc-line-width-select', {
+                    lineWidth: parseInt(e.target.dataset.linewidth)
+                });
+                this.hideToolPanelPopup();
+            } else if (e.target.dataset.halign) {
+                // 基本表計算: 水平配置選択
+                e.preventDefault();
+                this.sendToToolPanelSource(source, 'popup-calc-halign-select', {
+                    align: e.target.dataset.halign
+                });
+                this.hideToolPanelPopup();
+            } else if (e.target.dataset.valign) {
+                // 基本表計算: 垂直配置選択
+                e.preventDefault();
+                this.sendToToolPanelSource(source, 'popup-calc-valign-select', {
+                    vAlign: e.target.dataset.valign
+                });
+                this.hideToolPanelPopup();
             }
         };
 

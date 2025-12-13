@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.20
+ * TADjs Ver 0.21
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -132,7 +132,7 @@ class TADjsDesktop {
 
         // DialogManager初期化
         if (typeof window.DialogManager !== 'undefined') {
-            this.dialogManager = new window.DialogManager();
+            this.dialogManager = new window.DialogManager(this.parentMessageBus);
             logger.info('[TADjs] DialogManager初期化完了');
         } else {
             logger.warn('[TADjs] DialogManagerが利用できません');
@@ -1341,7 +1341,7 @@ class TADjsDesktop {
                             return; // stopPropagation()を呼ばずにreturn
                         }
 
-                        if (dragData.type === 'base-file-copy') {
+                        if (dragData.type === 'base-file-copy' || dragData.type === 'user-base-file-copy') {
                             logger.info('[TADjs] 原紙箱からのドロップ:', dragData);
                             e.stopPropagation();
                             this.handleBaseFileDrop(dragData, e);
@@ -1471,7 +1471,7 @@ class TADjsDesktop {
         logger.info('[TADjs] handleBaseFileDrop開始:', dragData);
 
         // 原紙箱からのドロップでない場合は処理しない
-        if (dragData.type !== 'base-file-copy') {
+        if (dragData.type !== 'base-file-copy' && dragData.type !== 'user-base-file-copy') {
             logger.info('[TADjs] handleBaseFileDrop: 原紙箱からのドロップではないためスキップ');
             return;
         }
@@ -1482,7 +1482,176 @@ class TADjsDesktop {
         const dropPosition = messageEvent && messageEvent.data
             ? (messageEvent.data.dropPosition || { x: messageEvent.data.clientX, y: messageEvent.data.clientY })
             : null;
-        logger.info('[TADjs] ドロップ先ウィンドウ:', dropTargetWindow ? 'あり' : 'なし', 'ドロップ位置:', dropPosition);
+        // targetCellがメッセージに含まれている場合はそれを使用（表計算プラグイン用）
+        const targetCell = messageEvent && messageEvent.data ? messageEvent.data.targetCell : null;
+        logger.info('[TADjs] ドロップ先ウィンドウ:', dropTargetWindow ? 'あり' : 'なし', 'ドロップ位置:', dropPosition, 'ターゲットセル:', targetCell);
+
+        // ユーザ原紙の場合は実身を複製して新規作成（システム原紙と同様）
+        if (dragData.type === 'user-base-file-copy') {
+            const baseFile = dragData.baseFile;
+            const sourceRealId = baseFile.realId;
+            const displayName = baseFile.displayName;
+
+            // 実身名を入力するダイアログを表示
+            const result = await this.showInputDialog(
+                '新しい実身の名称を入力してください',
+                displayName,
+                30,
+                [
+                    { label: '取消', value: 'cancel' },
+                    { label: '設定', value: 'ok' }
+                ],
+                1 // デフォルトは「設定」ボタン
+            );
+
+            logger.info('[TADjs] ユーザ原紙ダイアログ結果:', result);
+
+            // 取消の場合は何もしない
+            if (result.button === 'cancel' || !result.value) {
+                logger.info('[TADjs] ユーザ原紙作成キャンセル');
+                return;
+            }
+
+            const newName = result.value;
+            logger.info('[TADjs] ユーザ原紙から新しい実身名:', newName);
+
+            // 元の実身を読み込む
+            if (!this.realObjectSystem) {
+                logger.error('[TADjs] RealObjectSystemが初期化されていません');
+                this.setStatusMessage('実身システムが初期化されていません');
+                return;
+            }
+
+            let sourceRealObject;
+            try {
+                sourceRealObject = await this.realObjectSystem.loadRealObject(sourceRealId);
+                logger.info('[TADjs] 元の実身読み込み完了:', sourceRealId);
+            } catch (error) {
+                logger.error('[TADjs] 元の実身読み込みエラー:', error);
+                this.setStatusMessage('元の実身の読み込みに失敗しました');
+                return;
+            }
+
+            // 新しい実身IDを生成
+            const newRealId = typeof generateUUIDv7 === 'function' ? generateUUIDv7() : this.generateRealFileIdSet(1).fileId;
+            logger.info('[TADjs] ユーザ原紙から新しい実身ID:', newRealId);
+
+            // 新しいメタデータを作成
+            const currentDateTime = new Date().toISOString();
+            const newMetadata = {
+                ...sourceRealObject.metadata,
+                realId: newRealId,
+                name: newName,
+                makeDate: currentDateTime,
+                updateDate: currentDateTime,
+                accessDate: currentDateTime,
+                refCount: 1,
+                maker: this.currentUser || 'TRON User'
+            };
+
+            // XTADレコードをコピー（filename属性を更新）
+            const newRecords = sourceRealObject.records.map(record => {
+                let newXtad = record.xtad;
+                if (newXtad) {
+                    newXtad = newXtad.replace(/filename="[^"]*"/, `filename="${newName}"`);
+                }
+                return { xtad: newXtad, images: record.images || [] };
+            });
+
+            // RealObjectSystemに保存
+            try {
+                await this.realObjectSystem.saveRealObject(newRealId, {
+                    metadata: newMetadata,
+                    records: newRecords
+                });
+                logger.info('[TADjs] 新しい実身をRealObjectSystemに保存:', newRealId);
+            } catch (error) {
+                logger.error('[TADjs] 実身保存エラー:', error);
+                this.setStatusMessage('実身の保存に失敗しました');
+                return;
+            }
+
+            // JSONファイルも保存
+            const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(newRealId);
+            const jsonSaved = await this.saveDataFile(jsonFileName, JSON.stringify(newMetadata, null, 2));
+            if (jsonSaved) {
+                logger.info('[TADjs] JSONファイル保存成功:', jsonFileName);
+            } else {
+                logger.warn('[TADjs] JSONファイル保存失敗:', jsonFileName);
+            }
+
+            // アイコンファイルをコピー（存在する場合）
+            if (this.isElectronEnv) {
+                try {
+                    const basePath = this.realObjectSystem.getDataBasePath();
+                    const fs = require('fs');
+                    const path = require('path');
+                    const sourceIcoPath = path.join(basePath, `${sourceRealId}.ico`);
+                    const newIcoPath = path.join(basePath, `${newRealId}.ico`);
+
+                    if (fs.existsSync(sourceIcoPath)) {
+                        fs.copyFileSync(sourceIcoPath, newIcoPath);
+                        logger.info('[TADjs] アイコンファイルコピー成功:', sourceRealId, '->', newRealId);
+                    } else {
+                        logger.info('[TADjs] 元のアイコンファイルが存在しません:', sourceIcoPath);
+                    }
+                } catch (error) {
+                    logger.warn('[TADjs] アイコンファイルコピーエラー:', error.message);
+                }
+
+                // PNG画像ファイルをコピー（ピクセルマップ用、存在する場合）
+                try {
+                    const basePath = this.realObjectSystem.getDataBasePath();
+                    const fs = require('fs');
+                    const path = require('path');
+                    const files = fs.readdirSync(basePath);
+                    const pngPattern = new RegExp(`^${sourceRealId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}_\\d+_\\d+\\.png$`);
+
+                    for (const file of files) {
+                        if (pngPattern.test(file)) {
+                            const sourcePngPath = path.join(basePath, file);
+                            const newPngFile = file.replace(sourceRealId, newRealId);
+                            const newPngPath = path.join(basePath, newPngFile);
+
+                            try {
+                                fs.copyFileSync(sourcePngPath, newPngPath);
+                                logger.info('[TADjs] PNGファイルコピー成功:', file, '->', newPngFile);
+                            } catch (error) {
+                                logger.warn('[TADjs] PNGファイルコピーエラー:', file, error.message);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    logger.warn('[TADjs] PNG検索エラー:', error.message);
+                }
+            }
+
+            logger.info('[TADjs] ユーザ原紙から新しい実身を作成しました:', newRealId, newName);
+
+            // ドロップ先のウィンドウに仮身を追加
+            if (dropTargetWindow) {
+                const windowId = this.parentMessageBus.getWindowIdFromSource(dropTargetWindow);
+                if (windowId) {
+                    this.parentMessageBus.sendToWindow(windowId, 'add-virtual-object-from-base', {
+                        realId: newRealId,
+                        name: newName,
+                        dropPosition: dropPosition,
+                        targetCell: targetCell,
+                        applist: newMetadata.applist || {}
+                    });
+                    logger.info('[TADjs] ユーザ原紙からドロップ先に仮身を追加:', newRealId, newName, dropPosition, 'targetCell:', targetCell);
+                } else {
+                    logger.warn('[TADjs] windowIdが見つかりませんでした。仮身を追加できません。');
+                }
+            } else {
+                logger.warn('[TADjs] ドロップ先ウィンドウが不明です');
+            }
+
+            this.setStatusMessage(`実身「${newName}」を作成しました`);
+            return;
+        }
+
+        // システム原紙の場合は新規実身を作成
 
         // 実身名を入力するダイアログを表示
         const result = await this.showInputDialog(
@@ -1592,7 +1761,7 @@ class TADjsDesktop {
             try {
                 const metadata = {
                     realId: newRealId,
-                    realName: newName,
+                    name: newName,
                     recordCount: 1,
                     refCount: 1,  // 新規作成時は1
                     createdAt: new Date().toISOString(),
@@ -1664,9 +1833,10 @@ class TADjsDesktop {
                     realId: newRealId,
                     name: newName,
                     dropPosition: dropPosition,
+                    targetCell: targetCell,
                     applist: newRealJson.applist || {}
                 });
-                logger.info('[TADjs] ドロップ先に仮身を追加:', newRealId, newName, dropPosition, 'applist:', newRealJson.applist);
+                logger.info('[TADjs] ドロップ先に仮身を追加:', newRealId, newName, dropPosition, 'targetCell:', targetCell, 'applist:', newRealJson.applist);
             } else {
                 logger.warn('[TADjs] windowIdが見つかりませんでした。仮身を追加できません。');
             }
@@ -2877,9 +3047,28 @@ class TADjsDesktop {
         const plugin = window.pluginManager?.getPlugin(pluginId);
 
         if (!plugin || !plugin.needsCloseConfirmation) {
-            // プラグインがクローズ確認を必要としない場合は即座に許可
-            logger.info('[TADjsDesktop] プラグインはクローズ確認不要:', pluginId);
-            return true;
+            // プラグインがクローズ確認を必要としない場合でも、クリーンアップのためにクローズ通知を送信
+            logger.info('[TADjsDesktop] プラグインにクローズ通知を送信（確認不要）:', pluginId);
+
+            return new Promise((resolve) => {
+                // コールバックを登録（短いタイムアウト付き）
+                const timeoutId = setTimeout(() => {
+                    delete this.closeConfirmCallbacks[windowId];
+                    logger.info('[TADjsDesktop] クローズ通知タイムアウト、クローズを許可:', pluginId);
+                    resolve(true);
+                }, 500);
+
+                this.closeConfirmCallbacks[windowId] = (allowClose) => {
+                    clearTimeout(timeoutId);
+                    logger.info('[TADjsDesktop] プラグインからクローズ応答（確認不要）:', allowClose);
+                    resolve(true); // 確認不要の場合は常にtrue
+                };
+
+                // プラグインにクローズ要求を送信
+                this.parentMessageBus.sendToWindow(windowId, 'window-close-request', {
+                    windowId: windowId
+                });
+            });
         }
 
         // クローズ確認が必要なプラグインの場合
@@ -3356,7 +3545,6 @@ class TADjsDesktop {
                     fileData: file,
                     rawData: Array.from(uint8Array),
                     name: virtualObj.link_name || fileName,  // 実身名
-                    realName: virtualObj.link_name || fileName,  // 実身名（互換性）
                     displayName: virtualObj.link_name || fileName,
                     isBPK: true  // BPKファイルであることを示すフラグ
                 };
@@ -3416,7 +3604,6 @@ class TADjsDesktop {
                     fileData: file,
                     rawData: Array.from(uint8Array),
                     name: virtualObj.link_name || bpkFileName,  // 実身名
-                    realName: virtualObj.link_name || bpkFileName,  // 実身名（互換性）
                     displayName: virtualObj.link_name || bpkFileName,
                     isBPK: true  // BPKファイルであることを示すフラグ
                 };
@@ -3526,7 +3713,6 @@ class TADjsDesktop {
                 realObject: jsonData,        // 実身管理用セグメント（JSON）
                 windowConfig: jsonData.window || null, // ウィンドウ設定
                 name: jsonData.name || virtualObj.link_name || realId,  // 実身名
-                realName: jsonData.name || virtualObj.link_name || realId,  // 実身名（互換性）
                 displayName: jsonData.name || virtualObj.link_name || realId
             };
 
@@ -4398,11 +4584,12 @@ class TADjsDesktop {
      * @param {string} responseType - レスポンスメッセージタイプ
      * @param {Object} data - レスポンスデータ
      * @param {string} messageId - メッセージID（オプション）
+     * @param {string} sourceWindowId - 送信元のwindowId（オプション、source解決失敗時のフォールバック）
      * @returns {boolean} 送信成功したか
      */
-    respond(source, responseType, data, messageId = null) {
-        if (!source) {
-            logger.error(`[TADjs] Cannot send ${responseType}: source is null`);
+    respond(source, responseType, data, messageId = null, sourceWindowId = null) {
+        if (!source && !sourceWindowId) {
+            logger.error(`[TADjs] Cannot send ${responseType}: source and sourceWindowId are both null`);
             return false;
         }
 
@@ -4411,7 +4598,7 @@ class TADjsDesktop {
             : data;
 
         try {
-            this.parentMessageBus.respondTo(source, responseType, responseData);
+            this.parentMessageBus.respondTo(source, responseType, responseData, sourceWindowId);
             return true;
         } catch (error) {
             logger.error(`[TADjs] Failed to send ${responseType}:`, error);
@@ -4425,13 +4612,14 @@ class TADjsDesktop {
      * @param {string} responseType - レスポンスメッセージタイプ
      * @param {Error|string} error - エラーオブジェクトまたはメッセージ
      * @param {string} messageId - メッセージID（オプション）
+     * @param {string} sourceWindowId - 送信元のwindowId（オプション）
      * @returns {boolean} 送信成功したか
      */
-    respondError(source, responseType, error, messageId = null) {
+    respondError(source, responseType, error, messageId = null, sourceWindowId = null) {
         return this.respond(source, responseType, {
             success: false,
             error: error.message || error
-        }, messageId);
+        }, messageId, sourceWindowId);
     }
 
     /**
@@ -4440,13 +4628,14 @@ class TADjsDesktop {
      * @param {string} responseType - レスポンスメッセージタイプ
      * @param {Object} data - レスポンスデータ
      * @param {string} messageId - メッセージID（オプション）
+     * @param {string} sourceWindowId - 送信元のwindowId（オプション）
      * @returns {boolean} 送信成功したか
      */
-    respondSuccess(source, responseType, data = {}, messageId = null) {
+    respondSuccess(source, responseType, data = {}, messageId = null, sourceWindowId = null) {
         return this.respond(source, responseType, {
             success: true,
             ...data
-        }, messageId);
+        }, messageId, sourceWindowId);
     }
 
     // ========================================
@@ -4667,6 +4856,17 @@ class TADjsDesktop {
      * @returns {Promise<void>}
      */
     async showDialogAndRespond(dialogType, params, responseType, event) {
+        logger.info('[TADjs] showDialogAndRespond called:', {
+            dialogType,
+            responseType,
+            messageId: params.messageId,
+            sourceWindowId: params.sourceWindowId,
+            hasDialogManager: !!this.dialogManager
+        });
+
+        // sourceWindowIdを取得（event.sourceからwindowIdを解決できない場合のフォールバック）
+        const sourceWindowId = params.sourceWindowId || null;
+
         try {
             let result;
 
@@ -4679,6 +4879,7 @@ class TADjsDesktop {
                     );
                     break;
                 case 'input':
+                    logger.info('[TADjs] Showing input dialog:', params.message);
                     result = await this.showInputDialog(
                         params.message,
                         params.defaultValue || '',
@@ -4686,6 +4887,7 @@ class TADjsDesktop {
                         params.buttons,
                         params.defaultButton || 0
                     );
+                    logger.info('[TADjs] Input dialog result:', result);
                     break;
                 case 'custom':
                     result = await this.showCustomDialog(
@@ -4714,17 +4916,24 @@ class TADjsDesktop {
                             ...resultWithoutElement,
                             selectedFontIndex: selectedFontIndex
                         }
-                    }, params.messageId);
+                    }, params.messageId, sourceWindowId);
                     return; // 早期リターン
 
                 default:
                     throw new Error(`Unknown dialog type: ${dialogType}`);
             }
 
-            this.respondSuccess(event.source, responseType, { result }, params.messageId);
+            logger.info('[TADjs] Sending dialog response:', {
+                responseType,
+                messageId: params.messageId,
+                sourceWindowId,
+                hasResult: !!result
+            });
+            this.respondSuccess(event.source, responseType, { result }, params.messageId, sourceWindowId);
+            logger.info('[TADjs] Dialog response sent successfully');
         } catch (error) {
             logger.error(`[TADjs] Dialog error (${dialogType}):`, error);
-            this.respondError(event.source, responseType, error, params.messageId);
+            this.respondError(event.source, responseType, error, params.messageId, sourceWindowId);
         }
     }
 
@@ -4754,12 +4963,19 @@ class TADjsDesktop {
      * @returns {Promise<void>}
      */
     async handleShowInputDialog(data, event) {
+        logger.info('[TADjs] handleShowInputDialog called:', {
+            messageId: data.messageId,
+            message: data.message,
+            sourceWindowId: data.sourceWindowId,
+            hasEventSource: !!event.source
+        });
         await this.showDialogAndRespond(
             'input',
             data,
             'input-dialog-response',
             event
         );
+        logger.info('[TADjs] handleShowInputDialog completed');
     }
 
     /**
@@ -5561,7 +5777,7 @@ class TADjsDesktop {
             if (!newName) {
                 // 元の実身のメタデータを取得
                 const sourceRealObject = await this.realObjectSystem.loadRealObject(realId);
-                const defaultName = (sourceRealObject.metadata.name || sourceRealObject.metadata.realName || '実身') + 'のコピー';
+                const defaultName = (sourceRealObject.metadata.name || '実身') + 'のコピー';
 
                 // 名前入力ダイアログを表示
                 const result = await this.showInputDialog(
@@ -5596,7 +5812,7 @@ class TADjsDesktop {
             const newRealObject = await this.realObjectSystem.loadRealObject(newRealId);
 
             // 名前を更新
-            newRealObject.metadata.realName = newName;
+            newRealObject.metadata.name = newName;
             await this.realObjectSystem.saveRealObject(newRealId, newRealObject);
 
             // JSONファイルにもrefCountを書き込む
@@ -7276,7 +7492,7 @@ class TADjsDesktop {
         try {
             // 元の実身のメタデータを取得
             const sourceRealObject = await this.realObjectSystem.loadRealObject(realId);
-            const defaultName = (sourceRealObject.metadata.name || sourceRealObject.metadata.realName || '実身') + 'のコピー';
+            const defaultName = (sourceRealObject.metadata.name || '実身') + 'のコピー';
 
             // 名前入力ダイアログを表示
             const result = await this.showInputDialog(
@@ -7413,11 +7629,10 @@ class TADjsDesktop {
             const newRealObject = {
                 metadata: {
                     realId: newRealId,
-                    realName: newName,
                     name: newName,
                     recordCount: 1,
                     refCount: 1,
-                    createDate: new Date().toISOString(),
+                    makeDate: new Date().toISOString(),
                     updateDate: new Date().toISOString(),
                     accessDate: new Date().toISOString(),
                     applist: {
@@ -7588,6 +7803,12 @@ class TADjsDesktop {
                 }
                 if (windowConfig.backgroundColor !== undefined) {
                     jsonData.window.backgroundColor = windowConfig.backgroundColor;
+                }
+                if (windowConfig.scrollPos) {
+                    jsonData.window.scrollPos = windowConfig.scrollPos;
+                }
+                if (windowConfig.wordWrap !== undefined) {
+                    jsonData.window.wordWrap = windowConfig.wordWrap;
                 }
 
                 // updateDateを更新

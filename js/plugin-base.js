@@ -45,6 +45,20 @@ export class PluginBase {
             startX: 0,
             startY: 0
         };
+
+        // 仮身ドラッグ共通状態管理
+        this.virtualObjectDragState = {
+            isRightButtonPressed: false,   // 右ボタン押下フラグ
+            dragMode: 'move',              // 'move' | 'copy'
+            hasMoved: false,               // ドラッグ移動検出フラグ
+            isDragging: false,             // ドラッグ中フラグ
+            startX: 0,                     // ドラッグ開始X座標
+            startY: 0,                     // ドラッグ開始Y座標
+            dragThreshold: 5               // ドラッグ判定しきい値(px)
+        };
+
+        // 親ウィンドウのダイアログ表示状態
+        this.dialogVisible = false;
     }
 
     /**
@@ -67,7 +81,7 @@ export class PluginBase {
     }
 
     // ========================================
-    // 🟢 高優先度: 完全に同一のメソッド
+    // 実身データアクセス
     // ========================================
 
     /**
@@ -113,7 +127,7 @@ export class PluginBase {
     }
 
     // ========================================
-    // 🟡 中優先度: ダイアログメソッド（統一版）
+    // ダイアログ表示
     // ========================================
 
     /**
@@ -156,6 +170,10 @@ export class PluginBase {
      * @returns {Promise<string|null>} 入力値（キャンセル時はnull）
      */
     async showInputDialog(message, defaultValue = '', inputWidth = DEFAULT_INPUT_WIDTH) {
+        // ユーザー入力を待つダイアログなので、タイムアウトを無効化（0に設定）
+        // ボタンが押されるまで無期限に待機する
+        const INPUT_DIALOG_TIMEOUT_MS = 0;
+
         return new Promise((resolve, reject) => {
             this.messageBus.sendWithCallback('show-input-dialog', {
                 message: message,
@@ -186,7 +204,7 @@ export class PluginBase {
                     logger.info(`[${this.pluginName}] 設定ボタンが押されました, value:`, dialogResult.value);
                     resolve(dialogResult.value);
                 }
-            }, DIALOG_TIMEOUT_MS);
+            }, INPUT_DIALOG_TIMEOUT_MS);
         });
     }
 
@@ -222,7 +240,7 @@ export class PluginBase {
     }
 
     // ========================================
-    // 🟡 中優先度: RealObjectSystem委譲メソッド
+    // 実身/仮身操作
     // ========================================
 
     /**
@@ -273,7 +291,7 @@ export class PluginBase {
     }
 
     // ========================================
-    // 🟠 低優先度: MessageBus共通操作
+    // ウィンドウ操作・メッセージング
     // ========================================
 
     /**
@@ -291,10 +309,77 @@ export class PluginBase {
     }
 
     /**
+     * 全画面表示のオン/オフを切り替え
+     * toggleMaximize()のエイリアス
+     */
+    toggleFullscreen() {
+        this.toggleMaximize();
+    }
+
+    /**
      * コンテキストメニューを閉じる
      */
     closeContextMenu() {
         this.messageBus.send('close-context-menu');
+    }
+
+    /**
+     * コンテキストメニュー要求を送信
+     * @param {number} x - メニュー表示X座標（スクリーン座標）
+     * @param {number} y - メニュー表示Y座標（スクリーン座標）
+     */
+    requestContextMenu(x, y) {
+        this.messageBus.send('context-menu-request', { x, y });
+    }
+
+    // ========================================
+    // イベントハンドラ設定（共通）
+    // ========================================
+
+    /**
+     * ウィンドウアクティベーションハンドラを設定
+     * マウスダウン時にウィンドウをアクティブにする
+     *
+     * サブクラスのinit()から呼び出すこと
+     */
+    setupWindowActivation() {
+        document.addEventListener('mousedown', () => {
+            this.activateWindow();
+        });
+    }
+
+    /**
+     * コンテキストメニューハンドラを設定
+     * 右クリック時にコンテキストメニューを表示、クリック時に閉じる
+     *
+     * サブクラスのinit()から呼び出すこと
+     * カスタム処理が必要な場合は onContextMenu(e) をオーバーライド
+     */
+    setupContextMenu() {
+        document.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+
+            // サブクラスでカスタム処理を行うフック
+            this.onContextMenu?.(e);
+
+            // コンテキストメニュー要求を送信
+            const rect = window.frameElement?.getBoundingClientRect() || { left: 0, top: 0 };
+            this.requestContextMenu(rect.left + e.clientX, rect.top + e.clientY);
+        });
+
+        document.addEventListener('click', () => {
+            this.closeContextMenu();
+        });
+    }
+
+    /**
+     * コンテキストメニュー表示前のフック（サブクラスでオーバーライド）
+     * 右クリック時の追加処理（選択状態の更新など）を行う
+     *
+     * @param {MouseEvent} e - contextmenuイベント
+     */
+    onContextMenu(e) {
+        // デフォルト実装は空（サブクラスで必要に応じてオーバーライド）
     }
 
     /**
@@ -308,8 +393,45 @@ export class PluginBase {
         });
     }
 
+    /**
+     * クロスウィンドウドロップ成功を通知
+     * 仮身ドロップ完了時に、ドラッグ元に成功を通知する
+     *
+     * @param {Object} dragData - ドラッグデータ
+     * @param {Array} virtualObjects - 仮身オブジェクト配列
+     */
+    notifyCrossWindowDropSuccess(dragData, virtualObjects) {
+        const message = {
+            mode: dragData.mode || this.virtualObjectDragState.dragMode,
+            source: dragData.source,
+            sourceWindowId: dragData.sourceWindowId,
+            virtualObjects: virtualObjects,
+            virtualObjectId: virtualObjects?.[0]?.link_id
+        };
+
+        // dragDataにtargetWindowIdがある場合は含める
+        if (dragData.targetWindowId) {
+            message.targetWindowId = dragData.targetWindowId;
+        }
+
+        this.messageBus.send('cross-window-drop-success', message);
+    }
+
+    /**
+     * ウィンドウ設定（位置・サイズ・最大化状態）を更新
+     * @param {Object} windowConfig - { pos: {x, y}, width, height, maximize }
+     */
+    updateWindowConfig(windowConfig) {
+        if (this.messageBus && this.realId) {
+            this.messageBus.send('update-window-config', {
+                fileId: this.realId,
+                windowConfig: windowConfig
+            });
+        }
+    }
+
     // ========================================
-    // 🟠 低優先度: クリップボード操作
+    // クリップボード操作
     // ========================================
 
     /**
@@ -404,6 +526,298 @@ export class PluginBase {
     }
 
     // ========================================
+    // 仮身ドラッグ関連の共通メソッド
+    // ========================================
+
+    /**
+     * 仮身ドラッグ用の右ボタンイベントハンドラーを設定
+     * documentレベルでmousedown/mouseupを監視し、コピーモードを制御
+     *
+     * サブクラスは init() で this.setupVirtualObjectRightButtonHandlers() を呼び出すこと
+     *
+     * 動作:
+     * - 右ボタン押下時: isRightButtonPressedフラグをtrue、ドラッグ中ならコピーモードに切り替え
+     * - 右ボタン解放時: isRightButtonPressedフラグをfalse
+     * - 左ボタン解放時: 右ボタンが押されたままならコピーモードに切り替え
+     */
+    setupVirtualObjectRightButtonHandlers() {
+        // mousedown: 右ボタン押下検出
+        document.addEventListener('mousedown', (e) => {
+            if (e.button === 2) {
+                this.virtualObjectDragState.isRightButtonPressed = true;
+
+                // ドラッグ中かつ移動済みならコピーモードに即座に切り替え
+                if (this.virtualObjectDragState.isDragging &&
+                    this.virtualObjectDragState.hasMoved) {
+                    this.virtualObjectDragState.dragMode = 'copy';
+                    this.onDragModeChanged?.('copy'); // サブクラスフック
+                }
+            }
+        });
+
+        // mouseup: 右ボタン解放検出
+        document.addEventListener('mouseup', (e) => {
+            if (e.button === 2) {
+                this.virtualObjectDragState.isRightButtonPressed = false;
+
+                // コピーモードのドラッグ中なら左ボタンmouseupを待つ
+                if (this.virtualObjectDragState.isDragging &&
+                    this.virtualObjectDragState.dragMode === 'copy') {
+                    return;
+                }
+            }
+
+            // 左ボタンmouseup時の最終判定
+            if (e.button === 0 && this.virtualObjectDragState.isDragging) {
+                const isRightStillPressed = (e.buttons & 2) !== 0 ||
+                                           this.virtualObjectDragState.isRightButtonPressed;
+
+                if (this.virtualObjectDragState.hasMoved && isRightStillPressed) {
+                    this.virtualObjectDragState.dragMode = 'copy';
+                    this.onDragModeChanged?.('copy'); // サブクラスフック
+                    return;
+                }
+            }
+        });
+    }
+
+    /**
+     * 仮身ドラッグ開始時の共通処理
+     * サブクラスのdragstartハンドラーから呼び出す
+     *
+     * 実行内容:
+     * - ドラッグ状態を初期化（dragMode, hasMoved, isDragging, startX/Y）
+     * - 右ボタンが既に押されている場合はコピーモードに設定
+     * - dataTransfer.effectAllowedを設定
+     *
+     * @param {DragEvent} e - dragstartイベント
+     * @returns {Object} ドラッグデータ { dragMode, hasMoved }
+     */
+    initializeVirtualObjectDragStart(e) {
+        // ドラッグ状態を初期化
+        this.virtualObjectDragState.dragMode = 'move'; // デフォルト
+        this.virtualObjectDragState.hasMoved = false;
+        this.virtualObjectDragState.isDragging = true;
+        this.virtualObjectDragState.startX = e.clientX;
+        this.virtualObjectDragState.startY = e.clientY;
+
+        // 右ボタンの実際の状態を確認（e.buttonsビットマスク: 2 = 右ボタン）
+        // これにより、isRightButtonPressedの状態が古い場合も正しく同期される
+        const isRightActuallyPressed = (e.buttons & 2) !== 0;
+        this.virtualObjectDragState.isRightButtonPressed = isRightActuallyPressed;
+
+        // 右ボタンが実際に押されている場合はコピーモード
+        if (isRightActuallyPressed) {
+            this.virtualObjectDragState.dragMode = 'copy';
+        }
+
+        // effectAllowedを設定
+        e.dataTransfer.effectAllowed =
+            this.virtualObjectDragState.dragMode === 'copy' ? 'copy' : 'move';
+
+        return {
+            dragMode: this.virtualObjectDragState.dragMode,
+            hasMoved: this.virtualObjectDragState.hasMoved
+        };
+    }
+
+    /**
+     * ドラッグ中の移動を検出
+     * サブクラスのdragoverハンドラーから呼び出す
+     *
+     * しきい値（dragThreshold, デフォルト5px）以上移動した場合にtrue
+     *
+     * @param {DragEvent} e - dragoverイベント
+     * @returns {boolean} 移動が検出されたらtrue
+     */
+    detectVirtualObjectDragMove(e) {
+        if (!this.virtualObjectDragState.isDragging) return false;
+        if (this.virtualObjectDragState.hasMoved) return true; // 既に検出済み
+
+        const deltaX = e.clientX - this.virtualObjectDragState.startX;
+        const deltaY = e.clientY - this.virtualObjectDragState.startY;
+
+        if (Math.abs(deltaX) > this.virtualObjectDragState.dragThreshold ||
+            Math.abs(deltaY) > this.virtualObjectDragState.dragThreshold) {
+            this.virtualObjectDragState.hasMoved = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 仮身ドラッグ終了時のクリーンアップ
+     * サブクラスのdragend/dropハンドラーから呼び出す
+     *
+     * 注意: isRightButtonPressedはmouseupハンドラおよびinitializeVirtualObjectDragStart()で管理されます
+     */
+    cleanupVirtualObjectDragState() {
+        this.virtualObjectDragState.isDragging = false;
+        this.virtualObjectDragState.hasMoved = false;
+        this.virtualObjectDragState.dragMode = 'move'; // 次のドラッグのためにデフォルトに戻す
+        // isRightButtonPressedはmouseupハンドラおよびinitializeVirtualObjectDragStart()で管理
+    }
+
+    /**
+     * ダブルクリックドラッグ時の実身複製処理（共通メソッド）
+     * サブクラスのdropハンドラーから呼び出す
+     *
+     * dragData.isDuplicateDragがtrueの場合に実身を複製し、
+     * 新しいlink_idとlink_nameを持つ仮身オブジェクトを返す
+     *
+     * @param {Object} virtualObject - 元の仮身オブジェクト
+     * @returns {Promise<Object>} 複製された仮身オブジェクト（link_id, link_nameが更新される）
+     * @throws {Error} 実身複製に失敗した場合
+     *
+     * @example
+     * // dropハンドラーでの使用例
+     * if (dragData.isDuplicateDrag) {
+     *     try {
+     *         targetVirtualObject = await this.duplicateRealObjectForDrag(virtualObject);
+     *     } catch (error) {
+     *         logger.error('実身複製エラー:', error);
+     *         continue; // 次の仮身へ
+     *     }
+     * }
+     */
+    async duplicateRealObjectForDrag(virtualObject) {
+        const sourceRealId = window.RealObjectSystem.extractRealId(virtualObject.link_id);
+        const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).substring(2, 11);
+
+        this.messageBus.send('duplicate-real-object', {
+            realId: sourceRealId,
+            messageId: messageId
+        });
+
+        const result = await this.messageBus.waitFor('real-object-duplicated',
+            window.DEFAULT_TIMEOUT_MS, (data) => data.messageId === messageId);
+
+        if (!result.success) {
+            throw new Error(result.error || '実身複製失敗');
+        }
+
+        return {
+            ...virtualObject,
+            link_id: result.newRealId,
+            link_name: result.newName
+        };
+    }
+
+    /**
+     * 原紙箱からのドロップ処理（共通メソッド）
+     * サブクラスのdropハンドラーから呼び出す
+     *
+     * base-file-managerからドロップされたファイルを親ウィンドウに処理を委譲する
+     *
+     * @param {Object} dragData - ドラッグデータ
+     * @param {number} clientX - ドロップ位置のX座標
+     * @param {number} clientY - ドロップ位置のY座標
+     * @param {Object} [additionalData] - 追加データ（オプション）
+     *
+     * @example
+     * // dropハンドラーでの使用例
+     * if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
+     *     this.handleBaseFileDrop(dragData, e.clientX, e.clientY);
+     *     return;
+     * }
+     */
+    handleBaseFileDrop(dragData, clientX, clientY, additionalData = {}) {
+        this.messageBus.send('base-file-drop-request', {
+            dragData: dragData,
+            clientX: clientX,
+            clientY: clientY,
+            ...additionalData
+        });
+    }
+
+    /**
+     * 開いた仮身のiframe pointer-eventsを無効化
+     * ドラッグ中に開いた仮身内へのドロップを防ぐ
+     * サブクラスのdragstartハンドラーから呼び出す
+     *
+     * @example
+     * // dragstartハンドラーでの使用例
+     * this.disableIframePointerEvents();
+     */
+    disableIframePointerEvents() {
+        const allIframes = document.querySelectorAll('.virtual-object-content');
+        allIframes.forEach(iframe => {
+            iframe.style.pointerEvents = 'none';
+        });
+    }
+
+    /**
+     * 開いた仮身のiframe pointer-eventsを再有効化
+     * ドラッグ終了時に開いた仮身内のインタラクションを復元
+     * サブクラスのdragendハンドラーから呼び出す
+     *
+     * @example
+     * // dragendハンドラーでの使用例
+     * this.enableIframePointerEvents();
+     */
+    enableIframePointerEvents() {
+        const allIframes = document.querySelectorAll('.virtual-object-content');
+        allIframes.forEach(iframe => {
+            iframe.style.pointerEvents = 'auto';
+        });
+    }
+
+    /**
+     * ドロップ時のdataTransferからJSONデータをパース
+     * サブクラスのdropハンドラーから呼び出す
+     *
+     * @param {DataTransfer} dataTransfer - e.dataTransfer
+     * @returns {Object|null} パースされたJSONオブジェクト、失敗時はnull
+     *
+     * @example
+     * // dropハンドラーでの使用例
+     * const dragData = this.parseDragData(e.dataTransfer);
+     * if (!dragData) return;
+     * if (dragData.type === 'virtual-object-drag') { ... }
+     */
+    parseDragData(dataTransfer) {
+        const data = dataTransfer.getData('text/plain');
+        if (!data) return null;
+
+        try {
+            return JSON.parse(data);
+        } catch (_jsonError) {
+            return null;
+        }
+    }
+
+    /**
+     * 仮身ドラッグデータを構築してdataTransferに設定
+     * サブクラスのdragstartハンドラーから呼び出す
+     *
+     * @param {DragEvent} e - dragstartイベント
+     * @param {Array<Object>} virtualObjects - 仮身オブジェクト配列
+     * @param {string} sourceName - ドラッグ元プラグイン名（例: 'basic-text-editor'）
+     * @param {boolean} [isDuplicateDrag=false] - ダブルクリックドラッグ（実身複製）フラグ
+     * @returns {Object} 構築されたdragDataオブジェクト
+     *
+     * @example
+     * // dragstartハンドラーでの使用例
+     * const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
+     * this.setVirtualObjectDragData(e, [virtualObj], 'basic-text-editor');
+     */
+    setVirtualObjectDragData(e, virtualObjects, sourceName, isDuplicateDrag = false) {
+        const dragData = {
+            type: 'virtual-object-drag',
+            source: sourceName,
+            sourceWindowId: this.windowId,
+            mode: this.virtualObjectDragState.dragMode,
+            virtualObjects: virtualObjects,
+            virtualObject: virtualObjects[0], // 後方互換性のため
+            isDuplicateDrag: isDuplicateDrag
+        };
+
+        e.dataTransfer.setData('text/plain', JSON.stringify(dragData));
+        return dragData;
+    }
+
+    // ========================================
     // 共通MessageBusハンドラ登録
     // ========================================
 
@@ -482,7 +896,54 @@ export class PluginBase {
             this.handleCloseRequest(data.windowId);
         });
 
-        logger.info(`[${this.pluginName}] 共通MessageBusハンドラ登録完了 (6件)`);
+        // parent-dialog-opened メッセージ（親ウィンドウでダイアログが開いた）
+        this.messageBus.on('parent-dialog-opened', () => {
+            this.dialogVisible = true;
+            logger.debug(`[${this.pluginName}] [MessageBus] parent-dialog-opened受信`);
+        });
+
+        // parent-dialog-closed メッセージ（親ウィンドウでダイアログが閉じた）
+        this.messageBus.on('parent-dialog-closed', () => {
+            this.dialogVisible = false;
+            logger.debug(`[${this.pluginName}] [MessageBus] parent-dialog-closed受信`);
+        });
+
+        logger.info(`[${this.pluginName}] 共通MessageBusハンドラ登録完了 (8件)`);
+
+        // plugin-ready シグナルを親ウィンドウに送信
+        // これにより親ウィンドウはプラグインの準備完了を確認してからinitを送信できる
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'plugin-ready' }, '*');
+            logger.debug(`[${this.pluginName}] plugin-readyシグナル送信`);
+        }
+    }
+
+    /**
+     * cross-window-drop-successの共通ハンドラーを設定
+     * moveモード時に onDeleteSourceVirtualObject() フックを呼び出す
+     *
+     * サブクラスは setupMessageBusHandlers() でこのメソッドを呼び出すこと
+     *
+     * 動作:
+     * - moveモード: onDeleteSourceVirtualObject()フックを呼び出して元のオブジェクトを削除
+     * - copyモード: 何もしない
+     * - ドラッグ状態をクリーンアップ
+     * - onCrossWindowDropSuccess()フックを呼び出す（サブクラス固有の処理）
+     */
+    setupCrossWindowDropSuccessHandler() {
+        this.messageBus.on('cross-window-drop-success', (data) => {
+            if (data.mode === 'move') {
+                // moveモード: サブクラスで元のオブジェクトを削除
+                this.onDeleteSourceVirtualObject?.(data);
+            }
+            // copyモードの場合は何もしない
+
+            // ドラッグ状態をクリーンアップ
+            this.cleanupVirtualObjectDragState();
+
+            // サブクラス固有のクリーンアップ
+            this.onCrossWindowDropSuccess?.(data);
+        });
     }
 
     /**
@@ -517,6 +978,12 @@ export class PluginBase {
      */
     async handleCloseRequest(windowId) {
         logger.debug(`[${this.pluginName}] クローズ要求受信, isModified:`, this.isModified);
+
+        // クローズ前にスクロール位置を保存
+        const scrollPos = this.getScrollPosition();
+        if (scrollPos) {
+            this.updateWindowConfig({ scrollPos });
+        }
 
         if (this.isModified) {
             // 編集中の場合、保存確認ダイアログを表示
@@ -577,6 +1044,53 @@ export class PluginBase {
     }
 
     // ========================================
+    // スクロール位置管理
+    // ========================================
+
+    /**
+     * 現在のスクロール位置を取得（サブクラスでオーバーライド可能）
+     * デフォルトでは .plugin-content 要素のスクロール位置を返す
+     * @returns {Object|null} { x, y } または null
+     */
+    getScrollPosition() {
+        const pluginContent = document.querySelector('.plugin-content');
+        if (pluginContent) {
+            return {
+                x: pluginContent.scrollLeft,
+                y: pluginContent.scrollTop
+            };
+        }
+        return null;
+    }
+
+    /**
+     * スクロール位置を設定（サブクラスでオーバーライド可能）
+     * キャンバスサイズが縮小した場合は最大スクロール可能位置に制限
+     * @param {Object} scrollPos - { x, y }
+     */
+    setScrollPosition(scrollPos) {
+        if (!scrollPos) return;
+        const pluginContent = document.querySelector('.plugin-content');
+        if (pluginContent) {
+            const maxScrollLeft = Math.max(0, pluginContent.scrollWidth - pluginContent.clientWidth);
+            const maxScrollTop = Math.max(0, pluginContent.scrollHeight - pluginContent.clientHeight);
+            pluginContent.scrollLeft = Math.min(scrollPos.x || 0, maxScrollLeft);
+            pluginContent.scrollTop = Math.min(scrollPos.y || 0, maxScrollTop);
+        }
+    }
+
+    /**
+     * スクロール位置を保存してウィンドウ設定に反映
+     * 自動保存や明示的保存時に呼び出す
+     */
+    saveScrollPosition() {
+        const scrollPos = this.getScrollPosition();
+        if (scrollPos) {
+            this.updateWindowConfig({ scrollPos });
+        }
+    }
+
+    // ========================================
     // 共通ユーティリティメソッド
     // ========================================
 
@@ -602,5 +1116,122 @@ export class PluginBase {
      */
     error(...args) {
         logger.error(`[${this.pluginName}]`, ...args);
+    }
+
+    // ========================================
+    // 仮身ドラッグ関連のフックメソッド
+    // ========================================
+
+    /**
+     * ドラッグモードが変更された時のフック（サブクラスでオーバーライド）
+     * setupVirtualObjectRightButtonHandlers()で右ボタン操作時に呼ばれる
+     *
+     * @param {string} newMode - 新しいモード ('move' | 'copy')
+     *
+     * @example
+     * // basic-figure-editorでの実装例
+     * onDragModeChanged(newMode) {
+     *     logger.debug('[FIGURE EDITOR] ドラッグモード変更:', newMode);
+     *     // プレビュー表示の更新など
+     * }
+     */
+    onDragModeChanged(newMode) {
+        // デフォルト実装は空（サブクラスで必要に応じてオーバーライド）
+    }
+
+    /**
+     * 元の仮身オブジェクトを削除するフック（サブクラスで実装必須）
+     * cross-window-drop-successでmoveモード時に呼ばれる
+     *
+     * @param {Object} data - ドロップ成功データ
+     * @param {string} data.mode - ドラッグモード ('move')
+     * @param {string} data.source - ドラッグ元プラグイン名
+     * @param {string} data.sourceWindowId - ドラッグ元ウィンドウID
+     * @param {Array} data.virtualObjects - 仮身オブジェクト配列
+     * @param {string} data.virtualObjectId - 仮身ID
+     *
+     * @example
+     * // virtual-object-listでの実装例
+     * onDeleteSourceVirtualObject(data) {
+     *     const linkId = data.virtualObjectId || data.virtualObjects[0]?.link_id;
+     *     this.removeVirtualObjectFromList(linkId);
+     * }
+     *
+     * // basic-calc-editorでの実装例
+     * onDeleteSourceVirtualObject(data) {
+     *     if (this.dragSourceCell) {
+     *         const { col, row } = this.dragSourceCell;
+     *         this.clearCell(col, row);
+     *     }
+     * }
+     *
+     * // basic-text-editorでの実装例
+     * onDeleteSourceVirtualObject(data) {
+     *     if (this.draggingVirtualObject && this.draggingVirtualObject.parentNode) {
+     *         this.draggingVirtualObject.parentNode.removeChild(this.draggingVirtualObject);
+     *     }
+     * }
+     */
+    onDeleteSourceVirtualObject(data) {
+        // デフォルト実装は空（サブクラスで必ず実装すること）
+        logger.warn(`[${this.pluginName}] onDeleteSourceVirtualObject が実装されていません`);
+    }
+
+    /**
+     * cross-window-drop-success処理完了後のフック（サブクラスでオーバーライド）
+     * ドラッグ状態のクリーンアップ後に呼ばれる
+     *
+     * @param {Object} data - ドロップ成功データ
+     *
+     * @example
+     * // プラグイン固有の状態クリア
+     * onCrossWindowDropSuccess(data) {
+     *     this.dragSourceCell = null;
+     *     this.draggingVirtualObject = null;
+     * }
+     */
+    onCrossWindowDropSuccess(data) {
+        // デフォルト実装は空（サブクラスで必要に応じてオーバーライド）
+    }
+
+    // ========================================
+    // 仮身refCount管理（共通メソッド）
+    // ========================================
+
+    /**
+     * 仮身コピー要求（refCount+1）
+     * 新しい仮身参照が作成された時に呼び出す
+     * - コピーモードドロップ時
+     * - クリップボードからペースト時
+     *
+     * 注意: 移動モードでは呼ばないこと（参照が移動するだけなので）
+     *
+     * @param {string} linkId - 仮身のlink_id
+     */
+    requestCopyVirtualObject(linkId) {
+        const realId = this.extractRealId(linkId);
+        this.messageBus.send('copy-virtual-object', {
+            realId: realId,
+            messageId: `copy-virtual-${Date.now()}-${Math.random()}`
+        });
+    }
+
+    /**
+     * 仮身削除要求（refCount-1）
+     * 仮身参照が削除された時に呼び出す
+     * - ユーザーによる明示的削除時（メニュー/キー）
+     * - カット操作時
+     *
+     * 注意: 移動モードクロスウィンドウドロップでは呼ばないこと
+     *       （ターゲット側で+1されず、ソース側で-1すると不整合になる）
+     *
+     * @param {string} linkId - 仮身のlink_id
+     */
+    requestDeleteVirtualObject(linkId) {
+        const realId = this.extractRealId(linkId);
+        this.messageBus.send('delete-virtual-object', {
+            realId: realId,
+            messageId: `delete-virtual-${Date.now()}-${Math.random()}`
+        });
     }
 }

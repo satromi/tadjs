@@ -25,6 +25,7 @@
     "minimizable": true,
     "closable": true,
     "alwaysOnTop": false,
+    "wordWrap": true,
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
