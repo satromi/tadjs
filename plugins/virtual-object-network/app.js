@@ -41,6 +41,11 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             this.messageBus.start();
         }
 
+        // IconCacheManagerを初期化
+        if (window.IconCacheManager && this.messageBus) {
+            this.iconManager = new window.IconCacheManager(this.messageBus, '[VirtualObjectNetwork]');
+        }
+
         this.init();
     }
 
@@ -463,14 +468,40 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         rect.setAttribute('stroke', node.frcol);
         g.appendChild(rect);
 
-        // テキスト（仮身名）
+        // アイコンサイズと位置の計算
+        const iconSize = 16;
+        const iconPadding = 4;
+        const iconX = iconPadding;
+        const iconY = (node.height - iconSize) / 2;
+        const textX = iconPadding + iconSize + 4; // アイコンの右側にテキスト
+
+        // アイコン（SVG image要素）
+        const iconImage = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+        iconImage.setAttribute('class', 'vobj-icon');
+        iconImage.setAttribute('x', iconX);
+        iconImage.setAttribute('y', iconY);
+        iconImage.setAttribute('width', iconSize);
+        iconImage.setAttribute('height', iconSize);
+        iconImage.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        g.appendChild(iconImage);
+
+        // アイコンを非同期で読み込み
+        if (this.iconManager) {
+            this.iconManager.loadIcon(node.realId).then(iconData => {
+                if (iconData) {
+                    iconImage.setAttributeNS('http://www.w3.org/1999/xlink', 'href', `data:image/x-icon;base64,${iconData}`);
+                }
+            });
+        }
+
+        // テキスト（仮身名）- アイコン分だけ右にオフセット
         const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         text.setAttribute('class', 'vobj-text');
-        text.setAttribute('x', 8);
+        text.setAttribute('x', textX);
         text.setAttribute('y', node.height / 2 + 4);
         text.setAttribute('fill', node.chcol);
         text.setAttribute('font-size', node.chsz);
-        text.textContent = this.truncateText(node.name, node.width - 16, node.chsz);
+        text.textContent = this.truncateText(node.name, node.width - textX - 8, node.chsz);
         g.appendChild(text);
 
         // イベント設定

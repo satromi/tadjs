@@ -1538,22 +1538,34 @@ class BasicTextEditor extends window.PluginBase {
 
         // Ctrl+C: コピー
         if (e.ctrlKey && e.key === 'c') {
-            e.preventDefault();
-            this.executeMenuAction('copy');
+            // 画像または仮身が選択されている場合のみカスタム処理
+            if (this.selectedImage || this.selectedVirtualObject) {
+                e.preventDefault();
+                this.executeMenuAction('copy');
+            }
+            // テキストの場合はブラウザのデフォルト動作を使用
             return;
         }
 
         // Ctrl+X: カット（移動）
         if (e.ctrlKey && e.key === 'x') {
-            e.preventDefault();
-            this.executeMenuAction('cut');
+            // 画像または仮身が選択されている場合のみカスタム処理
+            if (this.selectedImage || this.selectedVirtualObject) {
+                e.preventDefault();
+                this.executeMenuAction('cut');
+            }
+            // テキストの場合はブラウザのデフォルト動作を使用
             return;
         }
 
         // Ctrl+V: ペースト
         if (e.ctrlKey && e.key === 'v') {
-            e.preventDefault();
-            this.executeMenuAction('paste');
+            // 画像または仮身がクリップボードにある場合のみカスタム処理
+            if (this.imageClipboard || this.virtualObjectClipboard) {
+                e.preventDefault();
+                this.executeMenuAction('paste');
+            }
+            // テキストの場合はブラウザのデフォルト動作を使用
             return;
         }
 
@@ -4801,8 +4813,8 @@ class BasicTextEditor extends window.PluginBase {
                     this.copyVirtualObject(this.selectedVirtualObject);
                     this.setStatus('仮身をクリップボードへコピーしました');
                 } else {
-                    document.execCommand('copy');
-                    this.setStatus('クリップボードへコピーしました');
+                    // テキストをクリップボードにコピー（Clipboard API使用）
+                    this.copyTextToClipboard();
                 }
                 break;
             case 'paste':
@@ -4829,8 +4841,8 @@ class BasicTextEditor extends window.PluginBase {
                     this.cutVirtualObject(this.selectedVirtualObject);
                     this.setStatus('仮身をクリップボードへ移動しました');
                 } else {
-                    document.execCommand('cut');
-                    this.setStatus('クリップボードへ移動しました');
+                    // テキストをクリップボードに移動（Clipboard API使用）
+                    this.cutTextToClipboard();
                 }
                 break;
             case 'redo':
@@ -7890,13 +7902,83 @@ class BasicTextEditor extends window.PluginBase {
             this.requestCopyVirtualObject(globalClipboard.link_id);
             this.setStatus('仮身をクリップボードから貼り付けました');
         } else {
-            // 仮身データがない場合は通常のペースト
-            document.execCommand('paste');
-            this.setStatus('クリップボードから貼り付けました');
+            // 仮身データがない場合はシステムクリップボードからテキストをペースト
+            await this.pasteTextFromClipboard();
         }
 
         // 編集状態を記録
         this.isModified = true;
+    }
+
+    /**
+     * テキストをクリップボードにコピー（Clipboard API使用）
+     */
+    async copyTextToClipboard() {
+        const selection = window.getSelection();
+        const selectedText = selection.toString();
+
+        if (selectedText) {
+            try {
+                await navigator.clipboard.writeText(selectedText);
+                this.setStatus('クリップボードへコピーしました');
+            } catch (error) {
+                logger.error('[EDITOR] クリップボードへのコピーに失敗:', error);
+                // フォールバック: document.execCommandを試行
+                document.execCommand('copy');
+                this.setStatus('クリップボードへコピーしました');
+            }
+        } else {
+            this.setStatus('コピーするテキストが選択されていません');
+        }
+    }
+
+    /**
+     * テキストをクリップボードに移動（Clipboard API使用）
+     */
+    async cutTextToClipboard() {
+        const selection = window.getSelection();
+        const selectedText = selection.toString();
+
+        if (selectedText) {
+            try {
+                await navigator.clipboard.writeText(selectedText);
+                // 選択範囲を削除
+                if (!selection.isCollapsed) {
+                    document.execCommand('delete');
+                }
+                this.setStatus('クリップボードへ移動しました');
+                this.isModified = true;
+            } catch (error) {
+                logger.error('[EDITOR] クリップボードへの移動に失敗:', error);
+                // フォールバック: document.execCommandを試行
+                document.execCommand('cut');
+                this.setStatus('クリップボードへ移動しました');
+                this.isModified = true;
+            }
+        } else {
+            this.setStatus('移動するテキストが選択されていません');
+        }
+    }
+
+    /**
+     * システムクリップボードからテキストをペースト（Clipboard API使用）
+     */
+    async pasteTextFromClipboard() {
+        try {
+            const text = await navigator.clipboard.readText();
+            if (text) {
+                // テキストを挿入
+                document.execCommand('insertText', false, text);
+                this.setStatus('クリップボードから貼り付けました');
+            } else {
+                this.setStatus('クリップボードにデータがありません');
+            }
+        } catch (error) {
+            logger.error('[EDITOR] クリップボードからの貼り付けに失敗:', error);
+            // フォールバック: document.execCommandを試行
+            document.execCommand('paste');
+            this.setStatus('クリップボードから貼り付けました');
+        }
     }
 
     // getGlobalClipboard() は基底クラス PluginBase で定義
