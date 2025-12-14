@@ -1,0 +1,109 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: "MS Gothic", "ＭＳ ゴシック", monospace;
+    background-color: #f0f0f0;
+}
+
+/* スクロール可能なコンテンツ領域 */
+.plugin-content {
+    overflow: auto;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ffffff;
+}
+
+/* カスタムスクロールバーを使用するためブラウザ標準のスクロールバーを非表示 */
+.plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.plugin-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE, Edge */
+}
+
+#network-svg {
+    display: block;
+}
+
+/* 仮身ノード */
+.vobj-node {
+    cursor: pointer;
+}
+
+.vobj-node:hover .vobj-frame {
+    stroke-width: 2;
+}
+
+.vobj-node.selected .vobj-frame {
+    stroke: #0066cc;
+    stroke-width: 2;
+}
+
+.vobj-frame {
+    stroke-width: 1;
+}
+
+.vobj-text {
+    font-family: "MS Gothic", "ＭＳ ゴシック", monospace;
+    pointer-events: none;
+    user-select: none;
+}
+
+/* 接続線 */
+.connection-line {
+    fill: none;
+    stroke: #666666;
+    stroke-width: 1;
+}
+
+.connection-line.highlight {
+    stroke: #0066cc;
+    stroke-width: 2;
+}
+
+/* エラー・警告メッセージ */
+.message-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 20px 40px;
+    background-color: #ffffff;
+    border: 2px solid #999999;
+    box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.3);
+    text-align: center;
+    z-index: 100;
+}
+
+.message-overlay h3 {
+    margin-bottom: 10px;
+    color: #333333;
+}
+
+.message-overlay p {
+    color: #666666;
+}
+
+/* 読み込み中表示 */
+.loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 14px;
+    color: #666666;
+}

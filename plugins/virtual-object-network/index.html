@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>仮身ネットワーク</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="plugin-content" id="network-container">
+        <svg id="network-svg"></svg>
+    </div>
+
+    <!-- ロガーをグローバル変数として読み込み（最初に読み込む必要がある） -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
+    <script type="module">
+        import {
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS
+        } from '../../js/util.js';
+        window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+        window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
+    </script>
+    <!-- メッセージバスをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
+    </script>
+    <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
+    <script type="module">
+        import { PluginBase } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+    </script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>

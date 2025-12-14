@@ -181,6 +181,16 @@ class VirtualObjectListApp extends window.PluginBase {
             listElement.style.backgroundColor = '';
 
             try {
+                // 外部ファイルドロップをチェック（Windowsからのドラッグなど）
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    const files = Array.from(e.dataTransfer.files);
+                    logger.info('[VirtualObjectList] 外部ファイルドロップ検出:', files.length, '個のファイル');
+
+                    // ファイル内容を読み込んでBase64で送信（iframeではfile.pathが利用不可のため）
+                    this.readAndSendFiles(files, e.clientX, e.clientY);
+                    return;
+                }
+
                 // PluginBase共通メソッドでdragDataをパース
                 const dragData = this.parseDragData(e.dataTransfer);
                 if (dragData) {
@@ -222,6 +232,18 @@ class VirtualObjectListApp extends window.PluginBase {
                             this.vobjDragState.dropClientY = e.clientY;
                             this.virtualObjectDragState.hasMoved = true;
                         }
+                        return;
+                    } else if (dragData.type === 'image-drag') {
+                        // 画像のドラッグ（基本文章編集プラグインから）
+                        logger.info('[VirtualObjectList] 画像ドロップ受信:', dragData.imageInfo?.savedFilename);
+
+                        // 親ウィンドウに画像から実身を作成するよう依頼
+                        this.messageBus.send('image-dropped-on-plugin', {
+                            dragData: dragData,
+                            clientX: e.clientX,
+                            clientY: e.clientY,
+                            windowId: this.windowId
+                        });
                         return;
                     }
                 }
@@ -278,6 +300,51 @@ class VirtualObjectListApp extends window.PluginBase {
         this.renderVirtualObjects();
 
         logger.debug('[VirtualObjectList] 原紙ファイル挿入完了');
+    }
+
+    /**
+     * ドロップされたファイルを読み込んで親ウィンドウに送信
+     * @param {File[]} files - ファイル配列
+     * @param {number} clientX - ドロップ位置X
+     * @param {number} clientY - ドロップ位置Y
+     */
+    async readAndSendFiles(files, clientX, clientY) {
+        const fileDataList = [];
+
+        for (const file of files) {
+            try {
+                // ファイル内容をArrayBufferとして読み込み
+                const arrayBuffer = await file.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+
+                // Base64に変換
+                let binary = '';
+                const chunkSize = 8192;
+                for (let i = 0; i < uint8Array.length; i += chunkSize) {
+                    const chunk = uint8Array.subarray(i, Math.min(i + chunkSize, uint8Array.length));
+                    binary += String.fromCharCode.apply(null, chunk);
+                }
+                const base64 = btoa(binary);
+
+                fileDataList.push({
+                    name: file.name,
+                    type: file.type || 'application/octet-stream',
+                    size: file.size,
+                    data: base64
+                });
+            } catch (error) {
+                logger.error('[VirtualObjectList] ファイル読み込みエラー:', file.name, error);
+            }
+        }
+
+        if (fileDataList.length > 0) {
+            this.messageBus.send('files-dropped-on-plugin', {
+                files: fileDataList,
+                clientX: clientX,
+                clientY: clientY,
+                windowId: this.windowId
+            });
+        }
     }
 
     /**
@@ -890,6 +957,19 @@ class VirtualObjectListApp extends window.PluginBase {
         // ========================================
         // 画像ファイルパスリレー機能（二段階メッセージング）
         // ========================================
+        // 子iframe（開いた仮身）からdelete-image-fileを受け取り、親ウィンドウに転送
+        window.addEventListener('message', (e) => {
+            if (e.data && e.data.type === 'delete-image-file') {
+                const { fileName } = e.data;
+                logger.debug('[VirtualObjectList] 子からdelete-image-file受信、親に転送:', fileName);
+
+                // 親ウィンドウに転送（レスポンス不要）
+                this.messageBus.send('delete-image-file', {
+                    fileName: fileName
+                });
+            }
+        });
+
         // 子iframe（開いた仮身）からget-image-file-pathを受け取り、親ウィンドウに転送
         window.addEventListener('message', (e) => {
             if (e.data && e.data.type === 'get-image-file-path') {
@@ -1145,7 +1225,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 // 実身操作メニュー
                 const realObjSubmenu = [
                     { text: '実身名変更', action: 'rename-real-object' },
-                    { text: '実身複製', action: 'duplicate-real-object' }
+                    { text: '実身複製', action: 'duplicate-real-object' },
+                    { text: '仮身ネットワーク', action: 'open-virtual-object-network' },
+                    { text: '実身/仮身検索', action: 'open-real-object-search' }
                 ];
 
                 menuDefinition.push({
@@ -1297,6 +1379,12 @@ class VirtualObjectListApp extends window.PluginBase {
             case 'open-trash-real-objects':
                 this.openTrashRealObjects();
                 break;
+            case 'open-virtual-object-network':
+                this.openVirtualObjectNetwork();
+                break;
+            case 'open-real-object-search':
+                this.openRealObjectSearch();
+                break;
         }
     }
 
@@ -1310,7 +1398,8 @@ class VirtualObjectListApp extends window.PluginBase {
             return;
         }
 
-        const realId = selectedVirtualObject.link_id;
+        // extractRealIdを使用してcloseRealObject()のキー形式と一致させる
+        const realId = window.RealObjectSystem.extractRealId(selectedVirtualObject.link_id);
         logger.debug('[VirtualObjectList] 仮身の実身を開く:', realId, 'プラグイン:', pluginId);
 
         const messageId = `open-${realId}-${Date.now()}`;
@@ -1623,22 +1712,7 @@ class VirtualObjectListApp extends window.PluginBase {
         }
     }
 
-    /**
-     * ウィンドウを閉じるリクエストを送信
-     */
-    requestCloseWindow() {
-        if (window.parent && window.parent !== window) {
-            // 親ウィンドウのiframe要素からwindowIdを取得
-            const windowElement = window.frameElement ? window.frameElement.closest('.window') : null;
-            const windowId = windowElement ? windowElement.id : null;
-
-            if (windowId) {
-                    this.messageBus.send('close-window', {
-                    windowId: windowId
-                });
-            }
-        }
-    }
+    // requestCloseWindow() は基底クラス PluginBase で定義
 
     /**
      * 選択中の仮身をコピー
@@ -1950,6 +2024,35 @@ class VirtualObjectListApp extends window.PluginBase {
     }
 
     /**
+     * 仮身ネットワークウィンドウを開く
+     */
+    openVirtualObjectNetwork() {
+        const selectedVirtualObject = this.getSelectedVirtualObject();
+        if (!selectedVirtualObject) {
+            logger.warn('[VirtualObjectList] 仮身が選択されていません');
+            this.setStatus('仮身を選択してください');
+            return;
+        }
+
+        // link_idから実身IDを抽出
+        const realId = window.RealObjectSystem.extractRealId(selectedVirtualObject.link_id);
+        if (!realId) {
+            logger.warn('[VirtualObjectList] 実身IDが取得できません');
+            this.setStatus('実身IDが取得できません');
+            return;
+        }
+
+        window.RealObjectSystem.openVirtualObjectNetwork(this, realId);
+    }
+
+    /**
+     * 実身/仮身検索ウィンドウを開く
+     */
+    openRealObjectSearch() {
+        window.RealObjectSystem.openRealObjectSearch(this);
+    }
+
+    /**
      * ダブルクリック+ドラッグによる実身複製処理
      * @param {number} dropX - ドラッグ終了位置のX座標（キャンバス座標系）
      * @param {number} dropY - ドラッグ終了位置のY座標（キャンバス座標系）
@@ -2176,26 +2279,9 @@ class VirtualObjectListApp extends window.PluginBase {
         const realId = window.RealObjectSystem.extractRealId(selectedVirtualObject.link_id);
 
         // 共通メソッド用にcontextMenuVirtualObjectを一時設定
-        // 仮身一覧プラグインでは、elementとして仮想的なdataset互換オブジェクトを作成
-        const vobjElement = {
-            dataset: {
-                linkPictdisp: selectedVirtualObject.pictdisp,
-                linkNamedisp: selectedVirtualObject.namedisp,
-                linkRoledisp: selectedVirtualObject.roledisp,
-                linkTypedisp: selectedVirtualObject.typedisp,
-                linkUpdatedisp: selectedVirtualObject.updatedisp,
-                linkFramedisp: selectedVirtualObject.framedisp,
-                linkFrcol: selectedVirtualObject.frcol,
-                linkChcol: selectedVirtualObject.chcol,
-                linkTbcol: selectedVirtualObject.tbcol,
-                linkBgcol: selectedVirtualObject.bgcol,
-                linkAutoopen: selectedVirtualObject.autoopen,
-                linkChsz: selectedVirtualObject.chsz
-            }
-        };
-
+        // RealObjectSystemはgetVirtualObjectCurrentAttrsを使用するため、elementは不要
         this.contextMenuVirtualObject = {
-            element: vobjElement,
+            element: null,
             realId: realId,
             virtualObj: selectedVirtualObject
         };
@@ -2207,21 +2293,21 @@ class VirtualObjectListApp extends window.PluginBase {
     }
 
     /**
-     * ステータスメッセージを設定（仮身一覧プラグインではステータスバーがないため空実装）
+     * ステータスメッセージを設定
      */
     setStatus(message) {
-        // 仮身一覧プラグインにはステータスバーがないため、コンソールログのみ
         logger.debug('[VirtualObjectList] Status:', message);
+        // 親ウィンドウにステータスメッセージを送信（PluginBaseの共通実装を呼び出し）
+        super.setStatus(message);
     }
 
     /**
      * 仮身に属性を適用
+     * @param {Object} attrs - 適用する属性値
      */
-    applyVirtualObjectAttributes(attrs, vobj = null, element = null) {
-        // vobjが指定されていない場合は選択中の仮身を使用
-        if (!vobj) {
-            vobj = this.getSelectedVirtualObject();
-        }
+    applyVirtualObjectAttributes(attrs) {
+        // contextMenuVirtualObjectまたは選択中の仮身を使用
+        const vobj = this.contextMenuVirtualObject?.virtualObj || this.getSelectedVirtualObject();
         if (!vobj) return;
 
         // vobjIndexを取得（querySelector用）
@@ -2466,8 +2552,175 @@ class VirtualObjectListApp extends window.PluginBase {
         const selectedCount = this.selectedVirtualObjects.size;
         const isMultiple = selectedCount > 1;
 
-        // ダイアログのHTML要素を作成（3段組レイアウト、縦並び、圧縮版）
-        const dialogHtml = `<div class="arrange-dialog" style="font-size:14px"><div style="margin:0;padding:0;line-height:0.6">選択: ${selectedCount}個</div><div style="display:flex;gap:0;margin:0;padding:0"><div style="flex:1;padding-right:2px;margin:0;line-height:0.6"><div style="margin:0;padding:0"><div style="margin:0;padding:0;display:flex;align-items:baseline"><span style="font-weight:bold;margin:0 2px 0 0;padding:0;min-width:28px;line-height:0.6">横</span><label style="margin:0;padding:0;line-height:0.6"><input type="radio" name="horizontal" value="left" ${!isMultiple ? 'disabled' : ''}>左揃え</label></div><div style="margin:0;padding:0 0 0 30px"><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="horizontal" value="right" ${!isMultiple ? 'disabled' : ''}>右揃え</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="horizontal" value="none" checked>なし</label></div></div><div style="margin:0;padding:0"><div style="margin:0;padding:0;display:flex;align-items:baseline"><span style="font-weight:bold;margin:0 2px 0 0;padding:0;min-width:28px;line-height:0.6">縦</span><label style="margin:0;padding:0;line-height:0.6"><input type="radio" name="vertical" value="compact" ${!isMultiple ? 'disabled' : ''}>詰める</label></div><div style="margin:0;padding:0 0 0 30px"><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="vertical" value="align" ${!isMultiple ? 'disabled' : ''}>上揃え</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="vertical" value="none" checked>なし</label></div></div><div style="margin:0;padding:0"><div style="margin:0;padding:0;display:flex;align-items:baseline"><span style="font-weight:bold;margin:0 2px 0 0;padding:0;min-width:28px;line-height:0.6">段組数</span><input type="number" id="columnCount" min="1" value="1" style="width:35px;font-size:14px;margin:0;padding:0" ${!isMultiple ? 'disabled' : ''}></div></div></div><div style="flex:1;padding-right:2px;margin:0;line-height:0.6"><div style="margin:0;padding:0"><div style="margin:0;padding:0;display:flex;align-items:baseline"><span style="font-weight:bold;margin:0 2px 0 0;padding:0;min-width:28px;line-height:0.6">段組</span><label style="margin:0;padding:0;line-height:0.6"><input type="radio" name="column" value="single" ${!isMultiple ? 'disabled' : ''}>1段</label></div><div style="margin:0;padding:0 0 0 30px"><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="column" value="multi-horizontal" ${!isMultiple ? 'disabled' : ''}>左右</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="column" value="multi-vertical" ${!isMultiple ? 'disabled' : ''}>上下</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="column" value="none" checked>なし</label></div></div><div style="margin:0;padding:0"><div style="margin:0;padding:0;display:flex;align-items:baseline"><span style="font-weight:bold;margin:0 2px 0 0;padding:0;min-width:28px;line-height:0.6">幅調整</span><label style="margin:0;padding:0;line-height:0.6"><input type="radio" name="length" value="first">最初</label></div><div style="margin:0;padding:0 0 0 30px"><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="length" value="full">全項目</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="length" value="icon-name">名前まで</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="length" value="with-relation">続柄まで</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="length" value="without-date">日付除く</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="length" value="none" checked>なし</label></div></div></div><div style="flex:1;margin:0;line-height:0.6"><div style="margin:0;padding:0"><div style="margin:0;padding:0;display:flex;align-items:baseline"><span style="font-weight:bold;margin:0 2px 0 0;padding:0;min-width:34px;line-height:0.6">整列順</span><label style="margin:0;padding:0;line-height:0.6"><input type="radio" name="sortBy" value="name" ${!isMultiple ? 'disabled' : ''}>名前</label></div><div style="margin:0;padding:0 0 0 36px"><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="sortBy" value="created" ${!isMultiple ? 'disabled' : ''}>作成日</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="sortBy" value="updated" ${!isMultiple ? 'disabled' : ''}>更新日</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="sortBy" value="size" ${!isMultiple ? 'disabled' : ''}>サイズ</label><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="sortBy" value="none" checked>なし</label></div></div><div style="margin:0;padding:0"><div style="margin:0;padding:0;display:flex;align-items:baseline"><span style="font-weight:bold;margin:0 2px 0 0;padding:0;min-width:34px;line-height:0.6">順序</span><label style="margin:0;padding:0;line-height:0.6"><input type="radio" name="sortOrder" value="asc" checked ${!isMultiple ? 'disabled' : ''}>昇順</label></div><div style="margin:0;padding:0 0 0 36px"><label style="display:block;margin:0;padding:0;line-height:0.6"><input type="radio" name="sortOrder" value="desc" ${!isMultiple ? 'disabled' : ''}>降順</label></div></div></div></div></div>        `;
+        // 無効状態のクラス
+        const disabledClass = !isMultiple ? 'disabled' : '';
+        const disabledAttr = !isMultiple ? 'disabled' : '';
+
+        // ダイアログのHTML要素を作成（3段組レイアウト、縦並び、カスタムラジオボタン）
+        const dialogHtml = `
+<div class="arrange-dialog" style="font-size:11px">
+    <div style="margin:0 0 8px 0;padding:0">選択: ${selectedCount}個</div>
+    <div style="display:flex;gap:12px;margin:0;padding:0">
+        <!-- 第1列: 横、縦、段組数 -->
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:flex-start;gap:4px">
+                <span style="font-weight:bold;min-width:40px">横</span>
+                <div class="radio-group-vertical">
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="horizontal" value="left" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>左揃え</span>
+                    </label>
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="horizontal" value="right" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>右揃え</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="horizontal" value="none" checked>
+                        <span class="radio-indicator"></span>
+                        <span>なし</span>
+                    </label>
+                </div>
+            </div>
+            <div style="display:flex;align-items:flex-start;gap:4px">
+                <span style="font-weight:bold;min-width:40px">縦</span>
+                <div class="radio-group-vertical">
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="vertical" value="compact" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>詰める</span>
+                    </label>
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="vertical" value="align" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>上揃え</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="vertical" value="none" checked>
+                        <span class="radio-indicator"></span>
+                        <span>なし</span>
+                    </label>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:4px">
+                <span style="font-weight:bold;min-width:40px">段組数</span>
+                <input type="number" id="columnCount" min="1" value="1" style="width:40px;font-size:11px" ${disabledAttr}>
+            </div>
+        </div>
+        <!-- 第2列: 段組、幅調整 -->
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:flex-start;gap:4px">
+                <span style="font-weight:bold;min-width:40px">段組</span>
+                <div class="radio-group-vertical">
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="column" value="single" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>1段</span>
+                    </label>
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="column" value="multi-horizontal" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>左右</span>
+                    </label>
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="column" value="multi-vertical" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>上下</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="column" value="none" checked>
+                        <span class="radio-indicator"></span>
+                        <span>なし</span>
+                    </label>
+                </div>
+            </div>
+            <div style="display:flex;align-items:flex-start;gap:4px">
+                <span style="font-weight:bold;min-width:40px">幅調整</span>
+                <div class="radio-group-vertical">
+                    <label class="radio-label">
+                        <input type="radio" name="length" value="first">
+                        <span class="radio-indicator"></span>
+                        <span>最初</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="length" value="full">
+                        <span class="radio-indicator"></span>
+                        <span>全項目</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="length" value="icon-name">
+                        <span class="radio-indicator"></span>
+                        <span>名前まで</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="length" value="with-relation">
+                        <span class="radio-indicator"></span>
+                        <span>続柄まで</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="length" value="without-date">
+                        <span class="radio-indicator"></span>
+                        <span>日付除く</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="length" value="none" checked>
+                        <span class="radio-indicator"></span>
+                        <span>なし</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+        <!-- 第3列: 整列順、順序 -->
+        <div style="flex:1;display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:flex-start;gap:4px">
+                <span style="font-weight:bold;min-width:40px">整列順</span>
+                <div class="radio-group-vertical">
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="sortBy" value="name" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>名前</span>
+                    </label>
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="sortBy" value="created" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>作成日</span>
+                    </label>
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="sortBy" value="updated" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>更新日</span>
+                    </label>
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="sortBy" value="size" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>サイズ</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="sortBy" value="none" checked>
+                        <span class="radio-indicator"></span>
+                        <span>なし</span>
+                    </label>
+                </div>
+            </div>
+            <div style="display:flex;align-items:flex-start;gap:4px">
+                <span style="font-weight:bold;min-width:40px">順序</span>
+                <div class="radio-group-vertical">
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="sortOrder" value="asc" checked ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>昇順</span>
+                    </label>
+                    <label class="radio-label ${disabledClass}">
+                        <input type="radio" name="sortOrder" value="desc" ${disabledAttr}>
+                        <span class="radio-indicator"></span>
+                        <span>降順</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>`;
 
         return new Promise((resolve) => {
             this.messageBus.sendWithCallback('show-custom-dialog', {

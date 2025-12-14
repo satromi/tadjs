@@ -1,0 +1,21 @@
+{
+  "id": "real-object-search",
+  "name": "実身/仮身検索",
+  "version": "1.0.0",
+  "type": "utility",
+  "description": "実身名と実身内の全文検索を行います",
+  "icon": "🔍",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 400,
+    "height": 350,
+    "resizable": false,
+    "scrollable": false,
+    "openable": true
+  },
+  "permissions": [
+    "file-read"
+  ]
+}

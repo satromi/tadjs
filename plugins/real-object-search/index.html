@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>実身/仮身検索</title>
+    <link rel="stylesheet" href="../../tadjs-desktop.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body tabindex="0">
+    <div class="plugin-content">
+        <div class="search-container">
+            <!-- タブヘッダー -->
+            <div class="tab-header">
+                <div class="tab active" data-tab="string">文字列</div>
+                <div class="tab" data-tab="date">日付</div>
+            </div>
+
+            <!-- タブコンテンツ -->
+            <div class="tab-content">
+                <!-- 文字列検索タブ -->
+                <div class="tab-panel active" id="string-panel">
+                    <div class="search-form">
+                        <div class="form-row">
+                            <label class="form-label">検索文字列:</label>
+                            <input type="text" id="search-text" class="search-input-short" placeholder="検索キーワードを入力">
+                        </div>
+                        <div class="form-row">
+                            <label class="form-label">検索対象:</label>
+                            <div class="radio-group-inline">
+                                <label class="radio-label">
+                                    <input type="radio" name="search-target" value="name">
+                                    <span class="radio-indicator"></span>
+                                    <span>実身名</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="search-target" value="content">
+                                    <span class="radio-indicator"></span>
+                                    <span>全文</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="search-target" value="both" checked>
+                                    <span class="radio-indicator"></span>
+                                    <span>両方</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label class="form-label">正規表現:</label>
+                            <div class="radio-group-inline">
+                                <label class="radio-label">
+                                    <input type="radio" name="string-use-regex" value="off" checked>
+                                    <span class="radio-indicator"></span>
+                                    <span>オフ</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="string-use-regex" value="on">
+                                    <span class="radio-indicator"></span>
+                                    <span>オン</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label class="form-label">検索深さ:</label>
+                            <input type="number" id="string-search-depth" class="number-input" value="255" min="1" max="999">
+                            <span class="form-label-inline">件数:</span>
+                            <span id="string-total-count" class="count-display">---</span>
+                            <span class="form-label-inline">該当:</span>
+                            <span id="string-match-count" class="count-display">---</span>
+                        </div>
+                        <div class="button-row">
+                            <button id="string-abort-button" class="abort-button" disabled>中断</button>
+                            <button id="search-button" class="search-button">検索</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 日付検索タブ -->
+                <div class="tab-panel" id="date-panel">
+                    <div class="search-form">
+                        <div class="form-row">
+                            <label class="form-label">検索文字列:</label>
+                            <input type="text" id="date-search-text" class="search-input-short" placeholder="">
+                        </div>
+                        <div class="form-row">
+                            <label class="form-label">検索対象:</label>
+                            <div class="radio-group-inline">
+                                <label class="radio-label">
+                                    <input type="radio" name="date-search-target" value="name">
+                                    <span class="radio-indicator"></span>
+                                    <span>実身名</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="date-search-target" value="content">
+                                    <span class="radio-indicator"></span>
+                                    <span>全文</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="date-search-target" value="both" checked>
+                                    <span class="radio-indicator"></span>
+                                    <span>両方</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label class="form-label">正規表現:</label>
+                            <div class="radio-group-inline">
+                                <label class="radio-label">
+                                    <input type="radio" name="date-use-regex" value="off" checked>
+                                    <span class="radio-indicator"></span>
+                                    <span>オフ</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="date-use-regex" value="on">
+                                    <span class="radio-indicator"></span>
+                                    <span>オン</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label class="form-label">日付FROM:</label>
+                            <input type="datetime-local" id="date-from" class="datetime-input" step="1">
+                        </div>
+                        <div class="form-row">
+                            <label class="form-label">日付TO:</label>
+                            <input type="datetime-local" id="date-to" class="datetime-input" step="1">
+                        </div>
+                        <div class="form-row">
+                            <label class="form-label">対象:</label>
+                            <div class="radio-group-inline">
+                                <label class="radio-label">
+                                    <input type="radio" name="date-target" value="makeDate" checked>
+                                    <span class="radio-indicator"></span>
+                                    <span>生成日</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="date-target" value="updateDate">
+                                    <span class="radio-indicator"></span>
+                                    <span>更新日</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label class="form-label">検索深さ:</label>
+                            <input type="number" id="search-depth" class="number-input" value="255" min="1" max="999">
+                            <span class="form-label-inline">件数:</span>
+                            <span id="total-count" class="count-display">---</span>
+                            <span class="form-label-inline">該当:</span>
+                            <span id="match-count" class="count-display">---</span>
+                        </div>
+                        <div class="button-row">
+                            <button id="abort-button" class="abort-button" disabled>中断</button>
+                            <button id="date-search-button" class="search-button">検索</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 検索中表示 -->
+            <div id="search-status" class="search-status"></div>
+        </div>
+    </div>
+
+    <!-- ロガーをグローバル変数として読み込み -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
+    <script type="module">
+        import {
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS
+        } from '../../js/util.js';
+        window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+        window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
+    </script>
+    <!-- メッセージバスをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
+    </script>
+    <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
+    <script type="module">
+        import { PluginBase } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+    </script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>

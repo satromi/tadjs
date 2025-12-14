@@ -4245,33 +4245,7 @@ class BasicFigureEditor extends window.PluginBase {
         logger.debug('[FIGURE EDITOR] 原紙箱から仮身追加完了');
     }
 
-    /**
-     * 親ウィンドウからグローバルクリップボードを取得
-     * @returns {Promise<Object|null>}
-     */
-    async getGlobalClipboard() {
-        if (!window.parent || window.parent === window) {
-            return null;
-        }
-
-        const messageId = `get-clipboard-${Date.now()}-${Math.random()}`;
-
-        // MessageBusでget-clipboardを送信
-        this.messageBus.send('get-clipboard', {
-            messageId: messageId
-        });
-
-        try {
-            // タイムアウト5秒でレスポンスを待つ
-            const result = await this.messageBus.waitFor('clipboard-data', window.DEFAULT_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-            return result.clipboardData;
-        } catch (error) {
-            logger.warn('[FIGURE EDITOR] クリップボード取得タイムアウト:', error);
-            return null;
-        }
-    }
+    // getGlobalClipboard() は基底クラス PluginBase で定義
 
     async insertImage(x, y, file) {
         logger.debug('[FIGURE EDITOR] 画像を配置:', file.name, 'at', x, y);
@@ -4288,8 +4262,8 @@ class BasicFigureEditor extends window.PluginBase {
                 img.onload = async () => {
                     logger.debug('[FIGURE EDITOR] 画像ロード完了:', img.width, 'x', img.height);
 
-                    // 画像が大きすぎる場合は縮小（最大600px）
-                    const maxSize = 600;
+                    // 画像が大きすぎる場合は縮小（最大10000px）
+                    const maxSize = 10000;
                     let width = img.width;
                     let height = img.height;
 
@@ -4400,6 +4374,26 @@ class BasicFigureEditor extends window.PluginBase {
         }
     }
 
+    /**
+     * 画像ファイルを削除
+     * @param {string} fileName - 削除する画像ファイル名
+     */
+    deleteImageFile(fileName) {
+        if (!fileName) return;
+
+        try {
+            // 最上位ウィンドウ(tadjs-desktop.js)にファイル削除を依頼
+            window.top.postMessage({
+                type: 'delete-image-file',
+                fileName: fileName
+            }, '*');
+
+            logger.info('[FIGURE EDITOR] 画像ファイル削除依頼:', fileName);
+        } catch (error) {
+            logger.error('[FIGURE EDITOR] 画像ファイル削除依頼エラー:', error);
+        }
+    }
+
     async savePixelmapImageFile(imageData, fileName) {
         try {
             // ImageDataをPNG形式のBlobに変換
@@ -4477,6 +4471,16 @@ class BasicFigureEditor extends window.PluginBase {
 
                 // refCount-1（ユーザーによる削除/カット）
                 this.requestDeleteVirtualObject(shape.virtualObject.link_id);
+            }
+
+            // 画像の場合はPNGファイルを削除
+            if (shape.type === 'image' && shape.fileName) {
+                this.deleteImageFile(shape.fileName);
+            }
+
+            // ピクセルマップの場合もPNGファイルを削除
+            if (shape.type === 'pixelmap' && shape.fileName) {
+                this.deleteImageFile(shape.fileName);
             }
 
             const index = this.shapes.indexOf(shape);
@@ -6436,7 +6440,9 @@ class BasicFigureEditor extends window.PluginBase {
                 // 実身操作メニュー
                 const realObjSubmenu = [
                     { label: '実身名変更', action: 'rename-real-object' },
-                    { label: '実身複製', action: 'duplicate-real-object' }
+                    { label: '実身複製', action: 'duplicate-real-object' },
+                    { label: '仮身ネットワーク', action: 'open-virtual-object-network' },
+                    { label: '実身/仮身検索', action: 'open-real-object-search' }
                 ];
 
                 menuDef.push({
@@ -6675,6 +6681,16 @@ class BasicFigureEditor extends window.PluginBase {
                 this.openTrashRealObjects();
                 break;
 
+            // 仮身ネットワーク
+            case 'open-virtual-object-network':
+                this.openVirtualObjectNetwork();
+                break;
+
+            // 実身/仮身検索
+            case 'open-real-object-search':
+                this.openRealObjectSearch();
+                break;
+
             default:
                 logger.debug('[FIGURE EDITOR] 未実装のアクション:', action);
         }
@@ -6731,6 +6747,14 @@ class BasicFigureEditor extends window.PluginBase {
             return copiedShape;
         });
 
+        // 仮身が含まれている場合はグローバルクリップボードにも送信
+        const vobjShape = this.selectedShapes.find(shape => shape.type === 'vobj' && shape.virtualObject);
+        if (vobjShape && vobjShape.virtualObject) {
+            // 仮身オブジェクト全体をコピー（virtual-object-listと同じ方式）
+            const clipboardData = JSON.parse(JSON.stringify(vobjShape.virtualObject));
+            this.setClipboard(clipboardData);
+        }
+
         this.setStatus(`${this.selectedShapes.length}個の図形をコピーしました`);
     }
 
@@ -6738,6 +6762,14 @@ class BasicFigureEditor extends window.PluginBase {
         if (this.selectedShapes.length === 0) {
             this.setStatus('図形が選択されていません');
             return;
+        }
+
+        // 仮身が含まれている場合はグローバルクリップボードにも送信（削除前に取得）
+        const vobjShape = this.selectedShapes.find(shape => shape.type === 'vobj' && shape.virtualObject);
+        if (vobjShape && vobjShape.virtualObject) {
+            // 仮身オブジェクト全体をコピー（virtual-object-listと同じ方式）
+            const clipboardData = JSON.parse(JSON.stringify(vobjShape.virtualObject));
+            this.setClipboard(clipboardData);
         }
 
         // 画像とピクセルマップを特別に処理してコピー
@@ -7766,7 +7798,8 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         const vobj = virtualObjectShape.virtualObject;
-        const realId = vobj.link_id;
+        // extractRealIdを使用して一貫したキー形式にする
+        const realId = window.RealObjectSystem.extractRealId(vobj.link_id);
 
         // 開いているかチェック
         if (!this.openedRealObjects.has(realId)) {
@@ -7804,7 +7837,8 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         const selectedVirtualObject = virtualObjectShape.virtualObject;
-        const realId = selectedVirtualObject.link_id;
+        // extractRealIdを使用してcontextMenuVirtualObject.realIdと一致させる
+        const realId = window.RealObjectSystem.extractRealId(selectedVirtualObject.link_id);
         logger.debug('[FIGURE EDITOR] 仮身の実身を開く:', realId, 'プラグイン:', pluginId);
 
         // ウィンドウが開いた通知を受け取るハンドラー
@@ -7893,93 +7927,26 @@ class BasicFigureEditor extends window.PluginBase {
         logger.debug('[FIGURE EDITOR] 実身を開く:', realId, 'with', defaultPluginId);
     }
 
-    async showVirtualAttributes() {
-        // 選択された図形の中から仮身を探す
-        const virtualObjectShape = this.selectedShapes.find(shape => shape.type === 'vobj');
-
-        if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
-            this.setStatus('仮身が選択されていません');
-            logger.warn('[FIGURE EDITOR] 選択中の仮身がありません');
-            return;
-        }
-
-        const vobj = virtualObjectShape.virtualObject;
-
-        // 現在の属性値を取得
-        const currentAttrs = {
-            pictdisp: vobj.pictdisp !== 'false',
-            namedisp: vobj.namedisp !== 'false',
-            roledisp: vobj.roledisp !== 'false',
-            typedisp: vobj.typedisp !== 'false',
-            updatedisp: vobj.updatedisp !== 'false',
-            framedisp: vobj.framedisp !== 'false',
-            frcol: vobj.frcol || '#000000',
-            chcol: vobj.chcol || '#000000',
-            tbcol: vobj.tbcol || '#ffffff',
-            bgcol: vobj.bgcol || '#ffffff',
-            autoopen: vobj.autoopen === 'true',
-            chsz: parseFloat(vobj.chsz) || 14
-        };
-
-        // 文字サイズの倍率を計算
-        const baseFontSize = 14;
-        const ratio = currentAttrs.chsz / baseFontSize;
-        let selectedRatio = '標準';
-        const ratioMap = {
-            '1/2倍': 0.5,
-            '3/4倍': 0.75,
-            '標準': 1.0,
-            '3/2倍': 1.5,
-            '2倍': 2.0,
-            '3倍': 3.0,
-            '4倍': 4.0
-        };
-
-        for (const [label, value] of Object.entries(ratioMap)) {
-            if (Math.abs(ratio - value) < 0.01) {
-                selectedRatio = label;
-                break;
-            }
-        }
-
-        // 親ウィンドウにダイアログ表示を要求
-        if (this.messageBus) {
-            const messageId = `change-vobj-attrs-${Date.now()}-${Math.random()}`;
-
-            this.messageBus.send('change-virtual-object-attributes', {
-                virtualObject: vobj,
-                currentAttributes: currentAttrs,
-                selectedRatio: selectedRatio,
-                messageId: messageId
-            });
-
-            logger.debug('[FIGURE EDITOR] 仮身属性変更ダイアログ要求');
-
-            try {
-                // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
-                const result = await this.messageBus.waitFor('virtual-object-attributes-changed', 0, (data) => {
-                    return data.messageId === messageId;
-                });
-
-                if (result.success && result.attributes) {
-                    this.applyVirtualObjectAttributes(virtualObjectShape, result.attributes);
-                }
-            } catch (error) {
-                logger.error('[FIGURE EDITOR] 仮身属性変更エラー:', error);
-            }
-        }
-    }
-
     /**
      * 仮身に属性を適用
+     * @param {Object} attrs - 適用する属性値
      */
-    applyVirtualObjectAttributes(shape, attrs) {
-        if (!shape || !shape.virtualObject) {
+    applyVirtualObjectAttributes(attrs) {
+        // contextMenuVirtualObjectから仮身情報を取得
+        if (!this.contextMenuVirtualObject || !this.contextMenuVirtualObject.virtualObj) {
             logger.warn('[FIGURE EDITOR] 仮身が見つかりません');
             return;
         }
 
-        const vobj = shape.virtualObject;
+        const vobj = this.contextMenuVirtualObject.virtualObj;
+        // shapeを探す（contextMenuVirtualObject.shapeまたはshapes配列から）
+        const shape = this.contextMenuVirtualObject.shape
+            || this.shapes.find(s => s.type === 'vobj' && s.virtualObject === vobj);
+
+        if (!shape) {
+            logger.warn('[FIGURE EDITOR] 仮身図形が見つかりません');
+            return;
+        }
 
         // 表示項目の設定
         if (attrs.pictdisp !== undefined) vobj.pictdisp = attrs.pictdisp ? 'true' : 'false';
@@ -8007,7 +7974,6 @@ class BasicFigureEditor extends window.PluginBase {
 
         // 既存のDOM要素を削除して強制再作成（属性を反映させるため）
         if (shape.vobjElement && shape.vobjElement.parentNode) {
-            logger.debug('[FIGURE EDITOR] 属性変更のため既存のDOM要素を削除:', vobj.link_name);
             shape.vobjElement.remove();
             shape.vobjElement = null;
         }
@@ -8018,7 +7984,6 @@ class BasicFigureEditor extends window.PluginBase {
         // 仮身DOM要素を再生成して表示を更新
         this.renderVirtualObjectsAsElements();
 
-        logger.debug('[FIGURE EDITOR] 仮身属性を適用:', attrs);
         this.setStatus('仮身属性を変更しました');
     }
 
@@ -8027,45 +7992,195 @@ class BasicFigureEditor extends window.PluginBase {
      */
     // getAppListData() は基底クラス PluginBase で定義
 
-    /**
-     * 選択中の仮身が指し示す実身を閉じる（基本文章編集プラグインから丸コピー）
-     */
-    closeRealObject() {
-        window.RealObjectSystem.closeRealObject(this);
-    }
+    // closeRealObject() は基底クラス PluginBase で定義
 
     /**
      * 仮身属性変更ダイアログを表示
      */
     async changeVirtualObjectAttributes() {
-        await this.showVirtualAttributes();
+        // contextMenuVirtualObjectが設定されていない場合は選択中の図形から設定
+        if (!this.contextMenuVirtualObject) {
+            const virtualObjectShape = this.selectedShapes.find(s => s.type === 'vobj');
+            if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
+                this.setStatus('仮身が選択されていません');
+                return;
+            }
+            const vobj = virtualObjectShape.virtualObject;
+            const realId = window.RealObjectSystem.extractRealId(vobj.link_id);
+            this.contextMenuVirtualObject = {
+                virtualObj: vobj,
+                element: virtualObjectShape.vobjElement,
+                realId: realId,
+                shape: virtualObjectShape
+            };
+        }
+
+        await window.RealObjectSystem.changeVirtualObjectAttributes(this);
     }
 
     /**
-     * 選択中の仮身が指し示す実身名を変更（基本文章編集プラグインから丸コピー）
+     * 選択中の仮身が指し示す実身名を変更
      */
     async renameRealObject() {
-        await window.RealObjectSystem.renameRealObject(this);
+        const result = await window.RealObjectSystem.renameRealObject(this);
 
-        // 図形エディタ特有の処理: 仮身の表示名を更新して再描画
-        if (this.contextMenuVirtualObject && this.contextMenuVirtualObject.virtualObj) {
+        // 図形エディタ特有の処理: 仮身オブジェクトの名前を更新して再描画
+        if (result.success && this.contextMenuVirtualObject && this.contextMenuVirtualObject.virtualObj) {
+            const virtualObj = this.contextMenuVirtualObject.virtualObj;
+
+            // 対応する図形を探す
+            const shape = this.shapes.find(s => s.type === 'vobj' && s.virtualObject === virtualObj);
+
+            // RealObjectSystem.renameRealObject()がelement.textContentで
+            // 仮身要素の構造を破壊しているため、DOM要素を削除して再作成を強制
+            if (shape && shape.vobjElement) {
+                if (shape.vobjElement.parentNode) {
+                    shape.vobjElement.remove();
+                }
+                shape.vobjElement = null;
+            }
+
+            // 仮身オブジェクトの名前を更新（shapes配列内のオブジェクトと同一参照）
+            virtualObj.link_name = result.newName;
+
+            // 仮身要素を再作成（vobjElement = nullなので新規作成される）
             this.renderVirtualObjectsAsElements();
             this.redraw();
         }
     }
 
     /**
-     * 選択中の仮身が指し示す実身を複製（基本文章編集プラグインから丸コピー）
+     * 選択中の仮身が指し示す実身を複製
+     * 複製した実身の仮身を元の仮身の下に追加
      */
     async duplicateRealObject() {
-        await window.RealObjectSystem.duplicateRealObject(this);
+        if (!this.contextMenuVirtualObject || !this.contextMenuVirtualObject.virtualObj) {
+            logger.warn('[FIGURE EDITOR] 選択中の仮身がありません');
+            return;
+        }
+
+        const realId = this.contextMenuVirtualObject.realId;
+        const originalVobj = this.contextMenuVirtualObject.virtualObj;
+
+        // 元の仮身の図形を探す
+        const originalShape = this.shapes.find(s => s.type === 'vobj' && s.virtualObject === originalVobj);
+        if (!originalShape) {
+            logger.warn('[FIGURE EDITOR] 元の仮身図形が見つかりません');
+            return;
+        }
+
+        const messageId = `duplicate-real-${Date.now()}-${Math.random()}`;
+
+        this.messageBus.send('duplicate-real-object', {
+            realId: realId,
+            messageId: messageId
+        });
+
+        try {
+            // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
+            const result = await this.messageBus.waitFor('real-object-duplicated', 0, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.success) {
+                // 元の仮身の属性をコピーして新しい仮身を作成
+                const newVirtualObject = {
+                    link_id: result.newRealId,
+                    link_name: result.newName,
+                    chsz: originalVobj.chsz || 14,
+                    frcol: originalVobj.frcol || '#000000',
+                    chcol: originalVobj.chcol || '#000000',
+                    tbcol: originalVobj.tbcol || '#ffffff',
+                    bgcol: originalVobj.bgcol || '#ffffff',
+                    pictdisp: originalVobj.pictdisp || 'true',
+                    namedisp: originalVobj.namedisp || 'true',
+                    roledisp: originalVobj.roledisp || 'false',
+                    framedisp: originalVobj.framedisp || 'true',
+                    typedisp: originalVobj.typedisp || 'false',
+                    updatedisp: originalVobj.updatedisp || 'false',
+                    dlen: originalVobj.dlen || 0,
+                    applist: originalVobj.applist || {}
+                };
+
+                // 元の仮身の下に配置（10px下）
+                const chszPx = (newVirtualObject.chsz || 14) * (96 / 72);
+                const lineHeight = 1.2;
+                const textHeight = Math.ceil(chszPx * lineHeight);
+                const newHeight = textHeight + 8;
+
+                const newVobjShape = {
+                    type: 'vobj',
+                    startX: originalShape.startX,
+                    startY: originalShape.endY + 10,
+                    endX: originalShape.endX,
+                    endY: originalShape.endY + 10 + newHeight,
+                    virtualObject: newVirtualObject,
+                    strokeColor: newVirtualObject.frcol,
+                    textColor: newVirtualObject.chcol,
+                    fillColor: newVirtualObject.tbcol,
+                    lineWidth: 1,
+                    originalHeight: newHeight,
+                    zIndex: this.getNextZIndex()
+                };
+
+                // 図形に追加
+                this.shapes.push(newVobjShape);
+
+                // アイコンを事前読み込み
+                const baseRealId = window.RealObjectSystem.extractRealId(result.newRealId);
+                this.iconManager.loadIcon(baseRealId).then(iconData => {
+                    if (iconData && this.virtualObjectRenderer) {
+                        this.virtualObjectRenderer.loadIconToCache(baseRealId, iconData);
+                    }
+                    // 再描画
+                    this.renderVirtualObjectsAsElements();
+                    this.redraw();
+                });
+
+                // 修正フラグを設定
+                this.isModified = true;
+
+                this.setStatus(`実身を複製しました: ${result.newName}`);
+            }
+        } catch (error) {
+            logger.error('[FIGURE EDITOR] 実身複製エラー:', error);
+            this.setStatus('実身の複製に失敗しました');
+        }
     }
 
     /**
-     * 屑実身操作ウィンドウを開く（基本文章編集プラグインから丸コピー）
+     * 屑実身操作ウィンドウを開く
      */
     openTrashRealObjects() {
         window.RealObjectSystem.openTrashRealObjects(this);
+    }
+
+    /**
+     * 仮身ネットワークウィンドウを開く
+     */
+    openVirtualObjectNetwork() {
+        if (!this.contextMenuVirtualObject) {
+            logger.warn('[FIGURE EDITOR] 仮身が選択されていません');
+            this.setStatus('仮身を選択してください');
+            return;
+        }
+
+        // 実身IDを取得
+        const realId = this.contextMenuVirtualObject.realId;
+        if (!realId) {
+            logger.warn('[FIGURE EDITOR] 実身IDが取得できません');
+            this.setStatus('実身IDが取得できません');
+            return;
+        }
+
+        window.RealObjectSystem.openVirtualObjectNetwork(this, realId);
+    }
+
+    /**
+     * 実身/仮身検索ウィンドウを開く
+     */
+    openRealObjectSearch() {
+        window.RealObjectSystem.openRealObjectSearch(this);
     }
 
     toggleFullscreen() {
@@ -8142,28 +8257,14 @@ class BasicFigureEditor extends window.PluginBase {
 
     // handleCloseRequest() と respondCloseRequest() は PluginBase で定義
 
-    /**
-     * ウィンドウを閉じるリクエストを送信
-     */
-    requestCloseWindow() {
-        if (window.parent && window.parent !== window) {
-            // 親ウィンドウのiframe要素からwindowIdを取得
-            const windowElement = window.frameElement ? window.frameElement.closest('.window') : null;
-            const windowId = windowElement ? windowElement.id : null;
-
-            if (windowId && this.messageBus) {
-                this.messageBus.send('close-window', {
-                    windowId: windowId
-                });
-            }
-        }
-    }
+    // requestCloseWindow() は基底クラス PluginBase で定義
 
     // showSaveConfirmDialog() は基底クラス PluginBase で定義
 
     setStatus(message) {
         logger.debug('[FIGURE EDITOR]', message);
-        // ステータスバーがある場合はそこに表示
+        // 親ウィンドウにステータスメッセージを送信（PluginBaseの共通実装を呼び出し）
+        super.setStatus(message);
     }
 
     // showInputDialog() は基底クラス PluginBase で定義

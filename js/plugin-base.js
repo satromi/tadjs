@@ -275,6 +275,30 @@ export class PluginBase {
     }
 
     /**
+     * 仮身オブジェクトから現在の属性値を取得（サブクラスでオーバーライド可能）
+     * RealObjectSystem.changeVirtualObjectAttributesから呼ばれる
+     *
+     * @param {Object} vobj - 仮身オブジェクト
+     * @param {HTMLElement|null} element - DOM要素（オプション）
+     * @returns {Object} 現在の属性値
+     */
+    getVirtualObjectCurrentAttrs(vobj, element = null) {
+        // デフォルト実装: RealObjectSystemのヘルパーを使用
+        return window.RealObjectSystem.buildCurrentAttrsFromVobj(vobj);
+    }
+
+    /**
+     * 仮身に属性を適用（サブクラスでオーバーライド必須）
+     * RealObjectSystem.changeVirtualObjectAttributesから呼ばれる
+     *
+     * @param {Object} attrs - 適用する属性値
+     */
+    applyVirtualObjectAttributes(attrs) {
+        // デフォルト実装: 何もしない（サブクラスでオーバーライドすること）
+        logger.warn(`[${this.pluginName}] applyVirtualObjectAttributesがオーバーライドされていません`);
+    }
+
+    /**
      * ごみ箱実身を開く
      */
     openTrashRealObjects() {
@@ -1233,5 +1257,194 @@ export class PluginBase {
             realId: realId,
             messageId: `delete-virtual-${Date.now()}-${Math.random()}`
         });
+    }
+
+    // ========================================
+    // ステータスメッセージ（共通実装）
+    // ========================================
+
+    /**
+     * ステータスメッセージを設定
+     * 親ウィンドウのステータスバーにメッセージを送信
+     * サブクラスでオーバーライド可能
+     *
+     * @param {string} message - 表示するメッセージ
+     */
+    setStatus(message) {
+        this.sendStatusMessage(message);
+    }
+
+    // ========================================
+    // グローバルクリップボード（共通実装）
+    // ========================================
+
+    /**
+     * グローバルクリップボードからデータを取得
+     * messageId方式でレスポンスを待つ
+     *
+     * @returns {Promise<Object|null>} クリップボードデータ（仮身データ等）
+     */
+    async getGlobalClipboard() {
+        if (!window.parent || window.parent === window) {
+            return null;
+        }
+
+        const messageId = `get-clipboard-${Date.now()}-${Math.random()}`;
+
+        this.messageBus.send('get-clipboard', {
+            messageId: messageId
+        });
+
+        try {
+            const result = await this.messageBus.waitFor('clipboard-data', DEFAULT_TIMEOUT_MS, (data) => {
+                return data.messageId === messageId;
+            });
+            return result.clipboardData;
+        } catch (error) {
+            logger.warn(`[${this.pluginName}] クリップボード取得タイムアウト:`, error);
+            return null;
+        }
+    }
+
+    // ========================================
+    // 仮身実行メニュー関連（共通実装）
+    // ========================================
+
+    /**
+     * execute-with-アクションを処理
+     * executeMenuAction()から呼び出して使用
+     *
+     * @param {string} action - アクション名
+     * @returns {boolean} 処理した場合はtrue
+     *
+     * @example
+     * executeMenuAction(action, additionalData) {
+     *     if (this.handleExecuteWithAction(action)) return;
+     *     // 他のアクション処理...
+     * }
+     */
+    handleExecuteWithAction(action) {
+        if (!action.startsWith('execute-with-')) {
+            return false;
+        }
+        const pluginId = action.replace('execute-with-', '');
+        logger.debug(`[${this.pluginName}] 仮身を指定アプリで起動:`, pluginId);
+
+        // サブクラスでgetContextMenuVirtualObject()を実装している場合
+        const contextVo = this.getContextMenuVirtualObject?.();
+        if (contextVo) {
+            this.openVirtualObjectReal(contextVo, pluginId);
+            this.setStatus(`${pluginId}で実身を開きます`);
+        }
+        return true;
+    }
+
+    /**
+     * コンテキストメニューで選択中の仮身を取得（サブクラスでオーバーライド）
+     * handleExecuteWithAction()から呼ばれる
+     *
+     * @returns {Object|null} 仮身オブジェクト（virtualObj形式）
+     */
+    getContextMenuVirtualObject() {
+        // デフォルト実装: contextMenuVirtualObjectプロパティを参照
+        return this.contextMenuVirtualObject?.virtualObj || null;
+    }
+
+    /**
+     * 実行サブメニューをapplistから生成
+     *
+     * @param {Object} applistData - applistデータ { pluginId: { name, ... }, ... }
+     * @param {string} [labelKey='label'] - ラベルキー（'label' または 'text'）
+     * @returns {Array} サブメニュー項目配列 [{ label/text, action }, ...]
+     *
+     * @example
+     * const applistData = await this.getAppListData(realId);
+     * if (applistData && Object.keys(applistData).length > 0) {
+     *     const executeSubmenu = this.buildExecuteSubmenu(applistData);
+     *     menuDef.push({ label: '実行', submenu: executeSubmenu });
+     * }
+     */
+    buildExecuteSubmenu(applistData, labelKey = 'label') {
+        const executeSubmenu = [];
+        for (const [pluginId, appInfo] of Object.entries(applistData)) {
+            const item = {
+                action: `execute-with-${pluginId}`
+            };
+            item[labelKey] = appInfo.name || pluginId;
+            executeSubmenu.push(item);
+        }
+        return executeSubmenu;
+    }
+
+    /**
+     * 仮身の実身を指定プラグインで開く
+     *
+     * @param {Object} virtualObj - 仮身オブジェクト
+     * @param {string} pluginId - 開くプラグインのID
+     * @param {string} [messageId] - メッセージID（省略時は自動生成）
+     */
+    openVirtualObjectReal(virtualObj, pluginId, messageId = null) {
+        if (!virtualObj || !pluginId) {
+            logger.warn(`[${this.pluginName}] openVirtualObjectReal: virtualObjまたはpluginIdが未指定`);
+            return;
+        }
+
+        const msgId = messageId || `open-${virtualObj.link_id || 'unknown'}-${Date.now()}`;
+
+        this.messageBus.send('open-virtual-object-real', {
+            virtualObj: virtualObj,
+            pluginId: pluginId,
+            messageId: msgId
+        });
+
+        logger.debug(`[${this.pluginName}] 実身を開く:`, virtualObj.link_id || virtualObj.link_name, 'with', pluginId);
+    }
+
+    // ========================================
+    // ウィンドウ操作（共通実装）
+    // ========================================
+
+    /**
+     * ウィンドウを閉じるリクエストを送信
+     * 親ウィンドウに対してclose-windowメッセージを送信
+     */
+    requestCloseWindow() {
+        if (window.parent && window.parent !== window) {
+            const windowElement = window.frameElement ? window.frameElement.closest('.window') : null;
+            const windowId = windowElement ? windowElement.id : null;
+
+            if (windowId && this.messageBus) {
+                this.messageBus.send('close-window', {
+                    windowId: windowId
+                });
+            }
+        }
+    }
+
+    // ========================================
+    // 実身操作（共通実装）
+    // ========================================
+
+    /**
+     * 選択中の仮身が指し示す開いている実身を閉じる
+     * contextMenuVirtualObjectが設定されている前提
+     */
+    closeRealObject() {
+        window.RealObjectSystem.closeRealObject(this);
+    }
+
+    /**
+     * 選択中の仮身が指し示す実身名を変更
+     * @returns {Promise<{success: boolean, newName?: string}>}
+     */
+    async renameRealObject() {
+        return await window.RealObjectSystem.renameRealObject(this);
+    }
+
+    /**
+     * 選択中の仮身が指し示す実身を複製
+     */
+    async duplicateRealObject() {
+        await window.RealObjectSystem.duplicateRealObject(this);
     }
 }

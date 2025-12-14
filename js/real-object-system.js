@@ -505,6 +505,31 @@ export class RealObjectSystem {
             logger.debug(`アイコン削除: ${icoPath}`);
         }
 
+        // PNG画像ファイル削除（realId_recordNo_imgNo.png パターン）
+        try {
+            const files = this.fs.readdirSync(basePath);
+            const pngPattern = new RegExp(`^${realId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}_\\d+_\\d+\\.png$`);
+            let pngDeleteCount = 0;
+
+            for (const file of files) {
+                if (pngPattern.test(file)) {
+                    const pngPath = this.path.join(basePath, file);
+                    try {
+                        this.fs.unlinkSync(pngPath);
+                        logger.debug(`PNG画像削除: ${pngPath}`);
+                        pngDeleteCount++;
+                    } catch (error) {
+                        logger.error(`PNG画像削除失敗: ${file}`, error);
+                    }
+                }
+            }
+            if (pngDeleteCount > 0) {
+                logger.info(`PNG画像ファイル ${pngDeleteCount} 個を削除`);
+            }
+        } catch (error) {
+            logger.debug(`PNG画像ファイルの検索中にエラー:`, error);
+        }
+
         logger.info(`実身削除完了: ${realId} (${recordNo}レコード)`);
     }
 
@@ -755,56 +780,35 @@ export class RealObjectSystem {
     }
 
     /**
-     * 仮身属性変更ダイアログを表示（プラグイン共通）
-     * @param {Object} plugin プラグインインスタンス（messageBus、contextMenuVirtualObject、applyVirtualObjectAttributesメソッドを持つ）
+     * 仮身オブジェクトから現在の属性値を構築（共通ヘルパー）
+     * @param {Object} vobj 仮身オブジェクト
+     * @returns {Object} 現在の属性値（boolean/string/number形式）
      */
-    static async changeVirtualObjectAttributes(plugin) {
-        if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
-            logger.warn('選択中の仮身がありません');
-            return;
-        }
-
-        const vobj = plugin.contextMenuVirtualObject.virtualObj;
-        const element = plugin.contextMenuVirtualObject.element;
-
-        // 現在の属性値を取得（elementのdatasetから最新の値を読み取る）
-        const pictdisp = element.dataset.linkPictdisp !== undefined ? element.dataset.linkPictdisp : (vobj.pictdisp || 'true');
-        const namedisp = element.dataset.linkNamedisp !== undefined ? element.dataset.linkNamedisp : (vobj.namedisp || 'true');
-        const roledisp = element.dataset.linkRoledisp !== undefined ? element.dataset.linkRoledisp : (vobj.roledisp || 'false');
-        const typedisp = element.dataset.linkTypedisp !== undefined ? element.dataset.linkTypedisp : (vobj.typedisp || 'false');
-        const updatedisp = element.dataset.linkUpdatedisp !== undefined ? element.dataset.linkUpdatedisp : (vobj.updatedisp || 'false');
-        const framedisp = element.dataset.linkFramedisp !== undefined ? element.dataset.linkFramedisp : (vobj.framedisp || 'true');
-        const frcol = element.dataset.linkFrcol || vobj.frcol || DEFAULT_FRCOL;
-        const chcol = element.dataset.linkChcol || vobj.chcol || DEFAULT_CHCOL;
-        const tbcol = element.dataset.linkTbcol || vobj.tbcol || DEFAULT_TBCOL;
-        const bgcol = element.dataset.linkBgcol || vobj.bgcol || DEFAULT_BGCOL;
-        const autoopen = element.dataset.linkAutoopen !== undefined ? element.dataset.linkAutoopen : (vobj.autoopen || 'false');
-        const chsz = element.dataset.linkChsz ? parseFloat(element.dataset.linkChsz) : (parseFloat(vobj.chsz) || 14);
-
-        logger.debug('仮身属性ダイアログ用に現在の属性を取得:', {
-            pictdisp, namedisp, roledisp, typedisp, updatedisp, framedisp,
-            frcol, chcol, tbcol, bgcol, autoopen, chsz
-        });
-
-        const currentAttrs = {
-            pictdisp: pictdisp !== 'false',  // デフォルトtrue
-            namedisp: namedisp !== 'false',  // デフォルトtrue
-            roledisp: roledisp === 'true',   // デフォルトfalse
-            typedisp: typedisp === 'true',   // デフォルトfalse
-            updatedisp: updatedisp === 'true',  // デフォルトfalse
-            framedisp: framedisp !== 'false',  // デフォルトtrue
-            frcol: frcol,
-            chcol: chcol,
-            tbcol: tbcol,
-            bgcol: bgcol,
-            autoopen: autoopen === 'true',
-            chsz: chsz
+    static buildCurrentAttrsFromVobj(vobj) {
+        return {
+            pictdisp: vobj.pictdisp !== 'false',  // デフォルトtrue
+            namedisp: vobj.namedisp !== 'false',  // デフォルトtrue
+            roledisp: vobj.roledisp === 'true',   // デフォルトfalse
+            typedisp: vobj.typedisp === 'true',   // デフォルトfalse
+            updatedisp: vobj.updatedisp === 'true',  // デフォルトfalse
+            framedisp: vobj.framedisp !== 'false',  // デフォルトtrue
+            frcol: vobj.frcol || DEFAULT_FRCOL,
+            chcol: vobj.chcol || DEFAULT_CHCOL,
+            tbcol: vobj.tbcol || DEFAULT_TBCOL,
+            bgcol: vobj.bgcol || DEFAULT_BGCOL,
+            autoopen: vobj.autoopen === 'true',
+            chsz: parseFloat(vobj.chsz) || DEFAULT_FONT_SIZE
         };
+    }
 
-        // 文字サイズの倍率を計算
+    /**
+     * 文字サイズから倍率ラベルを計算（共通ヘルパー）
+     * @param {number} chsz 文字サイズ（ポイント）
+     * @returns {string} 倍率ラベル（'標準', '2倍' など）
+     */
+    static calculateSelectedRatio(chsz) {
         const baseFontSize = DEFAULT_FONT_SIZE;
-        const ratio = currentAttrs.chsz / baseFontSize;
-        let selectedRatio = '標準';
+        const ratio = chsz / baseFontSize;
         const ratioMap = {
             '1/2倍': 0.5,
             '3/4倍': 0.75,
@@ -817,10 +821,38 @@ export class RealObjectSystem {
 
         for (const [label, value] of Object.entries(ratioMap)) {
             if (Math.abs(ratio - value) < 0.01) {
-                selectedRatio = label;
-                break;
+                return label;
             }
         }
+        return '標準';
+    }
+
+    /**
+     * 仮身属性変更ダイアログを表示（プラグイン共通）
+     * @param {Object} plugin プラグインインスタンス（messageBus、contextMenuVirtualObject、applyVirtualObjectAttributesメソッドを持つ）
+     *
+     * プラグインは以下のメソッドをオプションで実装可能:
+     * - getVirtualObjectCurrentAttrs(vobj, element): 現在の属性値を取得（element.dataset対応などカスタマイズ用）
+     * - applyVirtualObjectAttributes(attrs): 属性を適用（シグネチャは自由）
+     */
+    static async changeVirtualObjectAttributes(plugin) {
+        if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
+            logger.warn('選択中の仮身がありません');
+            return;
+        }
+
+        const vobj = plugin.contextMenuVirtualObject.virtualObj;
+        const element = plugin.contextMenuVirtualObject.element;
+
+        // 現在の属性値を取得
+        // プラグインがgetVirtualObjectCurrentAttrsを実装している場合はそれを使用
+        // そうでなければvobjから直接構築
+        const currentAttrs = (typeof plugin.getVirtualObjectCurrentAttrs === 'function')
+            ? plugin.getVirtualObjectCurrentAttrs(vobj, element)
+            : this.buildCurrentAttrsFromVobj(vobj);
+
+        // 文字サイズの倍率を計算
+        const selectedRatio = this.calculateSelectedRatio(currentAttrs.chsz);
 
         // 親ウィンドウにダイアログ表示を要求
         const messageId = `change-vobj-attrs-${Date.now()}-${Math.random()}`;
@@ -832,8 +864,6 @@ export class RealObjectSystem {
             messageId: messageId
         });
 
-        logger.debug('仮身属性変更ダイアログ要求');
-
         try {
             // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
             const result = await plugin.messageBus.waitFor('virtual-object-attributes-changed', 0, (data) => {
@@ -842,7 +872,7 @@ export class RealObjectSystem {
 
             if (result.success && result.attributes) {
                 // プラグイン固有のapplyVirtualObjectAttributesメソッドを呼び出す
-                plugin.applyVirtualObjectAttributes(result.attributes, vobj, element);
+                plugin.applyVirtualObjectAttributes(result.attributes);
             }
         } catch (error) {
             logger.error('仮身属性変更エラー:', error);
@@ -953,6 +983,44 @@ export class RealObjectSystem {
             } catch (error) {
                 logger.error('屑実身操作ウィンドウ起動エラー:', error);
                 plugin.setStatus('屑実身操作ウィンドウの起動に失敗しました');
+            }
+        }
+    }
+
+    /**
+     * 仮身ネットワークウィンドウを開く（プラグイン共通）
+     * @param {Object} plugin プラグインインスタンス（setStatusを持つ）
+     * @param {string} startRealId 起点となる実身ID
+     */
+    static openVirtualObjectNetwork(plugin, startRealId) {
+        if (window.parent && window.parent !== window && window.parent.pluginManager) {
+            try {
+                const fileData = {
+                    startRealId: startRealId
+                };
+                window.parent.pluginManager.launchPlugin('virtual-object-network', fileData);
+                logger.info('仮身ネットワークウィンドウ起動:', startRealId);
+                plugin.setStatus('仮身ネットワークウィンドウを起動しました');
+            } catch (error) {
+                logger.error('仮身ネットワークウィンドウ起動エラー:', error);
+                plugin.setStatus('仮身ネットワークウィンドウの起動に失敗しました');
+            }
+        }
+    }
+
+    /**
+     * 実身/仮身検索ウィンドウを開く（プラグイン共通）
+     * @param {Object} plugin プラグインインスタンス（setStatusを持つ）
+     */
+    static openRealObjectSearch(plugin) {
+        if (window.parent && window.parent !== window && window.parent.pluginManager) {
+            try {
+                window.parent.pluginManager.launchPlugin('real-object-search', null);
+                logger.info('実身/仮身検索ウィンドウ起動');
+                plugin.setStatus('実身/仮身検索ウィンドウを起動しました');
+            } catch (error) {
+                logger.error('実身/仮身検索ウィンドウ起動エラー:', error);
+                plugin.setStatus('実身/仮身検索ウィンドウの起動に失敗しました');
             }
         }
     }

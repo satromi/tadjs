@@ -951,6 +951,14 @@ class TADjsDesktop {
             'enable-window-resize': { handler: () => this.enableAllWindowResize() },
             'get-current-user': { handler: (_, e) => this.handleGetCurrentUser(e) },
             'import-files': { handler: 'handleImportFiles', async: true },
+            'save-calc-image-file': { handler: 'handleSaveCalcImageFile', async: true },
+            'delete-image-file': { handler: 'handleDeleteImageFile', async: true },
+            // 仮身ネットワーク用ハンドラ
+            'get-real-object-info': { handler: 'handleGetRealObjectInfo', async: true },
+            'get-virtual-objects-from-real': { handler: 'handleGetVirtualObjectsFromReal', async: true },
+            // 実身/仮身検索用ハンドラ
+            'search-real-objects': { handler: 'handleSearchRealObjects', async: true },
+            'abort-search': { handler: 'handleAbortSearch', async: false },
         };
     }
 
@@ -1439,12 +1447,30 @@ class TADjsDesktop {
                                 e.preventDefault();
                                 return false;
                             } catch (err) {
-                                logger.info('[TADjs] ドロップデータのJSON解析失敗、通常処理へ');
+                                logger.info('[TADjs] ドロップデータのJSON解析失敗、ファイルドロップをチェック');
                             }
+                        }
+
+                        // 外部ファイルドロップをチェック（Windowsからのドラッグなど）
+                        const files = Array.from(e.dataTransfer.files);
+                        if (files.length > 0) {
+                            logger.info('[TADjs] 外部ファイルドロップ検出:', files.length, '個のファイル');
+
+                            // FileImportManagerを使用してファイルを処理
+                            if (this.fileImportManager) {
+                                this.fileImportManager.handleFilesImport(files, iframe).then(() => {
+                                    logger.info('[TADjs] 外部ファイルインポート完了');
+                                }).catch(err => {
+                                    logger.error('[TADjs] 外部ファイルインポートエラー:', err);
+                                });
+                            }
+
+                            e.preventDefault();
+                            return false;
                         }
                     }
                 }
-                
+
                 // iframe以外、またはJSON解析失敗の場合はデフォルト動作を防ぐ
                 e.preventDefault();
                 return false;
@@ -5284,6 +5310,18 @@ class TADjsDesktop {
         );
 
         this.messageRouter.register(
+            'files-dropped-on-plugin',
+            this.handleFilesDroppedOnPlugin.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'image-dropped-on-plugin',
+            this.handleImageDroppedOnPlugin.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
             'set-data-folder',
             this.handleSetDataFolderRouter.bind(this),
             { autoResponse: false }
@@ -5627,6 +5665,731 @@ class TADjsDesktop {
     async handleSaveImageFile(data, event) {
         logger.info('[TADjs] 画像ファイル保存要求:', data.fileName);
         this.saveImageFile(data.fileName, data.imageData);
+    }
+
+    /**
+     * save-calc-image-file ハンドラー（基本表計算プラグイン用）
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleSaveCalcImageFile(event) {
+        const data = event.data;
+        logger.info('[TADjs] 表計算用画像ファイル保存要求:', data.fileName);
+
+        let success = false;
+        try {
+            // base64からUint8Arrayに変換
+            const base64 = data.data;
+            const binaryString = atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            success = this.saveImageFile(data.fileName, bytes);
+        } catch (error) {
+            logger.error('[TADjs] 表計算用画像ファイル保存エラー:', error);
+        }
+
+        // レスポンスを返す（save-image-result型で返す）
+        if (event.source && data.messageId) {
+            this.parentMessageBus.respondTo(event.source, 'save-image-result', {
+                messageId: data.messageId,
+                success: success,
+                fileName: data.fileName
+            });
+        }
+    }
+
+    /**
+     * delete-image-file ハンドラー（画像ファイル削除）
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleDeleteImageFile(data, event) {
+        const fileName = data.fileName;
+        logger.info('[TADjs] 画像ファイル削除要求:', fileName);
+
+        let success = false;
+        try {
+            if (window.electronAPI && window.electronAPI.deleteFile) {
+                const basePath = this.getDataBasePath();
+                const filePath = this.realObjectSystem.path.join(basePath, fileName);
+
+                // ファイルが存在するか確認
+                if (this.realObjectSystem.fs.existsSync(filePath)) {
+                    const result = await window.electronAPI.deleteFile(filePath);
+                    success = result.success;
+                    if (success) {
+                        logger.info('[TADjs] 画像ファイル削除成功:', filePath);
+                    } else {
+                        logger.error('[TADjs] 画像ファイル削除失敗:', result.error);
+                    }
+                } else {
+                    logger.warn('[TADjs] 削除対象の画像ファイルが存在しません:', filePath);
+                    success = true; // ファイルがなければ削除成功とみなす
+                }
+            } else {
+                logger.warn('[TADjs] electronAPI.deleteFile が利用できません（ブラウザモード）');
+            }
+        } catch (error) {
+            logger.error('[TADjs] 画像ファイル削除エラー:', error);
+        }
+
+        // レスポンスを返す
+        if (event.source && data.messageId) {
+            this.parentMessageBus.respondTo(event.source, 'delete-image-result', {
+                messageId: data.messageId,
+                success: success,
+                fileName: fileName
+            });
+        }
+    }
+
+    /**
+     * get-real-object-info ハンドラー（仮身ネットワーク用）
+     * 実身のメタデータを取得
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleGetRealObjectInfo(event) {
+        // 汎用ハンドラからはeventのみが渡される
+        const data = event.data || {};
+        const realId = data.realId;
+        logger.info('[TADjs] 実身情報取得要求:', realId);
+
+        let success = false;
+        let info = null;
+
+        try {
+            // JSONファイルから実身情報を読み込み
+            const basePath = this.getDataBasePath();
+            const jsonPath = this.realObjectSystem.path.join(basePath, `${realId}.json`);
+
+            if (this.realObjectSystem.fs.existsSync(jsonPath)) {
+                const jsonContent = this.realObjectSystem.fs.readFileSync(jsonPath, 'utf-8');
+                const metadata = JSON.parse(jsonContent);
+                info = {
+                    realId: realId,
+                    name: metadata.name || '無題',
+                    type: metadata.type || 'unknown',
+                    updateDate: metadata.updateDate,
+                    applist: metadata.applist || {}
+                };
+                success = true;
+            } else {
+                logger.warn('[TADjs] 実身のJSONファイルが見つかりません:', jsonPath);
+            }
+        } catch (error) {
+            logger.error('[TADjs] 実身情報取得エラー:', error);
+        }
+
+        // レスポンスを返す
+        if (event.source) {
+            this.parentMessageBus.respondTo(event.source, 'real-object-info-response', {
+                messageId: data.messageId,
+                success: success,
+                info: info
+            });
+        }
+    }
+
+    /**
+     * get-virtual-objects-from-real ハンドラー（仮身ネットワーク用）
+     * 実身のXTADから仮身リストを取得
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleGetVirtualObjectsFromReal(event) {
+        // 汎用ハンドラからはeventのみが渡される
+        const data = event.data || {};
+        const realId = data.realId;
+        logger.info('[TADjs] 仮身リスト取得要求:', realId);
+
+        let success = false;
+        let virtualObjects = [];
+
+        try {
+            // XTADファイルを読み込み
+            const basePath = this.getDataBasePath();
+            const xtadPath = this.realObjectSystem.path.join(basePath, `${realId}_0.xtad`);
+
+            if (this.realObjectSystem.fs.existsSync(xtadPath)) {
+                let xtadContent = this.realObjectSystem.fs.readFileSync(xtadPath, 'utf-8');
+                logger.info('[TADjs] XTADファイル読み込み:', xtadPath, 'サイズ:', xtadContent.length);
+
+                // 重複属性を削除（applist属性が2回出現する問題への対応）
+                // link要素内で2番目以降のapplist属性を削除
+                xtadContent = xtadContent.replace(/<link([^>]*)>/g, (match, attrs) => {
+                    let firstApplist = true;
+                    const cleanedAttrs = attrs.replace(/\sapplist="[^"]*"/g, (attrMatch) => {
+                        if (firstApplist) {
+                            firstApplist = false;
+                            return attrMatch;
+                        }
+                        return ''; // 2番目以降は削除
+                    });
+                    return '<link' + cleanedAttrs + '>';
+                });
+
+                // DOMParserでXMLを解析
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(xtadContent, 'text/xml');
+
+                // パースエラーをチェック
+                const parseError = xmlDoc.querySelector('parsererror');
+                if (parseError) {
+                    logger.error('[TADjs] XMLパースエラー:', parseError.textContent);
+                } else {
+                    // <link>要素を取得
+                    const linkElements = xmlDoc.getElementsByTagName('link');
+                    logger.info('[TADjs] link要素数:', linkElements.length);
+
+                    for (const link of linkElements) {
+                        const vobj = {
+                            link_id: link.getAttribute('id') || '',
+                            link_name: link.getAttribute('name') || link.textContent.trim() || '無題',
+                            frcol: link.getAttribute('frcol') || '#000000',
+                            tbcol: link.getAttribute('tbcol') || '#ffffff',
+                            chcol: link.getAttribute('chcol') || '#000000',
+                            chsz: parseInt(link.getAttribute('chsz')) || 14
+                        };
+                        virtualObjects.push(vobj);
+                    }
+                    success = true;
+                    logger.info('[TADjs] 仮身リスト取得成功:', virtualObjects.length, '件');
+                }
+            } else {
+                logger.warn('[TADjs] XTADファイルが見つかりません:', xtadPath);
+            }
+        } catch (error) {
+            logger.error('[TADjs] 仮身リスト取得エラー:', error);
+        }
+
+        // レスポンスを返す
+        if (event.source) {
+            this.parentMessageBus.respondTo(event.source, 'virtual-objects-response', {
+                messageId: data.messageId,
+                success: success,
+                virtualObjects: virtualObjects
+            });
+        }
+    }
+
+    /**
+     * search-real-objects ハンドラー（実身/仮身検索用）
+     * 実身名検索、全文検索、日付検索を実行
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleSearchRealObjects(event) {
+        const data = event.data || {};
+        logger.info('[TADjs] 実身/仮身検索要求:', data);
+
+        let success = false;
+        let results = [];
+        let error = null;
+
+        try {
+            if (data.searchType === 'string') {
+                results = await this.searchRealObjectsByString(data, event.source);
+                success = true;
+            } else if (data.searchType === 'date') {
+                results = await this.searchRealObjectsByDate(data, event.source);
+                success = true;
+            } else {
+                error = '不明な検索タイプです';
+            }
+        } catch (err) {
+            logger.error('[TADjs] 実身/仮身検索エラー:', err);
+            error = err.message;
+        }
+
+        // レスポンスを返す
+        if (event.source) {
+            this.parentMessageBus.respondTo(event.source, 'search-real-objects-response', {
+                messageId: data.messageId,
+                success: success,
+                results: results,
+                searchParams: data,
+                error: error
+            });
+        }
+    }
+
+    /**
+     * 検索中断ハンドラ
+     */
+    handleAbortSearch() {
+        logger.info('[TADjs] 検索中断要求');
+        this.searchAborted = true;
+    }
+
+    /**
+     * 文字列による実身検索
+     * @param {Object} params - 検索パラメータ
+     * @param {Object} eventSource - 進捗報告用のイベントソース（オプション）
+     * @returns {Promise<Array>} 検索結果
+     */
+    async searchRealObjectsByString(params, eventSource = null) {
+        const { searchText, searchTarget, useRegex } = params;
+        const results = [];
+
+        // 検索中断フラグをリセット
+        this.searchAborted = false;
+
+        // 全実身のメタデータを取得
+        const allMetadata = await this.realObjectSystem.getAllMetadata();
+        let processedCount = 0;
+
+        // 検索パターンを作成
+        let searchPattern;
+        if (useRegex) {
+            try {
+                searchPattern = new RegExp(searchText, 'i');
+            } catch (e) {
+                throw new Error('正規表現の構文が正しくありません');
+            }
+        }
+
+        for (const metadata of allMetadata) {
+            // 中断チェック
+            if (this.searchAborted) {
+                logger.info('[TADjs] 文字列検索が中断されました');
+                break;
+            }
+
+            processedCount++;
+            let matchType = null;
+            let matchedText = null;
+            let nameMatched = false;
+            let contentMatched = false;
+
+            // 実身名検索
+            if (searchTarget === 'name' || searchTarget === 'both') {
+                const name = metadata.name || '';
+                if (useRegex) {
+                    if (searchPattern.test(name)) {
+                        nameMatched = true;
+                    }
+                } else {
+                    if (name.toLowerCase().includes(searchText.toLowerCase())) {
+                        nameMatched = true;
+                    }
+                }
+            }
+
+            // 全文検索
+            if (searchTarget === 'content' || searchTarget === 'both') {
+                const textContent = await this.extractTextFromRealObject(metadata.realId);
+                if (textContent) {
+                    if (useRegex) {
+                        const match = searchPattern.exec(textContent);
+                        if (match) {
+                            contentMatched = true;
+                            // マッチ箇所の前後を含むテキストを抽出
+                            const start = Math.max(0, match.index - 20);
+                            const end = Math.min(textContent.length, match.index + match[0].length + 20);
+                            matchedText = textContent.substring(start, end);
+                        }
+                    } else {
+                        const lowerContent = textContent.toLowerCase();
+                        const lowerSearch = searchText.toLowerCase();
+                        const index = lowerContent.indexOf(lowerSearch);
+                        if (index >= 0) {
+                            contentMatched = true;
+                            // マッチ箇所の前後を含むテキストを抽出
+                            const start = Math.max(0, index - 20);
+                            const end = Math.min(textContent.length, index + searchText.length + 20);
+                            matchedText = textContent.substring(start, end);
+                        }
+                    }
+                }
+            }
+
+            // マッチタイプを決定
+            if (nameMatched && contentMatched) {
+                matchType = 'both';
+            } else if (nameMatched) {
+                matchType = 'name';
+            } else if (contentMatched) {
+                matchType = 'content';
+            }
+
+            if (matchType) {
+                // 仮身属性を抽出（色、サイズなど）
+                const vobjAttrs = await this.extractVobjAttributesFromRealObject(metadata.realId);
+
+                results.push({
+                    realId: metadata.realId,
+                    name: metadata.name || '無題',
+                    link_id: `${metadata.realId}_0.xtad`,
+                    matchType: matchType,
+                    matchedText: matchedText,
+                    makeDate: metadata.makeDate,
+                    updateDate: metadata.updateDate,
+                    accessDate: metadata.accessDate,
+                    // VirtualObjectRenderer用の仮身属性（XTADから抽出した値を含める）
+                    virtualObject: {
+                        link_id: `${metadata.realId}_0.xtad`,
+                        link_name: metadata.name || '無題',
+                        ...(vobjAttrs || {})
+                    }
+                });
+            }
+
+            // 進捗報告（10件ごと）
+            if (eventSource && processedCount % 10 === 0) {
+                this.parentMessageBus.respondTo(eventSource, 'search-real-objects-progress', {
+                    totalCount: processedCount,
+                    matchCount: results.length
+                });
+            }
+        }
+
+        // 最終進捗報告
+        if (eventSource) {
+            this.parentMessageBus.respondTo(eventSource, 'search-real-objects-progress', {
+                totalCount: processedCount,
+                matchCount: results.length
+            });
+        }
+
+        logger.info('[TADjs] 文字列検索結果:', results.length, '件');
+        return results;
+    }
+
+    /**
+     * 日付による実身検索（文字列+日付複合検索対応）
+     * @param {Object} params - 検索パラメータ
+     * @param {Object} eventSource - 進捗報告用のイベントソース（オプション）
+     * @returns {Promise<Array>} 検索結果
+     */
+    async searchRealObjectsByDate(params, eventSource = null) {
+        const { searchText, searchTarget, useRegex, dateFrom, dateTo, dateTarget } = params;
+        const results = [];
+
+        // 検索中断フラグをリセット
+        this.searchAborted = false;
+
+        // 全実身のメタデータを取得
+        const allMetadata = await this.realObjectSystem.getAllMetadata();
+        let processedCount = 0;
+
+        // 日付の変換（datetime-local形式）
+        const fromDateTime = dateFrom ? new Date(dateFrom).getTime() : null;
+        const toDateTime = dateTo ? new Date(dateTo).getTime() : null;
+
+        // 文字列検索パターンを作成
+        let searchPattern = null;
+        if (searchText) {
+            if (useRegex) {
+                try {
+                    searchPattern = new RegExp(searchText, 'i');
+                } catch (e) {
+                    throw new Error('正規表現の構文が正しくありません');
+                }
+            }
+        }
+
+        // 検索対象を決定（デフォルトは両方）
+        const effectiveSearchTarget = searchTarget || 'both';
+
+        for (const metadata of allMetadata) {
+            // 中断チェック
+            if (this.searchAborted) {
+                logger.info('[TADjs] 日付検索が中断されました');
+                break;
+            }
+
+            processedCount++;
+            let dateMatched = false;
+            let stringMatched = false;
+            let matchedText = null;
+            let matchType = null;
+            let nameMatched = false;
+            let contentMatched = false;
+
+            // 日付フィルタリング（FROM/TOが指定されている場合のみ）
+            if (fromDateTime !== null || toDateTime !== null) {
+                const dateValue = metadata[dateTarget];
+                if (dateValue) {
+                    const dateTime = new Date(dateValue).getTime();
+                    if (!isNaN(dateTime)) {
+                        // FROM/TO両方: 範囲指定
+                        // FROMのみ: 以降
+                        // TOのみ: 以前
+                        const afterFrom = fromDateTime === null || dateTime >= fromDateTime;
+                        const beforeTo = toDateTime === null || dateTime <= toDateTime;
+                        dateMatched = afterFrom && beforeTo;
+                    }
+                }
+            } else {
+                // 日付指定なしの場合は全て一致扱い
+                dateMatched = true;
+            }
+
+            // 日付が一致しない場合はスキップ
+            if (!dateMatched) {
+                // 進捗報告
+                if (eventSource && processedCount % 10 === 0) {
+                    this.parentMessageBus.respondTo(eventSource, 'search-real-objects-progress', {
+                        totalCount: processedCount,
+                        matchCount: results.length
+                    });
+                }
+                continue;
+            }
+
+            // 文字列検索（searchTextが指定されている場合）
+            if (searchText) {
+                // 実身名検索
+                if (effectiveSearchTarget === 'name' || effectiveSearchTarget === 'both') {
+                    const name = metadata.name || '';
+                    if (useRegex) {
+                        if (searchPattern.test(name)) {
+                            nameMatched = true;
+                        }
+                    } else {
+                        if (name.toLowerCase().includes(searchText.toLowerCase())) {
+                            nameMatched = true;
+                        }
+                    }
+                }
+
+                // 全文検索
+                if (effectiveSearchTarget === 'content' || effectiveSearchTarget === 'both') {
+                    const textContent = await this.extractTextFromRealObject(metadata.realId);
+                    if (textContent) {
+                        if (useRegex) {
+                            const match = searchPattern.exec(textContent);
+                            if (match) {
+                                contentMatched = true;
+                                const start = Math.max(0, match.index - 20);
+                                const end = Math.min(textContent.length, match.index + match[0].length + 20);
+                                matchedText = textContent.substring(start, end);
+                            }
+                        } else {
+                            const lowerContent = textContent.toLowerCase();
+                            const lowerSearch = searchText.toLowerCase();
+                            const index = lowerContent.indexOf(lowerSearch);
+                            if (index >= 0) {
+                                contentMatched = true;
+                                const start = Math.max(0, index - 20);
+                                const end = Math.min(textContent.length, index + searchText.length + 20);
+                                matchedText = textContent.substring(start, end);
+                            }
+                        }
+                    }
+                }
+
+                // 文字列一致を判定
+                stringMatched = nameMatched || contentMatched;
+
+                // マッチタイプを決定
+                if (nameMatched && contentMatched) {
+                    matchType = 'both';
+                } else if (nameMatched) {
+                    matchType = 'name';
+                } else if (contentMatched) {
+                    matchType = 'content';
+                }
+            } else {
+                // 文字列指定なしの場合は一致扱い
+                stringMatched = true;
+                matchType = 'date';
+            }
+
+            // 日付と文字列の両方が一致した場合に結果に追加
+            if (dateMatched && stringMatched) {
+                // 仮身属性を抽出（色、サイズなど）
+                const vobjAttrs = await this.extractVobjAttributesFromRealObject(metadata.realId);
+
+                results.push({
+                    realId: metadata.realId,
+                    name: metadata.name || '無題',
+                    link_id: `${metadata.realId}_0.xtad`,
+                    matchType: matchType,
+                    matchedText: matchedText,
+                    makeDate: metadata.makeDate,
+                    updateDate: metadata.updateDate,
+                    accessDate: metadata.accessDate,
+                    // VirtualObjectRenderer用の仮身属性（XTADから抽出した値を含める）
+                    virtualObject: {
+                        link_id: `${metadata.realId}_0.xtad`,
+                        link_name: metadata.name || '無題',
+                        ...(vobjAttrs || {})
+                    }
+                });
+            }
+
+            // 進捗報告（10件ごと）
+            if (eventSource && processedCount % 10 === 0) {
+                this.parentMessageBus.respondTo(eventSource, 'search-real-objects-progress', {
+                    totalCount: processedCount,
+                    matchCount: results.length
+                });
+            }
+        }
+
+        // 最終進捗報告
+        if (eventSource) {
+            this.parentMessageBus.respondTo(eventSource, 'search-real-objects-progress', {
+                totalCount: processedCount,
+                matchCount: results.length
+            });
+        }
+
+        logger.info('[TADjs] 日付検索結果:', results.length, '件');
+        return results;
+    }
+
+    /**
+     * 実身からテキスト内容を抽出（全文検索用）
+     * @param {string} realId - 実身ID
+     * @returns {Promise<string|null>} テキスト内容
+     */
+    async extractTextFromRealObject(realId) {
+        try {
+            const basePath = this.getDataBasePath();
+
+            // 全レコードのXTADファイルからテキストを抽出
+            let allText = '';
+            let recordNo = 0;
+
+            while (true) {
+                const xtadPath = this.realObjectSystem.path.join(basePath, `${realId}_${recordNo}.xtad`);
+                if (!this.realObjectSystem.fs.existsSync(xtadPath)) {
+                    break;
+                }
+
+                const xtadContent = this.realObjectSystem.fs.readFileSync(xtadPath, 'utf-8');
+                const textContent = this.extractTextFromXTADContent(xtadContent);
+                if (textContent) {
+                    allText += textContent + '\n';
+                }
+                recordNo++;
+            }
+
+            return allText.trim() || null;
+        } catch (error) {
+            logger.warn('[TADjs] テキスト抽出エラー:', realId, error);
+            return null;
+        }
+    }
+
+    /**
+     * XTAD XMLコンテンツからテキスト部分を抽出
+     * @param {string} xtadContent - XTAD XML文字列
+     * @returns {string} 抽出されたテキスト
+     */
+    extractTextFromXTADContent(xtadContent) {
+        try {
+            // DOMParserでXMLを解析
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xtadContent, 'text/xml');
+
+            // パースエラーをチェック
+            const parseError = xmlDoc.querySelector('parsererror');
+            if (parseError) {
+                return '';
+            }
+
+            // テキストノードを再帰的に収集
+            const textParts = [];
+            const collectText = (node) => {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const text = node.textContent.trim();
+                    if (text) {
+                        textParts.push(text);
+                    }
+                } else if (node.nodeType === Node.ELEMENT_NODE) {
+                    // link要素のname属性も含める
+                    if (node.tagName === 'link') {
+                        const linkName = node.getAttribute('name');
+                        if (linkName) {
+                            textParts.push(linkName);
+                        }
+                    }
+                    // 子ノードを再帰処理
+                    for (const child of node.childNodes) {
+                        collectText(child);
+                    }
+                }
+            };
+
+            collectText(xmlDoc.documentElement);
+            return textParts.join(' ');
+        } catch (error) {
+            logger.warn('[TADjs] XTAD テキスト抽出エラー:', error);
+            return '';
+        }
+    }
+
+    /**
+     * 実身から仮身属性（色、サイズなど）を抽出
+     * @param {string} realId - 実身ID
+     * @returns {Promise<Object|null>} 仮身属性オブジェクト
+     */
+    async extractVobjAttributesFromRealObject(realId) {
+        try {
+            const basePath = this.getDataBasePath();
+            const xtadPath = this.realObjectSystem.path.join(basePath, `${realId}_0.xtad`);
+
+            if (!this.realObjectSystem.fs.existsSync(xtadPath)) {
+                return null;
+            }
+
+            const xtadContent = this.realObjectSystem.fs.readFileSync(xtadPath, 'utf-8');
+            return this.extractVobjAttributesFromXTADContent(xtadContent);
+        } catch (error) {
+            logger.warn('[TADjs] 仮身属性抽出エラー:', realId, error);
+            return null;
+        }
+    }
+
+    /**
+     * XTAD XMLコンテンツから最初のlink要素の仮身属性を抽出
+     * @param {string} xtadContent - XTAD XML文字列
+     * @returns {Object|null} 仮身属性（chcol, tbcol, frcol, bgcol, chsz等）
+     */
+    extractVobjAttributesFromXTADContent(xtadContent) {
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xtadContent, 'text/xml');
+
+            const parseError = xmlDoc.querySelector('parsererror');
+            if (parseError) {
+                return null;
+            }
+
+            // 最初のlink要素を取得
+            const linkElement = xmlDoc.querySelector('link');
+            if (!linkElement) {
+                return null;
+            }
+
+            // 仮身属性を抽出
+            return {
+                chcol: linkElement.getAttribute('chcol') || undefined,
+                tbcol: linkElement.getAttribute('tbcol') || undefined,
+                frcol: linkElement.getAttribute('frcol') || undefined,
+                bgcol: linkElement.getAttribute('bgcol') || undefined,
+                chsz: linkElement.getAttribute('chsz') || undefined,
+                pictdisp: linkElement.getAttribute('pictdisp') || undefined,
+                namedisp: linkElement.getAttribute('namedisp') || undefined,
+                roledisp: linkElement.getAttribute('roledisp') || undefined,
+                typedisp: linkElement.getAttribute('typedisp') || undefined,
+                updatedisp: linkElement.getAttribute('updatedisp') || undefined,
+                framedisp: linkElement.getAttribute('framedisp') || undefined
+            };
+        } catch (error) {
+            logger.warn('[TADjs] XTAD 仮身属性抽出エラー:', error);
+            return null;
+        }
     }
 
     /**
@@ -6124,6 +6887,221 @@ class TADjsDesktop {
     async handleCrossWindowDropSuccess(data, event) {
         logger.info('[TADjs] cross-window-drop-success受信:', data);
         this.notifySourceWindowOfCrossWindowDrop(data);
+    }
+
+    /**
+     * files-dropped-on-plugin ハンドラー
+     * プラグインにドロップされたファイルを処理
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleFilesDroppedOnPlugin(data, event) {
+        logger.info('[TADjs] files-dropped-on-plugin受信:', data.files?.length, '個のファイル');
+
+        const { files, windowId, targetCell } = data;
+
+        if (!files || files.length === 0) {
+            logger.warn('[TADjs] ドロップされたファイルがありません');
+            return;
+        }
+
+        // ターゲットウィンドウのiframeを取得
+        const windowElement = document.getElementById(windowId);
+        if (!windowElement) {
+            logger.warn('[TADjs] ターゲットウィンドウが見つかりません:', windowId);
+            return;
+        }
+
+        const iframe = windowElement.querySelector('iframe');
+        if (!iframe || !iframe.contentWindow) {
+            logger.warn('[TADjs] iframeが見つかりません');
+            return;
+        }
+
+        // ファイルデータからFileオブジェクトを再構築
+        // 複数ファイルの場合、横方向に並べて配置
+        let fileIndex = 0;
+        for (const fileInfo of files) {
+            try {
+                if (!fileInfo.data) {
+                    logger.warn('[TADjs] ファイルデータがありません:', fileInfo.name);
+                    continue;
+                }
+
+                // Base64からバイナリデータに変換
+                const binary = atob(fileInfo.data);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i);
+                }
+
+                // Fileオブジェクトを作成
+                const blob = new Blob([bytes], { type: fileInfo.type || 'application/octet-stream' });
+                const file = new File([blob], fileInfo.name, { type: fileInfo.type });
+
+                // FileImportManagerを使用して実身を作成
+                if (this.fileImportManager) {
+                    const realObjectInfo = await this.fileImportManager.createRealObjectFromImportedFile(file);
+
+                    if (realObjectInfo) {
+                        // 各ファイルのセル位置を計算（横方向に並べる）
+                        const currentTargetCell = targetCell ? {
+                            col: targetCell.col + fileIndex,
+                            row: targetCell.row
+                        } : null;
+
+                        // プラグインに仮身追加メッセージを送信
+                        this.parentMessageBus.sendToWindow(windowId, 'add-virtual-object-from-base', {
+                            realId: realObjectInfo.realId,
+                            name: realObjectInfo.name,
+                            dropPosition: { x: data.clientX, y: data.clientY },
+                            targetCell: currentTargetCell,
+                            applist: realObjectInfo.applist
+                        });
+                        this.setStatusMessage(`実身「${realObjectInfo.name}」を作成しました`);
+                        fileIndex++;
+                    }
+                }
+            } catch (error) {
+                logger.error('[TADjs] ファイル処理エラー:', fileInfo.name, error);
+            }
+        }
+    }
+
+    /**
+     * image-dropped-on-plugin ハンドラー
+     * プラグインにドロップされた画像を処理（基本文章編集からのドラッグ）
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleImageDroppedOnPlugin(data, event) {
+        logger.info('[TADjs] image-dropped-on-plugin受信:', data.dragData?.imageInfo?.savedFilename);
+
+        const { dragData, windowId, clientX, clientY } = data;
+
+        if (!dragData || !dragData.imageInfo) {
+            logger.warn('[TADjs] 画像情報がありません');
+            return;
+        }
+
+        const imageInfo = dragData.imageInfo;
+        const savedFilename = imageInfo.savedFilename;
+
+        if (!savedFilename) {
+            logger.warn('[TADjs] 画像ファイル名がありません');
+            return;
+        }
+
+        try {
+            // 画像ファイルを読み込む
+            let imageData = null;
+
+            if (this.isElectronEnv) {
+                const fs = require('fs');
+                const path = require('path');
+
+                // データフォルダから画像を読み込む
+                const imagePath = path.join(this.getDataBasePath(), savedFilename);
+
+                if (fs.existsSync(imagePath)) {
+                    const buffer = fs.readFileSync(imagePath);
+                    imageData = buffer;
+                    logger.debug('[TADjs] 画像ファイル読み込み成功:', imagePath);
+                } else {
+                    logger.warn('[TADjs] 画像ファイルが見つかりません:', imagePath);
+                    this.setStatusMessage('画像ファイルが見つかりません');
+                    return;
+                }
+            }
+
+            if (!imageData) {
+                logger.warn('[TADjs] 画像データを取得できませんでした');
+                return;
+            }
+
+            // 基本図形編集プラグインの原紙を使用して新しい実身を作成
+            const baseFileId = '019a0000-0000-0000-0000-000000000003';  // basic-figure-editor原紙
+            const pluginId = 'basic-figure-editor';
+
+            // 新しい実身名
+            const newName = savedFilename.replace(/\.[^.]+$/, '');  // 拡張子を除去
+
+            // 新しい実身IDを生成
+            const newRealId = typeof generateUUIDv7 === 'function' ? generateUUIDv7() : this.generateRealFileIdSet(1).fileId;
+
+            // 原紙のJSONを読み込む
+            const jsonPath = `plugins/${pluginId}/${baseFileId}.json`;
+            const jsonResponse = await fetch(jsonPath);
+            if (!jsonResponse.ok) {
+                logger.error('[TADjs] 原紙JSON読み込み失敗');
+                return;
+            }
+            const basefileJson = await jsonResponse.json();
+
+            // 新しい実身のJSONを作成
+            const currentDateTime = new Date().toISOString();
+            const newRealJson = {
+                ...basefileJson,
+                name: newName,
+                makeDate: currentDateTime,
+                updateDate: currentDateTime,
+                accessDate: currentDateTime,
+                refCount: 1
+            };
+
+            // 画像を含むXTADを作成
+            const imageWidth = imageInfo.width || 200;
+            const imageHeight = imageInfo.height || 200;
+            const newImageFilename = `${newRealId}_0_0.png`;
+
+            const newRealXtad = `<?xml version="1.0" encoding="UTF-8"?>
+<tad version="0.2">
+<header filename="${newName}"/>
+<document>
+<figure>
+<shape type="image" x="10" y="10" width="${imageWidth}" height="${imageHeight}" savedFilename="${newImageFilename}"/>
+</figure>
+</document>
+</tad>`;
+
+            // ファイルを保存
+            const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(newRealId);
+            const xtadFileName = `${newRealId}_0.xtad`;
+
+            await this.saveDataFile(jsonFileName, JSON.stringify(newRealJson, null, 2));
+            await this.saveDataFile(xtadFileName, newRealXtad);
+            await this.saveDataFile(newImageFilename, imageData);
+
+            // アイコンをコピー
+            try {
+                const baseIconPath = `plugins/${pluginId}/${baseFileId}.ico`;
+                const iconResponse = await fetch(baseIconPath);
+                if (iconResponse.ok) {
+                    const iconData = await iconResponse.arrayBuffer();
+                    await this.saveDataFile(`${newRealId}.ico`, new Uint8Array(iconData));
+                }
+            } catch (error) {
+                logger.warn('[TADjs] アイコンコピーエラー:', error.message);
+            }
+
+            logger.info('[TADjs] 画像から実身を作成しました:', newRealId, newName);
+
+            // プラグインに仮身追加メッセージを送信
+            this.parentMessageBus.sendToWindow(windowId, 'add-virtual-object-from-base', {
+                realId: newRealId,
+                name: newName,
+                dropPosition: { x: clientX, y: clientY },
+                applist: newRealJson.applist || {}
+            });
+
+            this.setStatusMessage(`実身「${newName}」を作成しました`);
+
+        } catch (error) {
+            logger.error('[TADjs] 画像処理エラー:', error);
+            this.setStatusMessage('画像の処理に失敗しました');
+        }
     }
 
     /**

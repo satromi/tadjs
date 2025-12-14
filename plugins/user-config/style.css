@@ -173,42 +173,21 @@ body {
     text-align: right;
 }
 
-.config-item-buttons {
+/* カスタムラジオボタン設定項目 */
+.config-item-radio {
     display: flex;
     align-items: center;
     gap: 8px;
     margin-bottom: 8px;
 }
 
-.config-item-buttons label {
+.config-item-radio > label {
     font-size: 11px;
     min-width: 140px;
     font-weight: normal;
 }
 
-.button-group {
-    display: flex;
-    gap: 6px;
-}
-
-.size-button {
-    border: 1px outset #c0c0c0;
-    padding: 3px 12px;
-    font-size: 11px;
-    font-family: 'MS Sans Serif', sans-serif;
-    background: #c0c0c0;
-    cursor: pointer;
-    min-width: 40px;
-}
-
-.size-button.active {
-    border-style: inset;
-    background: #a0a0a0;
-}
-
-.size-button:active {
-    border-style: inset;
-}
+/* カスタムラジオボタンはtadjs-desktop.cssで定義 */
 
 /* データ配置フォルダセレクター */
 .folder-selector {

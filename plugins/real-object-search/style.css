@@ -1,0 +1,276 @@
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 11px;
+    background: #dedede;
+    overflow: hidden;
+    height: 100%;
+}
+
+.plugin-content {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.search-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* タブヘッダー */
+.tab-header {
+    display: flex;
+    border-bottom: 1px solid #808080;
+    background: #e0e0e0;
+    flex-shrink: 0;
+}
+
+.tab {
+    padding: 6px 12px;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+    font-size: 11px;
+    user-select: none;
+    border-bottom: none;
+}
+
+.tab:hover {
+    background: #d0d0d0;
+}
+
+.tab.active {
+    background: #dedede;
+    border-style: inset;
+}
+
+/* タブコンテンツ */
+.tab-content {
+    flex: 1;
+    overflow: hidden;
+    background: #dedede;
+    padding: 0;
+}
+
+.tab-panel {
+    display: none;
+    padding: 8px;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+/* フォーム */
+.search-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.form-group label {
+    font-size: 11px;
+    font-weight: normal;
+}
+
+/* 入力欄 */
+.search-input,
+.date-input {
+    border: 1px inset #c0c0c0;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: white;
+    width: 100%;
+    max-width: 300px;
+}
+
+.search-input:focus,
+.date-input:focus {
+    outline: none;
+}
+
+/* ラジオボタン */
+.radio-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+/* カスタムラジオボタンはtadjs-desktop.cssで定義 */
+
+/* チェックボックス */
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.checkbox-label input[type="checkbox"] {
+    cursor: pointer;
+}
+
+/* ボタンコンテナ */
+.button-container {
+    padding: 12px 0;
+    display: flex;
+    justify-content: center;
+}
+
+/* 検索ボタン */
+.search-button {
+    border: 1px outset #c0c0c0;
+    padding: 4px 16px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: #c0c0c0;
+    cursor: pointer;
+    min-width: 80px;
+}
+
+.search-button:hover {
+    background: #d0d0d0;
+}
+
+.search-button:active {
+    border-style: inset;
+}
+
+.search-button:disabled {
+    background: #c0c0c0;
+    color: #808080;
+    cursor: not-allowed;
+}
+
+/* 検索ステータス */
+.search-status {
+    text-align: center;
+    font-size: 11px;
+    color: #404040;
+    padding: 8px;
+}
+
+.search-status.error {
+    color: #cc0000;
+}
+
+.search-status.searching {
+    color: #000080;
+}
+
+/* フォーム行 */
+.form-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.form-label {
+    min-width: 70px;
+    font-size: 11px;
+    font-weight: normal;
+    flex-shrink: 0;
+}
+
+.search-input-short {
+    border: 1px inset #c0c0c0;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: white;
+    flex: 1;
+    max-width: 200px;
+}
+
+.search-input-short:focus {
+    outline: none;
+}
+
+.datetime-input {
+    border: 1px inset #c0c0c0;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: white;
+    width: 180px;
+}
+
+.datetime-input:focus {
+    outline: none;
+}
+
+.number-input {
+    border: 1px inset #c0c0c0;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: white;
+    width: 50px;
+    text-align: right;
+}
+
+.number-input:focus {
+    outline: none;
+}
+
+.count-display {
+    font-size: 11px;
+    color: #000080;
+    font-family: 'Courier New', monospace;
+    min-width: 40px;
+}
+
+/* インラインラベル（件数、該当の前） */
+.form-label-inline {
+    font-size: 11px;
+    font-weight: normal;
+    margin-left: 12px;
+}
+
+/* ボタン行（左右配置） */
+.button-row {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid #808080;
+}
+
+/* 中断ボタン */
+.abort-button {
+    border: 1px outset #c0c0c0;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-family: 'MS Sans Serif', sans-serif;
+    background: #c0c0c0;
+    cursor: pointer;
+}
+
+.abort-button:hover:not(:disabled) {
+    background: #d0d0d0;
+}
+
+.abort-button:active:not(:disabled) {
+    border-style: inset;
+}
+
+.abort-button:disabled {
+    background: #c0c0c0;
+    color: #808080;
+    cursor: not-allowed;
+}

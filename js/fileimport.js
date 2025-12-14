@@ -14,6 +14,16 @@ class FileImportManager {
     }
 
     /**
+     * 画像ファイル拡張子かどうかをチェック
+     * @param {string} ext - 拡張子（小文字）
+     * @returns {boolean}
+     */
+    isImageExtension(ext) {
+        const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'svg'];
+        return imageExtensions.includes(ext);
+    }
+
+    /**
      * インポートされたファイルから実身オブジェクトを作成
      * @param {File} file - インポートされたファイル
      * @returns {Promise<{realId: string, name: string, applist: object}|null>} 作成された実身の情報、またはnull（エラー時）
@@ -24,6 +34,11 @@ class FileImportManager {
         // ファイル拡張子を取得して小文字化
         const fileExt = file.name.split('.').pop().toLowerCase();
         logger.debug('ファイル拡張子:', fileExt);
+
+        // 画像ファイルの場合は専用処理
+        if (this.isImageExtension(fileExt)) {
+            return await this.createImageRealObject(file, fileExt);
+        }
 
         // 拡張子に応じて使用する原紙を決定
         let pluginId;
@@ -214,6 +229,203 @@ class FileImportManager {
             name: newName,
             applist: newRealJson.applist || {}
         };
+    }
+
+    /**
+     * 画像ファイルから実身オブジェクトを作成（basic-figure-editor用）
+     * @param {File} file - 画像ファイル
+     * @param {string} fileExt - ファイル拡張子
+     * @returns {Promise<{realId: string, name: string, applist: object}|null>}
+     */
+    async createImageRealObject(file, fileExt) {
+        logger.info('createImageRealObject開始:', file.name);
+
+        // 実身名はファイル名から拡張子を除いたものを使用
+        const newName = file.name.replace(/\.[^.]+$/, '');
+        logger.debug('新しい実身名:', newName);
+
+        // 新しい実身IDを生成
+        const newRealId = typeof generateUUIDv7 === 'function' ? generateUUIDv7() : this.tadjs.generateRealFileIdSet(1).fileId;
+        logger.debug('新しい実身ID:', newRealId);
+
+        // 画像をロードしてサイズを取得
+        let imageWidth = 400;
+        let imageHeight = 300;
+
+        try {
+            const imageSize = await this.getImageDimensions(file);
+            imageWidth = imageSize.width;
+            imageHeight = imageSize.height;
+            logger.debug('画像サイズ:', imageWidth, 'x', imageHeight);
+        } catch (error) {
+            logger.warn('画像サイズ取得失敗、デフォルト値を使用:', error.message);
+        }
+
+        // basic-figure-editor用のJSON作成
+        const currentDateTime = new Date().toISOString();
+        const newRealJson = {
+            name: newName,
+            makeDate: currentDateTime,
+            updateDate: currentDateTime,
+            accessDate: currentDateTime,
+            periodDate: null,
+            refCount: 1,
+            editable: true,
+            readable: true,
+            maker: 'TRON User',
+            window: {
+                pos: { x: 100, y: 100 },
+                panel: true,
+                panelpos: { x: 100, y: 90 },
+                width: Math.min(imageWidth + 50, 1200),
+                height: Math.min(imageHeight + 80, 900),
+                minWidth: 200,
+                minHeight: 200,
+                resizable: true,
+                scrollable: true,
+                maximize: false,
+                maximizable: true,
+                minimizable: true,
+                closable: true,
+                alwaysOnTop: false,
+                skipTaskbar: false,
+                frame: true,
+                transparent: false,
+                backgroundColor: '#ffffff'
+            },
+            applist: {
+                'basic-figure-editor': {
+                    name: newName,
+                    defaultOpen: true
+                },
+                'basic-text-editor': {
+                    name: '基本文章編集',
+                    defaultOpen: false
+                }
+            }
+        };
+
+        // 画像ファイル名（basic-figure-editorの形式: realId_0_imgNo.ext）
+        const imageFileName = `${newRealId}_0_0.${fileExt}`;
+
+        // basic-figure-editor用のXTAD作成（画像シェイプを含む）
+        const newRealXtad = `<tad version="1.0" encoding="UTF-8">
+<figure>
+<image l_atr="1" l_pat="0" f_pat="1" angle="0" rotation="0" flipH="false" flipV="false" left="10" top="10" right="${imageWidth + 10}" bottom="${imageHeight + 10}" href="${imageFileName}" />
+</figure>
+</tad>`;
+
+        // RealObjectSystemに実身を登録
+        if (this.tadjs.realObjectSystem) {
+            try {
+                const metadata = {
+                    realId: newRealId,
+                    name: newName,
+                    recordCount: 1,
+                    refCount: 1,
+                    createdAt: currentDateTime,
+                    modifiedAt: currentDateTime
+                };
+
+                const realObject = {
+                    metadata: metadata,
+                    records: [{ xtad: newRealXtad, images: [imageFileName] }]
+                };
+
+                await this.tadjs.realObjectSystem.saveRealObject(newRealId, realObject);
+                logger.debug('実身をRealObjectSystemに保存:', newRealId, newName);
+            } catch (error) {
+                logger.error('実身保存エラー:', error);
+            }
+        }
+
+        // JSONとXTADファイルを保存
+        const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(newRealId);
+        const xtadFileName = `${newRealId}_0.xtad`;
+
+        const jsonSaved = await this.tadjs.saveDataFile(jsonFileName, JSON.stringify(newRealJson, null, 2));
+        const xtadSaved = await this.tadjs.saveDataFile(xtadFileName, newRealXtad);
+
+        if (jsonSaved && xtadSaved) {
+            logger.info('画像実身をファイルシステムに保存:', jsonFileName, xtadFileName);
+        } else {
+            logger.warn('ファイルシステムへの保存に失敗');
+            return null;
+        }
+
+        // アイコンファイルをコピー（basic-figure-editorのアイコンを使用）
+        if (this.tadjs.isElectronEnv) {
+            try {
+                const baseIconPath = 'plugins/basic-figure-editor/019a0f91-066f-706f-93da-ffe8150d6207.ico';
+                const iconResponse = await fetch(baseIconPath);
+                if (iconResponse.ok) {
+                    const iconData = await iconResponse.arrayBuffer();
+                    const newIconFileName = `${newRealId}.ico`;
+                    await this.tadjs.saveDataFile(newIconFileName, iconData);
+                    logger.debug('アイコンファイルをコピー:', newIconFileName);
+                }
+            } catch (error) {
+                logger.warn('アイコンファイルコピー中のエラー:', error.message);
+            }
+        }
+
+        // 画像ファイルを保存
+        try {
+            let uint8Array;
+
+            if (file.path && this.tadjs.isElectronEnv) {
+                const fs = require('fs');
+                const buffer = fs.readFileSync(file.path);
+                uint8Array = new Uint8Array(buffer);
+            } else if (typeof file.arrayBuffer === 'function') {
+                const arrayBuffer = await file.arrayBuffer();
+                uint8Array = new Uint8Array(arrayBuffer);
+            } else {
+                logger.warn('ファイル内容を取得できません');
+                return {
+                    realId: newRealId,
+                    name: newName,
+                    applist: newRealJson.applist || {}
+                };
+            }
+
+            await this.tadjs.saveDataFile(imageFileName, uint8Array);
+            logger.debug('画像ファイルを保存:', imageFileName);
+        } catch (error) {
+            logger.error('画像ファイル保存エラー:', error);
+            return null;
+        }
+
+        logger.info('画像実身オブジェクト作成完了:', newRealId, newName);
+        return {
+            realId: newRealId,
+            name: newName,
+            applist: newRealJson.applist || {}
+        };
+    }
+
+    /**
+     * 画像のサイズを取得
+     * @param {File} file - 画像ファイル
+     * @returns {Promise<{width: number, height: number}>}
+     */
+    getImageDimensions(file) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            const url = URL.createObjectURL(file);
+
+            img.onload = () => {
+                URL.revokeObjectURL(url);
+                resolve({ width: img.width, height: img.height });
+            };
+
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                reject(new Error('画像読み込みエラー'));
+            };
+
+            img.src = url;
+        });
     }
 
     /**

@@ -1366,6 +1366,95 @@ input[type="text"], input[type="password"], textarea, .config-input {
     font-size: 11px;
 }
 
+/* ======================================
+   カスタムラジオボタン（標準UIコンポーネント）
+   ====================================== */
+
+/* カスタムラジオボタングループコンテナ（横方向） */
+.radio-group-inline {
+    display: inline-flex;
+    gap: 0;
+    background: #dedede;
+    border: 1px outset #c0c0c0;
+    border-radius: 3px;
+    padding: 2px;
+}
+
+/* カスタムラジオボタングループコンテナ（縦方向） */
+.radio-group-vertical {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0;
+    background: #dedede;
+    border: 1px outset #c0c0c0;
+    border-radius: 3px;
+    padding: 2px;
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 6px;
+    user-select: none;
+}
+
+/* ネイティブラジオボタンを非表示 */
+.radio-label input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+}
+
+/* カスタムラジオインジケーター */
+.radio-indicator {
+    display: inline-block;
+    width: 15px;
+    height: 8px;
+    border: 1px dotted #808080;
+    border-radius: 2px;
+    background: transparent;
+    flex-shrink: 0;
+    transition: background-color 0.1s, border-color 0.1s;
+}
+
+/* 選択状態のインジケーター */
+.radio-label input[type="radio"]:checked + .radio-indicator {
+    background: #48cf5a;
+    border: 1px solid #3ab34a;
+}
+
+/* フォーカス状態 */
+.radio-label input[type="radio"]:focus + .radio-indicator {
+    outline: 1px dotted #000;
+    outline-offset: 1px;
+}
+
+/* ホバー状態 */
+.radio-label:hover .radio-indicator {
+    border-color: #606060;
+}
+
+/* 無効状態のインジケーター（枠の色で塗りつぶし） */
+.radio-label input[type="radio"]:disabled + .radio-indicator {
+    background: #808080;
+    border: 1px solid #808080;
+}
+
+/* 無効状態のラベル */
+.radio-label.disabled {
+    cursor: not-allowed;
+    color: #808080;
+}
+
+.radio-label.disabled:hover .radio-indicator {
+    border-color: #808080;
+}
+
 /* レスポンシブ対応 */
 @media (max-width: 800px) {
     .file-list-area {

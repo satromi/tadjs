@@ -412,6 +412,12 @@ class BasicTextEditor extends window.PluginBase {
             this.messageBus.send('save-image-file', data);
         });
 
+        // delete-image-file メッセージ（開いた仮身内のプラグインからの画像削除要求を親ウィンドウに転送）
+        this.messageBus.on('delete-image-file', (data) => {
+            // 親ウィンドウに転送（型名を明示的に指定）
+            this.messageBus.send('delete-image-file', data);
+        });
+
         // save-image-response メッセージ（親ウィンドウからのレスポンスを開いた仮身内のプラグインに転送）
         this.messageBus.on('save-image-response', (data) => {
             // すべての子iframeに転送（MessageBus形式で送信）
@@ -495,11 +501,37 @@ class BasicTextEditor extends window.PluginBase {
         });
 
         // DOMの変更も監視（delete、backspaceなど）
-        this.mutationObserver = new MutationObserver(() => {
+        this.mutationObserver = new MutationObserver((mutations) => {
             // 一時停止フラグがtrueの場合はスキップ
             if (this.suppressMutationObserver) {
                 return;
             }
+
+            // 削除された画像を検出してPNGファイルを削除
+            mutations.forEach(mutation => {
+                if (mutation.removedNodes) {
+                    mutation.removedNodes.forEach(node => {
+                        // 削除されたノードがimg要素の場合
+                        if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'IMG') {
+                            const savedFilename = node.getAttribute('data-saved-filename');
+                            if (savedFilename && !savedFilename.startsWith('data:')) {
+                                this.deleteImageFile(savedFilename);
+                            }
+                        }
+                        // 削除されたノード内にimg要素がある場合（親要素ごと削除された場合）
+                        if (node.nodeType === Node.ELEMENT_NODE && node.querySelectorAll) {
+                            const imgs = node.querySelectorAll('img[data-saved-filename]');
+                            imgs.forEach(img => {
+                                const savedFilename = img.getAttribute('data-saved-filename');
+                                if (savedFilename && !savedFilename.startsWith('data:')) {
+                                    this.deleteImageFile(savedFilename);
+                                }
+                            });
+                        }
+                    });
+                }
+            });
+
             this.updateContentHeight();
         });
         this.mutationObserver.observe(this.editor, {
@@ -1677,11 +1709,11 @@ class BasicTextEditor extends window.PluginBase {
             const autoopen = vo.dataset.linkAutoopen;
             if (autoopen === 'true') {
                 try {
-                    // applistを取得
+                    // applistを取得（data-applist属性から）
                     let applist = null;
-                    if (vo.dataset.linkApplist) {
+                    if (vo.dataset.applist) {
                         try {
-                            applist = JSON.parse(this.decodeHtml(vo.dataset.linkApplist));
+                            applist = JSON.parse(this.decodeHtml(vo.dataset.applist));
                         } catch (e) {
                             continue;
                         }
@@ -1918,7 +1950,7 @@ class BasicTextEditor extends window.PluginBase {
                     bgcol: attrMap.bgcol || '#ffffff',
                     chsz: attrMap.chsz ? parseFloat(attrMap.chsz) : 14,
                     dlen: attrMap.dlen ? parseInt(attrMap.dlen) : 0,
-                    applist: attrMap.applist ? JSON.parse(this.decodeHtml(attrMap.applist)) : {},
+                    applist: this.parseApplist(attrMap.applist),
                     framedisp: attrMap.framedisp || 'true',
                     namedisp: attrMap.namedisp || 'true',
                     pictdisp: attrMap.pictdisp || 'true',
@@ -1962,8 +1994,9 @@ class BasicTextEditor extends window.PluginBase {
                 vobjElement.setAttribute('data-link-innercontent', escapedInnerContent);
 
                 // その他の属性も追加（VirtualObjectRendererが設定しない属性）
+                // applistはVirtualObjectRendererがdata-applistとして設定するため除外
                 for (const [key, value] of Object.entries(attrMap)) {
-                    if (!['id', 'name', 'tbcol', 'frcol', 'chcol', 'bgcol', 'chsz'].includes(key)) {
+                    if (!['id', 'name', 'tbcol', 'frcol', 'chcol', 'bgcol', 'chsz', 'applist'].includes(key)) {
                         vobjElement.setAttribute(`data-link-${key}`, value);
                     }
                 }
@@ -3196,6 +3229,27 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
+     * applist属性を安全にパース
+     * @param {string} applistStr - applist属性値
+     * @returns {Object} パースされたオブジェクト、失敗時は空オブジェクト
+     */
+    parseApplist(applistStr) {
+        if (!applistStr || applistStr.trim() === '') {
+            return {};
+        }
+        try {
+            const decoded = this.decodeHtml(applistStr);
+            if (!decoded || decoded.trim() === '') {
+                return {};
+            }
+            return JSON.parse(decoded);
+        } catch (e) {
+            logger.warn('[EDITOR] applistパースエラー:', applistStr, e.message);
+            return {};
+        }
+    }
+
+    /**
      * ファイルを保存
      */
     async saveFile() {
@@ -4347,11 +4401,8 @@ class BasicTextEditor extends window.PluginBase {
      */
     setStatus(message) {
         logger.debug(`[基本文章編集] ${message}`);
-
-        // 親ウィンドウにステータスメッセージを送信
-        this.messageBus.send('status-message', {
-            message: message
-        });
+        // 親ウィンドウにステータスメッセージを送信（PluginBaseの共通実装を呼び出し）
+        super.setStatus(message);
     }
 
     /**
@@ -4569,7 +4620,9 @@ class BasicTextEditor extends window.PluginBase {
                 // 実身操作メニュー
                 const realObjSubmenu = [
                     { label: '実身名変更', action: 'rename-real-object' },
-                    { label: '実身複製', action: 'duplicate-real-object' }
+                    { label: '実身複製', action: 'duplicate-real-object' },
+                    { label: '仮身ネットワーク', action: 'open-virtual-object-network' },
+                    { label: '実身/仮身検索', action: 'open-real-object-search' }
                 ];
 
                 menuDef.push({
@@ -4981,6 +5034,16 @@ class BasicTextEditor extends window.PluginBase {
             // 屑実身操作
             case 'open-trash-real-objects':
                 this.openTrashRealObjects();
+                break;
+
+            // 仮身ネットワーク
+            case 'open-virtual-object-network':
+                this.openVirtualObjectNetwork();
+                break;
+
+            // 実身/仮身検索
+            case 'open-real-object-search':
+                this.openRealObjectSearch();
                 break;
 
             default:
@@ -7010,20 +7073,7 @@ class BasicTextEditor extends window.PluginBase {
 
     // handleCloseRequest() と respondCloseRequest() は PluginBase で定義
 
-    /**
-     * ウィンドウを閉じるリクエストを送信
-     */
-    requestCloseWindow() {
-        // 親ウィンドウのiframe要素からwindowIdを取得
-        const windowElement = window.frameElement ? window.frameElement.closest('.window') : null;
-        const windowId = windowElement ? windowElement.id : null;
-
-        if (windowId && this.messageBus) {
-            this.messageBus.send('close-window', {
-                windowId: windowId
-            });
-        }
-    }
+    // requestCloseWindow() は基底クラス PluginBase で定義
 
     // showSaveConfirmDialog() は基底クラス PluginBase で定義
 
@@ -7177,6 +7227,25 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
+     * 画像ファイルを削除
+     * @param {string} fileName - 削除する画像ファイル名
+     */
+    deleteImageFile(fileName) {
+        if (!fileName) return;
+
+        try {
+            // 親ウィンドウにファイル削除を依頼
+            this.messageBus.send('delete-image-file', {
+                fileName: fileName
+            });
+
+            logger.info('[EDITOR] 画像ファイル削除依頼:', fileName);
+        } catch (error) {
+            logger.error('[EDITOR] 画像ファイル削除依頼エラー:', error);
+        }
+    }
+
+    /**
      * 画像を選択
      */
     selectImage(img) {
@@ -7207,6 +7276,22 @@ class BasicTextEditor extends window.PluginBase {
             img.setAttribute('data-current-width', currentWidth);
             img.setAttribute('data-current-height', currentHeight);
             logger.debug('[EDITOR] ドラッグ開始時のサイズを保存:', currentWidth, currentHeight);
+
+            // 他のウィンドウでドロップを受け取れるようにデータを設定
+            const imageData = {
+                type: 'image-drag',
+                source: 'basic-text-editor',
+                sourceWindowId: this.windowId,
+                imageInfo: {
+                    savedFilename: img.getAttribute('data-saved-filename'),
+                    width: parseInt(currentWidth),
+                    height: parseInt(currentHeight),
+                    originalWidth: img.getAttribute('data-original-width'),
+                    originalHeight: img.getAttribute('data-original-height'),
+                    mimeType: img.getAttribute('data-mime-type') || 'image/png'
+                }
+            };
+            e.dataTransfer.setData('text/plain', JSON.stringify(imageData));
 
             logger.debug('[EDITOR] 画像ドラッグ開始');
         });
@@ -7809,34 +7894,12 @@ class BasicTextEditor extends window.PluginBase {
             document.execCommand('paste');
             this.setStatus('クリップボードから貼り付けました');
         }
+
+        // 編集状態を記録
+        this.isModified = true;
     }
 
-    /**
-     * 親ウィンドウからグローバルクリップボードを取得
-     * @returns {Promise<Object|null>}
-     */
-    async getGlobalClipboard() {
-        if (!window.parent || window.parent === window) {
-            return null;
-        }
-
-        const messageId = `get-clipboard-${Date.now()}-${Math.random()}`;
-
-        this.messageBus.send('get-clipboard', {
-            messageId: messageId
-        });
-
-        try {
-            // タイムアウト5秒でレスポンスを待つ
-            const result = await this.messageBus.waitFor('clipboard-data', window.DEFAULT_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-            return result.clipboardData;
-        } catch (error) {
-            logger.warn('[EDITOR] クリップボード取得タイムアウト:', error);
-            return null;
-        }
-    }
+    // getGlobalClipboard() は基底クラス PluginBase で定義
 
     /**
      * 仮身をドロップ位置にコピー
@@ -8519,12 +8582,7 @@ class BasicTextEditor extends window.PluginBase {
         });
     }
 
-    /**
-     * 選択中の仮身が指し示す開いている実身を閉じる
-     */
-    closeRealObject() {
-        window.RealObjectSystem.closeRealObject(this);
-    }
+    // closeRealObject() は基底クラス PluginBase で定義
 
     /**
      * 仮身属性変更ダイアログを表示
@@ -8534,9 +8592,56 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
-     * 仮身に属性を適用
+     * 仮身オブジェクトから現在の属性値を取得（element.dataset対応）
+     * @param {Object} vobj - 仮身オブジェクト
+     * @param {HTMLElement|null} element - DOM要素
+     * @returns {Object} 現在の属性値
      */
-    async applyVirtualObjectAttributes(attrs, vobj, element) {
+    getVirtualObjectCurrentAttrs(vobj, element) {
+        if (!element || !element.dataset) {
+            // elementがない場合はデフォルト実装を使用
+            return window.RealObjectSystem.buildCurrentAttrsFromVobj(vobj);
+        }
+
+        // elementのdatasetから最新の値を読み取る（vobjをフォールバック）
+        const pictdisp = element.dataset.linkPictdisp !== undefined ? element.dataset.linkPictdisp : (vobj.pictdisp || 'true');
+        const namedisp = element.dataset.linkNamedisp !== undefined ? element.dataset.linkNamedisp : (vobj.namedisp || 'true');
+        const roledisp = element.dataset.linkRoledisp !== undefined ? element.dataset.linkRoledisp : (vobj.roledisp || 'false');
+        const typedisp = element.dataset.linkTypedisp !== undefined ? element.dataset.linkTypedisp : (vobj.typedisp || 'false');
+        const updatedisp = element.dataset.linkUpdatedisp !== undefined ? element.dataset.linkUpdatedisp : (vobj.updatedisp || 'false');
+        const framedisp = element.dataset.linkFramedisp !== undefined ? element.dataset.linkFramedisp : (vobj.framedisp || 'true');
+        const frcol = element.dataset.linkFrcol || vobj.frcol || '#000000';
+        const chcol = element.dataset.linkChcol || vobj.chcol || '#000000';
+        const tbcol = element.dataset.linkTbcol || vobj.tbcol || '#ffffff';
+        const bgcol = element.dataset.linkBgcol || vobj.bgcol || '#ffffff';
+        const autoopen = element.dataset.linkAutoopen !== undefined ? element.dataset.linkAutoopen : (vobj.autoopen || 'false');
+        const chsz = element.dataset.linkChsz ? parseFloat(element.dataset.linkChsz) : (parseFloat(vobj.chsz) || 14);
+
+        return {
+            pictdisp: pictdisp !== 'false',
+            namedisp: namedisp !== 'false',
+            roledisp: roledisp === 'true',
+            typedisp: typedisp === 'true',
+            updatedisp: updatedisp === 'true',
+            framedisp: framedisp !== 'false',
+            frcol: frcol,
+            chcol: chcol,
+            tbcol: tbcol,
+            bgcol: bgcol,
+            autoopen: autoopen === 'true',
+            chsz: chsz
+        };
+    }
+
+    /**
+     * 仮身に属性を適用
+     * @param {Object} attrs - 適用する属性値
+     */
+    async applyVirtualObjectAttributes(attrs) {
+        // contextMenuVirtualObjectからvobj, elementを取得
+        if (!this.contextMenuVirtualObject) return;
+        const vobj = this.contextMenuVirtualObject.virtualObj;
+        const element = this.contextMenuVirtualObject.element;
         if (!vobj || !element) return;
 
         // datasetから現在の属性値を読み取って、vobjに設定（link_プレフィックスの有無に対応）
@@ -8827,18 +8932,81 @@ class BasicTextEditor extends window.PluginBase {
         }
     }
 
-    /**
-     * 選択中の仮身が指し示す実身の名前を変更
-     */
-    async renameRealObject() {
-        await window.RealObjectSystem.renameRealObject(this);
-    }
+    // renameRealObject() は基底クラス PluginBase で定義
 
     /**
      * 選択中の仮身が指し示す実身を複製
+     * 複製した仮身を元の仮身のすぐ後ろに挿入
      */
     async duplicateRealObject() {
-        await window.RealObjectSystem.duplicateRealObject(this);
+        if (!this.contextMenuVirtualObject || !this.contextMenuVirtualObject.virtualObj) {
+            logger.warn('[EDITOR] 選択中の仮身がありません');
+            return;
+        }
+
+        const realId = this.contextMenuVirtualObject.realId;
+        const originalVobj = this.contextMenuVirtualObject.virtualObj;
+        const originalElement = this.contextMenuVirtualObject.element;
+
+        const messageId = `duplicate-real-${Date.now()}-${Math.random()}`;
+
+        this.messageBus.send('duplicate-real-object', {
+            realId: realId,
+            messageId: messageId
+        });
+
+        try {
+            // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
+            const result = await this.messageBus.waitFor('real-object-duplicated', 0, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.success) {
+                // 新しい仮身オブジェクトを作成（元の仮身の属性を引き継ぐ）
+                const newVirtualObj = {
+                    link_id: result.newRealId,
+                    link_name: result.newName,
+                    width: originalVobj.width || 150,
+                    heightPx: originalVobj.heightPx || 30,
+                    chsz: originalVobj.chsz || 14,
+                    frcol: originalVobj.frcol || '#000000',
+                    chcol: originalVobj.chcol || '#000000',
+                    tbcol: originalVobj.tbcol || '#ffffff',
+                    bgcol: originalVobj.bgcol || '#ffffff',
+                    dlen: 0,
+                    applist: originalVobj.applist || {},
+                    pictdisp: originalVobj.pictdisp || 'true',
+                    namedisp: originalVobj.namedisp || 'true',
+                    roledisp: originalVobj.roledisp || 'false',
+                    typedisp: originalVobj.typedisp || 'false',
+                    updatedisp: originalVobj.updatedisp || 'false',
+                    framedisp: originalVobj.framedisp || 'true',
+                    autoopen: originalVobj.autoopen || 'false'
+                };
+
+                // 元の仮身のすぐ後ろにカーソルを配置
+                if (originalElement && originalElement.parentNode) {
+                    const selection = window.getSelection();
+                    const range = document.createRange();
+                    range.setStartAfter(originalElement);
+                    range.collapse(true);
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                }
+
+                // 新しい仮身を挿入
+                this.insertVirtualObjectLink(newVirtualObj);
+
+                // 編集状態を記録
+                this.isModified = true;
+                this.updateContentHeight();
+
+                this.setStatus(`実身を複製しました: ${result.newName}`);
+            }
+        } catch (error) {
+            logger.error('[EDITOR] 実身複製エラー:', error);
+            this.setStatus('実身の複製に失敗しました');
+        }
     }
 
     /**
@@ -8964,6 +9132,34 @@ class BasicTextEditor extends window.PluginBase {
      */
     openTrashRealObjects() {
         window.RealObjectSystem.openTrashRealObjects(this);
+    }
+
+    /**
+     * 仮身ネットワークウィンドウを開く
+     */
+    openVirtualObjectNetwork() {
+        if (!this.contextMenuVirtualObject) {
+            logger.warn('[EDITOR] 仮身が選択されていません');
+            this.setStatus('仮身を選択してください');
+            return;
+        }
+
+        // 実身IDを取得
+        const realId = this.contextMenuVirtualObject.realId;
+        if (!realId) {
+            logger.warn('[EDITOR] 実身IDが取得できません');
+            this.setStatus('実身IDが取得できません');
+            return;
+        }
+
+        window.RealObjectSystem.openVirtualObjectNetwork(this, realId);
+    }
+
+    /**
+     * 実身/仮身検索ウィンドウを開く
+     */
+    openRealObjectSearch() {
+        window.RealObjectSystem.openRealObjectSearch(this);
     }
 
     /**

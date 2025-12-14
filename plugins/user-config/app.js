@@ -221,9 +221,6 @@ class UserConfigApp extends window.PluginBase {
 
         // 表示属性のスライダーと数値入力の連動
         this.setupDisplaySliders();
-
-        // 表示属性のボタングループ
-        this.setupSizeButtons();
     }
 
     setupDisplaySliders() {
@@ -254,22 +251,6 @@ class UserConfigApp extends window.PluginBase {
                     }
                 });
             }
-        });
-    }
-
-    setupSizeButtons() {
-        const buttonGroups = document.querySelectorAll('.button-group');
-
-        buttonGroups.forEach(group => {
-            const buttons = group.querySelectorAll('.size-button');
-            buttons.forEach(button => {
-                button.addEventListener('click', () => {
-                    // 同じグループ内の他のボタンの active を外す
-                    buttons.forEach(b => b.classList.remove('active'));
-                    // クリックされたボタンに active を付ける
-                    button.classList.add('active');
-                });
-            });
         });
     }
 
@@ -338,23 +319,19 @@ class UserConfigApp extends window.PluginBase {
             if (numberElem) numberElem.value = value;
         });
 
-        // ボタン設定
-        const buttonDefaults = {
+        // ラジオボタン設定
+        const radioDefaults = {
             'cursor-width': '1',
             'pointer-size': 'small',
             'selection-width': '1'
         };
 
-        Object.entries(buttonDefaults).forEach(([setting, defaultValue]) => {
-            const value = localStorage.getItem(setting) || defaultValue;
-            const buttons = document.querySelectorAll(`[data-setting="${setting}"]`);
-            buttons.forEach(button => {
-                if (button.dataset.value === value) {
-                    button.classList.add('active');
-                } else {
-                    button.classList.remove('active');
-                }
-            });
+        Object.entries(radioDefaults).forEach(([name, defaultValue]) => {
+            const value = localStorage.getItem(name) || defaultValue;
+            const radio = document.querySelector(`input[name="${name}"][value="${value}"]`);
+            if (radio) {
+                radio.checked = true;
+            }
         });
     }
 
@@ -404,12 +381,12 @@ class UserConfigApp extends window.PluginBase {
             }
         });
 
-        // ボタン設定を保存
-        const settings = ['cursor-width', 'pointer-size', 'selection-width'];
-        settings.forEach(setting => {
-            const activeButton = document.querySelector(`[data-setting="${setting}"].active`);
-            if (activeButton) {
-                localStorage.setItem(setting, activeButton.dataset.value);
+        // ラジオボタン設定を保存
+        const radioSettings = ['cursor-width', 'pointer-size', 'selection-width'];
+        radioSettings.forEach(name => {
+            const checkedRadio = document.querySelector(`input[name="${name}"]:checked`);
+            if (checkedRadio) {
+                localStorage.setItem(name, checkedRadio.value);
             }
         });
     }

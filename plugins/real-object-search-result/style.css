@@ -1,0 +1,96 @@
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 11px;
+    background: #dedede;
+    overflow: hidden;
+    height: 100%;
+}
+
+.plugin-content {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* 検索条件表示 */
+.search-info {
+    padding: 6px 8px;
+    background: #e0e0e0;
+    border-bottom: 1px solid #808080;
+    font-size: 11px;
+    color: #404040;
+    flex-shrink: 0;
+}
+
+/* 結果コンテナ */
+.result-container {
+    flex: 1;
+    overflow: auto;
+    padding: 8px;
+    background: #f0f0f0;
+}
+
+/* 結果リスト */
+.result-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* 検索結果行 */
+.result-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 4px;
+    cursor: default;
+}
+
+.result-row:hover {
+    background: #e8e8e8;
+}
+
+.result-row.selected {
+    background: #c0c0e0;
+}
+
+/* 仮身要素はVirtualObjectRendererが生成するためスタイルは最小限 */
+.result-row .virtual-object {
+    flex-shrink: 0;
+}
+
+/* マッチ情報テキスト */
+.match-info {
+    font-size: 10px;
+    color: #404040;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.match-info.match-name {
+    color: #006600;
+}
+
+.match-info.match-content {
+    color: #000066;
+}
+
+.match-info.match-date {
+    color: #660066;
+}
+
+.match-info.match-both {
+    color: #006600;
+}
+
+/* 空メッセージ */
+.empty-message {
+    text-align: center;
+    color: #808080;
+    padding: 20px;
+    font-size: 11px;
+}

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ユーザ環境設定</title>
+    <link rel="stylesheet" href="../../tadjs-desktop.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -99,29 +100,65 @@
                             <input type="number" class="config-number" id="menu-delay-num" min="0" max="1000" value="200" step="50">
                         </div>
 
-                        <!-- ボタン選択項目 -->
-                        <div class="config-item-buttons">
+                        <!-- ラジオボタン選択項目 -->
+                        <div class="config-item-radio">
                             <label>カーソル太さ：</label>
-                            <div class="button-group">
-                                <button class="size-button active" data-setting="cursor-width" data-value="1">細</button>
-                                <button class="size-button" data-setting="cursor-width" data-value="2">中</button>
-                                <button class="size-button" data-setting="cursor-width" data-value="3">太</button>
+                            <div class="radio-group-inline">
+                                <label class="radio-label">
+                                    <input type="radio" name="cursor-width" value="1" checked>
+                                    <span class="radio-indicator"></span>
+                                    <span>細</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="cursor-width" value="2">
+                                    <span class="radio-indicator"></span>
+                                    <span>中</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="cursor-width" value="3">
+                                    <span class="radio-indicator"></span>
+                                    <span>太</span>
+                                </label>
                             </div>
                         </div>
-                        <div class="config-item-buttons">
+                        <div class="config-item-radio">
                             <label>ポインタ表示サイズ：</label>
-                            <div class="button-group">
-                                <button class="size-button active" data-setting="pointer-size" data-value="small">小</button>
-                                <button class="size-button" data-setting="pointer-size" data-value="medium">中</button>
-                                <button class="size-button" data-setting="pointer-size" data-value="large">大</button>
+                            <div class="radio-group-inline">
+                                <label class="radio-label">
+                                    <input type="radio" name="pointer-size" value="small" checked>
+                                    <span class="radio-indicator"></span>
+                                    <span>小</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="pointer-size" value="medium">
+                                    <span class="radio-indicator"></span>
+                                    <span>中</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="pointer-size" value="large">
+                                    <span class="radio-indicator"></span>
+                                    <span>大</span>
+                                </label>
                             </div>
                         </div>
-                        <div class="config-item-buttons">
+                        <div class="config-item-radio">
                             <label>選択枠太さ：</label>
-                            <div class="button-group">
-                                <button class="size-button active" data-setting="selection-width" data-value="1">細</button>
-                                <button class="size-button" data-setting="selection-width" data-value="2">中</button>
-                                <button class="size-button" data-setting="selection-width" data-value="3">太</button>
+                            <div class="radio-group-inline">
+                                <label class="radio-label">
+                                    <input type="radio" name="selection-width" value="1" checked>
+                                    <span class="radio-indicator"></span>
+                                    <span>細</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="selection-width" value="2">
+                                    <span class="radio-indicator"></span>
+                                    <span>中</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="selection-width" value="3">
+                                    <span class="radio-indicator"></span>
+                                    <span>太</span>
+                                </label>
                             </div>
                         </div>
                     </div>

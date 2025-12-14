@@ -250,6 +250,34 @@ html, body {
     box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.7);
 }
 
+/* セル内の画像要素 */
+.image-in-cell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.image-in-cell img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+/* 画像の選択状態 */
+.image-in-cell.selected {
+    box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.5);
+    outline: 2px solid #ff8f00;
+    outline-offset: -2px;
+    border-radius: 2px;
+}
+
+.image-in-cell.selected:hover {
+    box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.7);
+}
+
 /* セル入力ボックス（操作パネル用） */
 .cell-input-box {
     width: 100%;

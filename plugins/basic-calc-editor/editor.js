@@ -77,6 +77,15 @@ class CalcEditor extends window.PluginBase {
         this.selectedVirtualObjectCell = null; // 選択中の仮身セル { col, row }
         this.isResizingVirtualObject = false; // 仮身リサイズ中フラグ
 
+        // 画像パス取得関連
+        this.imagePathCallbacks = {}; // messageId -> callback
+        this.imagePathMessageId = 0;
+
+        // 画像セル関連
+        this.selectedImageCell = null; // 選択中の画像セル { col, row }
+        this.isResizingImage = false; // 画像リサイズ中フラグ
+        this.contextMenuImage = null; // コンテキストメニュー表示時の画像情報
+
         // VirtualObjectRenderer初期化
         if (window.VirtualObjectRenderer) {
             this.virtualObjectRenderer = new window.VirtualObjectRenderer();
@@ -159,7 +168,10 @@ class CalcEditor extends window.PluginBase {
             }
 
             if (data.fileData) {
-                this.realId = data.fileData.realId;
+                // realIdから_数字.xtadを除去（basic-figure-editorと同じ形式）
+                let rawId = data.fileData.realId;
+                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
+                logger.debug('[CalcEditor] realId設定:', this.realId, '(元:', rawId, ')');
                 this.fileName = data.fileData.fileName || data.fileData.displayName || '新規表計算';
 
                 // XMLデータがあれば読み込み（親はxmlDataフィールドを使用）
@@ -364,6 +376,15 @@ class CalcEditor extends window.PluginBase {
                     logger.debug('[CalcEditor] 実身ウィンドウを追跡から削除:', realId);
                     break;
                 }
+            }
+        });
+
+        // 画像ファイルパス応答
+        this.messageBus.on('image-file-path-response', (data) => {
+            logger.debug('[CalcEditor] image-file-path-response受信:', data.messageId);
+            if (this.imagePathCallbacks && this.imagePathCallbacks[data.messageId]) {
+                this.imagePathCallbacks[data.messageId](data.filePath);
+                delete this.imagePathCallbacks[data.messageId];
             }
         });
 
@@ -649,6 +670,53 @@ class CalcEditor extends window.PluginBase {
             container.style.backgroundColor = '';
 
             try {
+                // 外部ファイルドロップをチェック（Windowsからのドラッグなど）
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    const files = Array.from(e.dataTransfer.files);
+                    logger.info('[CalcEditor] 外部ファイルドロップ検出:', files.length, '個のファイル');
+
+                    // ドロップ位置からセルを特定
+                    const cell = document.elementFromPoint(e.clientX, e.clientY)?.closest('.cell');
+                    let targetCell = null;
+                    if (cell) {
+                        targetCell = {
+                            col: parseInt(cell.dataset.col),
+                            row: parseInt(cell.dataset.row)
+                        };
+                        logger.info('[CalcEditor] ドロップ先セル:', this.colToLetter(targetCell.col) + targetCell.row);
+                    } else {
+                        logger.warn('[CalcEditor] ドロップ位置にセルが見つかりません、デフォルト位置を使用');
+                        targetCell = { col: 1, row: 1 };
+                    }
+
+                    // 画像ファイルとその他のファイルを分離
+                    const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'svg'];
+                    const imageFiles = [];
+                    const otherFiles = [];
+
+                    for (const file of files) {
+                        const ext = file.name.split('.').pop().toLowerCase();
+                        if (imageExtensions.includes(ext)) {
+                            imageFiles.push(file);
+                        } else {
+                            otherFiles.push(file);
+                        }
+                    }
+
+                    // 画像ファイルは直接セルに挿入
+                    if (imageFiles.length > 0) {
+                        logger.info('[CalcEditor] 画像ファイル検出:', imageFiles.length, '個');
+                        this.insertImageFilesToCells(imageFiles, targetCell);
+                    }
+
+                    // その他のファイルは親に送信
+                    if (otherFiles.length > 0) {
+                        this.readAndSendFiles(otherFiles, e.clientX, e.clientY, targetCell);
+                    }
+
+                    return;
+                }
+
                 // PluginBase共通メソッドでdragDataをパース（linkタグXMLは別処理）
                 const data = e.dataTransfer.getData('text/plain');
                 logger.debug('[CalcEditor] ドロップデータ:', data);
@@ -1097,6 +1165,12 @@ class CalcEditor extends window.PluginBase {
                         const vobjRow = this.selectedVirtualObjectCell.row;
                         this.deselectVirtualObject();
                         this.clearCell(vobjCol, vobjRow);
+                    // 画像が選択されている場合は画像を削除
+                    } else if (this.selectedImageCell) {
+                        const imgCol = this.selectedImageCell.col;
+                        const imgRow = this.selectedImageCell.row;
+                        this.deselectImage();
+                        this.clearCell(imgCol, imgRow);
                     } else {
                         this.clearCell(col, row);
                     }
@@ -1200,8 +1274,8 @@ class CalcEditor extends window.PluginBase {
 
         // blurイベントで常にフォーカスを戻す（IMEを常に有効にするため）
         imeInput.addEventListener('blur', () => {
-            // 編集モード中、または親ウィンドウでダイアログ表示中はime-inputにフォーカスを戻さない
-            if (!this.isEditing && !this.dialogVisible) {
+            // 編集モード中、親ウィンドウでダイアログ表示中、または別ウィンドウにフォーカスが移った場合はime-inputにフォーカスを戻さない
+            if (!this.isEditing && !this.dialogVisible && document.hasFocus()) {
                 setTimeout(() => {
                     imeInput.focus();
                     logger.debug('[CalcEditor] blur後にime-inputにフォーカスを再設定');
@@ -1425,6 +1499,14 @@ class CalcEditor extends window.PluginBase {
             const vobjCell = this.selectedVirtualObjectCell;
             if (vobjCell.col !== col || vobjCell.row !== row) {
                 this.deselectVirtualObject();
+            }
+        }
+
+        // 画像選択を解除（別のセルが選択された場合）
+        if (this.selectedImageCell) {
+            const imgCell = this.selectedImageCell;
+            if (imgCell.col !== col || imgCell.row !== row) {
+                this.deselectImage();
             }
         }
 
@@ -2092,6 +2174,61 @@ class CalcEditor extends window.PluginBase {
                     // フォールバック: VirtualObjectRendererが利用できない場合
                     cell.textContent = `[仮身: ${cellData.virtualObject.link_name || '(名前なし)'}]`;
                 }
+            } else if (cellData.contentType === 'image' && cellData.imageInfo) {
+                // 画像セルの表示
+                cell.textContent = ''; // まずクリア
+
+                const imageSrc = cellData.imageInfo.dataUrl || cellData.imageInfo.src;
+                if (imageSrc) {
+                    // コンテナdivを作成
+                    const imageContainer = document.createElement('div');
+                    imageContainer.className = 'image-in-cell';
+
+                    // カスタムサイズがある場合は適用
+                    if (cellData.imageInfo.displayWidth) {
+                        imageContainer.style.width = `${cellData.imageInfo.displayWidth}px`;
+                    }
+                    if (cellData.imageInfo.displayHeight) {
+                        imageContainer.style.height = `${cellData.imageInfo.displayHeight}px`;
+                    }
+
+                    const img = document.createElement('img');
+                    img.src = imageSrc;
+                    img.alt = cellData.imageInfo.name || '画像';
+                    img.draggable = false; // セル内画像はドラッグ不可
+
+                    // 画像がロードされたらセルサイズを調整（必要に応じて）
+                    img.onload = () => {
+                    };
+
+                    img.onerror = () => {
+                        imageContainer.textContent = '[画像ロードエラー]';
+                    };
+
+                    imageContainer.appendChild(img);
+
+                    // mousedownイベントハンドラ - 画像選択
+                    imageContainer.addEventListener('mousedown', (e) => {
+                        e.stopPropagation(); // セル選択イベントに伝播させない
+
+                        if (e.button !== 0) return; // 左クリックのみ
+
+                        // リサイズ中は何もしない
+                        if (this.isResizingImage) {
+                            return;
+                        }
+
+                        // 画像を選択状態にする
+                        this.selectImage(col, row);
+                    });
+
+                    cell.appendChild(imageContainer);
+                } else {
+                    // 画像パスがまだ取得できていない場合は読み込み中表示
+                    cell.textContent = '[画像読み込み中...]';
+                    cell.style.color = '#888';
+                    cell.style.fontStyle = 'italic';
+                }
             } else {
                 // テキスト or 数式の表示
                 cell.textContent = cellData.displayValue || cellData.value || '';
@@ -2360,6 +2497,11 @@ class CalcEditor extends window.PluginBase {
         // 仮身セルの場合はrefCount-1
         if (cellData && cellData.contentType === 'virtualObject' && cellData.virtualObject) {
             this.requestDeleteVirtualObject(cellData.virtualObject.link_id);
+        }
+
+        // 画像セルの場合はPNGファイルを削除
+        if (cellData && cellData.contentType === 'image' && cellData.imageInfo && cellData.imageInfo.href) {
+            this.deleteImageFile(cellData.imageInfo.href);
         }
 
         this.cells.delete(key);
@@ -2736,18 +2878,23 @@ class CalcEditor extends window.PluginBase {
         if (this.selectionRange) {
             const { startCol, startRow, endCol, endRow } = this.selectionRange;
             const copiedCells = [];
+            let firstVirtualObject = null;
 
             for (let row = startRow; row <= endRow; row++) {
                 const rowData = [];
                 for (let col = startCol; col <= endCol; col++) {
                     const key = `${col},${row}`;
                     const cellData = this.cells.get(key);
+                    const vo = cellData && cellData.virtualObject ? JSON.parse(JSON.stringify(cellData.virtualObject)) : null;
+                    if (vo && !firstVirtualObject) {
+                        firstVirtualObject = vo;
+                    }
                     rowData.push({
                         value: cellData ? (cellData.formula || cellData.value || '') : '',
                         hasFormula: cellData ? !!cellData.formula : false,
                         style: cellData ? { ...cellData.style } : {},
                         contentType: cellData ? cellData.contentType || 'text' : 'text',
-                        virtualObject: cellData && cellData.virtualObject ? JSON.parse(JSON.stringify(cellData.virtualObject)) : null
+                        virtualObject: vo
                     });
                 }
                 copiedCells.push(rowData);
@@ -2759,6 +2906,12 @@ class CalcEditor extends window.PluginBase {
                 sourceCol: startCol,
                 sourceRow: startRow
             };
+
+            // 仮身が含まれている場合はグローバルクリップボードにも送信
+            if (firstVirtualObject) {
+                // 仮身オブジェクト全体をコピー（virtual-object-listと同じ方式）
+                this.setClipboard(firstVirtualObject);
+            }
 
             // システムクリップボードにもテキストとしてコピー
             const textData = copiedCells.map(row =>
@@ -2772,6 +2925,7 @@ class CalcEditor extends window.PluginBase {
             const { col, row } = this.selectedCell;
             const key = `${col},${row}`;
             const cellData = this.cells.get(key);
+            const virtualObject = cellData && cellData.virtualObject ? JSON.parse(JSON.stringify(cellData.virtualObject)) : null;
 
             this.clipboard = {
                 type: 'cell',
@@ -2780,11 +2934,17 @@ class CalcEditor extends window.PluginBase {
                     hasFormula: cellData ? !!cellData.formula : false,
                     style: cellData ? { ...cellData.style } : {},
                     contentType: cellData ? cellData.contentType || 'text' : 'text',
-                    virtualObject: cellData && cellData.virtualObject ? JSON.parse(JSON.stringify(cellData.virtualObject)) : null
+                    virtualObject: virtualObject
                 },
                 sourceCol: col,
                 sourceRow: row
             };
+
+            // 仮身セルの場合はグローバルクリップボードにも送信
+            if (virtualObject) {
+                // 仮身オブジェクト全体をコピー（virtual-object-listと同じ方式）
+                this.setClipboard(virtualObject);
+            }
 
             const textValue = cellData ? (cellData.value || '') : '';
             navigator.clipboard.writeText(textValue).catch(e => logger.error('コピー失敗', e));
@@ -3495,6 +3655,83 @@ class CalcEditor extends window.PluginBase {
                     this.renderCell(col, row);
                     matchCount++;
                 } else {
+                    // <image>タグがあれば画像セルとして処理
+                    const imageMatch = contentAfterCalcPos.match(/<image\s+([^>]*)(?:\/>|>)/);
+                    if (imageMatch) {
+                        const imageAttrs = imageMatch[1];
+
+                        // 属性をパース
+                        const imageAttrMap = {};
+                        const imageAttrRegex = /(\w+)="([^"]*)"/g;
+                        let imageAttrMatch;
+                        while ((imageAttrMatch = imageAttrRegex.exec(imageAttrs)) !== null) {
+                            imageAttrMap[imageAttrMatch[1]] = imageAttrMatch[2];
+                        }
+
+                        // 画像情報を作成
+                        const imageInfo = {
+                            href: imageAttrMap.href || '',
+                            name: imageAttrMap.href?.split('/').pop() || '画像',
+                            left: parseFloat(imageAttrMap.left) || 0,
+                            top: parseFloat(imageAttrMap.top) || 0,
+                            right: parseFloat(imageAttrMap.right) || 100,
+                            bottom: parseFloat(imageAttrMap.bottom) || 100,
+                            l_atr: imageAttrMap.l_atr || '1',
+                            l_pat: imageAttrMap.l_pat || '0',
+                            f_pat: imageAttrMap.f_pat || '1',
+                            angle: parseFloat(imageAttrMap.angle) || 0,
+                            rotation: parseFloat(imageAttrMap.rotation) || 0,
+                            flipH: imageAttrMap.flipH === 'true',
+                            flipV: imageAttrMap.flipV === 'true',
+                            displayWidth: imageAttrMap.displayWidth ? parseFloat(imageAttrMap.displayWidth) : undefined,
+                            displayHeight: imageAttrMap.displayHeight ? parseFloat(imageAttrMap.displayHeight) : undefined
+                        };
+
+                        // セルに画像を設定
+                        const key = `${col},${row}`;
+                        const cellData = {
+                            value: '',
+                            formula: '',
+                            displayValue: '',
+                            style: cellStyle,
+                            imageInfo: imageInfo,
+                            contentType: 'image'
+                        };
+
+                        this.cells.set(key, cellData);
+
+                        // 画像ファイルパスを非同期で取得してセルを更新
+                        if (imageInfo.href) {
+                            const currentCol = col;
+                            const currentRow = row;
+                            this.getImageFilePath(imageInfo.href).then(filePath => {
+                                logger.debug('[CalcEditor] 画像パス取得成功:', imageInfo.href, '->', filePath);
+                                // 絶対パスをfile:// URLに変換
+                                let fileUrl = filePath;
+                                if (filePath.match(/^[A-Za-z]:\\/)) {
+                                    // Windows絶対パス (C:\...) を file:// URLに変換
+                                    fileUrl = 'file:///' + filePath.replace(/\\/g, '/');
+                                } else if (filePath.startsWith('/')) {
+                                    // Unix絶対パス
+                                    fileUrl = 'file://' + filePath;
+                                }
+                                // セルデータを更新
+                                const cellDataToUpdate = this.cells.get(`${currentCol},${currentRow}`);
+                                if (cellDataToUpdate && cellDataToUpdate.imageInfo) {
+                                    cellDataToUpdate.imageInfo.src = fileUrl;
+                                    this.renderCell(currentCol, currentRow);
+                                }
+                            }).catch(error => {
+                                logger.error('[CalcEditor] 画像パス取得エラー:', imageInfo.href, error);
+                            });
+                        }
+
+                        this.renderCell(col, row);
+                        matchCount++;
+                        logger.debug(`[CalcEditor] 画像セル読み込み: ${colLetters}${row}, href=${imageInfo.href}`);
+                        continue;
+                    }
+
                     // 通常セル: セルの値と文字装飾を解析
                     const { value, style: formatStyle } = this.parseCellValueWithFormatting(contentAfterCalcPos);
 
@@ -3872,10 +4109,13 @@ class CalcEditor extends window.PluginBase {
                     xtad += `<cell valign="${cellData.style.vAlign}"/>`;
                 }
 
-                // セルの値（仮身または文字装飾タグ付き）
+                // セルの値（仮身、画像、または文字装飾タグ付き）
                 if (cellData && cellData.contentType === 'virtualObject' && cellData.virtualObject) {
                     // 仮身セル: <link>タグを生成
                     xtad += this.generateLinkTag(cellData.virtualObject);
+                } else if (cellData && cellData.contentType === 'image' && cellData.imageInfo) {
+                    // 画像セル: <image>タグを生成
+                    xtad += this.generateImageTag(cellData.imageInfo);
                 } else {
                     // 通常セル: 文字装飾タグ付き
                     xtad += this.generateCellValueWithFormatting(value, cellData?.style);
@@ -4086,6 +4326,51 @@ class CalcEditor extends window.PluginBase {
         const innerContent = linkName;
 
         return `<link${attrs}>${this.escapeXml(innerContent)}</link>`;
+    }
+
+    /**
+     * <image>タグを生成
+     * @param {Object} imageInfo - 画像情報
+     * @returns {string} <image>タグ
+     */
+    generateImageTag(imageInfo) {
+        if (!imageInfo || !imageInfo.href) {
+            logger.warn('[CalcEditor] 画像情報が不正です:', imageInfo);
+            return '';
+        }
+
+        // 基本図形編集プラグインと同じ形式でタグを生成
+        let attrs = '';
+
+        // 線属性
+        attrs += ` l_atr="${imageInfo.l_atr || '1'}"`;
+        attrs += ` l_pat="${imageInfo.l_pat || '0'}"`;
+        attrs += ` f_pat="${imageInfo.f_pat || '1'}"`;
+
+        // 回転・反転
+        attrs += ` angle="${imageInfo.angle || 0}"`;
+        attrs += ` rotation="${imageInfo.rotation || 0}"`;
+        attrs += ` flipH="${imageInfo.flipH || false}"`;
+        attrs += ` flipV="${imageInfo.flipV || false}"`;
+
+        // 位置（セル内での相対位置）
+        attrs += ` left="${imageInfo.left || 0}"`;
+        attrs += ` top="${imageInfo.top || 0}"`;
+        attrs += ` right="${imageInfo.right || 100}"`;
+        attrs += ` bottom="${imageInfo.bottom || 100}"`;
+
+        // 表示サイズ（リサイズ後のサイズ）
+        if (imageInfo.displayWidth) {
+            attrs += ` displayWidth="${imageInfo.displayWidth}"`;
+        }
+        if (imageInfo.displayHeight) {
+            attrs += ` displayHeight="${imageInfo.displayHeight}"`;
+        }
+
+        // ファイル参照
+        attrs += ` href="${this.escapeXml(imageInfo.href)}"`;
+
+        return `<image${attrs} />`;
     }
 
     /**
@@ -4548,6 +4833,16 @@ class CalcEditor extends window.PluginBase {
             case 'open-trash-real-objects':
                 this.openTrashRealObjects();
                 break;
+
+            // 仮身ネットワーク
+            case 'open-virtual-object-network':
+                this.openVirtualObjectNetwork();
+                break;
+
+            // 実身/仮身検索
+            case 'open-real-object-search':
+                this.openRealObjectSearch();
+                break;
         }
     }
 
@@ -4626,7 +4921,9 @@ class CalcEditor extends window.PluginBase {
                 label: '実身操作',
                 submenu: [
                     { label: '実身名変更', action: 'rename-real-object' },
-                    { label: '実身複製', action: 'duplicate-real-object' }
+                    { label: '実身複製', action: 'duplicate-real-object' },
+                    { label: '仮身ネットワーク', action: 'open-virtual-object-network' },
+                    { label: '実身/仮身検索', action: 'open-real-object-search' }
                 ]
             });
 
@@ -4756,13 +5053,7 @@ class CalcEditor extends window.PluginBase {
         }
     }
 
-    /**
-     * 選択中の仮身が指し示す実身を閉じる
-     * RealObjectSystemの共通メソッドを使用
-     */
-    closeRealObject() {
-        window.RealObjectSystem.closeRealObject(this);
-    }
+    // closeRealObject() は基底クラス PluginBase で定義
 
     /**
      * ステータスメッセージを設定
@@ -4770,7 +5061,8 @@ class CalcEditor extends window.PluginBase {
      */
     setStatus(message) {
         logger.debug('[CalcEditor] Status:', message);
-        // ステータスバーがある場合はそこに表示
+        // 親ウィンドウにステータスメッセージを送信（PluginBaseの共通実装を呼び出し）
+        super.setStatus(message);
     }
 
     /**
@@ -4782,80 +5074,22 @@ class CalcEditor extends window.PluginBase {
             return;
         }
 
-        const vobj = this.contextMenuVirtualObject.virtualObj;
-        const cellKey = this.contextMenuVirtualObject.cellKey;
-
-        logger.info('[CalcEditor] 仮身の属性変更:', vobj.link_name);
-
-        // 現在の属性値を取得
-        const currentAttrs = {
-            pictdisp: vobj.pictdisp !== 'false',
-            namedisp: vobj.namedisp !== 'false',
-            roledisp: vobj.roledisp !== 'false',
-            typedisp: vobj.typedisp !== 'false',
-            updatedisp: vobj.updatedisp !== 'false',
-            framedisp: vobj.framedisp !== 'false',
-            frcol: vobj.frcol || '#000000',
-            chcol: vobj.chcol || '#000000',
-            tbcol: vobj.tbcol || '#ffffff',
-            bgcol: vobj.bgcol || '#ffffff',
-            autoopen: vobj.autoopen === 'true',
-            chsz: parseFloat(vobj.chsz) || 14
-        };
-
-        // 文字サイズの倍率を計算
-        const baseFontSize = 14;
-        const ratio = currentAttrs.chsz / baseFontSize;
-        let selectedRatio = '標準';
-        const ratioMap = {
-            '1/2倍': 0.5,
-            '3/4倍': 0.75,
-            '標準': 1.0,
-            '3/2倍': 1.5,
-            '2倍': 2.0,
-            '3倍': 3.0,
-            '4倍': 4.0
-        };
-
-        for (const [label, value] of Object.entries(ratioMap)) {
-            if (Math.abs(ratio - value) < 0.01) {
-                selectedRatio = label;
-                break;
-            }
-        }
-
-        // 親ウィンドウにダイアログ表示を要求
-        if (this.messageBus) {
-            const messageId = `change-vobj-attrs-${Date.now()}-${Math.random()}`;
-
-            this.messageBus.send('change-virtual-object-attributes', {
-                virtualObject: vobj,
-                currentAttributes: currentAttrs,
-                selectedRatio: selectedRatio,
-                messageId: messageId
-            });
-
-            logger.debug('[CalcEditor] 仮身属性変更ダイアログ要求');
-
-            try {
-                // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
-                const result = await this.messageBus.waitFor('virtual-object-attributes-changed', 0, (data) => {
-                    return data.messageId === messageId;
-                });
-
-                if (result.success && result.attributes) {
-                    this.applyVirtualObjectAttributes(cellKey, result.attributes);
-                }
-            } catch (error) {
-                logger.error('[CalcEditor] 仮身属性変更エラー:', error);
-            }
-        }
+        // RealObjectSystemの共通メソッドを使用
+        await window.RealObjectSystem.changeVirtualObjectAttributes(this);
     }
 
     /**
      * 仮身に属性を適用
+     * @param {Object} attrs - 適用する属性値
      */
-    applyVirtualObjectAttributes(cellKey, attrs) {
+    applyVirtualObjectAttributes(attrs) {
+        // contextMenuVirtualObjectからcellKeyを取得
+        if (!this.contextMenuVirtualObject || !this.contextMenuVirtualObject.cellKey) {
+            logger.warn('[CalcEditor] 仮身が選択されていません');
+            return;
+        }
+
+        const cellKey = this.contextMenuVirtualObject.cellKey;
         const cellData = this.cells.get(cellKey);
         if (!cellData || !cellData.virtualObject) {
             logger.warn('[CalcEditor] 仮身が見つかりません:', cellKey);
@@ -4997,6 +5231,38 @@ class CalcEditor extends window.PluginBase {
     openTrashRealObjects() {
         if (window.RealObjectSystem) {
             window.RealObjectSystem.openTrashRealObjects(this);
+        }
+    }
+
+    /**
+     * 仮身ネットワークウィンドウを開く
+     */
+    openVirtualObjectNetwork() {
+        if (!this.contextMenuVirtualObject || !this.contextMenuVirtualObject.virtualObj) {
+            logger.warn('[CalcEditor] 仮身が選択されていません');
+            this.setStatus('仮身を選択してください');
+            return;
+        }
+
+        // 実身IDを取得
+        const realId = this.contextMenuVirtualObject.virtualObj.realId;
+        if (!realId) {
+            logger.warn('[CalcEditor] 実身IDが取得できません');
+            this.setStatus('実身IDが取得できません');
+            return;
+        }
+
+        if (window.RealObjectSystem) {
+            window.RealObjectSystem.openVirtualObjectNetwork(this, realId);
+        }
+    }
+
+    /**
+     * 実身/仮身検索ウィンドウを開く
+     */
+    openRealObjectSearch() {
+        if (window.RealObjectSystem) {
+            window.RealObjectSystem.openRealObjectSearch(this);
         }
     }
 
@@ -5481,6 +5747,275 @@ class CalcEditor extends window.PluginBase {
     }
 
     /**
+     * 画像ファイルをセルに挿入
+     * @param {File[]} imageFiles - 画像ファイル配列
+     * @param {Object} startCell - 開始セル { col, row }
+     */
+    async insertImageFilesToCells(imageFiles, startCell) {
+        logger.info('[CalcEditor] insertImageFilesToCells開始:', imageFiles.length, '個の画像');
+
+        let currentCol = startCell.col;
+        const row = startCell.row;
+        let imageIndex = 0;
+
+        for (const file of imageFiles) {
+            try {
+                const ext = file.name.split('.').pop().toLowerCase();
+                const baseName = file.name.replace(/\.[^.]+$/, '');
+
+                // 画像をData URLとして読み込み
+                const dataUrl = await this.readFileAsDataUrl(file);
+
+                // 画像のサイズを取得
+                const imageSize = await this.getImageDimensions(dataUrl);
+
+                // 画像ファイル名を生成（realId_recordNo_imgNo.ext形式）
+                // recordNo = 0（表計算は単一レコード）、imgNoは既存画像の最大値+1
+                const imgNo = this.getNextImageNumber();
+                const imageFileName = `${this.realId}_0_${imgNo}.${ext}`;
+
+                // 画像ファイルを保存（親ウィンドウ経由）
+                await this.saveImageFile(imageFileName, dataUrl);
+
+                // 画像情報を作成
+                const imageInfo = {
+                    href: imageFileName,
+                    name: baseName,
+                    src: dataUrl, // 表示用にData URLを保持
+                    dataUrl: dataUrl,
+                    left: 0,
+                    top: 0,
+                    right: imageSize.width,
+                    bottom: imageSize.height,
+                    originalWidth: imageSize.width,
+                    originalHeight: imageSize.height,
+                    l_atr: '1',
+                    l_pat: '0',
+                    f_pat: '1',
+                    angle: 0,
+                    rotation: 0,
+                    flipH: false,
+                    flipV: false
+                };
+
+                // セルに画像を設定
+                const key = `${currentCol},${row}`;
+                const cellData = {
+                    value: '',
+                    formula: '',
+                    displayValue: '',
+                    style: {},
+                    imageInfo: imageInfo,
+                    contentType: 'image'
+                };
+
+                this.cells.set(key, cellData);
+                this.renderCell(currentCol, row);
+
+                logger.info(`[CalcEditor] 画像セル追加: ${this.colToLetter(currentCol)}${row}, ${imageFileName}`);
+
+                // 次の列へ
+                currentCol++;
+                imageIndex++;
+
+            } catch (error) {
+                logger.error('[CalcEditor] 画像ファイル処理エラー:', file.name, error);
+            }
+        }
+
+        // 変更フラグを立てる
+        this.isModified = true;
+
+        logger.info('[CalcEditor] insertImageFilesToCells完了');
+    }
+
+    /**
+     * ファイルをData URLとして読み込む
+     * @param {File} file - ファイル
+     * @returns {Promise<string>} Data URL
+     */
+    readFileAsDataUrl(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('ファイル読み込みエラー'));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    /**
+     * Data URLから画像のサイズを取得
+     * @param {string} dataUrl - Data URL
+     * @returns {Promise<{width: number, height: number}>}
+     */
+    getImageDimensions(dataUrl) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                resolve({ width: img.width, height: img.height });
+            };
+            img.onerror = () => {
+                reject(new Error('画像読み込みエラー'));
+            };
+            img.src = dataUrl;
+        });
+    }
+
+    /**
+     * 画像ファイルを保存（親ウィンドウ経由）
+     * basic-figure-editorと同じ形式で保存
+     * @param {string} fileName - ファイル名
+     * @param {string} dataUrl - Data URL
+     * @returns {Promise<boolean>}
+     */
+    async saveImageFile(fileName, dataUrl) {
+        try {
+            // Data URLをArrayBufferに変換
+            const base64 = dataUrl.split(',')[1];
+            const binaryString = atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+
+            // 最上位ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
+            // basic-figure-editorと同じ形式で送信
+            window.top.postMessage({
+                type: 'save-image-file',
+                fileName: fileName,
+                imageData: Array.from(bytes)
+            }, '*');
+
+            logger.debug('[CalcEditor] 画像ファイル保存依頼:', fileName);
+            return true;
+        } catch (error) {
+            logger.error('[CalcEditor] 画像ファイル保存エラー:', error);
+            return false;
+        }
+    }
+
+    /**
+     * 画像ファイルを削除
+     * @param {string} fileName - 削除する画像ファイル名
+     */
+    deleteImageFile(fileName) {
+        if (!fileName) return;
+
+        try {
+            // 最上位ウィンドウ(tadjs-desktop.js)にファイル削除を依頼
+            window.top.postMessage({
+                type: 'delete-image-file',
+                fileName: fileName
+            }, '*');
+
+            logger.info('[CalcEditor] 画像ファイル削除依頼:', fileName);
+        } catch (error) {
+            logger.error('[CalcEditor] 画像ファイル削除依頼エラー:', error);
+        }
+    }
+
+    /**
+     * 次の画像番号を取得
+     * 既存の画像セルから最大のimgNoを探し、+1を返す
+     * @returns {number} 次の画像番号
+     */
+    getNextImageNumber() {
+        let maxImgNo = -1;
+
+        // 全セルを走査して画像セルのimgNoを取得
+        this.cells.forEach((cellData) => {
+            if (cellData.contentType === 'image' && cellData.imageInfo && cellData.imageInfo.href) {
+                // href形式: realId_recordNo_imgNo.ext
+                const match = cellData.imageInfo.href.match(/_(\d+)\.[^.]+$/);
+                if (match) {
+                    const imgNo = parseInt(match[1]);
+                    if (!isNaN(imgNo) && imgNo > maxImgNo) {
+                        maxImgNo = imgNo;
+                    }
+                }
+            }
+        });
+
+        return maxImgNo + 1;
+    }
+
+    /**
+     * 画像ファイルの絶対パスを取得（非同期）
+     * @param {string} fileName - ファイル名
+     * @returns {Promise<string>} 絶対パス
+     */
+    getImageFilePath(fileName) {
+        return new Promise((resolve, reject) => {
+            const messageId = `img_${this.imagePathMessageId++}`;
+
+            // コールバックを登録
+            this.imagePathCallbacks[messageId] = (filePath) => {
+                resolve(filePath);
+            };
+
+            // タイムアウト設定（5秒）
+            setTimeout(() => {
+                if (this.imagePathCallbacks[messageId]) {
+                    delete this.imagePathCallbacks[messageId];
+                    reject(new Error('画像パス取得タイムアウト'));
+                }
+            }, 5000);
+
+            this.messageBus.send('get-image-file-path', {
+                messageId: messageId,
+                fileName: fileName
+            });
+        });
+    }
+
+    /**
+     * ドロップされたファイルを読み込んで親ウィンドウに送信
+     * @param {File[]} files - ファイル配列
+     * @param {number} clientX - ドロップ位置X
+     * @param {number} clientY - ドロップ位置Y
+     * @param {Object} targetCell - ドロップ先セル { col, row }
+     */
+    async readAndSendFiles(files, clientX, clientY, targetCell) {
+        const fileDataList = [];
+
+        for (const file of files) {
+            try {
+                // ファイル内容をArrayBufferとして読み込み
+                const arrayBuffer = await file.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+
+                // Base64に変換
+                let binary = '';
+                const chunkSize = 8192;
+                for (let i = 0; i < uint8Array.length; i += chunkSize) {
+                    const chunk = uint8Array.subarray(i, Math.min(i + chunkSize, uint8Array.length));
+                    binary += String.fromCharCode.apply(null, chunk);
+                }
+                const base64 = btoa(binary);
+
+                fileDataList.push({
+                    name: file.name,
+                    type: file.type || 'application/octet-stream',
+                    size: file.size,
+                    data: base64
+                });
+            } catch (error) {
+                logger.error('[CalcEditor] ファイル読み込みエラー:', file.name, error);
+            }
+        }
+
+        if (fileDataList.length > 0) {
+            this.messageBus.send('files-dropped-on-plugin', {
+                files: fileDataList,
+                clientX: clientX,
+                clientY: clientY,
+                targetCell: targetCell,
+                windowId: this.windowId
+            });
+        }
+    }
+
+    /**
      * 仮身を挿入
      * @param {Object} virtualObject - 仮身オブジェクト（完全な情報を含む）
      */
@@ -5757,6 +6292,68 @@ class CalcEditor extends window.PluginBase {
     }
 
     /**
+     * 画像を選択状態にする
+     * @param {number} col - 列番号
+     * @param {number} row - 行番号
+     */
+    selectImage(col, row) {
+        const key = `${col},${row}`;
+        const cellData = this.cells.get(key);
+
+        // 画像セルでない場合は何もしない
+        if (!cellData || cellData.contentType !== 'image' || !cellData.imageInfo) {
+            return;
+        }
+
+        // 既に選択中の画像があれば解除
+        if (this.selectedImageCell) {
+            this.deselectImage();
+        }
+
+        // 仮身選択も解除
+        if (this.selectedVirtualObjectCell) {
+            this.deselectVirtualObject();
+        }
+
+        // 選択状態を設定
+        this.selectedImageCell = { col, row };
+
+        // 画像要素に選択クラスを追加
+        const cell = this.getCellElement(col, row);
+        if (cell) {
+            const imageContainer = cell.querySelector('.image-in-cell');
+            if (imageContainer) {
+                imageContainer.classList.add('selected');
+                // リサイズ機能を有効化
+                this.makeImageResizable(imageContainer, col, row);
+            }
+        }
+    }
+
+    /**
+     * 画像の選択を解除する
+     */
+    deselectImage() {
+        if (!this.selectedImageCell) {
+            return;
+        }
+
+        const { col, row } = this.selectedImageCell;
+        const cell = this.getCellElement(col, row);
+
+        if (cell) {
+            const imageContainer = cell.querySelector('.image-in-cell');
+            if (imageContainer) {
+                imageContainer.classList.remove('selected');
+                // リサイズハンドラを削除
+                this.removeImageResizeHandlers(imageContainer);
+            }
+        }
+
+        this.selectedImageCell = null;
+    }
+
+    /**
      * 仮身のリサイズハンドラを削除
      * @param {HTMLElement} vobjElement - 仮身要素
      */
@@ -5966,6 +6563,195 @@ class CalcEditor extends window.PluginBase {
     }
 
     /**
+     * 画像のリサイズハンドラを削除
+     * @param {HTMLElement} containerElement - 画像コンテナ要素
+     */
+    removeImageResizeHandlers(containerElement) {
+        if (containerElement._resizeMousemoveHandler) {
+            containerElement.removeEventListener('mousemove', containerElement._resizeMousemoveHandler);
+            containerElement._resizeMousemoveHandler = null;
+        }
+        if (containerElement._resizeMouseleaveHandler) {
+            containerElement.removeEventListener('mouseleave', containerElement._resizeMouseleaveHandler);
+            containerElement._resizeMouseleaveHandler = null;
+        }
+        if (containerElement._resizeMousedownHandler) {
+            containerElement.removeEventListener('mousedown', containerElement._resizeMousedownHandler, true);
+            containerElement._resizeMousedownHandler = null;
+        }
+        // カーソルをリセット
+        containerElement.style.cursor = '';
+    }
+
+    /**
+     * 画像要素をリサイズ可能にする
+     * @param {HTMLElement} containerElement - 画像コンテナ要素
+     * @param {number} col - 列番号
+     * @param {number} row - 行番号
+     */
+    makeImageResizable(containerElement, col, row) {
+        // 重複登録を防ぐため、既存のリサイズハンドラーをクリーンアップ
+        this.removeImageResizeHandlers(containerElement);
+
+        // マウス移動でカーソルを変更（リサイズエリアの表示）
+        const mousemoveHandler = (e) => {
+            // リサイズ中は何もしない
+            if (this.isResizingImage) {
+                return;
+            }
+
+            const rect = containerElement.getBoundingClientRect();
+            // リサイズエリア：枠の内側8pxから外側4pxまで
+            const isRightEdge = e.clientX > rect.right - 8 && e.clientX <= rect.right + 4;
+            const isBottomEdge = e.clientY > rect.bottom - 8 && e.clientY <= rect.bottom + 4;
+
+            // カーソルの形状を変更
+            if (isRightEdge && isBottomEdge) {
+                containerElement.style.cursor = 'nwse-resize'; // 右下: 斜めリサイズ
+            } else if (isRightEdge) {
+                containerElement.style.cursor = 'ew-resize'; // 右: 横リサイズ
+            } else if (isBottomEdge) {
+                containerElement.style.cursor = 'ns-resize'; // 下: 縦リサイズ
+            } else {
+                containerElement.style.cursor = 'pointer'; // 通常: ポインタ
+            }
+        };
+
+        // マウスがコンテナから離れたらカーソルを元に戻す
+        const mouseleaveHandler = () => {
+            if (!this.isResizingImage) {
+                containerElement.style.cursor = 'pointer';
+            }
+        };
+
+        // マウスダウンでリサイズ開始
+        const mousedownHandler = (e) => {
+            const rect = containerElement.getBoundingClientRect();
+            // リサイズエリア：枠の内側8pxから外側4pxまで
+            const isRightEdge = e.clientX > rect.right - 8 && e.clientX <= rect.right + 4;
+            const isBottomEdge = e.clientY > rect.bottom - 8 && e.clientY <= rect.bottom + 4;
+
+            // リサイズエリア以外のクリックは無視
+            if (!isRightEdge && !isBottomEdge) {
+                return;
+            }
+
+            // 左クリックのみ処理
+            if (e.button !== 0) {
+                return;
+            }
+
+            // リサイズ中は新しいリサイズを開始しない
+            if (this.isResizingImage) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            // リサイズ開始フラグを設定
+            this.isResizingImage = true;
+
+            // リサイズモード開始
+            const startX = e.clientX;
+            const startY = e.clientY;
+            // コンテナ要素の現在のサイズを取得
+            const containerRect = containerElement.getBoundingClientRect();
+            const startWidth = Math.round(containerRect.width);
+            const startHeight = Math.round(containerRect.height);
+            const minWidth = 24;  // 最小幅
+            const minHeight = 24; // 最小高さ
+
+            // リサイズプレビュー枠を作成
+            const previewBox = document.createElement('div');
+            previewBox.style.position = 'fixed';
+            previewBox.style.left = `${containerRect.left}px`;
+            previewBox.style.top = `${containerRect.top}px`;
+            previewBox.style.width = `${startWidth}px`;
+            previewBox.style.height = `${startHeight}px`;
+            previewBox.style.border = '2px dashed rgba(255, 143, 0, 0.8)';
+            previewBox.style.backgroundColor = 'rgba(255, 143, 0, 0.1)';
+            previewBox.style.pointerEvents = 'none';
+            previewBox.style.zIndex = '999999';
+            previewBox.style.boxSizing = 'border-box';
+            document.body.appendChild(previewBox);
+
+            let currentWidth = startWidth;
+            let currentHeight = startHeight;
+
+            const onMouseMove = (moveEvent) => {
+                if (isRightEdge) {
+                    const deltaX = moveEvent.clientX - startX;
+                    currentWidth = Math.max(minWidth, startWidth + deltaX);
+                    previewBox.style.width = `${currentWidth}px`;
+                }
+
+                if (isBottomEdge) {
+                    const deltaY = moveEvent.clientY - startY;
+                    currentHeight = Math.max(minHeight, startHeight + deltaY);
+                    previewBox.style.height = `${currentHeight}px`;
+                }
+            };
+
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+
+                // プレビュー枠を削除
+                if (previewBox && previewBox.parentNode) {
+                    previewBox.parentNode.removeChild(previewBox);
+                }
+
+                // カーソルを元に戻す
+                containerElement.style.cursor = 'pointer';
+
+                // 最終的なサイズを取得
+                const finalWidth = Math.round(currentWidth);
+                const finalHeight = Math.round(currentHeight);
+
+                // 画像オブジェクトのサイズを更新
+                const key = `${col},${row}`;
+                const cellData = this.cells.get(key);
+                if (cellData && cellData.imageInfo) {
+                    if (isRightEdge && finalWidth !== startWidth) {
+                        cellData.imageInfo.displayWidth = finalWidth;
+                    }
+                    if (isBottomEdge && finalHeight !== startHeight) {
+                        cellData.imageInfo.displayHeight = finalHeight;
+                    }
+                }
+
+                // セル表示を更新
+                if (finalWidth !== startWidth || finalHeight !== startHeight) {
+                    this.renderCell(col, row);
+                    this.isModified = true;
+
+                    // 画像を再選択
+                    setTimeout(() => {
+                        this.selectImage(col, row);
+                    }, 10);
+                }
+
+                // リサイズ終了フラグをリセット
+                this.isResizingImage = false;
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        };
+
+        // ハンドラを登録して参照を保存
+        containerElement.addEventListener('mousemove', mousemoveHandler);
+        containerElement._resizeMousemoveHandler = mousemoveHandler;
+
+        containerElement.addEventListener('mouseleave', mouseleaveHandler);
+        containerElement._resizeMouseleaveHandler = mouseleaveHandler;
+
+        containerElement.addEventListener('mousedown', mousedownHandler, true); // キャプチャフェーズで先にリサイズ判定
+        containerElement._resizeMousedownHandler = mousedownHandler;
+    }
+
+    /**
      * ウィンドウクローズ要求を処理
      * @param {string} windowId - ウィンドウID
      */
@@ -6040,22 +6826,7 @@ class CalcEditor extends window.PluginBase {
         });
     }
 
-    /**
-     * ウィンドウを閉じるリクエストを送信
-     */
-    requestCloseWindow() {
-        if (window.parent && window.parent !== window) {
-            // 親ウィンドウのiframe要素からwindowIdを取得
-            const windowElement = window.frameElement ? window.frameElement.closest('.window') : null;
-            const windowId = windowElement ? windowElement.id : null;
-
-            if (windowId && this.messageBus) {
-                this.messageBus.send('close-window', {
-                    windowId: windowId
-                });
-            }
-        }
-    }
+    // requestCloseWindow() は基底クラス PluginBase で定義
 
     /**
      * 親ウィンドウにメッセージ送信
