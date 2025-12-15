@@ -1,3 +1,9 @@
+html {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
 body {
     margin: 0;
     padding: 0;
@@ -201,17 +207,67 @@ body {
     outline: none;
 }
 
-.datetime-input {
+/* 日付入力グループ */
+.date-input-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+/* 日付入力欄共通 */
+.date-part-input {
     border: 1px inset #c0c0c0;
     padding: 2px 4px;
     font-size: 11px;
     font-family: 'MS Sans Serif', sans-serif;
     background: white;
-    width: 180px;
+    text-align: center;
 }
 
-.datetime-input:focus {
+.date-part-input:focus {
     outline: none;
+}
+
+/* 年入力欄 */
+.year-input {
+    width: 40px;
+}
+
+/* 月・日入力欄 */
+.month-input,
+.day-input {
+    width: 26px;
+}
+
+/* 時・分・秒入力欄 */
+.time-input {
+    width: 26px;
+}
+
+/* 日付セパレーター（/） */
+.date-separator {
+    font-size: 11px;
+    color: #404040;
+}
+
+/* 日付と時刻の間のスペース */
+.time-separator {
+    width: 8px;
+}
+
+/* 時刻セパレーター（:） */
+.time-colon {
+    font-size: 11px;
+    color: #404040;
+}
+
+/* 日付行のレイアウト調整 */
+.date-row {
+    flex-wrap: wrap;
+}
+
+.date-row .form-label {
+    min-width: 70px;
 }
 
 .number-input {

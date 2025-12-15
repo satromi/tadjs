@@ -289,6 +289,12 @@ export class WindowManager {
      * @param {string} windowId - ウィンドウID
      */
     setActiveWindow(windowId) {
+        // 前のアクティブウィンドウに非アクティブ化を通知
+        const previousActiveWindow = this.activeWindow;
+        if (previousActiveWindow && previousActiveWindow !== windowId && this.parentMessageBus) {
+            this.parentMessageBus.sendToWindow(previousActiveWindow, 'window-deactivated', {});
+        }
+
         // 全ウインドウを非アクティブに
         document.querySelectorAll('.window').forEach(win => {
             win.classList.remove('front-window');
@@ -333,6 +339,11 @@ export class WindowManager {
                 } catch (error) {
                     logger.warn('ウィンドウへのフォーカス設定に失敗:', error);
                 }
+            }
+
+            // 新しいアクティブウィンドウにアクティブ化を通知
+            if (this.parentMessageBus) {
+                this.parentMessageBus.sendToWindow(windowId, 'window-activated', {});
             }
         } else {
             this.activeWindow = null;

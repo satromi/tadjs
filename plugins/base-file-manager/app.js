@@ -89,50 +89,8 @@ class BaseFileManager extends window.PluginBase {
             await this.loadBaseFiles();
         });
 
-        // window-moved メッセージ
-        this.messageBus.on('window-moved', (data) => {
-            if (data.pos && data.width !== undefined && data.height !== undefined) {
-                this.updateWindowConfig({
-                    pos: data.pos,
-                    width: data.width,
-                    height: data.height
-                });
-            }
-        });
-
-        // window-resized-end メッセージ
-        this.messageBus.on('window-resized-end', (data) => {
-            if (data.width !== undefined && data.height !== undefined) {
-                this.updateWindowConfig({
-                    width: data.width,
-                    height: data.height
-                });
-            }
-        });
-
-        // window-maximize-toggled メッセージ
-        this.messageBus.on('window-maximize-toggled', (data) => {
-            if (data.width !== undefined && data.height !== undefined) {
-                this.updateWindowConfig({
-                    width: data.width,
-                    height: data.height
-                });
-            }
-        });
-
-        // get-menu-definition メッセージ
-        this.messageBus.on('get-menu-definition', (data) => {
-            const menuDefinition = this.getMenuDefinition();
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: menuDefinition
-            });
-        });
-
-        // menu-action メッセージ
-        this.messageBus.on('menu-action', (data) => {
-            this.handleMenuAction(data.action);
-        });
+        // window-moved, window-resized-end, window-maximize-toggled,
+        // get-menu-definition, menu-action はsetupCommonMessageBusHandlers()で登録済み
 
         // custom-dialog-response メッセージ (MessageBusが自動処理)
         this.messageBus.on('custom-dialog-response', () => {
@@ -172,16 +130,16 @@ class BaseFileManager extends window.PluginBase {
         ];
     }
 
-    async handleMenuAction(action) {
+    executeMenuAction(action) {
         switch (action) {
             case 'reload':
-                await this.loadBaseFiles();
+                this.loadBaseFiles();
                 break;
             case 'close':
                 this.requestCloseWindow();
                 break;
             case 'change-bg-color':
-                await this.changeBgColor();
+                this.changeBgColor();
                 break;
             case 'toggle-fullscreen':
                 this.toggleFullscreenWithState();
@@ -208,14 +166,14 @@ class BaseFileManager extends window.PluginBase {
             // Ctrl+E: ウィンドウを閉じる
             if (e.ctrlKey && e.key === 'e') {
                 e.preventDefault();
-                this.handleMenuAction('close');
+                this.executeMenuAction('close');
                 return;
             }
 
             // Ctrl+L: 全画面表示切り替え
             if (e.ctrlKey && e.key === 'l') {
                 e.preventDefault();
-                this.handleMenuAction('toggle-fullscreen');
+                this.executeMenuAction('toggle-fullscreen');
                 return;
             }
         });

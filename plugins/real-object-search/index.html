@@ -117,13 +117,37 @@
                                 </label>
                             </div>
                         </div>
-                        <div class="form-row">
+                        <div class="form-row date-row">
                             <label class="form-label">日付FROM:</label>
-                            <input type="datetime-local" id="date-from" class="datetime-input" step="1">
+                            <div class="date-input-group">
+                                <input type="text" id="date-from-year" class="date-part-input year-input" placeholder="年" maxlength="4">
+                                <span class="date-separator">/</span>
+                                <input type="text" id="date-from-month" class="date-part-input month-input" placeholder="月" maxlength="2">
+                                <span class="date-separator">/</span>
+                                <input type="text" id="date-from-day" class="date-part-input day-input" placeholder="日" maxlength="2">
+                                <span class="date-separator time-separator"></span>
+                                <input type="text" id="date-from-hour" class="date-part-input time-input" placeholder="時" maxlength="2">
+                                <span class="time-colon">:</span>
+                                <input type="text" id="date-from-minute" class="date-part-input time-input" placeholder="分" maxlength="2">
+                                <span class="time-colon">:</span>
+                                <input type="text" id="date-from-second" class="date-part-input time-input" placeholder="秒" maxlength="2">
+                            </div>
                         </div>
-                        <div class="form-row">
+                        <div class="form-row date-row">
                             <label class="form-label">日付TO:</label>
-                            <input type="datetime-local" id="date-to" class="datetime-input" step="1">
+                            <div class="date-input-group">
+                                <input type="text" id="date-to-year" class="date-part-input year-input" placeholder="年" maxlength="4">
+                                <span class="date-separator">/</span>
+                                <input type="text" id="date-to-month" class="date-part-input month-input" placeholder="月" maxlength="2">
+                                <span class="date-separator">/</span>
+                                <input type="text" id="date-to-day" class="date-part-input day-input" placeholder="日" maxlength="2">
+                                <span class="date-separator time-separator"></span>
+                                <input type="text" id="date-to-hour" class="date-part-input time-input" placeholder="時" maxlength="2">
+                                <span class="time-colon">:</span>
+                                <input type="text" id="date-to-minute" class="date-part-input time-input" placeholder="分" maxlength="2">
+                                <span class="time-colon">:</span>
+                                <input type="text" id="date-to-second" class="date-part-input time-input" placeholder="秒" maxlength="2">
+                            </div>
                         </div>
                         <div class="form-row">
                             <label class="form-label">対象:</label>

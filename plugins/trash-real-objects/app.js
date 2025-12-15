@@ -27,6 +27,11 @@ class TrashRealObjectsApp extends window.PluginBase {
             this.messageBus.start();
         }
 
+        // IconCacheManagerを初期化
+        if (window.IconCacheManager && this.messageBus) {
+            this.iconManager = new window.IconCacheManager(this.messageBus, '[TrashRealObjects]');
+        }
+
         this.init();
     }
 
@@ -213,6 +218,10 @@ class TrashRealObjectsApp extends window.PluginBase {
             emptyMessage.className = 'empty-message';
             emptyMessage.textContent = '屑実身はありません';
             listElement.appendChild(emptyMessage);
+            // スクロールバーを更新
+            if (this.messageBus) {
+                this.messageBus.send('update-scrollbars');
+            }
             return;
         }
 
@@ -221,6 +230,11 @@ class TrashRealObjectsApp extends window.PluginBase {
             const vobjElement = this.createTrashObjectElement(obj, index);
             listElement.appendChild(vobjElement);
         });
+
+        // スクロールバーを更新
+        if (this.messageBus) {
+            this.messageBus.send('update-scrollbars');
+        }
     }
 
     createTrashObjectElement(obj, index) {
@@ -229,32 +243,30 @@ class TrashRealObjectsApp extends window.PluginBase {
         vobj.dataset.realId = obj.realId;
         vobj.dataset.index = index;
 
-        // 仮身枠（原紙箱と同じスタイル）
-        vobj.style.border = '1px solid #000000';
-        vobj.style.backgroundColor = '#ffffff';
-        vobj.style.width = '300px';
-        vobj.style.height = '30px';
-        vobj.style.margin = '5px';
-        vobj.style.padding = '4px';
-        vobj.style.cursor = 'pointer';
-        vobj.style.display = 'flex';
-        vobj.style.alignItems = 'center';
-        vobj.style.boxSizing = 'border-box';
-
-        // 選択状態の背景色
+        // 選択状態のクラス
         if (this.selectedObject && this.selectedObject.realId === obj.realId) {
-            vobj.style.backgroundColor = '#e0e0ff';
+            vobj.classList.add('selected');
+        }
+
+        // アイコン要素
+        const icon = document.createElement('img');
+        icon.className = 'trash-object-icon';
+        icon.alt = '';
+        vobj.appendChild(icon);
+
+        // IconCacheManagerでアイコンを読み込み
+        if (this.iconManager) {
+            this.iconManager.loadIcon(obj.realId).then(iconData => {
+                if (iconData) {
+                    icon.src = `data:image/x-icon;base64,${iconData}`;
+                }
+            });
         }
 
         // タイトルテキスト
         const title = document.createElement('span');
+        title.className = 'trash-object-title';
         title.textContent = obj.name || '無題';
-        title.style.fontSize = '14px';
-        title.style.color = '#000000';
-        title.style.whiteSpace = 'nowrap';
-        title.style.overflow = 'hidden';
-        title.style.textOverflow = 'ellipsis';
-        title.style.flex = '1';
 
         vobj.appendChild(title);
 
@@ -313,13 +325,13 @@ class TrashRealObjectsApp extends window.PluginBase {
     selectTrashObject(obj) {
         this.selectedObject = obj;
 
-        // 選択状態を視覚的に更新（全体の再レンダリングではなく、スタイル更新のみ）
+        // 選択状態を視覚的に更新（全体の再レンダリングではなく、クラス更新のみ）
         const allVobjs = document.querySelectorAll('.trash-object-vobj');
         allVobjs.forEach(vobj => {
             if (vobj.dataset.realId === obj.realId) {
-                vobj.style.backgroundColor = '#e0e0ff';
+                vobj.classList.add('selected');
             } else {
-                vobj.style.backgroundColor = '#ffffff';
+                vobj.classList.remove('selected');
             }
         });
     }
@@ -329,6 +341,17 @@ class TrashRealObjectsApp extends window.PluginBase {
 
         this.clipboard = { ...this.selectedObject };
         this.copyMode = true;
+
+        // グローバルクリップボードにも仮身形式で設定（他プラグインとの連携用）
+        const vobjData = {
+            link_id: this.selectedObject.realId,
+            link_name: this.selectedObject.name || '無題',
+            vobjleft: 0,
+            vobjtop: 0,
+            vobjright: 100,
+            vobjbottom: 30
+        };
+        this.setClipboard(vobjData);
 
         this.messageBus.send('set-copy-mode', {
             copyMode: true
@@ -351,6 +374,17 @@ class TrashRealObjectsApp extends window.PluginBase {
 
         this.clipboard = { ...this.selectedObject };
         this.copyMode = false;
+
+        // グローバルクリップボードにも仮身形式で設定（他プラグインとの連携用）
+        const vobjData = {
+            link_id: this.selectedObject.realId,
+            link_name: this.selectedObject.name || '無題',
+            vobjleft: 0,
+            vobjtop: 0,
+            vobjright: 100,
+            vobjbottom: 30
+        };
+        this.setClipboard(vobjData);
 
         this.messageBus.send('set-copy-mode', {
             copyMode: false

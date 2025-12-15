@@ -244,6 +244,88 @@ class RealObjectSearchApp extends window.PluginBase {
     }
 
     /**
+     * 月の最終日を取得
+     * @param {number} year - 年
+     * @param {number} month - 月（1-12）
+     * @returns {number} その月の最終日
+     */
+    getLastDayOfMonth(year, month) {
+        // 翌月の0日 = 当月の最終日
+        return new Date(year, month, 0).getDate();
+    }
+
+    /**
+     * 個別入力フィールドから日付文字列を組み立てる
+     * @param {string} prefix - フィールドIDのプレフィックス（'date-from' または 'date-to'）
+     * @param {boolean} isFrom - FROMフィールドかどうか
+     * @returns {string|null} ISO形式の日付文字列、または年が未入力の場合はnull
+     */
+    buildDateTimeString(prefix, isFrom) {
+        const yearStr = document.getElementById(`${prefix}-year`).value.trim();
+        const monthStr = document.getElementById(`${prefix}-month`).value.trim();
+        const dayStr = document.getElementById(`${prefix}-day`).value.trim();
+        const hourStr = document.getElementById(`${prefix}-hour`).value.trim();
+        const minuteStr = document.getElementById(`${prefix}-minute`).value.trim();
+        const secondStr = document.getElementById(`${prefix}-second`).value.trim();
+
+        // 年が未入力の場合はフィルタなし
+        if (!yearStr) {
+            return null;
+        }
+
+        const year = parseInt(yearStr, 10);
+        if (isNaN(year) || year < 1 || year > 9999) {
+            return null;
+        }
+
+        let month, day, hour, minute, second;
+
+        if (isFrom) {
+            // FROM: デフォルトは期間の開始
+            month = monthStr ? parseInt(monthStr, 10) : 1;
+            day = dayStr ? parseInt(dayStr, 10) : 1;
+            hour = hourStr ? parseInt(hourStr, 10) : 0;
+            minute = minuteStr ? parseInt(minuteStr, 10) : 0;
+            second = secondStr ? parseInt(secondStr, 10) : 0;
+        } else {
+            // TO: デフォルトは期間の終了
+            if (!monthStr) {
+                // 年のみ指定 → 12月31日
+                month = 12;
+                day = 31;
+            } else {
+                month = parseInt(monthStr, 10);
+                if (!dayStr) {
+                    // 年月のみ指定 → その月の最終日
+                    day = this.getLastDayOfMonth(year, month);
+                } else {
+                    day = parseInt(dayStr, 10);
+                }
+            }
+            hour = hourStr ? parseInt(hourStr, 10) : 23;
+            minute = minuteStr ? parseInt(minuteStr, 10) : 59;
+            second = secondStr ? parseInt(secondStr, 10) : 59;
+        }
+
+        // 値の範囲チェックと補正
+        month = Math.max(1, Math.min(12, month || 1));
+        const maxDay = this.getLastDayOfMonth(year, month);
+        day = Math.max(1, Math.min(maxDay, day || 1));
+        hour = Math.max(0, Math.min(23, hour || 0));
+        minute = Math.max(0, Math.min(59, minute || 0));
+        second = Math.max(0, Math.min(59, second || 0));
+
+        // ISO形式で返す (datetime-local互換)
+        const monthPadded = String(month).padStart(2, '0');
+        const dayPadded = String(day).padStart(2, '0');
+        const hourPadded = String(hour).padStart(2, '0');
+        const minutePadded = String(minute).padStart(2, '0');
+        const secondPadded = String(second).padStart(2, '0');
+
+        return `${year}-${monthPadded}-${dayPadded}T${hourPadded}:${minutePadded}:${secondPadded}`;
+    }
+
+    /**
      * 日付検索を実行（文字列+日付複合検索）
      */
     executeDateSearch() {
@@ -251,10 +333,12 @@ class RealObjectSearchApp extends window.PluginBase {
         const searchTarget = document.querySelector('input[name="date-search-target"]:checked').value;
         const useRegexValue = document.querySelector('input[name="date-use-regex"]:checked').value;
         const useRegex = (useRegexValue === 'on');
-        const dateFrom = document.getElementById('date-from').value;
-        const dateTo = document.getElementById('date-to').value;
         const dateTarget = document.querySelector('input[name="date-target"]:checked').value;
         const searchDepth = parseInt(document.getElementById('search-depth').value) || 255;
+
+        // 個別入力フィールドから日付を組み立て
+        const dateFrom = this.buildDateTimeString('date-from', true);
+        const dateTo = this.buildDateTimeString('date-to', false);
 
         // 正規表現のバリデーション
         if (searchText && useRegex) {

@@ -5703,11 +5703,12 @@ class TADjsDesktop {
 
     /**
      * delete-image-file ハンドラー（画像ファイル削除）
-     * @param {Object} data - メッセージデータ
-     * @param {MessageEvent} event - メッセージイベント
+     * @param {MessageEvent} event - メッセージイベント（汎用ハンドラーからはeventのみ渡される）
      * @returns {Promise<void>}
      */
-    async handleDeleteImageFile(data, event) {
+    async handleDeleteImageFile(event) {
+        // 汎用ハンドラーからはeventのみが渡されるため、event.dataからデータを取得
+        const data = event.data || event;
         const fileName = data.fileName;
         logger.info('[TADjs] 画像ファイル削除要求:', fileName);
 

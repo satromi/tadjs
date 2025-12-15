@@ -1802,33 +1802,7 @@ class VirtualObjectListApp extends window.PluginBase {
         logger.debug('[VirtualObjectList] 仮身をペースト:', newVirtualObj.link_name, 'realId:', realId);
     }
 
-    /**
-     * 親ウィンドウからクリップボードデータを取得
-     * @returns {Promise<Object|null>}
-     */
-    async getClipboard() {
-        if (!window.parent || window.parent === window) {
-            return null;
-        }
-
-        const messageId = `get-clipboard-${Date.now()}-${Math.random()}`;
-
-        // MessageBusでget-clipboardを送信
-        this.messageBus.send('get-clipboard', {
-            messageId: messageId
-        });
-
-        try {
-            // タイムアウト5秒でレスポンスを待つ
-            const result = await this.messageBus.waitFor('clipboard-data', window.DEFAULT_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-            return result.clipboardData;
-        } catch (error) {
-            logger.warn('[VirtualObjectList] クリップボード取得タイムアウト:', error);
-            return null;
-        }
-    }
+    // getClipboard() は基底クラス PluginBase で定義
 
     /**
      * 選択中の仮身を削除

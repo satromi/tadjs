@@ -5,7 +5,7 @@
  * @extends PluginBase
  * @license MIT
  * @author satromi
- * @version 1.1.0
+ * @version 1.0.0
  */
 const logger = window.getLogger('RealObjectSearchResult');
 
@@ -165,7 +165,24 @@ class RealObjectSearchResultApp extends window.PluginBase {
                 dateRange = `${this.searchParams.dateTo} 以前`;
             }
 
-            infoText = `日付検索: ${dateRange} (${dateTargetText}) - ${this.searchResults.length} 件`;
+            infoText = `日付検索: ${dateRange} (${dateTargetText})`;
+
+            // 検索文字列が指定されている場合は表示
+            if (this.searchParams.searchText) {
+                const targetText = {
+                    'name': '実身名',
+                    'content': '全文',
+                    'both': '実身名+全文'
+                }[this.searchParams.searchTarget] || '';
+
+                infoText += `, 検索: "${this.searchParams.searchText}" (${targetText}`;
+                if (this.searchParams.useRegex) {
+                    infoText += ', 正規表現';
+                }
+                infoText += ')';
+            }
+
+            infoText += ` - ${this.searchResults.length} 件`;
         }
 
         infoElement.textContent = infoText;
@@ -185,6 +202,10 @@ class RealObjectSearchResultApp extends window.PluginBase {
             emptyMessage.className = 'empty-message';
             emptyMessage.textContent = '検索結果はありません';
             listElement.appendChild(emptyMessage);
+            // スクロールバー更新を通知
+            if (this.messageBus) {
+                this.messageBus.send('update-scrollbars');
+            }
             return;
         }
 
@@ -192,6 +213,11 @@ class RealObjectSearchResultApp extends window.PluginBase {
             const result = this.searchResults[index];
             const rowElement = await this.createResultElement(result, index);
             listElement.appendChild(rowElement);
+        }
+
+        // スクロールバー更新を通知
+        if (this.messageBus) {
+            this.messageBus.send('update-scrollbars');
         }
     }
 

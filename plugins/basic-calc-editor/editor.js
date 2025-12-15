@@ -288,7 +288,12 @@ class CalcEditor extends window.PluginBase {
 
         // 操作パネルからのセル値更新
         this.messageBus.on('calc-cell-value-update', (data) => {
-            logger.debug('[CalcEditor] セル値更新:', data);
+            // ウィンドウがアクティブでない場合、空の値更新は無視
+            // （操作パネルからの正当な入力には値が含まれるはず）
+            if (!this.isWindowActive && (!data.value || data.value === '')) {
+                logger.info('[CalcEditor] ウィンドウ非アクティブのため空のセル値更新をスキップ');
+                return;
+            }
             if (this.selectedCell) {
                 this.setCellValue(this.selectedCell.col, this.selectedCell.row, data.value);
                 this.renderCell(this.selectedCell.col, this.selectedCell.row);
@@ -1274,8 +1279,8 @@ class CalcEditor extends window.PluginBase {
 
         // blurイベントで常にフォーカスを戻す（IMEを常に有効にするため）
         imeInput.addEventListener('blur', () => {
-            // 編集モード中、親ウィンドウでダイアログ表示中、または別ウィンドウにフォーカスが移った場合はime-inputにフォーカスを戻さない
-            if (!this.isEditing && !this.dialogVisible && document.hasFocus()) {
+            // 編集モード中、親ウィンドウでダイアログ表示中、またはウィンドウが非アクティブの場合はime-inputにフォーカスを戻さない
+            if (!this.isEditing && !this.dialogVisible && this.isWindowActive) {
                 setTimeout(() => {
                     imeInput.focus();
                     logger.debug('[CalcEditor] blur後にime-inputにフォーカスを再設定');
@@ -2431,6 +2436,14 @@ class CalcEditor extends window.PluginBase {
     finishEditing() {
         if (!this.isEditing || !this.editingCell) return;
 
+        // ウィンドウが非アクティブの場合は編集状態をキャンセル
+        // （他ウィンドウへのフォーカス移動時に誤って空の値を保存するのを防ぐ）
+        if (!this.isWindowActive) {
+            logger.info('[CalcEditor] ウィンドウ非アクティブのため編集をキャンセル');
+            this.cancelEditing();
+            return;
+        }
+
         const { col, row } = this.editingCell;
         const cell = this.getCellElement(col, row);
         if (!cell) return;
@@ -2475,9 +2488,9 @@ class CalcEditor extends window.PluginBase {
         this.isEditing = false;
         this.editingCell = null;
 
-        // IME有効化用のtextareaにフォーカスを戻す
+        // ウィンドウがアクティブな場合のみ、IME有効化用のtextareaにフォーカスを戻す
         const imeInput = document.getElementById('ime-input');
-        if (imeInput) {
+        if (imeInput && this.isWindowActive) {
             setTimeout(() => {
                 imeInput.focus();
                 logger.debug('[CalcEditor] 編集キャンセル後、ime-inputにフォーカスを再設定');
@@ -2485,6 +2498,17 @@ class CalcEditor extends window.PluginBase {
         }
 
         logger.debug(`[CalcEditor] 編集キャンセル`);
+    }
+
+    /**
+     * ウィンドウが非アクティブになった時のハンドラ（PluginBaseのオーバーライド）
+     * 編集中の場合はキャンセルする
+     */
+    onWindowDeactivated() {
+        if (this.isEditing) {
+            logger.info('[CalcEditor] ウィンドウ非アクティブ化により編集をキャンセル');
+            this.cancelEditing();
+        }
     }
 
     /**
@@ -2870,9 +2894,13 @@ class CalcEditor extends window.PluginBase {
 
     /**
      * セルコピー（範囲対応）
+     * 画像セルの場合はDataURLも含めてコピーする
      */
-    copyCell() {
+    async copyCell() {
         if (!this.selectedCell) return;
+
+        // 画像セルのDataURLを事前に取得（コピー時も確実にデータを保持）
+        await this.preloadImageDataForCopy();
 
         // 範囲選択がある場合は範囲をコピー
         if (this.selectionRange) {
@@ -2889,12 +2917,15 @@ class CalcEditor extends window.PluginBase {
                     if (vo && !firstVirtualObject) {
                         firstVirtualObject = vo;
                     }
+                    // 画像情報もコピー
+                    const imgInfo = cellData && cellData.imageInfo ? JSON.parse(JSON.stringify(cellData.imageInfo)) : null;
                     rowData.push({
                         value: cellData ? (cellData.formula || cellData.value || '') : '',
                         hasFormula: cellData ? !!cellData.formula : false,
                         style: cellData ? { ...cellData.style } : {},
                         contentType: cellData ? cellData.contentType || 'text' : 'text',
-                        virtualObject: vo
+                        virtualObject: vo,
+                        imageInfo: imgInfo
                     });
                 }
                 copiedCells.push(rowData);
@@ -2907,17 +2938,21 @@ class CalcEditor extends window.PluginBase {
                 sourceRow: startRow
             };
 
-            // 仮身が含まれている場合はグローバルクリップボードにも送信
-            if (firstVirtualObject) {
-                // 仮身オブジェクト全体をコピー（virtual-object-listと同じ方式）
-                this.setClipboard(firstVirtualObject);
-            }
-
             // システムクリップボードにもテキストとしてコピー
             const textData = copiedCells.map(row =>
                 row.map(cell => cell.hasFormula ? cell.value : cell.value).join('\t')
             ).join('\n');
-            navigator.clipboard.writeText(textData).catch(e => logger.error('コピー失敗', e));
+
+            // グローバルクリップボードに送信（仮身優先、なければテキスト）
+            if (firstVirtualObject) {
+                // 仮身オブジェクト全体をコピー（virtual-object-listと同じ方式）
+                this.setClipboard(firstVirtualObject);
+            } else if (textData) {
+                // テキストをグローバルクリップボードに設定
+                this.setTextClipboard(textData);
+            }
+
+            navigator.clipboard.writeText(textData).catch(e => {});
 
             logger.debug(`[CalcEditor] 範囲コピー: ${this.colToLetter(startCol)}${startRow}:${this.colToLetter(endCol)}${endRow}`);
         } else {
@@ -2926,6 +2961,8 @@ class CalcEditor extends window.PluginBase {
             const key = `${col},${row}`;
             const cellData = this.cells.get(key);
             const virtualObject = cellData && cellData.virtualObject ? JSON.parse(JSON.stringify(cellData.virtualObject)) : null;
+            // 画像情報もコピー
+            const imageInfo = cellData && cellData.imageInfo ? JSON.parse(JSON.stringify(cellData.imageInfo)) : null;
 
             this.clipboard = {
                 type: 'cell',
@@ -2934,20 +2971,25 @@ class CalcEditor extends window.PluginBase {
                     hasFormula: cellData ? !!cellData.formula : false,
                     style: cellData ? { ...cellData.style } : {},
                     contentType: cellData ? cellData.contentType || 'text' : 'text',
-                    virtualObject: virtualObject
+                    virtualObject: virtualObject,
+                    imageInfo: imageInfo
                 },
                 sourceCol: col,
                 sourceRow: row
             };
 
-            // 仮身セルの場合はグローバルクリップボードにも送信
+            const textValue = cellData ? (cellData.value || '') : '';
+
+            // グローバルクリップボードに送信（仮身優先、なければテキスト）
             if (virtualObject) {
                 // 仮身オブジェクト全体をコピー（virtual-object-listと同じ方式）
                 this.setClipboard(virtualObject);
+            } else if (textValue) {
+                // テキストをグローバルクリップボードに設定
+                this.setTextClipboard(textValue);
             }
 
-            const textValue = cellData ? (cellData.value || '') : '';
-            navigator.clipboard.writeText(textValue).catch(e => logger.error('コピー失敗', e));
+            navigator.clipboard.writeText(textValue).catch(e => {});
 
             logger.debug(`[CalcEditor] セルコピー: ${this.colToLetter(col)}${row}`);
         }
@@ -2955,10 +2997,17 @@ class CalcEditor extends window.PluginBase {
 
     /**
      * セル切り取り
+     * 画像セルの場合はファイル削除前にDataURLを取得して保持する
      */
-    cutCell() {
+    async cutCell() {
         if (!this.selectedCell) return;
-        this.copyCell();
+
+        // 画像セルのDataURLを事前に取得（ファイル削除前に実行）
+        // ※copyCell()内でもpreloadImageDataForCopy()が呼ばれるが、二重ロードは避けられる
+        await this.preloadImageDataForCut();
+
+        // コピーを実行（imageInfo.dataUrlが設定済み）
+        await this.copyCell();
 
         // 範囲選択がある場合は範囲をクリア
         if (this.selectionRange) {
@@ -2971,6 +3020,49 @@ class CalcEditor extends window.PluginBase {
         } else {
             this.clearCell(this.selectedCell.col, this.selectedCell.row);
         }
+    }
+
+    /**
+     * コピー/カット操作前に画像セルのDataURLを事前取得
+     * ファイル削除後でも貼り付けできるようにデータをメモリに保持する
+     */
+    async preloadImageDataForCopy() {
+        const cellsToProcess = [];
+
+        // 対象セルをリストアップ
+        if (this.selectionRange) {
+            const { startCol, startRow, endCol, endRow } = this.selectionRange;
+            for (let row = startRow; row <= endRow; row++) {
+                for (let col = startCol; col <= endCol; col++) {
+                    cellsToProcess.push({ col, row });
+                }
+            }
+        } else if (this.selectedCell) {
+            cellsToProcess.push(this.selectedCell);
+        }
+
+        // 画像セルのDataURLを取得
+        for (const { col, row } of cellsToProcess) {
+            const key = `${col},${row}`;
+            const cellData = this.cells.get(key);
+
+            if (cellData && cellData.contentType === 'image' && cellData.imageInfo) {
+                // dataUrlがない場合はsrcからロード（PluginBase共通メソッド使用）
+                if (!cellData.imageInfo.dataUrl && cellData.imageInfo.src) {
+                    const dataUrl = await this.loadImageFromUrl(cellData.imageInfo.src);
+                    if (dataUrl) {
+                        cellData.imageInfo.dataUrl = dataUrl;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * カット操作前に画像セルのDataURLを事前取得（preloadImageDataForCopyのエイリアス）
+     */
+    async preloadImageDataForCut() {
+        return this.preloadImageDataForCopy();
     }
 
     /**
@@ -3011,6 +3103,9 @@ class CalcEditor extends window.PluginBase {
                             // refCount+1（ペースト = 新しい参照が作成される）
                             this.requestCopyVirtualObject(cellInfo.virtualObject.link_id);
                             this.isModified = true;
+                        } else if (cellInfo.contentType === 'image' && cellInfo.imageInfo) {
+                            // 画像セルの場合は新しいファイル名で保存
+                            await this.pasteImageCell(key, cellInfo, targetCol, targetRow);
                         } else {
                             // 通常のセル（テキスト・数式）
                             let value = cellInfo.value;
@@ -3050,6 +3145,9 @@ class CalcEditor extends window.PluginBase {
                     // refCount+1（ペースト = 新しい参照が作成される）
                     this.requestCopyVirtualObject(data.virtualObject.link_id);
                     this.isModified = true;
+                } else if (data.contentType === 'image' && data.imageInfo) {
+                    // 画像セルの場合は新しいファイル名で保存
+                    await this.pasteImageCell(key, data, destCol, destRow);
                 } else {
                     // 通常のセル（テキスト・数式）
                     let value = data.value;
@@ -3067,16 +3165,155 @@ class CalcEditor extends window.PluginBase {
                 logger.debug(`[CalcEditor] セル貼り付け: ${this.colToLetter(destCol)}${destRow}`);
             }
         } else {
-            // システムクリップボードから貼り付け
+            // グローバルクリップボードをチェック（他ウィンドウからのコピー対応）
+            const globalClipboard = await this.getGlobalClipboard();
+            if (globalClipboard) {
+                if (globalClipboard.type === 'text' && globalClipboard.text) {
+                    // テキストをセルに設定
+                    this.setCellValue(destCol, destRow, globalClipboard.text);
+                    this.renderCell(destCol, destRow);
+                    return;
+                } else if (globalClipboard.link_id) {
+                    // 仮身をセルに設定
+                    const key = `${destCol},${destRow}`;
+                    this.cells.set(key, {
+                        value: '',
+                        formula: '',
+                        displayValue: '',
+                        style: {},
+                        virtualObject: JSON.parse(JSON.stringify(globalClipboard)),
+                        contentType: 'virtualObject'
+                    });
+                    this.requestCopyVirtualObject(globalClipboard.link_id);
+                    this.isModified = true;
+                    this.renderCell(destCol, destRow);
+                    return;
+                } else if (globalClipboard.type === 'image' && globalClipboard.dataUrl) {
+                    // 画像をセルに設定
+                    await this.pasteImageFromGlobalClipboard(globalClipboard, destCol, destRow);
+                    return;
+                }
+            }
+
+            // システムクリップボードから貼り付け（フォーカスがある場合のみ動作）
             try {
                 const text = await navigator.clipboard.readText();
-                this.setCellValue(destCol, destRow, text);
-                this.renderCell(destCol, destRow);
+                if (text) {
+                    this.setCellValue(destCol, destRow, text);
+                    this.renderCell(destCol, destRow);
+                }
             } catch (e) {
-                logger.error('貼り付け失敗', e);
+                // NotAllowedError等は無視（グローバルクリップボードで対応済み）
             }
         }
     }
+
+    /**
+     * 画像セルを貼り付け（新しいファイル名で保存）
+     * @param {string} key - セルキー
+     * @param {Object} cellInfo - コピーされたセル情報
+     * @param {number} targetCol - 貼り付け先列
+     * @param {number} targetRow - 貼り付け先行
+     */
+    async pasteImageCell(key, cellInfo, targetCol, targetRow) {
+        const sourceImageInfo = cellInfo.imageInfo;
+
+        // 新しい画像番号を取得
+        const imgNo = this.getNextImageNumber();
+
+        // 新しいファイル名を生成
+        let realId = this.realId || 'unknown';
+        realId = realId.replace(/_\d+\.xtad$/i, '');
+        const recordNo = 0;
+        const extension = sourceImageInfo.href ? sourceImageInfo.href.split('.').pop().toLowerCase() : 'png';
+        const newFileName = `${realId}_${recordNo}_${imgNo}.${extension}`;
+
+        // 新しいimageInfoを作成
+        const newImageInfo = JSON.parse(JSON.stringify(sourceImageInfo));
+        newImageInfo.href = newFileName;
+
+        // 画像データがある場合は新しいファイル名で保存
+        const imageSrc = sourceImageInfo.dataUrl || sourceImageInfo.src;
+        if (imageSrc && imageSrc.startsWith('data:')) {
+            // Data URLから保存（PluginBase共通メソッド使用）
+            await this.saveImageFile(imageSrc, newFileName);
+            newImageInfo.src = imageSrc;
+            newImageInfo.dataUrl = imageSrc;
+        } else if (imageSrc) {
+            // file:// URLの場合は画像を読み込んでからData URLとして保存（PluginBase共通メソッド使用）
+            try {
+                const dataUrl = await this.loadImageFromUrl(imageSrc);
+                if (dataUrl) {
+                    await this.saveImageFile(dataUrl, newFileName);
+                    newImageInfo.src = dataUrl;
+                    newImageInfo.dataUrl = dataUrl;
+                }
+            } catch (error) {
+                logger.error('[CalcEditor] 画像読み込みエラー:', error);
+            }
+        }
+
+        // セルに画像を設定
+        this.cells.set(key, {
+            value: '',
+            formula: '',
+            displayValue: '',
+            style: cellInfo.style || {},
+            imageInfo: newImageInfo,
+            contentType: 'image'
+        });
+
+        this.isModified = true;
+        logger.debug(`[CalcEditor] 画像セル貼り付け: ${this.colToLetter(targetCol)}${targetRow}, ${newFileName}`);
+    }
+
+    /**
+     * グローバルクリップボードから画像をセルに貼り付け
+     * @param {Object} clipboardData - グローバルクリップボードの画像データ
+     * @param {number} col - 貼り付け先列
+     * @param {number} row - 貼り付け先行
+     */
+    async pasteImageFromGlobalClipboard(clipboardData, col, row) {
+        const key = `${col},${row}`;
+
+        // 新しい画像番号を取得
+        const imgNo = this.getNextImageNumber();
+
+        // 新しいファイル名を生成
+        let realId = this.realId || 'unknown';
+        realId = realId.replace(/_\d+\.xtad$/i, '');
+        const recordNo = 0;
+        const extension = 'png';
+        const newFileName = `${realId}_${recordNo}_${imgNo}.${extension}`;
+
+        // 画像データを保存（PluginBase共通メソッド使用）
+        await this.saveImageFile(clipboardData.dataUrl, newFileName);
+
+        // セルに画像を設定
+        const imageInfo = {
+            href: newFileName,
+            src: clipboardData.dataUrl,
+            dataUrl: clipboardData.dataUrl,
+            width: clipboardData.width || 100,
+            height: clipboardData.height || 100,
+            name: clipboardData.name || 'image.png'
+        };
+
+        this.cells.set(key, {
+            value: '',
+            formula: '',
+            displayValue: '',
+            style: {},
+            imageInfo: imageInfo,
+            contentType: 'image'
+        });
+
+        this.isModified = true;
+        this.renderCell(col, row);
+        logger.debug(`[CalcEditor] グローバルクリップボードから画像貼り付け: ${this.colToLetter(col)}${row}, ${newFileName}`);
+    }
+
+    // loadImageFromUrl() は基底クラス PluginBase で定義
 
     /**
      * 数式の相対参照を調整
@@ -5774,8 +6011,8 @@ class CalcEditor extends window.PluginBase {
                 const imgNo = this.getNextImageNumber();
                 const imageFileName = `${this.realId}_0_${imgNo}.${ext}`;
 
-                // 画像ファイルを保存（親ウィンドウ経由）
-                await this.saveImageFile(imageFileName, dataUrl);
+                // 画像ファイルを保存（PluginBase共通メソッド使用）
+                await this.saveImageFile(dataUrl, imageFileName);
 
                 // 画像情報を作成
                 const imageInfo = {
@@ -5861,58 +6098,7 @@ class CalcEditor extends window.PluginBase {
         });
     }
 
-    /**
-     * 画像ファイルを保存（親ウィンドウ経由）
-     * basic-figure-editorと同じ形式で保存
-     * @param {string} fileName - ファイル名
-     * @param {string} dataUrl - Data URL
-     * @returns {Promise<boolean>}
-     */
-    async saveImageFile(fileName, dataUrl) {
-        try {
-            // Data URLをArrayBufferに変換
-            const base64 = dataUrl.split(',')[1];
-            const binaryString = atob(base64);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-
-            // 最上位ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
-            // basic-figure-editorと同じ形式で送信
-            window.top.postMessage({
-                type: 'save-image-file',
-                fileName: fileName,
-                imageData: Array.from(bytes)
-            }, '*');
-
-            logger.debug('[CalcEditor] 画像ファイル保存依頼:', fileName);
-            return true;
-        } catch (error) {
-            logger.error('[CalcEditor] 画像ファイル保存エラー:', error);
-            return false;
-        }
-    }
-
-    /**
-     * 画像ファイルを削除
-     * @param {string} fileName - 削除する画像ファイル名
-     */
-    deleteImageFile(fileName) {
-        if (!fileName) return;
-
-        try {
-            // 最上位ウィンドウ(tadjs-desktop.js)にファイル削除を依頼
-            window.top.postMessage({
-                type: 'delete-image-file',
-                fileName: fileName
-            }, '*');
-
-            logger.info('[CalcEditor] 画像ファイル削除依頼:', fileName);
-        } catch (error) {
-            logger.error('[CalcEditor] 画像ファイル削除依頼エラー:', error);
-        }
-    }
+    // saveImageFile, deleteImageFile は PluginBase の共通実装を使用
 
     /**
      * 次の画像番号を取得

@@ -6,9 +6,11 @@
     <title>屑実身操作</title>
     <link rel="stylesheet" href="style.css">
 </head>
-<body>
-    <div class="viewer-container">
-        <div class="trash-list" id="trashList">
+<body tabindex="0">
+    <div class="plugin-content">
+        <div class="viewer-container">
+            <div class="trash-list" id="trashList">
+            </div>
         </div>
     </div>
 
@@ -23,6 +25,11 @@
     <script type="module">
         import { MessageBus } from '../../js/message-bus.js';
         window.MessageBus = MessageBus;
+    </script>
+    <!-- アイコンキャッシュマネージャー -->
+    <script type="module">
+        import { IconCacheManager } from '../../js/icon-cache-manager.js';
+        window.IconCacheManager = IconCacheManager;
     </script>
     <!-- PluginBaseをグローバル変数として読み込み -->
     <script type="module">

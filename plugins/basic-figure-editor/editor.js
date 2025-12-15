@@ -919,7 +919,15 @@ class BasicFigureEditor extends window.PluginBase {
                 return;
             }
 
-            // まずグローバルクリップボードをチェック（仮身データ）
+            // ローカルクリップボードを優先チェック（図形データ）
+            // 直近のローカル操作を優先する（basic-text-editorと同様の挙動）
+            if (this.clipboard && this.clipboard.length > 0) {
+                e.preventDefault();
+                await this.pasteShapes();
+                return;
+            }
+
+            // ローカルが空の場合、グローバルクリップボードをチェック（仮身データ）
             const globalClipboard = await this.getGlobalClipboard();
             if (globalClipboard && globalClipboard.link_id) {
                 e.preventDefault();
@@ -3997,17 +4005,42 @@ class BasicFigureEditor extends window.PluginBase {
         if (e.ctrlKey && e.key === 'a') {
             e.preventDefault();
             this.selectAllShapes();
+            return;
+        }
+
+        // Ctrl+C: クリップボードへコピー
+        if (e.ctrlKey && e.key === 'c') {
+            e.preventDefault();
+            this.copyShapes();  // async but fire-and-forget in keyboard handler
+            return;
+        }
+
+        // Ctrl+V: クリップボードからコピー（貼り付け）
+        if (e.ctrlKey && e.key === 'v') {
+            e.preventDefault();
+            this.pasteShapes();  // async but fire-and-forget in keyboard handler
+            return;
+        }
+
+        // Ctrl+X: クリップボードへ移動（切り取り）
+        if (e.ctrlKey && e.key === 'x') {
+            e.preventDefault();
+            this.cutShapes();  // async but fire-and-forget in keyboard handler
+            return;
         }
 
         // Delete: 選択図形を削除
         if (e.key === 'Delete') {
-            this.deleteSelectedShapes();
+            e.preventDefault();
+            this.deleteSelectedShapes();  // async but fire-and-forget in keyboard handler
+            return;
         }
 
-        // Ctrl+Z: 元に戻す
+        // Ctrl+Z: クリップボードから移動
         if (e.ctrlKey && e.key === 'z') {
             e.preventDefault();
-            this.undo();
+            this.pasteMove();
+            return;
         }
 
         // Enter または Escape: 多角形描画を完了
@@ -4354,79 +4387,10 @@ class BasicFigureEditor extends window.PluginBase {
         return maxPixelmapNo + 1;
     }
 
-    async saveImageFile(file, fileName) {
-        try {
-            // ArrayBufferとして読み込み
-            const arrayBuffer = await file.arrayBuffer();
-            const buffer = new Uint8Array(arrayBuffer);
+    // saveImageFile, deleteImageFile, savePixelmapImageFile, saveImageFromElement は
+    // PluginBase の共通実装を使用
 
-            // 最上位ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
-            window.top.postMessage({
-                type: 'save-image-file',
-                fileName: fileName,
-                imageData: Array.from(buffer),
-                mimeType: file.type
-            }, '*');
-
-            logger.debug('[FIGURE EDITOR] 画像ファイル保存依頼:', fileName);
-        } catch (error) {
-            logger.error('[FIGURE EDITOR] 画像ファイル保存エラー:', error);
-        }
-    }
-
-    /**
-     * 画像ファイルを削除
-     * @param {string} fileName - 削除する画像ファイル名
-     */
-    deleteImageFile(fileName) {
-        if (!fileName) return;
-
-        try {
-            // 最上位ウィンドウ(tadjs-desktop.js)にファイル削除を依頼
-            window.top.postMessage({
-                type: 'delete-image-file',
-                fileName: fileName
-            }, '*');
-
-            logger.info('[FIGURE EDITOR] 画像ファイル削除依頼:', fileName);
-        } catch (error) {
-            logger.error('[FIGURE EDITOR] 画像ファイル削除依頼エラー:', error);
-        }
-    }
-
-    async savePixelmapImageFile(imageData, fileName) {
-        try {
-            // ImageDataをPNG形式のBlobに変換
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = imageData.width;
-            tempCanvas.height = imageData.height;
-            const tempCtx = tempCanvas.getContext('2d');
-            tempCtx.putImageData(imageData, 0, 0);
-
-            // CanvasからBlobを取得
-            const blob = await new Promise((resolve) => {
-                tempCanvas.toBlob(resolve, 'image/png');
-            });
-
-            // BlobをArrayBufferに変換
-            const arrayBuffer = await blob.arrayBuffer();
-            const buffer = new Uint8Array(arrayBuffer);
-
-            // 最上位ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
-            window.top.postMessage({
-                type: 'save-image-file',
-                fileName: fileName,
-                imageData: Array.from(buffer),
-                mimeType: 'image/png'
-            }, '*');
-
-            logger.debug('[FIGURE EDITOR] ピクセルマップ画像ファイル保存依頼:', fileName);
-        } catch (error) {
-            logger.error('[FIGURE EDITOR] ピクセルマップ画像ファイル保存エラー:', error);
-        }
-    }
-
-    deleteSelectedShapes() {
+    async deleteSelectedShapes() {
         if (this.selectedShapes.length === 0) return;
 
         // 保護されている図形をフィルタリング
@@ -4453,6 +4417,11 @@ class BasicFigureEditor extends window.PluginBase {
                 return;
             }
         }
+
+        // 画像またはピクセルマップが含まれているかチェック（後で自動保存するため）
+        const hasImageOrPixelmap = deletableShapes.some(shape =>
+            shape.type === 'image' || shape.type === 'pixelmap'
+        );
 
         // 削除可能な図形のみ削除
         deletableShapes.forEach(shape => {
@@ -4495,6 +4464,12 @@ class BasicFigureEditor extends window.PluginBase {
         this.isModified = true;
         // スクロールバー更新を通知
         this.resizeCanvas();
+
+        // 画像またはピクセルマップが含まれていた場合は削除後に自動保存
+        if (hasImageOrPixelmap) {
+            logger.debug('[FIGURE EDITOR] 画像/ピクセルマップを削除後: 自動保存を実行');
+            await this.saveFile();
+        }
     }
 
     /**
@@ -5764,7 +5739,13 @@ class BasicFigureEditor extends window.PluginBase {
         this.saveScrollPosition();
 
         try {
-            logger.debug('[FIGURE EDITOR] 保存処理開始');
+            logger.debug('[FIGURE EDITOR] 保存処理開始, realId:', this.realId);
+
+            if (!this.realId) {
+                logger.warn('[FIGURE EDITOR] realIdが未設定のため保存をスキップ');
+                this.setStatus('保存に失敗しました（realId未設定）');
+                return;
+            }
 
             // 図形データをXMLに変換
             const xmlData = this.convertToXmlTad();
@@ -6364,11 +6345,11 @@ class BasicFigureEditor extends window.PluginBase {
             {
                 label: '編集',
                 submenu: [
-                    { label: '取消', action: 'undo', shortcut: 'Ctrl+Z' },
+                    { label: '取消', action: 'undo' },
                     { label: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
                     { label: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
                     { label: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
-                    { label: 'クリップボードから移動', action: 'paste-move' },
+                    { label: 'クリップボードから移動', action: 'paste-move', shortcut: 'Ctrl+Z' },
                     { label: '削除', action: 'delete-shape', shortcut: 'Delete' },
                     { separator: true },
                     { label: 'グループ化', action: 'group-shapes' },
@@ -6548,7 +6529,7 @@ class BasicFigureEditor extends window.PluginBase {
                 break;
 
             case 'copy':
-                this.copyShapes();
+                await this.copyShapes();
                 break;
 
             case 'paste':
@@ -6556,7 +6537,7 @@ class BasicFigureEditor extends window.PluginBase {
                 break;
 
             case 'cut':
-                this.cutShapes();
+                await this.cutShapes();
                 break;
 
             case 'paste-move':
@@ -6564,7 +6545,7 @@ class BasicFigureEditor extends window.PluginBase {
                 break;
 
             case 'delete-shape':
-                this.deleteSelectedShapes();
+                await this.deleteSelectedShapes();
                 break;
 
             case 'group-shapes':
@@ -6717,10 +6698,20 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     // === クリップボード操作 ===
-    copyShapes() {
+    async copyShapes() {
         if (this.selectedShapes.length === 0) {
             this.setStatus('図形が選択されていません');
             return;
+        }
+
+        // 画像またはピクセルマップが含まれている場合は自動保存
+        // realIdが未設定の場合はsaveFile内で新規実身を作成する
+        const hasImageOrPixelmap = this.selectedShapes.some(shape =>
+            shape.type === 'image' || shape.type === 'pixelmap'
+        );
+        if (hasImageOrPixelmap) {
+            logger.debug('[FIGURE EDITOR] 画像/ピクセルマップをコピー: 自動保存を実行');
+            await this.saveFile();
         }
 
         // 画像とピクセルマップを特別に処理してコピー
@@ -6753,12 +6744,23 @@ class BasicFigureEditor extends window.PluginBase {
             // 仮身オブジェクト全体をコピー（virtual-object-listと同じ方式）
             const clipboardData = JSON.parse(JSON.stringify(vobjShape.virtualObject));
             this.setClipboard(clipboardData);
+        } else {
+            // 画像セグメントが含まれている場合はグローバルクリップボードにも送信
+            const imageShape = this.selectedShapes.find(shape => shape.type === 'image' && shape.imageElement);
+            if (imageShape && imageShape.imageElement) {
+                this.setImageClipboard(imageShape.imageElement, {
+                    width: imageShape.width,
+                    height: imageShape.height,
+                    name: imageShape.name || 'image.png'
+                });
+            }
         }
 
+        logger.debug('[FIGURE EDITOR] copyShapes完了: clipboard.length=', this.clipboard.length, 'shapes:', this.clipboard.map(s => s.type));
         this.setStatus(`${this.selectedShapes.length}個の図形をコピーしました`);
     }
 
-    cutShapes() {
+    async cutShapes() {
         if (this.selectedShapes.length === 0) {
             this.setStatus('図形が選択されていません');
             return;
@@ -6770,6 +6772,16 @@ class BasicFigureEditor extends window.PluginBase {
             // 仮身オブジェクト全体をコピー（virtual-object-listと同じ方式）
             const clipboardData = JSON.parse(JSON.stringify(vobjShape.virtualObject));
             this.setClipboard(clipboardData);
+        } else {
+            // 画像セグメントが含まれている場合はグローバルクリップボードにも送信（削除前に取得）
+            const imageShape = this.selectedShapes.find(shape => shape.type === 'image' && shape.imageElement);
+            if (imageShape && imageShape.imageElement) {
+                this.setImageClipboard(imageShape.imageElement, {
+                    width: imageShape.width,
+                    height: imageShape.height,
+                    name: imageShape.name || 'image.png'
+                });
+            }
         }
 
         // 画像とピクセルマップを特別に処理してコピー
@@ -6794,31 +6806,41 @@ class BasicFigureEditor extends window.PluginBase {
             return copiedShape;
         });
 
-        this.deleteSelectedShapes();
+        await this.deleteSelectedShapes();
         this.setStatus(`${this.clipboard.length}個の図形を切り取りました`);
     }
 
     async pasteShapes() {
-        // まずグローバルクリップボードをチェック（仮身データ）
-        const globalClipboard = await this.getGlobalClipboard();
-        if (globalClipboard && globalClipboard.link_id) {
-            logger.debug('[FIGURE EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
-            // キャンバス中央に配置
-            const x = this.canvas.width / 2;
-            const y = this.canvas.height / 2;
-            this.insertVirtualObject(x, y, globalClipboard);
-            this.setStatus('仮身をクリップボードから貼り付けました');
-            return;
-        }
+        logger.debug('[FIGURE EDITOR] pasteShapes開始: clipboard=', this.clipboard ? this.clipboard.length : 'null', 'shapes:', this.clipboard ? this.clipboard.map(s => s.type) : []);
+        // ローカルクリップボードを優先チェック（図形データ）
+        // basic-text-editorと同様に、直近のローカル操作を優先
+        if (this.clipboard && this.clipboard.length > 0) {
+            // ローカルクリップボードから貼り付け（下のコードで処理）
+            logger.debug('[FIGURE EDITOR] ローカルクリップボードから貼り付け');
+        } else {
+            // ローカルが空の場合、グローバルクリップボードをチェック（他ウィンドウからの仮身）
+            logger.debug('[FIGURE EDITOR] ローカルクリップボードが空、グローバルをチェック');
+            const globalClipboard = await this.getGlobalClipboard();
+            if (globalClipboard && globalClipboard.link_id) {
+                logger.debug('[FIGURE EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
+                // キャンバス中央に配置
+                const x = this.canvas.width / 2;
+                const y = this.canvas.height / 2;
+                this.insertVirtualObject(x, y, globalClipboard);
+                this.setStatus('仮身をクリップボードから貼り付けました');
+                return;
+            }
 
-        // ローカルクリップボードをチェック（図形データ）
-        if (!this.clipboard || this.clipboard.length === 0) {
+            logger.debug('[FIGURE EDITOR] グローバルクリップボードも空');
             this.setStatus('クリップボードが空です');
             return;
         }
 
         // クリップボードの図形を複製して貼り付け（少しずらす）
-        const pastedShapes = this.clipboard.map(shape => {
+        const pastedShapes = [];
+        const imageSavePromises = [];
+
+        for (const shape of this.clipboard) {
             const newShape = JSON.parse(JSON.stringify(shape));
             newShape.startX += 20;
             newShape.startY += 20;
@@ -6836,11 +6858,15 @@ class BasicFigureEditor extends window.PluginBase {
                 }
                 // 新しい画像番号を割り当て
                 newShape.imgNo = this.getNextImageNumber();
-                // ファイル名を更新
-                if (newShape.fileName) {
-                    const fileId = this.currentFile?.fileId || 'unknown';
-                    const recordNo = this.currentFile?.recordNo || 0;
-                    newShape.fileName = `${fileId}_${recordNo}_${newShape.imgNo}.png`;
+                // ファイル名を更新（this.realIdを使用）
+                const fileId = this.realId || 'unknown';
+                const recordNo = 0;
+                newShape.fileName = `${fileId}_${recordNo}_${newShape.imgNo}.png`;
+
+                // 画像ファイルを保存（imageElementがある場合）
+                if (shape.imageElement) {
+                    imageSavePromises.push(this.saveImageFromElement(shape.imageElement, newShape.fileName));
+                    logger.debug('[FIGURE EDITOR] 画像ペースト: ファイル保存予約', newShape.fileName);
                 }
             }
 
@@ -6854,19 +6880,27 @@ class BasicFigureEditor extends window.PluginBase {
                 );
                 // 新しいピクセルマップ番号を割り当て
                 newShape.pixelmapNo = this.getNextPixelmapNumber();
-                // ファイル名を更新
-                if (newShape.fileName) {
-                    const fileId = this.currentFile?.fileId || 'unknown';
-                    const recordNo = this.currentFile?.recordNo || 0;
-                    newShape.fileName = `${fileId}_${recordNo}_${newShape.pixelmapNo}.png`;
-                }
+                // ファイル名を更新（this.realIdを使用）
+                const fileId = this.realId || 'unknown';
+                const recordNo = 0;
+                newShape.fileName = `${fileId}_${recordNo}_${newShape.pixelmapNo}.png`;
+
+                // ピクセルマップ画像ファイルを保存
+                imageSavePromises.push(this.savePixelmapImageFile(newShape.imageData, newShape.fileName));
+                logger.debug('[FIGURE EDITOR] ピクセルマップペースト: ファイル保存予約', newShape.fileName);
             }
 
             // 新しいz-indexを割り当て
             newShape.zIndex = this.getNextZIndex();
 
-            return newShape;
-        });
+            pastedShapes.push(newShape);
+        }
+
+        // 画像ファイルの保存を待つ
+        if (imageSavePromises.length > 0) {
+            await Promise.all(imageSavePromises);
+            logger.debug('[FIGURE EDITOR] 画像ファイル保存完了:', imageSavePromises.length, '件');
+        }
 
         this.shapes.push(...pastedShapes);
         this.selectedShapes = pastedShapes;
@@ -6875,6 +6909,24 @@ class BasicFigureEditor extends window.PluginBase {
         this.setStatus(`${pastedShapes.length}個の図形を貼り付けました`);
         // スクロールバー更新を通知
         this.resizeCanvas();
+
+        // 画像またはピクセルマップが含まれている場合は自動保存
+        const hasImageOrPixelmap = pastedShapes.some(shape =>
+            shape.type === 'image' || shape.type === 'pixelmap'
+        );
+        if (hasImageOrPixelmap) {
+            logger.debug('[FIGURE EDITOR] 画像/ピクセルマップをペースト: 自動保存を実行');
+            await this.saveFile();
+        }
+        // クリップボードの位置を更新（次回ペースト時にさらにオフセット）
+        for (const shape of this.clipboard) {
+            shape.startX += 20;
+            shape.startY += 20;
+            shape.endX += 20;
+            shape.endY += 20;
+        }
+
+        logger.debug('[FIGURE EDITOR] pasteShapes完了: clipboard.length=', this.clipboard ? this.clipboard.length : 'null');
     }
 
     redo() {
@@ -6899,13 +6951,16 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     // === 図形操作 ===
-    duplicateShape() {
+    async duplicateShape() {
         if (this.selectedShapes.length === 0) {
             this.setStatus('図形が選択されていません');
             return;
         }
 
-        const duplicated = this.selectedShapes.map(shape => {
+        const duplicated = [];
+        const imageSavePromises = [];
+
+        for (const shape of this.selectedShapes) {
             const newShape = JSON.parse(JSON.stringify(shape));
             newShape.startX += 20;
             newShape.startY += 20;
@@ -6921,10 +6976,15 @@ class BasicFigureEditor extends window.PluginBase {
                     newShape.imageData = shape.imageData;
                 }
                 newShape.imgNo = this.getNextImageNumber();
-                if (newShape.fileName) {
-                    const fileId = this.currentFile?.fileId || 'unknown';
-                    const recordNo = this.currentFile?.recordNo || 0;
-                    newShape.fileName = `${fileId}_${recordNo}_${newShape.imgNo}.png`;
+                // ファイル名を更新（this.realIdを使用）
+                const fileId = this.realId || 'unknown';
+                const recordNo = 0;
+                newShape.fileName = `${fileId}_${recordNo}_${newShape.imgNo}.png`;
+
+                // 画像ファイルを保存（imageElementがある場合）
+                if (shape.imageElement) {
+                    imageSavePromises.push(this.saveImageFromElement(shape.imageElement, newShape.fileName));
+                    logger.debug('[FIGURE EDITOR] 画像複製: ファイル保存予約', newShape.fileName);
                 }
             }
 
@@ -6936,24 +6996,42 @@ class BasicFigureEditor extends window.PluginBase {
                     shape.imageData.height
                 );
                 newShape.pixelmapNo = this.getNextPixelmapNumber();
-                if (newShape.fileName) {
-                    const fileId = this.currentFile?.fileId || 'unknown';
-                    const recordNo = this.currentFile?.recordNo || 0;
-                    newShape.fileName = `${fileId}_${recordNo}_${newShape.pixelmapNo}.png`;
-                }
+                // ファイル名を更新（this.realIdを使用）
+                const fileId = this.realId || 'unknown';
+                const recordNo = 0;
+                newShape.fileName = `${fileId}_${recordNo}_${newShape.pixelmapNo}.png`;
+
+                // ピクセルマップ画像ファイルを保存
+                imageSavePromises.push(this.savePixelmapImageFile(newShape.imageData, newShape.fileName));
+                logger.debug('[FIGURE EDITOR] ピクセルマップ複製: ファイル保存予約', newShape.fileName);
             }
 
             // 新しいz-indexを割り当て
             newShape.zIndex = this.getNextZIndex();
 
-            return newShape;
-        });
+            duplicated.push(newShape);
+        }
+
+        // 画像ファイルの保存を待つ
+        if (imageSavePromises.length > 0) {
+            await Promise.all(imageSavePromises);
+            logger.debug('[FIGURE EDITOR] 画像ファイル保存完了:', imageSavePromises.length, '件');
+        }
 
         this.shapes.push(...duplicated);
         this.selectedShapes = duplicated;
         this.redraw();
         this.isModified = true;
         this.setStatus(`${duplicated.length}個の図形を複写しました`);
+
+        // 画像またはピクセルマップが含まれている場合は自動保存
+        const hasImageOrPixelmap = duplicated.some(shape =>
+            shape.type === 'image' || shape.type === 'pixelmap'
+        );
+        if (hasImageOrPixelmap) {
+            logger.debug('[FIGURE EDITOR] 画像/ピクセルマップを複製: 自動保存を実行');
+            await this.saveFile();
+        }
     }
 
     groupShapes() {
@@ -7618,7 +7696,16 @@ class BasicFigureEditor extends window.PluginBase {
 
     // === 編集（追加） ===
     async pasteMove() {
-        // グローバルクリップボードをチェック
+        // ローカルクリップボードを優先チェック
+        if (this.clipboard && this.clipboard.length > 0) {
+            // クリップボードから移動（貼り付け後、クリップボードをクリア）
+            await this.pasteShapes();
+            this.clipboard = [];
+            this.setStatus('クリップボードから移動しました');
+            return;
+        }
+
+        // ローカルが空の場合、グローバルクリップボードをチェック
         const globalClipboard = await this.getGlobalClipboard();
         if (globalClipboard && globalClipboard.link_id) {
             // グローバルクリップボードからの場合は通常のペーストと同じ
@@ -7626,16 +7713,7 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        // ローカルクリップボードをチェック
-        if (!this.clipboard || this.clipboard.length === 0) {
-            this.setStatus('クリップボードが空です');
-            return;
-        }
-
-        // クリップボードから移動（貼り付け後、クリップボードをクリア）
-        await this.pasteShapes();
-        this.clipboard = [];
-        this.setStatus('クリップボードから移動しました');
+        this.setStatus('クリップボードが空です');
     }
 
     alignShapes() {

@@ -126,18 +126,62 @@ class UserConfigApp extends window.PluginBase {
         });
     }
 
-    handleMenuAction(action) {
+    async handleMenuAction(action) {
         const activeElement = document.activeElement;
+        const isInputField = activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA');
 
         switch (action) {
             case 'copy':
-                document.execCommand('copy');
+                if (isInputField) {
+                    const selectedText = activeElement.value.substring(activeElement.selectionStart, activeElement.selectionEnd);
+                    if (selectedText) {
+                        this.setTextClipboard(selectedText);
+                        navigator.clipboard.writeText(selectedText).catch(() => {});
+                    }
+                }
                 break;
             case 'paste':
-                document.execCommand('paste');
+                if (isInputField) {
+                    // グローバルクリップボードを優先
+                    const globalClipboard = await this.getClipboard();
+                    if (globalClipboard && globalClipboard.type === 'text' && globalClipboard.text) {
+                        const start = activeElement.selectionStart;
+                        const end = activeElement.selectionEnd;
+                        const value = activeElement.value;
+                        activeElement.value = value.substring(0, start) + globalClipboard.text + value.substring(end);
+                        activeElement.selectionStart = activeElement.selectionEnd = start + globalClipboard.text.length;
+                        activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+                    } else {
+                        // システムクリップボードからフォールバック
+                        try {
+                            const text = await navigator.clipboard.readText();
+                            if (text) {
+                                const start = activeElement.selectionStart;
+                                const end = activeElement.selectionEnd;
+                                const value = activeElement.value;
+                                activeElement.value = value.substring(0, start) + text + value.substring(end);
+                                activeElement.selectionStart = activeElement.selectionEnd = start + text.length;
+                                activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+                            }
+                        } catch (e) {
+                            // NotAllowedError等は無視
+                        }
+                    }
+                }
                 break;
             case 'cut':
-                document.execCommand('cut');
+                if (isInputField) {
+                    const selectedText = activeElement.value.substring(activeElement.selectionStart, activeElement.selectionEnd);
+                    if (selectedText) {
+                        this.setTextClipboard(selectedText);
+                        navigator.clipboard.writeText(selectedText).catch(() => {});
+                        const start = activeElement.selectionStart;
+                        const end = activeElement.selectionEnd;
+                        activeElement.value = activeElement.value.substring(0, start) + activeElement.value.substring(end);
+                        activeElement.selectionStart = activeElement.selectionEnd = start;
+                        activeElement.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                }
                 break;
             case 'undo':
                 document.execCommand('undo');
@@ -146,7 +190,7 @@ class UserConfigApp extends window.PluginBase {
                 document.execCommand('redo');
                 break;
             case 'select-all':
-                if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA')) {
+                if (isInputField) {
                     activeElement.select();
                 } else {
                     document.execCommand('selectAll');

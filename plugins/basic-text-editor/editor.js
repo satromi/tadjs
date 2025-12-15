@@ -28,6 +28,7 @@ class BasicTextEditor extends window.PluginBase {
         this.mutationObserver = null; // MutationObserverインスタンス
         this.suppressMutationObserver = false; // MutationObserver一時停止フラグ
         this.selectedImage = null; // 選択中の画像要素
+        this.lastSelectedText = ''; // メニュー操作用の最後の選択テキスト
         this.isResizing = false; // リサイズ中フラグ
         this.resizeStartX = 0; // リサイズ開始X座標
         this.resizeStartY = 0; // リサイズ開始Y座標
@@ -150,17 +151,17 @@ class BasicTextEditor extends window.PluginBase {
 
             this.loadFile(data.fileData);
 
-            // キーボードショートカットが動作するようにbodyにフォーカスを設定
-            setTimeout(() => {
-                document.body.focus();
-            }, 100);
-
             // スクロール位置を復元（DOM更新完了を待つ）
             if (data.fileData && data.fileData.windowConfig && data.fileData.windowConfig.scrollPos) {
                 setTimeout(() => {
                     this.setScrollPosition(data.fileData.windowConfig.scrollPos);
                 }, 150);
             }
+
+            // エディタにフォーカス（DOM更新完了を待つ）
+            setTimeout(() => {
+                this.editor.focus();
+            }, 200);
 
             // 折り返し設定を復元（未定義の場合はtrue）
             if (data.fileData && data.fileData.windowConfig) {
@@ -275,6 +276,13 @@ class BasicTextEditor extends window.PluginBase {
                             });
                         });
                     }
+
+                    // エディタにフォーカス
+                    requestAnimationFrame(() => {
+                        requestAnimationFrame(() => {
+                            this.editor.focus();
+                        });
+                    });
                 }
             }
         });
@@ -406,18 +414,6 @@ class BasicTextEditor extends window.PluginBase {
             });
         });
 
-        // save-image-file メッセージ（開いた仮身内のプラグインからの画像保存要求を親ウィンドウに転送）
-        this.messageBus.on('save-image-file', (data) => {
-            // 親ウィンドウに転送（型名を明示的に指定）
-            this.messageBus.send('save-image-file', data);
-        });
-
-        // delete-image-file メッセージ（開いた仮身内のプラグインからの画像削除要求を親ウィンドウに転送）
-        this.messageBus.on('delete-image-file', (data) => {
-            // 親ウィンドウに転送（型名を明示的に指定）
-            this.messageBus.send('delete-image-file', data);
-        });
-
         // save-image-response メッセージ（親ウィンドウからのレスポンスを開いた仮身内のプラグインに転送）
         this.messageBus.on('save-image-response', (data) => {
             // すべての子iframeに転送（MessageBus形式で送信）
@@ -507,7 +503,8 @@ class BasicTextEditor extends window.PluginBase {
                 return;
             }
 
-            // 削除された画像を検出してPNGファイルを削除
+            // 削除された画像を検出して削除候補を収集
+            const filesToDelete = new Set();
             mutations.forEach(mutation => {
                 if (mutation.removedNodes) {
                     mutation.removedNodes.forEach(node => {
@@ -515,7 +512,7 @@ class BasicTextEditor extends window.PluginBase {
                         if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'IMG') {
                             const savedFilename = node.getAttribute('data-saved-filename');
                             if (savedFilename && !savedFilename.startsWith('data:')) {
-                                this.deleteImageFile(savedFilename);
+                                filesToDelete.add(savedFilename);
                             }
                         }
                         // 削除されたノード内にimg要素がある場合（親要素ごと削除された場合）
@@ -524,13 +521,28 @@ class BasicTextEditor extends window.PluginBase {
                             imgs.forEach(img => {
                                 const savedFilename = img.getAttribute('data-saved-filename');
                                 if (savedFilename && !savedFilename.startsWith('data:')) {
-                                    this.deleteImageFile(savedFilename);
+                                    filesToDelete.add(savedFilename);
                                 }
                             });
                         }
                     });
                 }
             });
+
+            // 遅延して削除（DOM操作完了後に存在確認）
+            if (filesToDelete.size > 0) {
+                setTimeout(() => {
+                    filesToDelete.forEach(filename => {
+                        // DOM内に同じファイル名の画像が残っていないか確認
+                        const stillExists = this.editor.querySelector(
+                            `img[data-saved-filename="${filename}"]`
+                        );
+                        if (!stillExists) {
+                            this.deleteImageFile(filename);
+                        }
+                    });
+                }, 0);
+            }
 
             this.updateContentHeight();
         });
@@ -559,6 +571,23 @@ class BasicTextEditor extends window.PluginBase {
         // コピーイベント: 仮身を含む場合はXML形式でコピー
         this.editor.addEventListener('copy', (e) => {
             this.handleCopy(e);
+        });
+
+        // ペーストイベント: ブラウザのネイティブペーストを防ぎ、カスタム処理を使用
+        this.editor.addEventListener('paste', (e) => {
+            // デフォルト動作を防止（ブラウザによる画像などの自動ペーストを防ぐ）
+            e.preventDefault();
+            // カスタムペースト処理を実行
+            this.handlePaste(e);
+        });
+
+        // 選択変更イベント: メニュー操作用に選択テキストを保存、カーソル位置をトラッキング
+        document.addEventListener('selectionchange', () => {
+            const selection = window.getSelection();
+            const selectedText = selection.toString();
+            if (selectedText) {
+                this.lastSelectedText = selectedText;
+            }
         });
 
         // 初期高さを設定
@@ -888,13 +917,22 @@ class BasicTextEditor extends window.PluginBase {
 
             const range = selection.getRangeAt(0);
             const container = range.cloneContents();
+            const selectedText = selection.toString();
 
             // 選択範囲に仮身が含まれているか確認
             const hasVirtualObject = container.querySelector('.virtual-object') !== null;
 
             if (!hasVirtualObject) {
-                // 仮身が含まれていない場合はデフォルト動作
-                return;
+                // 仮身が含まれていない場合でもグローバルクリップボードを更新
+                // （Ctrl+Cでブラウザのデフォルトコピーと同時に実行される）
+                if (selectedText) {
+                    this.setTextClipboard(selectedText);
+                    // テキストコピー時はローカルの画像・仮身クリップボードをクリア
+                    // （ペースト時にテキストが優先されるようにする）
+                    this.imageClipboard = null;
+                    this.virtualObjectClipboard = null;
+                }
+                return; // ブラウザのデフォルト動作も許可
             }
 
             // デフォルト動作を防止
@@ -922,6 +960,111 @@ class BasicTextEditor extends window.PluginBase {
         } catch (error) {
             logger.error('[EDITOR] コピーエラー:', error);
             // エラー時はデフォルト動作を許可
+        }
+    }
+
+    /**
+     * ペーストイベントを処理
+     * テキストを優先し、画像のみの場合は画像を挿入
+     */
+    async handlePaste(e) {
+        try {
+            // 読み取り専用の場合はペーストを無視
+            if (this.editor.contentEditable === 'false') {
+                this.setStatus('読み取り専用モードです');
+                return;
+            }
+
+            // ローカルクリップボードを最優先でチェック（画像・仮身）
+            if (this.imageClipboard) {
+                this.pasteImage();
+                this.setStatus('画像をクリップボードから貼り付けました');
+                return;
+            }
+
+            if (this.virtualObjectClipboard) {
+                this.pasteVirtualObject();
+                this.setStatus('仮身をクリップボードから貼り付けました');
+                return;
+            }
+
+            // clipboardDataからデータを取得
+            const clipboardData = e.clipboardData;
+            if (!clipboardData) {
+                // clipboardDataがない場合はグローバルクリップボード経由でペースト
+                await this.pasteFromGlobalClipboard();
+                return;
+            }
+
+            // TAD XMLデータをチェック（仮身を含むコピー）
+            const tadXml = clipboardData.getData('application/x-tad-xml');
+            if (tadXml) {
+                logger.debug('[EDITOR] TAD XMLをペースト:', tadXml);
+                const htmlContent = await this.renderTADXML(tadXml);
+                document.execCommand('insertHTML', false, htmlContent);
+                this.isModified = true;
+                this.setStatus('仮身を含むコンテンツを貼り付けました');
+                return;
+            }
+
+            // グローバルクリップボードをチェック（アプリ内コピーを優先）
+            const globalClipboard = await this.getGlobalClipboard();
+
+            // グローバルクリップボードにテキストがある場合は優先使用
+            // （メニュー操作等でシステムクリップボード書き込みが失敗した場合に対応）
+            if (globalClipboard && globalClipboard.type === 'text' && globalClipboard.text) {
+                document.execCommand('insertText', false, globalClipboard.text);
+                this.isModified = true;
+                this.setStatus('テキストをクリップボードから貼り付けました');
+                return;
+            }
+
+            // グローバルクリップボードにテキストがない場合はシステムクリップボードを使用
+            const text = clipboardData.getData('text/plain');
+            if (text) {
+                document.execCommand('insertText', false, text);
+                this.isModified = true;
+                this.setStatus('クリップボードから貼り付けました');
+                return;
+            }
+
+            // テキストがない場合は画像・仮身をチェック
+            if (globalClipboard && globalClipboard.type === 'image' && globalClipboard.dataUrl) {
+                await this.insertImageFromDataUrl(globalClipboard.dataUrl, globalClipboard.name || 'image.png');
+                this.setStatus('画像をクリップボードから貼り付けました');
+                return;
+            }
+
+            if (globalClipboard && globalClipboard.link_id) {
+                this.insertVirtualObjectLink(globalClipboard);
+                this.requestCopyVirtualObject(globalClipboard.link_id);
+                this.setStatus('仮身をクリップボードから貼り付けました');
+                return;
+            }
+
+            // 画像ファイルをチェック（テキストがない場合のみ）
+            const items = clipboardData.items;
+            if (items) {
+                for (let i = 0; i < items.length; i++) {
+                    if (items[i].type.startsWith('image/')) {
+                        const blob = items[i].getAsFile();
+                        if (blob) {
+                            const reader = new FileReader();
+                            reader.onload = async (event) => {
+                                await this.insertImageFromDataUrl(event.target.result, 'clipboard_image.png');
+                                this.setStatus('画像をクリップボードから貼り付けました');
+                            };
+                            reader.readAsDataURL(blob);
+                            return;
+                        }
+                    }
+                }
+            }
+
+            this.setStatus('貼り付け可能なデータがありません');
+        } catch (error) {
+            logger.error('[EDITOR] ペーストエラー:', error);
+            this.setStatus('貼り付けに失敗しました');
         }
     }
 
@@ -1180,6 +1323,106 @@ class BasicTextEditor extends window.PluginBase {
 
         } catch (error) {
             logger.error('[EDITOR] 画像挿入エラー:', error);
+            this.setStatus('画像の挿入に失敗しました');
+        }
+    }
+
+    /**
+     * DataURLから画像を挿入（グローバルクリップボードからのペースト用）
+     * @param {string} dataUrl - 画像のDataURL
+     * @param {string} fileName - ファイル名
+     */
+    async insertImageFromDataUrl(dataUrl, fileName = 'image.png') {
+        try {
+            // 画像をロード
+            const img = new Image();
+
+            const imageData = await new Promise((resolve, reject) => {
+                img.onload = () => {
+                    // 画像が大きすぎる場合は縮小（最大600px）
+                    const maxSize = 600;
+                    let displayWidth = img.width;
+                    let displayHeight = img.height;
+
+                    if (displayWidth > maxSize || displayHeight > maxSize) {
+                        const scale = Math.min(maxSize / displayWidth, maxSize / displayHeight);
+                        displayWidth = Math.floor(displayWidth * scale);
+                        displayHeight = Math.floor(displayHeight * scale);
+                    }
+
+                    resolve({
+                        dataUrl: dataUrl,
+                        displayWidth: displayWidth,
+                        displayHeight: displayHeight,
+                        originalWidth: img.width,
+                        originalHeight: img.height
+                    });
+                };
+
+                img.onerror = () => {
+                    reject(new Error('画像読み込みエラー'));
+                };
+
+                img.src = dataUrl;
+            });
+
+            // 画像番号を取得
+            const imgNo = this.getNextImageNumber();
+
+            // ファイル名を生成: realId_recordNo_imgNo.png
+            let realId = this.realId || 'unknown';
+            realId = realId.replace(/_\d+\.xtad$/i, '');
+            const recordNo = 0;
+            const extension = fileName.split('.').pop().toLowerCase() || 'png';
+            const savedFileName = `${realId}_${recordNo}_${imgNo}.${extension}`;
+
+            // 画像ファイルを保存（PluginBase共通メソッド使用）
+            await this.saveImageFile(dataUrl, savedFileName);
+
+            // 画像の色深度情報を設定（PNGの場合の標準値）
+            const planes = 3;
+            const pixbits = 0x0818;
+
+            // 画像要素を作成
+            const imgElement = document.createElement('img');
+            imgElement.src = imageData.dataUrl;
+            imgElement.style.maxWidth = '100%';
+            imgElement.style.height = 'auto';
+            imgElement.style.display = 'inline-block';
+            imgElement.style.verticalAlign = 'middle';
+            imgElement.style.margin = '4px';
+            imgElement.setAttribute('data-original-filename', fileName);
+            imgElement.setAttribute('data-saved-filename', savedFileName);
+            imgElement.setAttribute('data-mime-type', 'image/png');
+            imgElement.setAttribute('data-original-width', imageData.originalWidth);
+            imgElement.setAttribute('data-original-height', imageData.originalHeight);
+            imgElement.setAttribute('data-display-width', imageData.displayWidth);
+            imgElement.setAttribute('data-display-height', imageData.displayHeight);
+            imgElement.setAttribute('data-img-no', imgNo);
+            imgElement.setAttribute('data-planes', planes);
+            imgElement.setAttribute('data-pixbits', pixbits);
+
+            // カーソル位置に挿入
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                range.deleteContents();
+                range.insertNode(imgElement);
+
+                // カーソルを画像の後ろに移動
+                range.setStartAfter(imgElement);
+                range.setEndAfter(imgElement);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            } else {
+                // カーソル位置がない場合は末尾に追加
+                this.editor.appendChild(imgElement);
+            }
+
+            this.updateContentHeight();
+
+        } catch (error) {
+            logger.error('[EDITOR] DataURLからの画像挿入エラー:', error);
             this.setStatus('画像の挿入に失敗しました');
         }
     }
@@ -1558,14 +1801,18 @@ class BasicTextEditor extends window.PluginBase {
             return;
         }
 
-        // Ctrl+V: ペースト
+        // Ctrl+V: ペースト（pasteイベントハンドラーで処理）
+        // keydownでpreventDefaultしないと、pasteイベント内のclipboardDataが取得できない場合がある
+        // 処理はpasteイベントハンドラー(handlePaste)に任せる
         if (e.ctrlKey && e.key === 'v') {
-            // 画像または仮身がクリップボードにある場合のみカスタム処理
-            if (this.imageClipboard || this.virtualObjectClipboard) {
-                e.preventDefault();
-                this.executeMenuAction('paste');
-            }
-            // テキストの場合はブラウザのデフォルト動作を使用
+            // pasteイベントが発火するので、ここでは何もしない
+            return;
+        }
+
+        // Ctrl+Z: クリップボードから移動
+        if (e.ctrlKey && e.key === 'z') {
+            e.preventDefault();
+            this.executeMenuAction('redo');
             return;
         }
 
@@ -4252,7 +4499,7 @@ class BasicTextEditor extends window.PluginBase {
      * 親ウインドウにXMLデータの変更を通知（自動保存用）
      */
     async notifyXmlDataChanged() {
-        // 保存時にスクロール位置と折り返し設定も保存
+        // 保存時にスクロール位置、折り返し設定も保存
         this.saveScrollPosition();
         this.updateWindowConfig({ wordWrap: this.wrapMode });
 
@@ -4800,10 +5047,14 @@ class BasicTextEditor extends window.PluginBase {
 
             // 編集
             case 'undo':
+                // メニューからの呼び出し時はフォーカスがないためエディタにフォーカスを戻す
+                this.editor.focus();
                 document.execCommand('undo');
                 this.setStatus('元に戻しました');
                 break;
             case 'copy':
+                // メニューからの呼び出し時はフォーカスがないためエディタにフォーカスを戻す
+                this.editor.focus();
                 // 画像が選択されている場合は画像をコピー
                 if (this.selectedImage) {
                     this.copyImage(this.selectedImage);
@@ -4818,6 +5069,8 @@ class BasicTextEditor extends window.PluginBase {
                 }
                 break;
             case 'paste':
+                // メニューからの呼び出し時はフォーカスがないためエディタにフォーカスを戻す
+                this.editor.focus();
                 // クリップボードに画像がある場合は画像を貼り付け
                 if (this.imageClipboard) {
                     this.pasteImage();
@@ -4832,6 +5085,8 @@ class BasicTextEditor extends window.PluginBase {
                 }
                 break;
             case 'cut':
+                // メニューからの呼び出し時はフォーカスがないためエディタにフォーカスを戻す
+                this.editor.focus();
                 // 画像が選択されている場合は画像を移動
                 if (this.selectedImage) {
                     this.cutImage(this.selectedImage);
@@ -4846,6 +5101,8 @@ class BasicTextEditor extends window.PluginBase {
                 }
                 break;
             case 'redo':
+                // メニューからの呼び出し時はフォーカスがないためエディタにフォーカスを戻す
+                this.editor.focus();
                 // クリップボードに画像がある場合は画像を移動（貼り付け後クリア）
                 if (this.imageClipboard && this.imageClipboard.isCut) {
                     this.pasteImage();
@@ -4857,8 +5114,8 @@ class BasicTextEditor extends window.PluginBase {
                     this.virtualObjectClipboard = null;  // 移動なのでクリップボードをクリア
                     this.setStatus('仮身をクリップボードから移動しました');
                 } else {
-                    document.execCommand('redo');
-                    this.setStatus('やり直しました');
+                    // テキストの場合: グローバルクリップボードから移動
+                    this.pasteMoveFromGlobalClipboard();
                 }
                 break;
             case 'select-all':
@@ -7076,6 +7333,16 @@ class BasicTextEditor extends window.PluginBase {
     // updateWindowConfig() は基底クラス PluginBase で定義
 
     /**
+     * ウィンドウがアクティブになった時の処理（PluginBase hook override）
+     * エディタにフォーカスを設定
+     */
+    onWindowActivated() {
+        if (this.editor) {
+            this.editor.focus();
+        }
+    }
+
+    /**
      * クローズ前の保存処理フック（PluginBase共通ハンドラから呼ばれる）
      * 「保存」が選択された時にXMLデータの変更を通知
      */
@@ -7218,44 +7485,7 @@ class BasicTextEditor extends window.PluginBase {
         }
     }
 
-    async saveImageFile(file, fileName) {
-        try {
-            // ArrayBufferとして読み込み
-            const arrayBuffer = await file.arrayBuffer();
-            const buffer = new Uint8Array(arrayBuffer);
-
-            // 親ウィンドウにファイル保存を依頼
-            this.messageBus.send('save-image-file', {
-                fileName: fileName,
-                imageData: Array.from(buffer),
-                mimeType: file.type
-            });
-
-            logger.debug('[EDITOR] 画像ファイル保存完了:', fileName);
-        } catch (error) {
-            logger.error('[EDITOR] 画像ファイル保存エラー:', error);
-            throw error;
-        }
-    }
-
-    /**
-     * 画像ファイルを削除
-     * @param {string} fileName - 削除する画像ファイル名
-     */
-    deleteImageFile(fileName) {
-        if (!fileName) return;
-
-        try {
-            // 親ウィンドウにファイル削除を依頼
-            this.messageBus.send('delete-image-file', {
-                fileName: fileName
-            });
-
-            logger.info('[EDITOR] 画像ファイル削除依頼:', fileName);
-        } catch (error) {
-            logger.error('[EDITOR] 画像ファイル削除依頼エラー:', error);
-        }
-    }
+    // saveImageFile, deleteImageFile は PluginBase の共通実装を使用
 
     /**
      * 画像を選択
@@ -7620,12 +7850,16 @@ class BasicTextEditor extends window.PluginBase {
     /**
      * 画像をクリップボードへコピー
      */
-    copyImage(img) {
+    async copyImage(img) {
         logger.debug('[EDITOR] 画像をコピー:', img.getAttribute('data-saved-filename'));
+
+        // 画像データをDataURLとして取得（PluginBase共通メソッド使用）
+        const dataUrl = await this.imageElementToDataUrlAsync(img);
 
         // 画像の全ての属性を保存
         this.imageClipboard = {
-            src: img.src,
+            src: dataUrl || img.src,
+            dataUrl: dataUrl,  // DataURLを保持（貼り付け時に使用）
             alt: img.alt,
             width: img.style.width,
             height: img.style.height,
@@ -7646,17 +7880,24 @@ class BasicTextEditor extends window.PluginBase {
 
     /**
      * 画像をクリップボードへ移動（カット）
+     * ファイル削除前に画像データをDataURLとして保持する
      */
-    cutImage(img) {
+    async cutImage(img) {
         logger.debug('[EDITOR] 画像を移動:', img.getAttribute('data-saved-filename'));
+
+        const savedFilename = img.getAttribute('data-saved-filename');
+
+        // 画像データをDataURLとして取得（ファイル削除前に実行、PluginBase共通メソッド使用）
+        const dataUrl = await this.imageElementToDataUrlAsync(img);
 
         // 画像の全ての属性を保存
         this.imageClipboard = {
-            src: img.src,
+            src: dataUrl || img.src,
+            dataUrl: dataUrl,  // DataURLを保持（貼り付け時に使用）
             alt: img.alt,
             width: img.style.width,
             height: img.style.height,
-            savedFilename: img.getAttribute('data-saved-filename'),
+            savedFilename: savedFilename,
             currentWidth: img.getAttribute('data-current-width'),
             currentHeight: img.getAttribute('data-current-height'),
             originalWidth: img.getAttribute('data-original-width'),
@@ -7668,9 +7909,19 @@ class BasicTextEditor extends window.PluginBase {
             isCut: true  // 移動モード
         };
 
-        // 画像を削除
-        this.deselectImage();
-        img.remove();
+        // MutationObserverを一時停止して画像を削除（ファイル削除をバイパス）
+        this.suppressMutationObserver = true;
+        try {
+            this.deselectImage();
+            img.remove();
+        } finally {
+            this.suppressMutationObserver = false;
+        }
+
+        // 手動でファイルを削除
+        if (savedFilename && !savedFilename.startsWith('data:')) {
+            this.deleteImageFile(savedFilename);
+        }
 
         logger.debug('[EDITOR] 画像を削除し、クリップボードに保存:', this.imageClipboard);
 
@@ -7678,10 +7929,12 @@ class BasicTextEditor extends window.PluginBase {
         this.isModified = true;
     }
 
+    // imageElementToDataUrlAsync() は基底クラス PluginBase で定義
+
     /**
      * 画像をクリップボードから貼り付け
      */
-    pasteImage() {
+    async pasteImage() {
         if (!this.imageClipboard) {
             logger.warn('[EDITOR] クリップボードに画像がありません');
             return;
@@ -7700,22 +7953,52 @@ class BasicTextEditor extends window.PluginBase {
 
         // 新しい画像要素を作成
         const newImg = document.createElement('img');
-        newImg.src = this.imageClipboard.src;
         newImg.alt = this.imageClipboard.alt;
         newImg.style.width = this.imageClipboard.width;
         newImg.style.height = this.imageClipboard.height;
-        newImg.setAttribute('data-saved-filename', this.imageClipboard.savedFilename);
+
+        // 新しいファイル名を生成して保存（コピーモード・カットモード共通）
+        // カットモードでは元ファイルは削除済みなので、dataUrlから新しいファイルを作成する
+        let newSavedFilename = this.imageClipboard.savedFilename;
+        const hasDataUrl = this.imageClipboard.dataUrl && this.imageClipboard.dataUrl.startsWith('data:');
+        const needsNewFile = this.imageClipboard.savedFilename && !this.imageClipboard.savedFilename.startsWith('data:');
+
+        if (needsNewFile && hasDataUrl) {
+            // 新しい画像番号を取得
+            const imgNo = this.getNextImageNumber();
+
+            // 新しいファイル名を生成
+            let realId = this.realId || 'unknown';
+            realId = realId.replace(/_\d+\.xtad$/i, '');
+            const recordNo = 0;
+            const extension = this.imageClipboard.savedFilename.split('.').pop().toLowerCase() || 'png';
+            newSavedFilename = `${realId}_${recordNo}_${imgNo}.${extension}`;
+
+            // 画像データを新しいファイル名で保存（dataUrlを使用）
+            await this.copyImageToFile(newImg, newSavedFilename, this.imageClipboard.dataUrl);
+
+            logger.debug(`[EDITOR] ${this.imageClipboard.isCut ? 'カット' : 'コピー'}モード: 新しいファイル名で保存:`, newSavedFilename);
+
+            // 新しい画像番号を設定
+            newImg.setAttribute('data-img-no', imgNo);
+        } else {
+            if (this.imageClipboard.imgNo) newImg.setAttribute('data-img-no', this.imageClipboard.imgNo);
+        }
+
+        // 画像ソースを設定（dataUrlがあればそれを使用、なければ元のsrc）
+        newImg.src = this.imageClipboard.dataUrl || this.imageClipboard.src;
+
+        newImg.setAttribute('data-saved-filename', newSavedFilename);
         if (this.imageClipboard.currentWidth) newImg.setAttribute('data-current-width', this.imageClipboard.currentWidth);
         if (this.imageClipboard.currentHeight) newImg.setAttribute('data-current-height', this.imageClipboard.currentHeight);
         if (this.imageClipboard.originalWidth) newImg.setAttribute('data-original-width', this.imageClipboard.originalWidth);
         if (this.imageClipboard.originalHeight) newImg.setAttribute('data-original-height', this.imageClipboard.originalHeight);
         if (this.imageClipboard.planes) newImg.setAttribute('data-planes', this.imageClipboard.planes);
         if (this.imageClipboard.pixbits) newImg.setAttribute('data-pixbits', this.imageClipboard.pixbits);
-        if (this.imageClipboard.imgNo) newImg.setAttribute('data-img-no', this.imageClipboard.imgNo);
         if (this.imageClipboard.mimeType) newImg.setAttribute('data-mime-type', this.imageClipboard.mimeType);
 
-        // data: URLが必要な場合は読み込み
-        if (this.imageClipboard.savedFilename && !this.imageClipboard.savedFilename.startsWith('data:')) {
+        // data: URLが必要な場合は読み込み（移動モードまたはdata: URL以外の場合）
+        if (newSavedFilename && !newSavedFilename.startsWith('data:')) {
             newImg.setAttribute('data-needs-load', 'true');
         }
 
@@ -7734,7 +8017,7 @@ class BasicTextEditor extends window.PluginBase {
         selection.addRange(newRange);
 
         // 画像を読み込む
-        if (this.imageClipboard.savedFilename && !this.imageClipboard.savedFilename.startsWith('data:')) {
+        if (newSavedFilename && !newSavedFilename.startsWith('data:')) {
             this.loadImagesFromParent();
         }
 
@@ -7751,6 +8034,41 @@ class BasicTextEditor extends window.PluginBase {
 
         // 編集状態を記録
         this.isModified = true;
+    }
+
+    /**
+     * 画像をクリップボードにコピーする際のファイル保存
+     * @param {HTMLImageElement} imgElement - 画像要素
+     * @param {string} fileName - 保存するファイル名
+     * @param {string} srcUrl - 画像のソースURL（data: URLまたはfile:// URL）
+     */
+    async copyImageToFile(imgElement, fileName, srcUrl) {
+        try {
+            // srcがdata: URLの場合はそのまま使用
+            if (srcUrl && srcUrl.startsWith('data:')) {
+                // PluginBase共通メソッドでDataURLから保存
+                await this.saveImageFile(srcUrl, fileName);
+            } else {
+                // 画像が読み込まれるまで待機
+                await new Promise((resolve, reject) => {
+                    if (imgElement.complete && imgElement.naturalWidth > 0) {
+                        resolve();
+                    } else {
+                        imgElement.onload = resolve;
+                        imgElement.onerror = reject;
+                        // タイムアウト設定
+                        setTimeout(() => reject(new Error('画像読み込みタイムアウト')), 5000);
+                    }
+                });
+
+                // PluginBase共通メソッドで画像要素から保存
+                await super.saveImageFromElement(imgElement, fileName);
+            }
+
+            logger.debug('[EDITOR] 画像ファイル保存完了(コピー):', fileName);
+        } catch (error) {
+            logger.error('[EDITOR] 画像ファイル保存エラー(コピー):', error);
+        }
     }
 
     /**
@@ -7887,7 +8205,7 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
-     * グローバルクリップボードから仮身をペースト
+     * グローバルクリップボードから仮身または画像をペースト
      */
     async pasteFromGlobalClipboard() {
         logger.debug('[EDITOR] グローバルクリップボードをチェック中...');
@@ -7901,9 +8219,54 @@ class BasicTextEditor extends window.PluginBase {
             // refCount+1（グローバルクリップボードからのペースト = 新しい参照が作成される）
             this.requestCopyVirtualObject(globalClipboard.link_id);
             this.setStatus('仮身をクリップボードから貼り付けました');
+        } else if (globalClipboard && globalClipboard.type === 'image' && globalClipboard.dataUrl) {
+            // 画像データがある場合（他プラグインからの画像コピー）
+            await this.insertImageFromDataUrl(globalClipboard.dataUrl, globalClipboard.name || 'image.png');
+            this.setStatus('画像をクリップボードから貼り付けました');
+        } else if (globalClipboard && globalClipboard.type === 'text' && globalClipboard.text) {
+            // テキストデータがある場合（グローバルクリップボード優先）
+            document.execCommand('insertText', false, globalClipboard.text);
+            this.setStatus('テキストをクリップボードから貼り付けました');
         } else {
-            // 仮身データがない場合はシステムクリップボードからテキストをペースト
+            // グローバルクリップボードにデータがない場合はシステムクリップボードからテキストをペースト
             await this.pasteTextFromClipboard();
+        }
+
+        // 編集状態を記録
+        this.isModified = true;
+    }
+
+    /**
+     * グローバルクリップボードから移動（貼り付け後クリア）
+     */
+    async pasteMoveFromGlobalClipboard() {
+        logger.debug('[EDITOR] グローバルクリップボードから移動中...');
+
+        // 親ウィンドウからグローバルクリップボードを取得
+        const globalClipboard = await this.getGlobalClipboard();
+
+        if (globalClipboard && globalClipboard.link_id) {
+            // 仮身データがある場合
+            this.insertVirtualObjectLink(globalClipboard);
+            // 移動なのでrefCountは変更しない（元の場所から削除されているため）
+            this.setStatus('仮身をクリップボードから移動しました');
+            // グローバルクリップボードをクリア
+            this.setClipboard(null);
+        } else if (globalClipboard && globalClipboard.type === 'image' && globalClipboard.dataUrl) {
+            // 画像データがある場合（他プラグインからの画像コピー）
+            await this.insertImageFromDataUrl(globalClipboard.dataUrl, globalClipboard.name || 'image.png');
+            this.setStatus('画像をクリップボードから移動しました');
+            // グローバルクリップボードをクリア
+            this.setClipboard(null);
+        } else if (globalClipboard && globalClipboard.type === 'text' && globalClipboard.text) {
+            // テキストデータがある場合（グローバルクリップボード優先）
+            document.execCommand('insertText', false, globalClipboard.text);
+            this.setStatus('テキストをクリップボードから移動しました');
+            // グローバルクリップボードをクリア（移動なので）
+            this.setClipboard(null);
+        } else {
+            // グローバルクリップボードにデータがない場合はシステムクリップボードからテキストを移動
+            await this.pasteMoveTextFromClipboard();
         }
 
         // 編集状態を記録
@@ -7915,18 +8278,27 @@ class BasicTextEditor extends window.PluginBase {
      */
     async copyTextToClipboard() {
         const selection = window.getSelection();
-        const selectedText = selection.toString();
+        // 現在の選択テキスト、または保存済みの選択テキストを使用
+        // （メニュークリック時にフォーカスが外れて選択が消える場合の対策）
+        const selectedText = selection.toString() || this.lastSelectedText;
 
         if (selectedText) {
+            // グローバルクリップボードにテキストを保存（確実な方法）
+            this.setTextClipboard(selectedText);
+
+            // テキストコピー時はローカルの画像・仮身クリップボードをクリア
+            // （ペースト時にテキストが優先されるようにする）
+            this.imageClipboard = null;
+            this.virtualObjectClipboard = null;
+
             try {
+                // システムクリップボードにも書き込み（外部アプリ連携用、失敗してもOK）
                 await navigator.clipboard.writeText(selectedText);
-                this.setStatus('クリップボードへコピーしました');
             } catch (error) {
-                logger.error('[EDITOR] クリップボードへのコピーに失敗:', error);
-                // フォールバック: document.execCommandを試行
-                document.execCommand('copy');
-                this.setStatus('クリップボードへコピーしました');
+                // システムクリップボード書き込み失敗は無視
+                // グローバルクリップボードに保存済みなので問題なし
             }
+            this.setStatus('クリップボードへコピーしました');
         } else {
             this.setStatus('コピーするテキストが選択されていません');
         }
@@ -7937,24 +8309,32 @@ class BasicTextEditor extends window.PluginBase {
      */
     async cutTextToClipboard() {
         const selection = window.getSelection();
-        const selectedText = selection.toString();
+        // 現在の選択テキスト、または保存済みの選択テキストを使用
+        const selectedText = selection.toString() || this.lastSelectedText;
 
         if (selectedText) {
-            try {
-                await navigator.clipboard.writeText(selectedText);
-                // 選択範囲を削除
-                if (!selection.isCollapsed) {
-                    document.execCommand('delete');
-                }
-                this.setStatus('クリップボードへ移動しました');
-                this.isModified = true;
-            } catch (error) {
-                logger.error('[EDITOR] クリップボードへの移動に失敗:', error);
-                // フォールバック: document.execCommandを試行
-                document.execCommand('cut');
-                this.setStatus('クリップボードへ移動しました');
-                this.isModified = true;
+            // グローバルクリップボードにテキストを保存（確実な方法）
+            this.setTextClipboard(selectedText);
+
+            // テキストコピー時はローカルの画像・仮身クリップボードをクリア
+            // （ペースト時にテキストが優先されるようにする）
+            this.imageClipboard = null;
+            this.virtualObjectClipboard = null;
+
+            // 選択範囲を削除（フォーカス復帰後に選択が残っている場合のみ）
+            if (!selection.isCollapsed) {
+                document.execCommand('delete');
             }
+
+            try {
+                // システムクリップボードにも書き込み（外部アプリ連携用、失敗してもOK）
+                await navigator.clipboard.writeText(selectedText);
+            } catch (error) {
+                // システムクリップボード書き込み失敗は無視
+                // グローバルクリップボードに保存済みなので問題なし
+            }
+            this.setStatus('クリップボードへ移動しました');
+            this.isModified = true;
         } else {
             this.setStatus('移動するテキストが選択されていません');
         }
@@ -7974,10 +8354,41 @@ class BasicTextEditor extends window.PluginBase {
                 this.setStatus('クリップボードにデータがありません');
             }
         } catch (error) {
-            logger.error('[EDITOR] クリップボードからの貼り付けに失敗:', error);
-            // フォールバック: document.execCommandを試行
-            document.execCommand('paste');
-            this.setStatus('クリップボードから貼り付けました');
+            // NotAllowedError: クロスプラグイン間でフォーカスがない場合に発生
+            // グローバルクリップボードで対応済みのため、システムクリップボードアクセス失敗は無視
+            if (error.name === 'NotAllowedError') {
+                this.setStatus('貼り付け可能なデータがありません');
+                return;
+            }
+            // その他のエラーも同様に処理（危険なdocument.execCommand('paste')は使用しない）
+            this.setStatus('貼り付けに失敗しました');
+        }
+    }
+
+    /**
+     * システムクリップボードからテキストを移動（貼り付け後クリア）
+     */
+    async pasteMoveTextFromClipboard() {
+        try {
+            const text = await navigator.clipboard.readText();
+            if (text) {
+                // テキストを挿入
+                document.execCommand('insertText', false, text);
+                // システムクリップボードをクリア
+                await navigator.clipboard.writeText('');
+                this.setStatus('クリップボードから移動しました');
+            } else {
+                this.setStatus('クリップボードにデータがありません');
+            }
+        } catch (error) {
+            // NotAllowedError: クロスプラグイン間でフォーカスがない場合に発生
+            // グローバルクリップボードで対応済みのため、システムクリップボードアクセス失敗は無視
+            if (error.name === 'NotAllowedError') {
+                this.setStatus('移動可能なデータがありません');
+                return;
+            }
+            // その他のエラーも同様に処理（危険なdocument.execCommand('paste')は使用しない）
+            this.setStatus('移動に失敗しました');
         }
     }
 

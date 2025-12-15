@@ -59,6 +59,9 @@ export class PluginBase {
 
         // 親ウィンドウのダイアログ表示状態
         this.dialogVisible = false;
+
+        // ウィンドウのアクティブ状態
+        this.isWindowActive = false;
     }
 
     /**
@@ -486,6 +489,144 @@ export class PluginBase {
         this.messageBus.send('set-clipboard', {
             windowId: this.windowId,
             clipboardData: data
+        });
+    }
+
+    /**
+     * HTMLImageElementからDataURLを生成
+     * @param {HTMLImageElement} imageElement - 画像要素
+     * @param {string} [mimeType='image/png'] - MIMEタイプ
+     * @returns {string|null} DataURL、失敗時はnull
+     */
+    imageElementToDataUrl(imageElement, mimeType = 'image/png') {
+        if (!imageElement) return null;
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = imageElement.naturalWidth || imageElement.width;
+            canvas.height = imageElement.naturalHeight || imageElement.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(imageElement, 0, 0);
+            return canvas.toDataURL(mimeType);
+        } catch (error) {
+            logger.error(`[${this.pluginName}] DataURL変換エラー:`, error);
+            return null;
+        }
+    }
+
+    /**
+     * 画像をグローバルクリップボードに設定
+     * @param {HTMLImageElement|string} source - 画像要素またはDataURL
+     * @param {Object} [options={}] - オプション
+     * @param {number} [options.width] - 幅（省略時はsourceから取得）
+     * @param {number} [options.height] - 高さ（省略時はsourceから取得）
+     * @param {string} [options.name='image.png'] - ファイル名
+     */
+    setImageClipboard(source, options = {}) {
+        let dataUrl;
+        let width = options.width;
+        let height = options.height;
+
+        if (source instanceof HTMLImageElement) {
+            dataUrl = this.imageElementToDataUrl(source);
+            if (!width) width = source.naturalWidth || source.width;
+            if (!height) height = source.naturalHeight || source.height;
+        } else if (typeof source === 'string' && source.startsWith('data:')) {
+            dataUrl = source;
+        } else {
+            logger.error(`[${this.pluginName}] setImageClipboard: 無効なソース`);
+            return;
+        }
+
+        if (!dataUrl) return;
+
+        this.setClipboard({
+            type: 'image',
+            dataUrl: dataUrl,
+            width: width,
+            height: height,
+            name: options.name || 'image.png'
+        });
+    }
+
+    /**
+     * テキストをグローバルクリップボードに設定
+     * @param {string} text - テキスト
+     */
+    setTextClipboard(text) {
+        if (!text) return;
+        this.setClipboard({
+            type: 'text',
+            text: text
+        });
+    }
+
+    /**
+     * HTMLImageElementからDataURLを非同期で生成（未読み込み対応）
+     * @param {HTMLImageElement} imageElement - 画像要素
+     * @param {string} [mimeType='image/png'] - MIMEタイプ
+     * @returns {Promise<string|null>} DataURL
+     */
+    async imageElementToDataUrlAsync(imageElement, mimeType = 'image/png') {
+        if (!imageElement) return null;
+
+        // 既にdata: URLならそのまま返す
+        if (imageElement.src && imageElement.src.startsWith('data:')) {
+            return imageElement.src;
+        }
+
+        // 画像が読み込まれているか確認
+        if (imageElement.complete && imageElement.naturalWidth > 0) {
+            return this.imageElementToDataUrl(imageElement, mimeType);
+        }
+
+        // 画像を再読み込み
+        return new Promise((resolve) => {
+            const tempImg = new Image();
+            tempImg.crossOrigin = 'anonymous';
+            tempImg.onload = () => {
+                resolve(this.imageElementToDataUrl(tempImg, mimeType));
+            };
+            tempImg.onerror = () => {
+                logger.error(`[${this.pluginName}] 画像読み込みエラー:`, imageElement.src);
+                resolve(null);
+            };
+            tempImg.src = imageElement.src;
+        });
+    }
+
+    /**
+     * URLから画像を読み込んでDataURLを生成
+     * @param {string} imageUrl - 画像URL
+     * @param {Object} [options={}] - オプション
+     * @param {number} [options.timeout=5000] - タイムアウト(ms)
+     * @param {string} [options.mimeType='image/png'] - MIMEタイプ
+     * @returns {Promise<string|null>} DataURL
+     */
+    async loadImageFromUrl(imageUrl, options = {}) {
+        const timeout = options.timeout || 5000;
+        const mimeType = options.mimeType || 'image/png';
+
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+
+            const timeoutId = setTimeout(() => {
+                if (!img.complete) {
+                    logger.warn(`[${this.pluginName}] 画像読み込みタイムアウト:`, imageUrl);
+                    resolve(null);
+                }
+            }, timeout);
+
+            img.onload = () => {
+                clearTimeout(timeoutId);
+                resolve(this.imageElementToDataUrl(img, mimeType));
+            };
+            img.onerror = () => {
+                clearTimeout(timeoutId);
+                logger.error(`[${this.pluginName}] 画像読み込みエラー:`, imageUrl);
+                resolve(null);
+            };
+            img.src = imageUrl;
         });
     }
 
@@ -932,7 +1073,21 @@ export class PluginBase {
             logger.debug(`[${this.pluginName}] [MessageBus] parent-dialog-closed受信`);
         });
 
-        logger.info(`[${this.pluginName}] 共通MessageBusハンドラ登録完了 (8件)`);
+        // window-activated メッセージ（ウィンドウがアクティブになった）
+        this.messageBus.on('window-activated', () => {
+            this.isWindowActive = true;
+            logger.debug(`[${this.pluginName}] [MessageBus] window-activated受信`);
+            this.onWindowActivated();
+        });
+
+        // window-deactivated メッセージ（ウィンドウが非アクティブになった）
+        this.messageBus.on('window-deactivated', () => {
+            this.isWindowActive = false;
+            logger.debug(`[${this.pluginName}] [MessageBus] window-deactivated受信`);
+            this.onWindowDeactivated();
+        });
+
+        logger.info(`[${this.pluginName}] 共通MessageBusハンドラ登録完了 (10件)`);
 
         // plugin-ready シグナルを親ウィンドウに送信
         // これにより親ウィンドウはプラグインの準備完了を確認してからinitを送信できる
@@ -983,6 +1138,22 @@ export class PluginBase {
      * @param {Object} data - 最大化データ { pos, width, height, maximize }
      */
     onWindowMaximizeToggled(data) {
+        // デフォルト実装は空（サブクラスで必要に応じてオーバーライド）
+    }
+
+    /**
+     * ウィンドウがアクティブになった時のフック（サブクラスでオーバーライド）
+     * window-activatedメッセージ受信時に呼び出される
+     */
+    onWindowActivated() {
+        // デフォルト実装は空（サブクラスで必要に応じてオーバーライド）
+    }
+
+    /**
+     * ウィンドウが非アクティブになった時のフック（サブクラスでオーバーライド）
+     * window-deactivatedメッセージ受信時に呼び出される
+     */
+    onWindowDeactivated() {
         // デフォルト実装は空（サブクラスで必要に応じてオーバーライド）
     }
 
@@ -1446,5 +1617,147 @@ export class PluginBase {
      */
     async duplicateRealObject() {
         await window.RealObjectSystem.duplicateRealObject(this);
+    }
+
+    // ========================================
+    // 画像ファイル操作（共通実装）
+    // ========================================
+
+    /**
+     * 画像ファイルを削除
+     * @param {string} fileName - 削除する画像ファイル名
+     */
+    deleteImageFile(fileName) {
+        if (!fileName) return;
+
+        try {
+            // 親ウィンドウ(tadjs-desktop.js)にファイル削除を依頼
+            this.messageBus.send('delete-image-file', {
+                fileName: fileName
+            });
+
+            logger.info(`[${this.pluginName}] 画像ファイル削除依頼:`, fileName);
+        } catch (error) {
+            logger.error(`[${this.pluginName}] 画像ファイル削除依頼エラー:`, error);
+        }
+    }
+
+    /**
+     * 画像ファイルを保存
+     * FileオブジェクトまたはDataURL文字列から保存可能
+     *
+     * @param {File|Blob|string} source - 保存するソース（File/Blob または DataURL文字列）
+     * @param {string} fileName - 保存先ファイル名
+     * @param {string} [mimeType] - MIMEタイプ（省略時はソースから推測）
+     * @returns {Promise<boolean>} 成功時true
+     */
+    async saveImageFile(source, fileName, mimeType = null) {
+        try {
+            let bytes;
+            let detectedMimeType;
+
+            if (source instanceof File || source instanceof Blob) {
+                // File/Blobオブジェクトから保存
+                const arrayBuffer = await source.arrayBuffer();
+                bytes = new Uint8Array(arrayBuffer);
+                detectedMimeType = mimeType || source.type || 'application/octet-stream';
+            } else if (typeof source === 'string' && source.startsWith('data:')) {
+                // DataURLから保存
+                const base64 = source.split(',')[1];
+                const binaryString = atob(base64);
+                bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                detectedMimeType = mimeType || source.split(',')[0].split(':')[1].split(';')[0];
+            } else {
+                throw new Error('Invalid source: must be File, Blob, or DataURL string');
+            }
+
+            // 親ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
+            this.messageBus.send('save-image-file', {
+                fileName: fileName,
+                imageData: Array.from(bytes),
+                mimeType: detectedMimeType
+            });
+
+            logger.debug(`[${this.pluginName}] 画像ファイル保存依頼:`, fileName);
+            return true;
+        } catch (error) {
+            logger.error(`[${this.pluginName}] 画像ファイル保存エラー:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * ImageDataからPNG画像ファイルを保存
+     * @param {ImageData} imageData - 保存するImageData
+     * @param {string} fileName - 保存先ファイル名
+     */
+    async savePixelmapImageFile(imageData, fileName) {
+        try {
+            // ImageDataをPNG形式のBlobに変換
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = imageData.width;
+            tempCanvas.height = imageData.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.putImageData(imageData, 0, 0);
+
+            // CanvasからBlobを取得
+            const blob = await new Promise((resolve) => {
+                tempCanvas.toBlob(resolve, 'image/png');
+            });
+
+            // BlobをArrayBufferに変換
+            const arrayBuffer = await blob.arrayBuffer();
+            const buffer = new Uint8Array(arrayBuffer);
+
+            // 親ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
+            this.messageBus.send('save-image-file', {
+                fileName: fileName,
+                imageData: Array.from(buffer),
+                mimeType: 'image/png'
+            });
+
+            logger.debug(`[${this.pluginName}] ピクセルマップ画像ファイル保存依頼:`, fileName);
+        } catch (error) {
+            logger.error(`[${this.pluginName}] ピクセルマップ画像ファイル保存エラー:`, error);
+        }
+    }
+
+    /**
+     * HTMLImageElementからPNG画像ファイルを保存
+     * @param {HTMLImageElement} imageElement - 保存する画像要素
+     * @param {string} fileName - 保存先ファイル名
+     */
+    async saveImageFromElement(imageElement, fileName) {
+        try {
+            // 画像をCanvasに描画してPNGに変換
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = imageElement.naturalWidth || imageElement.width;
+            tempCanvas.height = imageElement.naturalHeight || imageElement.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(imageElement, 0, 0);
+
+            // CanvasからBlobを取得
+            const blob = await new Promise((resolve) => {
+                tempCanvas.toBlob(resolve, 'image/png');
+            });
+
+            // BlobをArrayBufferに変換
+            const arrayBuffer = await blob.arrayBuffer();
+            const buffer = new Uint8Array(arrayBuffer);
+
+            // 親ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
+            this.messageBus.send('save-image-file', {
+                fileName: fileName,
+                imageData: Array.from(buffer),
+                mimeType: 'image/png'
+            });
+
+            logger.debug(`[${this.pluginName}] 画像ファイル保存依頼(Element):`, fileName);
+        } catch (error) {
+            logger.error(`[${this.pluginName}] 画像ファイル保存エラー(Element):`, error);
+        }
     }
 }

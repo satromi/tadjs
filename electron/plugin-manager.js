@@ -717,6 +717,14 @@ class PluginManager {
                             windowId: windowId,
                             fileData: fileData || null
                         }, '*');
+
+                        // このウィンドウがアクティブなら window-activated を送信
+                        // (setActiveWindowはプラグイン登録前に呼ばれるため、ここで補完)
+                        if (window.tadjsDesktop?.windowManager?.activeWindow === windowId &&
+                            window.tadjsDesktop?.parentMessageBus) {
+                            window.tadjsDesktop.parentMessageBus.sendToWindow(windowId, 'window-activated', {});
+                            console.log(`[PluginManager] window-activated送信: ${windowId}`);
+                        }
                     }
                 };
 

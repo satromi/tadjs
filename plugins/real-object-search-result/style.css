@@ -1,3 +1,9 @@
+html {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
 body {
     margin: 0;
     padding: 0;
@@ -9,27 +15,40 @@ body {
 }
 
 .plugin-content {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+    overflow: auto; /* スクロール可能 */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* カスタムスクロールバーを使用するためブラウザ標準のスクロールバーを非表示 */
+.plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.plugin-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE, Edge */
 }
 
 /* 検索条件表示 */
 .search-info {
+    position: sticky;
+    top: 0;
+    z-index: 10;
     padding: 6px 8px;
     background: #e0e0e0;
     border-bottom: 1px solid #808080;
     font-size: 11px;
     color: #404040;
-    flex-shrink: 0;
 }
 
 /* 結果コンテナ */
 .result-container {
-    flex: 1;
-    overflow: auto;
     padding: 8px;
     background: #f0f0f0;
 }
