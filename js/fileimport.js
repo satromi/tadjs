@@ -193,12 +193,19 @@ class FileImportManager {
             // ディスクにコピー（実身IDを使った新しい名前で）
             let uint8Array;
 
-            if (file.path && this.tadjs.isElectronEnv) {
+            if (file.base64Data) {
+                // Base64エンコードされたデータが送信された場合（プラグインからの場合）
+                const binary = atob(file.base64Data);
+                const len = binary.length;
+                uint8Array = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    uint8Array[i] = binary.charCodeAt(i);
+                }
+            } else if (file.path && this.tadjs.isElectronEnv) {
                 // Electron環境でファイルパスが利用可能な場合、fsで読み込む
                 const fs = require('fs');
                 const buffer = fs.readFileSync(file.path);
                 uint8Array = new Uint8Array(buffer);
-                logger.debug('ファイルをfsで読み込み:', file.path);
             } else if (typeof file.arrayBuffer === 'function') {
                 // File オブジェクトの場合、arrayBuffer()で読み込む
                 const arrayBuffer = await file.arrayBuffer();
@@ -214,7 +221,6 @@ class FileImportManager {
             }
 
             await this.tadjs.saveDataFile(newFileName, uint8Array);
-            logger.debug('インポートファイルをコピー:', file.name, '->', newFileName);
 
             // メモリ上でも新しい名前で参照できるようにする（元の名前も残す）
             this.tadjs.fileObjects[newFileName] = file;
@@ -373,7 +379,15 @@ class FileImportManager {
         try {
             let uint8Array;
 
-            if (file.path && this.tadjs.isElectronEnv) {
+            if (file.base64Data) {
+                // Base64エンコードされたデータが送信された場合（プラグインからの場合）
+                const binary = atob(file.base64Data);
+                const len = binary.length;
+                uint8Array = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    uint8Array[i] = binary.charCodeAt(i);
+                }
+            } else if (file.path && this.tadjs.isElectronEnv) {
                 const fs = require('fs');
                 const buffer = fs.readFileSync(file.path);
                 uint8Array = new Uint8Array(buffer);
@@ -390,7 +404,6 @@ class FileImportManager {
             }
 
             await this.tadjs.saveDataFile(imageFileName, uint8Array);
-            logger.debug('画像ファイルを保存:', imageFileName);
         } catch (error) {
             logger.error('画像ファイル保存エラー:', error);
             return null;
@@ -406,21 +419,39 @@ class FileImportManager {
 
     /**
      * 画像のサイズを取得
-     * @param {File} file - 画像ファイル
+     * @param {File|Object} file - 画像ファイルまたはBase64データを含むオブジェクト
      * @returns {Promise<{width: number, height: number}>}
      */
     getImageDimensions(file) {
         return new Promise((resolve, reject) => {
             const img = new Image();
-            const url = URL.createObjectURL(file);
+            let url;
+            let isDataUrl = false;
+
+            if (file.base64Data) {
+                // Base64データからData URLを作成
+                const mimeType = file.type || 'image/png';
+                url = `data:${mimeType};base64,${file.base64Data}`;
+                isDataUrl = true;
+            } else if (typeof file === 'object' && file.name) {
+                // Fileオブジェクトの場合
+                url = URL.createObjectURL(file);
+            } else {
+                reject(new Error('Invalid file object'));
+                return;
+            }
 
             img.onload = () => {
-                URL.revokeObjectURL(url);
+                if (!isDataUrl) {
+                    URL.revokeObjectURL(url);
+                }
                 resolve({ width: img.width, height: img.height });
             };
 
             img.onerror = () => {
-                URL.revokeObjectURL(url);
+                if (!isDataUrl) {
+                    URL.revokeObjectURL(url);
+                }
                 reject(new Error('画像読み込みエラー'));
             };
 

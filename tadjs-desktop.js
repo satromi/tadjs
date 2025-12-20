@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.26
+ * TADjs Ver 0.27
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -680,7 +680,16 @@ class TADjsDesktop {
      * @returns {Promise<Uint8Array>} ファイル内容
      */
     async getFileAsUint8Array(file) {
-        if (typeof file.arrayBuffer === 'function') {
+        if (file.base64Data) {
+            // Base64エンコードされたデータが含まれる場合（インポートされたファイル）
+            const binary = atob(file.base64Data);
+            const len = binary.length;
+            const uint8Array = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                uint8Array[i] = binary.charCodeAt(i);
+            }
+            return uint8Array;
+        } else if (typeof file.arrayBuffer === 'function') {
             // File オブジェクトの場合
             const arrayBuffer = await file.arrayBuffer();
             return new Uint8Array(arrayBuffer);

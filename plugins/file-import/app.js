@@ -282,7 +282,7 @@ class FileImportApp extends window.PluginBase {
     /**
      * ファイルを取り込み
      */
-    importFiles() {
+    async importFiles() {
         if (this.selectedFiles.length === 0) {
             logger.warn('[FileImport] ファイルが選択されていません');
             return;
@@ -292,18 +292,38 @@ class FileImportApp extends window.PluginBase {
 
         // 親ウィンドウにファイルを送信
         // File オブジェクトはpostMessageでシリアライズできないため、
-        // 必要なプロパティを抽出して送信する
+        // ファイル内容をBase64エンコードして送信する
         if (this.messageBus) {
-            const fileInfos = this.selectedFiles.map(file => ({
-                name: file.name,
-                size: file.size,
-                type: file.type,
-                // Electron環境ではfile.pathでファイルパスにアクセス可能
-                path: file.path || null,
-                lastModified: file.lastModified
-            }));
+            const fileInfos = [];
 
-            logger.info('[FileImport] ファイル情報を送信:', fileInfos);
+            for (const file of this.selectedFiles) {
+                try {
+                    // ファイル内容をArrayBufferとして読み込み
+                    const arrayBuffer = await file.arrayBuffer();
+                    const uint8Array = new Uint8Array(arrayBuffer);
+
+                    // Base64エンコード
+                    let binary = '';
+                    const len = uint8Array.byteLength;
+                    for (let i = 0; i < len; i++) {
+                        binary += String.fromCharCode(uint8Array[i]);
+                    }
+                    const base64Data = btoa(binary);
+
+                    fileInfos.push({
+                        name: file.name,
+                        size: file.size,
+                        type: file.type,
+                        path: file.path || null,
+                        lastModified: file.lastModified,
+                        base64Data: base64Data  // ファイル内容をBase64で送信
+                    });
+                } catch (error) {
+                    logger.error('[FileImport] ファイル読み込みエラー:', file.name, error);
+                }
+            }
+
+            logger.info('[FileImport] ファイル情報を送信:', fileInfos.length, '個');
 
             this.messageBus.send('import-files', {
                 files: fileInfos,
