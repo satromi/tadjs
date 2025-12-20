@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.21
+ * TADjs Ver 0.25
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -147,6 +147,7 @@ class TADjsDesktop {
                 initScrollbar: this.initScrollbar.bind(this),
                 forceUpdateScrollbar: this.forceUpdateScrollbar.bind(this),
                 initScrollbarForPlugin: this.initScrollbarForPlugin.bind(this),
+                initScrollbarForPluginWithMessageBus: this.initScrollbarForPluginWithMessageBus.bind(this),
                 forceUpdateScrollbarForPlugin: this.forceUpdateScrollbarForPlugin.bind(this),
                 getToolPanelRelations: () => this.toolPanelRelations
             });
@@ -552,6 +553,35 @@ class TADjsDesktop {
                 clientX: data.clientX,
                 clientY: data.clientY
             });
+        });
+
+        // scroll-state-update: プラグインからのスクロール状態更新
+        this.parentMessageBus.on('scroll-state-update', (data) => {
+            if (!data.windowId || !this.scrollbarManager) return;
+
+            // スクロール状態をキャッシュに保存
+            this.scrollbarManager.updateScrollState(data.windowId, {
+                scrollTop: data.scrollTop,
+                scrollLeft: data.scrollLeft,
+                scrollHeight: data.scrollHeight,
+                scrollWidth: data.scrollWidth,
+                clientHeight: data.clientHeight,
+                clientWidth: data.clientWidth
+            });
+
+            // 対応するウィンドウのスクロールバーUIを更新
+            const windowInfo = this.windows.get(data.windowId);
+            if (windowInfo && windowInfo.element) {
+                const vScrollbar = windowInfo.element.querySelector('.custom-scrollbar-vertical');
+                const hScrollbar = windowInfo.element.querySelector('.custom-scrollbar-horizontal');
+
+                if (vScrollbar) {
+                    this.scrollbarManager.updateScrollbarFromState(vScrollbar, 'vertical', data);
+                }
+                if (hScrollbar) {
+                    this.scrollbarManager.updateScrollbarFromState(hScrollbar, 'horizontal', data);
+                }
+            }
         });
 
         logger.info('[TADjs] 親MessageBusハンドラ登録完了');
@@ -2498,6 +2528,25 @@ class TADjsDesktop {
             this.scrollbarManager.initScrollbarForPlugin(iframe, content, scrollbar, direction);
         } else {
             logger.warn('[TADjs] ScrollbarManagerが利用できません');
+        }
+    }
+
+    /**
+     * プラグインウィンドウ用のMessageBusベーススクロールバー初期化
+     * cross-frame DOMアクセスを使用せず、MessageBus経由でスクロール制御
+     * @param {HTMLElement} scrollbar - スクロールバー要素
+     * @param {string} direction - スクロール方向（'vertical'または'horizontal'）
+     * @param {string} windowId - ウィンドウID
+     * @returns {Function} クリーンアップ関数
+     */
+    initScrollbarForPluginWithMessageBus(scrollbar, direction, windowId) {
+        if (this.scrollbarManager && this.parentMessageBus) {
+            return this.scrollbarManager.initScrollbarForPluginWithMessageBus(
+                scrollbar, direction, this.parentMessageBus, windowId
+            );
+        } else {
+            logger.warn('[TADjs] ScrollbarManagerまたはMessageBusが利用できません');
+            return () => {};
         }
     }
 
@@ -4563,11 +4612,13 @@ class TADjsDesktop {
      * @param {number} inputWidth - 入力欄の幅（文字数）
      * @param {Array<{label: string, value: any}>} buttons - ボタン定義の配列
      * @param {number} defaultButton - デフォルトボタンのインデックス (0始まり)
+     * @param {Object} options - オプション
+     * @param {boolean} options.colorPicker - カラーピッカーを表示するかどうか
      * @returns {Promise<{button: any, value: string}>} - 選択されたボタンと入力値
      */
-    showInputDialog(message, defaultValue = '', inputWidth = window.DEFAULT_INPUT_WIDTH, buttons = [{ label: '取消', value: 'cancel' }, { label: 'OK', value: 'ok' }], defaultButton = 1) {
+    showInputDialog(message, defaultValue = '', inputWidth = window.DEFAULT_INPUT_WIDTH, buttons = [{ label: '取消', value: 'cancel' }, { label: 'OK', value: 'ok' }], defaultButton = 1, options = {}) {
         if (this.dialogManager) {
-            return this.dialogManager.showInputDialog(message, defaultValue, inputWidth, buttons, defaultButton);
+            return this.dialogManager.showInputDialog(message, defaultValue, inputWidth, buttons, defaultButton, options);
         }
         logger.warn('[TADjs] DialogManagerが利用できません');
         return Promise.resolve({ button: 'cancel', value: '' });
@@ -4911,7 +4962,11 @@ class TADjsDesktop {
                         params.defaultValue || '',
                         params.inputWidth || 30,
                         params.buttons,
-                        params.defaultButton || 0
+                        params.defaultButton || 0,
+                        {
+                            colorPicker: params.colorPicker || false,
+                            checkbox: params.checkbox || null
+                        }
                     );
                     logger.info('[TADjs] Input dialog result:', result);
                     break;
@@ -5219,7 +5274,13 @@ class TADjsDesktop {
             { autoResponse: false }
         );
 
-        logger.info('[TADjs] Phase 4 Batch 3: 実身/仮身操作系ハンドラー登録完了 (4件)');
+        this.messageRouter.register(
+            'set-relationship',
+            this.handleSetRelationshipRouter.bind(this),
+            { autoResponse: false }
+        );
+
+        logger.info('[TADjs] Phase 4 Batch 3: 実身/仮身操作系ハンドラー登録完了 (6件)');
 
         // Phase 4 Batch 4: オブジェクトを開く系ハンドラー登録
         this.messageRouter.register(
@@ -6626,6 +6687,96 @@ class TADjsDesktop {
         await this.handleChangeVirtualObjectAttributes(data, event).catch(err => {
             logger.error('[TADjs] 仮身属性変更エラー:', err);
         });
+    }
+
+    /**
+     * set-relationship MessageRouterハンドラー
+     * 実身の続柄（relationship）を設定する
+     * @param {Object} data - メッセージデータ { realId, messageId }
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleSetRelationshipRouter(data, event) {
+        if (!this.realObjectSystem) {
+            logger.error('[TADjs] 実身仮身システムが初期化されていません');
+            return;
+        }
+
+        const source = event?.source;
+        if (!source) {
+            logger.error('[TADjs] sourceが取得できませんでした');
+            return;
+        }
+
+        const { realId: fullRealId, messageId } = data;
+
+        // 実身IDを抽出（_0.xtad を除去）
+        let realId = fullRealId;
+        if (realId && realId.match(/_\d+\.xtad$/i)) {
+            realId = realId.replace(/_\d+\.xtad$/i, '');
+        }
+
+        try {
+            // 現在の続柄を取得
+            const realObject = await this.realObjectSystem.loadRealObject(realId);
+            const currentRelationship = realObject.metadata.relationship || [];
+            const currentText = currentRelationship.join(' ');
+
+            // 入力ダイアログを表示
+            const result = await this.showInputDialog(
+                '続柄（リレーションタグ名）を入力してください\n（半角スペース区切りで複数設定可）',
+                currentText,
+                40,
+                [
+                    { label: '取消', value: 'cancel' },
+                    { label: '設定', value: 'ok' }
+                ],
+                1
+            );
+
+            // キャンセルされた場合
+            if (result.button === 'cancel' || result.value === null) {
+                this.parentMessageBus.respondTo(source, 'relationship-set', {
+                    messageId: messageId,
+                    success: false,
+                    cancelled: true
+                });
+                return;
+            }
+
+            // 半角スペースで分割して配列化（空要素除去）
+            const newRelationship = result.value
+                .split(' ')
+                .map(s => s.trim())
+                .filter(s => s !== '');
+
+            // JSONファイルを直接更新
+            const jsonPath = this.path.join(this.realObjectSystem._basePath, `${realId}.json`);
+            const jsonContent = JSON.parse(this.fs.readFileSync(jsonPath, 'utf-8'));
+            jsonContent.relationship = newRelationship;
+            jsonContent.updateDate = new Date().toISOString();
+            this.fs.writeFileSync(jsonPath, JSON.stringify(jsonContent, null, 2));
+
+            // 成功を通知
+            this.parentMessageBus.respondTo(source, 'relationship-set', {
+                messageId: messageId,
+                success: true,
+                relationship: newRelationship
+            });
+
+            const relationshipText = newRelationship.length > 0
+                ? newRelationship.join(' ')
+                : '（なし）';
+            logger.info('[TADjs] 続柄設定完了:', realId, relationshipText);
+            this.setStatusMessage(`続柄を設定しました: ${relationshipText}`);
+        } catch (error) {
+            logger.error('[TADjs] 続柄設定エラー:', error);
+            this.parentMessageBus.respondTo(source, 'relationship-set', {
+                messageId: messageId,
+                success: false,
+                error: error.message
+            });
+        }
     }
 
     // ========================================

@@ -36,6 +36,7 @@ class CalcEditor extends window.PluginBase {
         this.isSelecting = false; // マウスドラッグ選択中フラグ
         this.isEditing = false;
         this.editingCell = null;
+        this.savedCellSelection = null; // ウィンドウ非アクティブ時のセル選択保存用
 
         // フィルハンドル
         this.fillHandle = null;
@@ -76,6 +77,7 @@ class CalcEditor extends window.PluginBase {
         this.openedRealObjects = new Map(); // 開いている実身のID → windowId のマップ
         this.selectedVirtualObjectCell = null; // 選択中の仮身セル { col, row }
         this.isResizingVirtualObject = false; // 仮身リサイズ中フラグ
+        // this.iconData は PluginBase で初期化済み
 
         // 画像パス取得関連
         this.imagePathCallbacks = {}; // messageId -> callback
@@ -95,15 +97,7 @@ class CalcEditor extends window.PluginBase {
             this.virtualObjectRenderer = null;
         }
 
-        // MessageBus（IconCacheManagerより先に初期化）
-        // messageBusはPluginBaseで初期化されるが、CalcEditorでは独自に初期化
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: false,
-                pluginName: 'CalcEditor'
-            });
-            this.messageBus.start();
-        }
+        // MessageBusはPluginBaseで初期化済み
 
         this.init();
     }
@@ -136,6 +130,9 @@ class CalcEditor extends window.PluginBase {
 
         // ウィンドウアクティベーション（PluginBase共通）
         this.setupWindowActivation();
+
+        // スクロール通知初期化（MessageBus経由で親ウィンドウにスクロール状態を通知）
+        this.initScrollNotification();
 
         // キーボードショートカット
         this.setupKeyboardShortcuts();
@@ -189,6 +186,11 @@ class CalcEditor extends window.PluginBase {
                 if (data.fileData.realObject && data.fileData.realObject.window && typeof data.fileData.realObject.window.panel === 'boolean') {
                     this.operationPanelVisible = data.fileData.realObject.window.panel;
                     logger.debug('[CalcEditor] 操作パネル表示状態を復元:', this.operationPanelVisible);
+                }
+
+                // 背景色の設定（開いた仮身の表示領域背景）
+                if (data.fileData.bgcol) {
+                    this.applyBackgroundColor(data.fileData.bgcol);
                 }
             }
 
@@ -755,52 +757,57 @@ class CalcEditor extends window.PluginBase {
 
                     logger.info(`[CalcEditor] 仮身をセルに配置: ${this.colToLetter(col)}${row}`, virtualObject);
 
-                    // セルに仮身を設定
-                    this.cells.set(key, {
-                        value: '',
-                        formula: '',
-                        displayValue: '',
-                        style: {},
-                        virtualObject: virtualObject,
-                        contentType: 'virtualObject'
-                    });
+                    // メタデータをJSONから読み込み（続柄、更新日時など）、完了後にセルを設定
+                    // 移動モード用の情報を保持（コールバック内で参照するため）
+                    const dragSourceCellInfo = this.dragSourceCell ? { ...this.dragSourceCell } : null;
+                    const dragMode = this.virtualObjectDragState.dragMode;
 
-                    this.isModified = true;
-                    this.renderCell(col, row);
-
-                    // デバッグ: ドラッグ元の状態を確認
-                    logger.info('[CalcEditor] ドラッグ元の状態確認:', {
-                        dragSourceCell: this.dragSourceCell,
-                        dragMode: this.virtualObjectDragState.dragMode,
-                        isRightButtonPressed: this.virtualObjectDragState.isRightButtonPressed,
-                        hasMoved: this.virtualObjectDragState.hasMoved
-                    });
-
-                    // 移動モードの場合は、ドラッグ元のセルをクリア
-                    if (this.dragSourceCell && this.virtualObjectDragState.dragMode === 'move') {
-                        const sourceKey = `${this.dragSourceCell.col},${this.dragSourceCell.row}`;
-                        logger.info(`[CalcEditor] 移動モード条件チェック: sourceKey=${sourceKey}, targetKey=${key}`);
-                        // ドラッグ先と同じセルでない場合のみクリア
-                        if (sourceKey !== key) {
-                            this.cells.delete(sourceKey);
-                            this.renderCell(this.dragSourceCell.col, this.dragSourceCell.row);
-                            logger.info(`[CalcEditor] ドラッグ元のセルをクリア（移動モード）: ${this.colToLetter(this.dragSourceCell.col)}${this.dragSourceCell.row}`);
-                        } else {
-                            logger.info('[CalcEditor] 同じセルへのドロップのため、元のセルはクリアしない');
-                        }
-                    } else if (this.dragSourceCell && this.virtualObjectDragState.dragMode === 'copy') {
-                        logger.info(`[CalcEditor] ドラッグ元のセルを保持（コピーモード）: ${this.colToLetter(this.dragSourceCell.col)}${this.dragSourceCell.row}`);
-                    } else {
-                        logger.warn('[CalcEditor] ドラッグ元のセルをクリアしない理由:', {
-                            hasDragSourceCell: !!this.dragSourceCell,
-                            dragMode: this.virtualObjectDragState.dragMode
+                    this.loadVirtualObjectMetadata(virtualObject).then(() => {
+                        // セルに仮身を設定
+                        this.cells.set(key, {
+                            value: '',
+                            formula: '',
+                            displayValue: '',
+                            style: {},
+                            virtualObject: virtualObject,
+                            contentType: 'virtualObject'
                         });
-                    }
 
-                    // ドロップ成功フラグを設定（dragendでのリセットを防ぐ）
-                    this.virtualObjectDropSuccess = true;
+                        this.isModified = true;
+                        this.renderCell(col, row);
 
-                    logger.info('[CalcEditor] 仮身ドロップ完了');
+                        // デバッグ: ドラッグ元の状態を確認
+                        logger.info('[CalcEditor] ドラッグ元の状態確認:', {
+                            dragSourceCell: dragSourceCellInfo,
+                            dragMode: dragMode
+                        });
+
+                        // 移動モードの場合は、ドラッグ元のセルをクリア
+                        if (dragSourceCellInfo && dragMode === 'move') {
+                            const sourceKey = `${dragSourceCellInfo.col},${dragSourceCellInfo.row}`;
+                            logger.info(`[CalcEditor] 移動モード条件チェック: sourceKey=${sourceKey}, targetKey=${key}`);
+                            // ドラッグ先と同じセルでない場合のみクリア
+                            if (sourceKey !== key) {
+                                this.cells.delete(sourceKey);
+                                this.renderCell(dragSourceCellInfo.col, dragSourceCellInfo.row);
+                                logger.info(`[CalcEditor] ドラッグ元のセルをクリア（移動モード）: ${this.colToLetter(dragSourceCellInfo.col)}${dragSourceCellInfo.row}`);
+                            } else {
+                                logger.info('[CalcEditor] 同じセルへのドロップのため、元のセルはクリアしない');
+                            }
+                        } else if (dragSourceCellInfo && dragMode === 'copy') {
+                            logger.info(`[CalcEditor] ドラッグ元のセルを保持（コピーモード）: ${this.colToLetter(dragSourceCellInfo.col)}${dragSourceCellInfo.row}`);
+                        } else {
+                            logger.warn('[CalcEditor] ドラッグ元のセルをクリアしない理由:', {
+                                hasDragSourceCell: !!dragSourceCellInfo,
+                                dragMode: dragMode
+                            });
+                        }
+
+                        // ドロップ成功フラグを設定（dragendでのリセットを防ぐ）
+                        this.virtualObjectDropSuccess = true;
+
+                        logger.info('[CalcEditor] 仮身ドロップ完了');
+                    });
                     return;
                 }
 
@@ -1273,8 +1280,8 @@ class CalcEditor extends window.PluginBase {
             return;
         }
 
-        // 初期フォーカス
-        imeInput.focus();
+        // 初期フォーカス（preventScroll: true でスクロール位置がリセットされるのを防ぐ）
+        imeInput.focus({ preventScroll: true });
         logger.debug('[CalcEditor] ime-inputに初期フォーカスを設定');
 
         // blurイベントで常にフォーカスを戻す（IMEを常に有効にするため）
@@ -1282,7 +1289,7 @@ class CalcEditor extends window.PluginBase {
             // 編集モード中、親ウィンドウでダイアログ表示中、またはウィンドウが非アクティブの場合はime-inputにフォーカスを戻さない
             if (!this.isEditing && !this.dialogVisible && this.isWindowActive) {
                 setTimeout(() => {
-                    imeInput.focus();
+                    imeInput.focus({ preventScroll: true });
                     logger.debug('[CalcEditor] blur後にime-inputにフォーカスを再設定');
                 }, 0);
             }
@@ -1526,7 +1533,8 @@ class CalcEditor extends window.PluginBase {
         const cell = this.getCellElement(col, row);
         if (cell) {
             cell.classList.add('selected');
-            cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            // カスタムスクロール（stickyヘッダーを考慮）
+            this.scrollCellIntoView(cell);
             // フィルハンドルの位置を更新
             this.updateFillHandlePosition(cell);
         }
@@ -1754,6 +1762,51 @@ class CalcEditor extends window.PluginBase {
      */
     getCellElement(col, row) {
         return document.querySelector(`.cell[data-col="${col}"][data-row="${row}"]`);
+    }
+
+    /**
+     * セルが表示領域内に見えるようにスクロール
+     * ブラウザのscrollIntoViewはstickyヘッダーを考慮しないため、カスタム実装
+     * @param {HTMLElement} cell - セル要素
+     */
+    scrollCellIntoView(cell) {
+        if (!cell) return;
+
+        const pluginContent = document.querySelector('.plugin-content');
+        if (!pluginContent) return;
+
+        const headerHeight = 24; // .grid-headerの高さ
+        const cellRect = cell.getBoundingClientRect();
+        const containerRect = pluginContent.getBoundingClientRect();
+
+        // 垂直方向：セルがstickyヘッダーの下に隠れていないか確認
+        const visibleTop = containerRect.top + headerHeight;
+        const visibleBottom = containerRect.bottom;
+
+        if (cellRect.top < visibleTop) {
+            // セルが上に隠れている - 上にスクロール
+            const scrollAmount = cellRect.top - visibleTop;
+            pluginContent.scrollTop += scrollAmount;
+        } else if (cellRect.bottom > visibleBottom) {
+            // セルが下に隠れている - 下にスクロール
+            const scrollAmount = cellRect.bottom - visibleBottom;
+            pluginContent.scrollTop += scrollAmount;
+        }
+
+        // 水平方向：行ヘッダー（50px）を考慮
+        const rowHeaderWidth = 50;
+        const visibleLeft = containerRect.left + rowHeaderWidth;
+        const visibleRight = containerRect.right;
+
+        if (cellRect.left < visibleLeft) {
+            // セルが左に隠れている - 左にスクロール
+            const scrollAmount = cellRect.left - visibleLeft;
+            pluginContent.scrollLeft += scrollAmount;
+        } else if (cellRect.right > visibleRight) {
+            // セルが右に隠れている - 右にスクロール
+            const scrollAmount = cellRect.right - visibleRight;
+            pluginContent.scrollLeft += scrollAmount;
+        }
     }
 
     /**
@@ -2461,10 +2514,11 @@ class CalcEditor extends window.PluginBase {
         this.editingCell = null;
 
         // IME有効化用のtextareaにフォーカスを戻す
+        // preventScroll: true でスクロール位置がリセットされるのを防ぐ
         const imeInput = document.getElementById('ime-input');
         if (imeInput) {
             setTimeout(() => {
-                imeInput.focus();
+                imeInput.focus({ preventScroll: true });
                 logger.debug('[CalcEditor] 編集終了後、ime-inputにフォーカスを再設定');
             }, 0);
         }
@@ -2489,10 +2543,11 @@ class CalcEditor extends window.PluginBase {
         this.editingCell = null;
 
         // ウィンドウがアクティブな場合のみ、IME有効化用のtextareaにフォーカスを戻す
+        // preventScroll: true でスクロール位置がリセットされるのを防ぐ
         const imeInput = document.getElementById('ime-input');
         if (imeInput && this.isWindowActive) {
             setTimeout(() => {
-                imeInput.focus();
+                imeInput.focus({ preventScroll: true });
                 logger.debug('[CalcEditor] 編集キャンセル後、ime-inputにフォーカスを再設定');
             }, 0);
         }
@@ -2502,13 +2557,58 @@ class CalcEditor extends window.PluginBase {
 
     /**
      * ウィンドウが非アクティブになった時のハンドラ（PluginBaseのオーバーライド）
-     * 編集中の場合はキャンセルする
+     * 編集中の場合はキャンセル、セル選択とスクロール位置を保存
      */
     onWindowDeactivated() {
         if (this.isEditing) {
-            logger.info('[CalcEditor] ウィンドウ非アクティブ化により編集をキャンセル');
             this.cancelEditing();
         }
+        // スクロール位置を保存
+        this.saveScrollPosition();
+        // セル選択状態を保存
+        this.savedCellSelection = {
+            selectedCell: this.selectedCell ? { ...this.selectedCell } : null,
+            selectionRange: this.selectionRange ? { ...this.selectionRange } : null
+        };
+    }
+
+    /**
+     * ウィンドウがアクティブになった時のハンドラ（PluginBaseのオーバーライド）
+     * セル選択とスクロール位置を復元
+     */
+    onWindowActivated() {
+        // スクロール位置を一時保存（focus時にリセットされる可能性があるため）
+        const pluginContent = document.querySelector('.plugin-content');
+        const savedScrollPos = pluginContent ? {
+            x: pluginContent.scrollLeft,
+            y: pluginContent.scrollTop
+        } : null;
+
+        // IME入力用textareaにフォーカス
+        // preventScroll: true でスクロール位置がリセットされるのを防ぐ
+        const imeInput = document.querySelector('#ime-input');
+        if (imeInput) {
+            imeInput.focus({ preventScroll: true });
+        }
+
+        // スクロール位置とセル選択を復元
+        requestAnimationFrame(() => {
+            if (pluginContent && savedScrollPos) {
+                pluginContent.scrollLeft = savedScrollPos.x;
+                pluginContent.scrollTop = savedScrollPos.y;
+            }
+            if (this.savedCellSelection) {
+                if (this.savedCellSelection.selectedCell) {
+                    this.selectedCell = this.savedCellSelection.selectedCell;
+                }
+                if (this.savedCellSelection.selectionRange) {
+                    this.selectionRange = this.savedCellSelection.selectionRange;
+                }
+                // 選択ハイライトを再描画
+                this.clearSelection();
+                this.renderSelection();
+            }
+        });
     }
 
     /**
@@ -3679,21 +3779,20 @@ class CalcEditor extends window.PluginBase {
      * @param {string} xtadData - TAD XMLデータ
      */
     async preloadVirtualObjectIcons(xtadData) {
+        // iconDataは PluginBase で初期化済み、ここでクリア
+        this.iconData = {};
+
         if (!this.iconManager) {
-            logger.debug('[CalcEditor] IconManagerが利用できないため、アイコン事前ロードをスキップ');
-            this.iconData = {};
             return;
         }
 
         // <link>タグから実身IDを抽出
         const linkRegex = /<link\s+([^>]*)>(.*?)<\/link>/gi;
-        const iconLoadPromises = [];
-        const linkMatches = [];
+        const realIds = [];
         let match;
 
         while ((match = linkRegex.exec(xtadData)) !== null) {
             const attrs = match[1];
-            linkMatches.push({ attributes: attrs });
 
             // 属性をパース
             const attrMap = {};
@@ -3706,43 +3805,12 @@ class CalcEditor extends window.PluginBase {
             if (attrMap.id) {
                 // フルIDから実身IDのみを抽出（_0.xtadなどを削除）
                 const realId = attrMap.id.replace(/_\d+\.xtad$/i, '');
-                logger.debug('[CalcEditor] アイコンを事前ロード:', attrMap.id, '実身ID:', realId);
-                iconLoadPromises.push(this.iconManager.loadIcon(realId));
+                realIds.push(realId);
             }
         }
 
-        // すべてのアイコンをロード（並列実行）
-        if (iconLoadPromises.length > 0) {
-            await Promise.all(iconLoadPromises);
-            logger.info(`[CalcEditor] ${iconLoadPromises.length}個のアイコンを事前ロード完了`);
-        }
-
-        // キャッシュからアイコンデータを取得してiconDataオブジェクトを作成（基本文章編集と同じ方式）
-        this.iconData = {};
-        for (const linkMatch of linkMatches) {
-            const attrMap = {};
-            const attrRegex = /(\w+)="([^"]*)"/g;
-            let attrMatch;
-
-            while ((attrMatch = attrRegex.exec(linkMatch.attributes)) !== null) {
-                attrMap[attrMatch[1]] = this.unescapeXml(attrMatch[2]);
-            }
-
-            if (attrMap.id) {
-                // フルIDから実身IDのみを抽出（_0.xtadなどを削除）
-                const realId = attrMap.id.replace(/_\d+\.xtad$/i, '');
-                if (this.iconManager.hasInCache(realId)) {
-                    const cachedData = this.iconManager.getFromCache(realId);
-                    if (cachedData) {
-                        // iconDataは実身IDをキーにする（基本文章編集と同じ）
-                        this.iconData[realId] = cachedData;
-                        logger.debug('[CalcEditor] キャッシュからアイコンデータ取得:', attrMap.id, '実身ID:', realId, 'データ長:', cachedData.length);
-                    }
-                }
-            }
-        }
-
-        logger.info(`[CalcEditor] iconDataオブジェクト構築完了: ${Object.keys(this.iconData).length}個のアイコン`);
+        // PluginBase共通メソッドでアイコン一括読み込み
+        await this.loadAndStoreIcons(realIds);
     }
 
     /**
@@ -3866,8 +3934,8 @@ class CalcEditor extends window.PluginBase {
                         bgcol: attrMap.bgcol,
                         chsz: attrMap.chsz,
                         framedisp: attrMap.framedisp,
-                        namedisp: attrMap.namedisp,
-                        pictdisp: attrMap.pictdisp,
+                        namedisp: attrMap.namedisp !== undefined ? attrMap.namedisp : 'true',
+                        pictdisp: attrMap.pictdisp !== undefined ? attrMap.pictdisp : 'true',
                         roledisp: attrMap.roledisp,
                         typedisp: attrMap.typedisp,
                         updatedisp: attrMap.updatedisp,
@@ -3876,6 +3944,9 @@ class CalcEditor extends window.PluginBase {
                         autoopen: attrMap.autoopen || 'false',
                         applist: applist
                     };
+
+                    // メタデータをJSONから読み込み（続柄、更新日時など）
+                    await this.loadVirtualObjectMetadata(virtualObject);
 
                     // セルに仮身を設定
                     const key = `${col},${row}`;
@@ -4487,31 +4558,7 @@ class CalcEditor extends window.PluginBase {
         return fontTags + result;
     }
 
-    /**
-     * XML特殊文字をエスケープ
-     */
-    escapeXml(text) {
-        if (typeof text !== 'string') return '';
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&apos;');
-    }
-
-    /**
-     * XML特殊文字をアンエスケープ
-     */
-    unescapeXml(text) {
-        if (typeof text !== 'string') return '';
-        return text
-            .replace(/&quot;/g, '"')
-            .replace(/&apos;/g, "'")
-            .replace(/&gt;/g, '>')
-            .replace(/&lt;/g, '<')
-            .replace(/&amp;/g, '&');
-    }
+    // escapeXml / unescapeXml は PluginBase に移動済み
 
     /**
      * <link>タグを生成（仮身）
@@ -4644,7 +4691,7 @@ class CalcEditor extends window.PluginBase {
             logger.debug('[CalcEditor] 実身複製がキャンセルされました');
             return;
         }
-        const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
+        const messageId = this.generateMessageId('duplicate');
 
         // MessageBus経由で実身複製を要求（名前を含める）
         this.messageBus.send('duplicate-real-object', {
@@ -4809,7 +4856,7 @@ class CalcEditor extends window.PluginBase {
         this.saveDocument();
 
         // 親ウィンドウに新たな実身への保存を要求（basic-text-editorと同じ方式）
-        const messageId = 'save-as-new-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        const messageId = this.generateMessageId('save-as-new');
 
         this.messageBus.send('save-as-new-real-object', {
             realId: this.realId,
@@ -4864,49 +4911,20 @@ class CalcEditor extends window.PluginBase {
     }
 
     /**
-     * 背景色変更
+     * 背景色をUIに適用（PluginBaseのオーバーライド）
+     * @param {string} color - 背景色
      */
-    changeBackgroundColor() {
-        logger.info('[CalcEditor] 背景色変更');
-        // TODO: カラーピッカーダイアログを表示して背景色を変更
-        // 現時点ではデフォルトの実装
-        this.sendToParent('show-color-picker', {
-            target: 'spreadsheet-background',
-            currentColor: this.backgroundColor || '#ffffff'
-        });
+    applyBackgroundColor(color) {
+        this.bgColor = color;
+        const gridBody = document.querySelector('.grid-body');
+        if (gridBody) {
+            gridBody.style.backgroundColor = color;
+        }
     }
 
     // updateWindowConfig() は基底クラス PluginBase で定義
-
-    /**
-     * スクロール位置を取得（.grid-bodyを使用するためオーバーライド）
-     * @returns {Object|null} { x, y } または null
-     */
-    getScrollPosition() {
-        const gridBody = document.querySelector('.grid-body');
-        if (gridBody) {
-            return {
-                x: gridBody.scrollLeft,
-                y: gridBody.scrollTop
-            };
-        }
-        return null;
-    }
-
-    /**
-     * スクロール位置を設定（.grid-bodyを使用するためオーバーライド）
-     * @param {Object} scrollPos - { x, y }
-     */
-    setScrollPosition(scrollPos) {
-        if (!scrollPos) return;
-        const gridBody = document.querySelector('.grid-body');
-        if (gridBody) {
-            const maxScrollLeft = Math.max(0, gridBody.scrollWidth - gridBody.clientWidth);
-            const maxScrollTop = Math.max(0, gridBody.scrollHeight - gridBody.clientHeight);
-            gridBody.scrollLeft = Math.min(scrollPos.x || 0, maxScrollLeft);
-            gridBody.scrollTop = Math.min(scrollPos.y || 0, maxScrollTop);
-        }
-    }
+    // getScrollPosition() は基底クラス PluginBase で定義（.plugin-contentを使用）
+    // setScrollPosition() は基底クラス PluginBase で定義（.plugin-contentを使用）
 
     /**
      * 操作パネル位置を更新
@@ -5023,8 +5041,8 @@ class CalcEditor extends window.PluginBase {
             case 'refresh-view':
                 this.refreshView();
                 break;
-            case 'change-background-color':
-                this.changeBackgroundColor();
+            case 'change-bg-color':
+                this.changeBgColor();
                 break;
             case 'show-font-menu':
                 // フォントメニューは親ウィンドウ側で処理
@@ -5056,6 +5074,9 @@ class CalcEditor extends window.PluginBase {
                 break;
             case 'change-virtual-object-attributes':
                 this.changeVirtualObjectAttributes();
+                break;
+            case 'set-relationship':
+                this.setRelationship();
                 break;
 
             // 実身操作
@@ -5104,7 +5125,7 @@ class CalcEditor extends window.PluginBase {
                     { separator: true },
                     { label: '全画面表示オンオフ', action: 'toggle-fullscreen' },
                     { label: '再表示', action: 'refresh-view' },
-                    { label: '背景色変更', action: 'change-background-color' }
+                    { label: '背景色変更', action: 'change-bg-color' }
                 ]
             },
             {
@@ -5149,7 +5170,8 @@ class CalcEditor extends window.PluginBase {
                     { label: '開く', action: 'open-real-object', disabled: isOpened },
                     { label: '閉じる', action: 'close-real-object', disabled: !isOpened },
                     { separator: true },
-                    { label: '属性変更', action: 'change-virtual-object-attributes' }
+                    { label: '属性変更', action: 'change-virtual-object-attributes' },
+                    { label: '続柄設定', action: 'set-relationship' }
                 ]
             });
 
@@ -5335,26 +5357,8 @@ class CalcEditor extends window.PluginBase {
 
         const vobj = cellData.virtualObject;
 
-        // 表示項目の設定
-        if (attrs.pictdisp !== undefined) vobj.pictdisp = attrs.pictdisp ? 'true' : 'false';
-        if (attrs.namedisp !== undefined) vobj.namedisp = attrs.namedisp ? 'true' : 'false';
-        if (attrs.roledisp !== undefined) vobj.roledisp = attrs.roledisp ? 'true' : 'false';
-        if (attrs.typedisp !== undefined) vobj.typedisp = attrs.typedisp ? 'true' : 'false';
-        if (attrs.updatedisp !== undefined) vobj.updatedisp = attrs.updatedisp ? 'true' : 'false';
-        if (attrs.framedisp !== undefined) vobj.framedisp = attrs.framedisp ? 'true' : 'false';
-
-        // 色の設定（#ffffff形式のみ）
-        const colorRegex = /^#[0-9A-Fa-f]{6}$/;
-        if (attrs.frcol && colorRegex.test(attrs.frcol)) vobj.frcol = attrs.frcol;
-        if (attrs.chcol && colorRegex.test(attrs.chcol)) vobj.chcol = attrs.chcol;
-        if (attrs.tbcol && colorRegex.test(attrs.tbcol)) vobj.tbcol = attrs.tbcol;
-        if (attrs.bgcol && colorRegex.test(attrs.bgcol)) vobj.bgcol = attrs.bgcol;
-
-        // 文字サイズの設定
-        if (attrs.chsz !== undefined) vobj.chsz = attrs.chsz.toString();
-
-        // 自動起動の設定
-        if (attrs.autoopen !== undefined) vobj.autoopen = attrs.autoopen ? 'true' : 'false';
+        // PluginBaseの共通メソッドで属性を適用
+        this._applyVobjAttrs(vobj, attrs);
 
         // 変更をマーク
         this.isModified = true;
@@ -5364,6 +5368,29 @@ class CalcEditor extends window.PluginBase {
         this.renderCell(col, row);
 
         logger.info('[CalcEditor] 仮身属性を適用しました:', cellKey);
+    }
+
+    /**
+     * 続柄更新後の再描画（PluginBaseフック）
+     */
+    onRelationshipUpdated(virtualObj, result) {
+        // contextMenuVirtualObjectからcellKeyを取得
+        if (!this.contextMenuVirtualObject || !this.contextMenuVirtualObject.cellKey) {
+            return;
+        }
+
+        const cellKey = this.contextMenuVirtualObject.cellKey;
+        const cellData = this.cells.get(cellKey);
+        if (!cellData || !cellData.virtualObject) {
+            return;
+        }
+
+        // 変更をマーク
+        this.isModified = true;
+
+        // セルを再描画
+        const [col, row] = cellKey.split(',').map(Number);
+        this.renderCell(col, row);
     }
 
     /**
@@ -5405,7 +5432,7 @@ class CalcEditor extends window.PluginBase {
         logger.info('[CalcEditor] 実身複製:', realId);
 
         // 親ウィンドウに実身複製を要求
-        const messageId = `duplicate-real-${Date.now()}-${Math.random()}`;
+        const messageId = this.generateMessageId('duplicate-real');
 
         this.messageBus.send('duplicate-real-object', {
             realId: realId,
@@ -6236,13 +6263,14 @@ class CalcEditor extends window.PluginBase {
 
         this.cells.set(key, cellData);
 
-        // セルを再レンダリング
-        this.renderCell(col, row);
-
         // 変更フラグを立てる
         this.isModified = true;
 
-        logger.info('[CalcEditor] 仮身挿入完了');
+        // メタデータをJSONから読み込み（続柄、更新日時など）、完了後に再レンダリング
+        this.loadVirtualObjectMetadata(virtualObject).then(() => {
+            this.renderCell(col, row);
+            logger.info('[CalcEditor] 仮身挿入完了（メタデータ読み込み完了）');
+        });
     }
 
     /**

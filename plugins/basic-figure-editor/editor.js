@@ -34,6 +34,7 @@ class BasicFigureEditor extends window.PluginBase {
         this.originalContent = ''; // 保存時の内容
         this.imagePathCallbacks = {}; // 画像パス取得コールバック（messageId -> callback）
         this.imagePathMessageId = 0; // 画像パスメッセージID
+        // this.iconData は PluginBase で初期化済み
 
         // 図形編集用のプロパティ
         this.currentTool = 'select'; // 現在選択中のツール
@@ -148,18 +149,7 @@ class BasicFigureEditor extends window.PluginBase {
         this.lastBlinkTime = 0; // 最後の点滅切り替え時刻
         this.animationFrameId = null; // アニメーションフレームID
 
-        // MessageBusの初期化（即座に開始）
-        this.messageBus = null;
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: this.debug,
-                pluginName: 'BasicFigureEditor'
-            });
-            this.messageBus.start();
-            logger.debug('[BasicFigureEditor] MessageBus initialized');
-        } else {
-            logger.warn('[BasicFigureEditor] MessageBus not available');
-        }
+        // MessageBusはPluginBaseで初期化済み
 
         this.init();
     }
@@ -5801,7 +5791,7 @@ class BasicFigureEditor extends window.PluginBase {
             }
 
             // 親ウィンドウに新たな実身への保存を要求
-            const messageId = 'save-as-new-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+            const messageId = this.generateMessageId('save-as-new');
 
             // 親ウィンドウに保存を要求
             if (this.messageBus) {
@@ -6263,15 +6253,7 @@ class BasicFigureEditor extends window.PluginBase {
         return maxZIndex + 1;
     }
 
-    escapeXml(text) {
-        if (!text) return '';
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&apos;');
-    }
+    // escapeXml は PluginBase に移動済み
 
     setupContextMenu() {
         this.canvas.addEventListener('contextmenu', (e) => {
@@ -6410,7 +6392,8 @@ class BasicFigureEditor extends window.PluginBase {
                     { label: '開く', action: 'open-real-object', disabled: isOpened },
                     { label: '閉じる', action: 'close-real-object', disabled: !isOpened },
                     { separator: true },
-                    { label: '属性変更', action: 'change-virtual-object-attributes' }
+                    { label: '属性変更', action: 'change-virtual-object-attributes' },
+                    { label: '続柄設定', action: 'set-relationship' }
                 ];
 
                 menuDef.push({
@@ -6646,6 +6629,10 @@ class BasicFigureEditor extends window.PluginBase {
 
             case 'change-virtual-object-attributes':
                 this.changeVirtualObjectAttributes();
+                break;
+
+            case 'set-relationship':
+                this.setRelationship();
                 break;
 
             // 実身操作
@@ -8026,26 +8013,8 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        // 表示項目の設定
-        if (attrs.pictdisp !== undefined) vobj.pictdisp = attrs.pictdisp ? 'true' : 'false';
-        if (attrs.namedisp !== undefined) vobj.namedisp = attrs.namedisp ? 'true' : 'false';
-        if (attrs.roledisp !== undefined) vobj.roledisp = attrs.roledisp ? 'true' : 'false';
-        if (attrs.typedisp !== undefined) vobj.typedisp = attrs.typedisp ? 'true' : 'false';
-        if (attrs.updatedisp !== undefined) vobj.updatedisp = attrs.updatedisp ? 'true' : 'false';
-        if (attrs.framedisp !== undefined) vobj.framedisp = attrs.framedisp ? 'true' : 'false';
-
-        // 色の設定（#ffffff形式のみ）
-        const colorRegex = /^#[0-9A-Fa-f]{6}$/;
-        if (attrs.frcol && colorRegex.test(attrs.frcol)) vobj.frcol = attrs.frcol;
-        if (attrs.chcol && colorRegex.test(attrs.chcol)) vobj.chcol = attrs.chcol;
-        if (attrs.tbcol && colorRegex.test(attrs.tbcol)) vobj.tbcol = attrs.tbcol;
-        if (attrs.bgcol && colorRegex.test(attrs.bgcol)) vobj.bgcol = attrs.bgcol;
-
-        // 文字サイズの設定
-        if (attrs.chsz !== undefined) vobj.chsz = attrs.chsz.toString();
-
-        // 自動起動の設定
-        if (attrs.autoopen !== undefined) vobj.autoopen = attrs.autoopen ? 'true' : 'false';
+        // PluginBaseの共通メソッドで属性を適用
+        this._applyVobjAttrs(vobj, attrs);
 
         // 修正フラグを立てる
         this.isModified = true;
@@ -8094,6 +8063,52 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         await window.RealObjectSystem.changeVirtualObjectAttributes(this);
+    }
+
+    /**
+     * 続柄設定（changeVirtualObjectAttributesパターン踏襲）
+     */
+    async setRelationship() {
+        // contextMenuVirtualObjectが設定されていない場合は選択中の図形から設定
+        if (!this.contextMenuVirtualObject) {
+            const virtualObjectShape = this.selectedShapes.find(s => s.type === 'vobj');
+            if (!virtualObjectShape || !virtualObjectShape.virtualObject) {
+                this.setStatus('仮身が選択されていません');
+                return { success: false };
+            }
+            const vobj = virtualObjectShape.virtualObject;
+            const realId = window.RealObjectSystem.extractRealId(vobj.link_id);
+            this.contextMenuVirtualObject = {
+                virtualObj: vobj,
+                element: virtualObjectShape.vobjElement,
+                realId: realId,
+                shape: virtualObjectShape
+            };
+        }
+
+        // 親クラスのsetRelationship()を呼び出す（metadata更新とフック呼び出しを含む）
+        return await super.setRelationship();
+    }
+
+    /**
+     * 続柄更新後の再描画（PluginBaseフック）
+     */
+    onRelationshipUpdated(virtualObj, result) {
+        // contextMenuVirtualObjectからshapeを取得
+        const shape = this.contextMenuVirtualObject?.shape
+            || this.shapes.find(s => s.type === 'vobj' && s.virtualObject === virtualObj);
+
+        if (shape && shape.vobjElement) {
+            // 既存のDOM要素を削除して強制再作成
+            if (shape.vobjElement.parentNode) {
+                shape.vobjElement.remove();
+            }
+            shape.vobjElement = null;
+        }
+
+        // Canvas再描画と仮身DOM要素の再生成
+        this.redraw();
+        this.isModified = true;
     }
 
     /**
@@ -8147,7 +8162,7 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        const messageId = `duplicate-real-${Date.now()}-${Math.random()}`;
+        const messageId = this.generateMessageId('duplicate-real');
 
         this.messageBus.send('duplicate-real-object', {
             realId: realId,
@@ -8298,31 +8313,13 @@ class BasicFigureEditor extends window.PluginBase {
         }
     }
 
-    async changeBgColor() {
-        const color = await this.showInputDialog('背景色を入力してください（16進数カラーコード）', this.bgColor);
-
-        if (color) {
-            this.bgColor = color;
-            this.redraw();
-            this.isModified = true;
-
-            // 親ウィンドウに背景色更新を通知（管理用セグメントに保存）
-            if (this.messageBus && this.realId) {
-                this.messageBus.send('update-background-color', {
-                    fileId: this.realId,
-                    backgroundColor: this.bgColor
-                });
-                logger.debug('[FIGURE EDITOR] 背景色更新を親ウィンドウに通知:', this.realId, this.bgColor);
-            }
-
-            // this.currentFileを更新（再表示時に正しい色を適用するため）
-            if (this.currentFile) {
-                if (!this.currentFile.windowConfig) {
-                    this.currentFile.windowConfig = {};
-                }
-                this.currentFile.windowConfig.backgroundColor = this.bgColor;
-            }
-        }
+    /**
+     * 背景色をUIに適用（PluginBaseのオーバーライド）
+     * @param {string} color - 背景色
+     */
+    applyBackgroundColor(color) {
+        this.bgColor = color;
+        this.redraw();
     }
 
     /**
@@ -8859,7 +8856,7 @@ class BasicFigureEditor extends window.PluginBase {
      * @returns {Promise<Blob>} ファイルデータ
      */
     async loadDataFileFromParent(fileName) {
-        const messageId = `load-${Date.now()}-${Math.random()}`;
+        const messageId = this.generateMessageId('load');
 
         if (this.messageBus) {
             this.messageBus.send('load-data-file-request', {
@@ -9214,31 +9211,29 @@ class BasicFigureEditor extends window.PluginBase {
 
     /**
      * すべての仮身のアイコンを事前読み込み
+     * アイコンデータをthis.iconDataオブジェクトに格納し、DOM要素作成時に使用
      */
     async preloadVirtualObjectIcons() {
+        // iconDataは PluginBase で初期化済み、ここでクリア
+        this.iconData = {};
+
         if (!this.virtualObjectRenderer) {
-            logger.debug('[FIGURE EDITOR] VirtualObjectRendererが利用できないため、アイコン事前読み込みをスキップ');
             return;
         }
 
+        // 仮身図形から実身IDを抽出
         const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'vobj' && shape.virtualObject && shape.virtualObject.link_id);
-        logger.debug('[FIGURE EDITOR] 仮身のアイコンを事前読み込み開始:', virtualObjectShapes.length, '個');
+        const realIds = virtualObjectShapes.map(shape =>
+            shape.virtualObject.link_id.replace(/_\d+\.xtad$/i, '')
+        );
 
-        const iconLoadPromises = virtualObjectShapes.map(async (shape) => {
-            const realId = shape.virtualObject.link_id.replace(/_\d+\.xtad$/i, '');
-            try {
-                const iconData = await this.iconManager.loadIcon(realId);
-                if (iconData) {
-                    await this.virtualObjectRenderer.loadIconToCache(realId, iconData);
-                    logger.debug('[FIGURE EDITOR] アイコンをキャッシュに読み込み:', realId);
-                }
-            } catch (error) {
-                logger.error('[FIGURE EDITOR] アイコン読み込みエラー:', realId, error);
-            }
-        });
+        // PluginBase共通メソッドでアイコン一括読み込み
+        await this.loadAndStoreIcons(realIds);
 
-        await Promise.all(iconLoadPromises);
-        logger.debug('[FIGURE EDITOR] 仮身のアイコン事前読み込み完了');
+        // VirtualObjectRendererのキャッシュにも格納（Canvas描画時に使用）
+        for (const realId of Object.keys(this.iconData)) {
+            await this.virtualObjectRenderer.loadIconToCache(realId, this.iconData[realId]);
+        }
     }
 
     /**
@@ -9345,9 +9340,10 @@ class BasicFigureEditor extends window.PluginBase {
         logger.debug('[FIGURE EDITOR] 仮身判定:', virtualObject.link_name, '高さ:', height, '開いた仮身:', isOpenVirtualObj);
 
         // VirtualObjectRendererを使用してDOM要素を作成
-        // アイコンは親ウィンドウ経由で読み込む
+        // アイコンは事前読み込み済みのiconDataを使用、フォールバックでloadIconCallbackを使用
         const vobjElement = this.virtualObjectRenderer.createBlockElement(virtualObjectWithPos, {
-            loadIconCallback: (realId) => this.iconManager.loadIcon(realId)
+            iconData: this.iconData || {},
+            loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIcon(realId) : Promise.resolve(null)
         });
 
         if (!vobjElement) {
@@ -10259,7 +10255,7 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         // メッセージIDを生成
-        const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
+        const messageId = this.generateMessageId('duplicate');
 
         // MessageBus経由で実身複製を要求（名前を含める）
         this.messageBus.send('duplicate-real-object', {

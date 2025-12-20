@@ -10,7 +10,259 @@ const logger = getLogger('ScrollbarManager');
 
 export class ScrollbarManager {
     constructor() {
-        // このクラスはステートレスなので、特にプロパティは不要
+        // MessageBusベースのスクロール状態をキャッシュ
+        // key: windowId, value: { scrollTop, scrollLeft, scrollHeight, scrollWidth, clientHeight, clientWidth }
+        this._scrollStateCache = new Map();
+    }
+
+    /**
+     * プラグインからのスクロール状態更新を受信して保存
+     * @param {string} windowId - ウィンドウID
+     * @param {Object} state - スクロール状態
+     */
+    updateScrollState(windowId, state) {
+        this._scrollStateCache.set(windowId, state);
+    }
+
+    /**
+     * キャッシュされたスクロール状態を取得
+     * @param {string} windowId - ウィンドウID
+     * @returns {Object|null} スクロール状態
+     */
+    getScrollState(windowId) {
+        return this._scrollStateCache.get(windowId) || null;
+    }
+
+    /**
+     * MessageBusベースのスクロールバー更新
+     * プラグインから受信したスクロール状態を使用してスクロールバーUIを更新
+     * @param {HTMLElement} scrollbar - スクロールバー要素
+     * @param {string} direction - スクロール方向（'vertical'または'horizontal'）
+     * @param {Object} state - スクロール状態 { scrollTop, scrollLeft, scrollHeight, scrollWidth, clientHeight, clientWidth }
+     */
+    updateScrollbarFromState(scrollbar, direction, state) {
+        const thumb = scrollbar.querySelector('.scroll-thumb');
+        const track = scrollbar.querySelector('.scroll-track');
+
+        if (!thumb || !track) return;
+
+        const trackRect = track.getBoundingClientRect();
+
+        if (direction === 'vertical') {
+            const { scrollTop, scrollHeight, clientHeight } = state;
+
+            scrollbar.style.display = 'block';
+
+            if (scrollHeight <= clientHeight) {
+                // スクロール不要
+                thumb.style.height = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height - 4) + 'px';
+                thumb.style.top = '2px';
+                thumb.style.background = window.SCROLLBAR_THUMB_COLOR;
+                thumb.style.cursor = 'default';
+            } else {
+                // スクロール可能
+                const viewportRatio = clientHeight / scrollHeight;
+                const thumbHeight = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height * viewportRatio);
+                const scrollRatio = scrollTop / (scrollHeight - clientHeight);
+                const maxThumbTop = trackRect.height - thumbHeight;
+                const thumbTop = scrollRatio * maxThumbTop;
+
+                thumb.style.height = thumbHeight + 'px';
+                thumb.style.top = thumbTop + 'px';
+                thumb.style.background = 'var(--window-titlebar-active)';
+                thumb.style.cursor = 'pointer';
+            }
+        } else {
+            const { scrollLeft, scrollWidth, clientWidth } = state;
+
+            scrollbar.style.display = 'block';
+
+            if (scrollWidth <= clientWidth) {
+                // スクロール不要
+                thumb.style.width = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width - 4) + 'px';
+                thumb.style.left = '2px';
+                thumb.style.background = window.SCROLLBAR_THUMB_COLOR;
+                thumb.style.cursor = 'default';
+            } else {
+                // スクロール可能
+                const viewportRatio = clientWidth / scrollWidth;
+                const thumbWidth = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width * viewportRatio);
+                const scrollRatio = scrollLeft / (scrollWidth - clientWidth);
+                const maxThumbLeft = trackRect.width - thumbWidth;
+                const thumbLeft = scrollRatio * maxThumbLeft;
+
+                thumb.style.width = thumbWidth + 'px';
+                thumb.style.left = thumbLeft + 'px';
+                thumb.style.background = 'var(--window-titlebar-active)';
+                thumb.style.cursor = 'pointer';
+            }
+        }
+    }
+
+    /**
+     * MessageBusベースのプラグインスクロールバー初期化
+     * cross-frame DOMアクセスを使用せず、MessageBus経由でスクロール制御
+     * @param {HTMLElement} scrollbar - スクロールバー要素
+     * @param {string} direction - スクロール方向（'vertical'または'horizontal'）
+     * @param {Object} messageBus - MessageBusインスタンス
+     * @param {string} windowId - ウィンドウID
+     * @returns {Function} クリーンアップ関数
+     */
+    initScrollbarForPluginWithMessageBus(scrollbar, direction, messageBus, windowId) {
+        const thumb = scrollbar.querySelector('.scroll-thumb');
+        const track = scrollbar.querySelector('.scroll-track');
+
+        if (!thumb || !track) {
+            return () => {};
+        }
+
+        let isDragging = false;
+        let startPos = 0;
+        let startScroll = 0;
+
+        // キャッシュされたスクロール状態を取得
+        const getState = () => this.getScrollState(windowId);
+
+        // ドラッグ開始
+        const handleMouseDown = (e) => {
+            const state = getState();
+            if (!state) return;
+
+            // スクロール不要な場合はドラッグ無効
+            if (direction === 'vertical' && state.scrollHeight <= state.clientHeight) return;
+            if (direction === 'horizontal' && state.scrollWidth <= state.clientWidth) return;
+
+            isDragging = true;
+
+            if (direction === 'vertical') {
+                startPos = e.clientY;
+                startScroll = state.scrollTop;
+            } else {
+                startPos = e.clientX;
+                startScroll = state.scrollLeft;
+            }
+            thumb.classList.add('dragging');
+            e.preventDefault();
+        };
+
+        thumb.addEventListener('mousedown', handleMouseDown);
+
+        // ドラッグ中
+        const handleMouseMove = (e) => {
+            if (!isDragging) return;
+
+            const state = getState();
+            if (!state) return;
+
+            const trackRect = track.getBoundingClientRect();
+
+            if (direction === 'vertical') {
+                const delta = e.clientY - startPos;
+                const thumbHeight = parseFloat(thumb.style.height);
+                const maxThumbMove = trackRect.height - thumbHeight;
+                const maxScroll = state.scrollHeight - state.clientHeight;
+
+                if (maxThumbMove > 0 && maxScroll > 0) {
+                    const scrollDelta = (delta / maxThumbMove) * maxScroll;
+                    const newScrollTop = Math.max(0, Math.min(maxScroll, startScroll + scrollDelta));
+
+                    // MessageBus経由でプラグインにスクロール位置を送信（親→子）
+                    messageBus.sendToWindow(windowId, 'set-scroll-position', {
+                        windowId: windowId,
+                        scrollTop: newScrollTop
+                    });
+                }
+            } else {
+                const delta = e.clientX - startPos;
+                const thumbWidth = parseFloat(thumb.style.width);
+                const maxThumbMove = trackRect.width - thumbWidth;
+                const maxScroll = state.scrollWidth - state.clientWidth;
+
+                if (maxThumbMove > 0 && maxScroll > 0) {
+                    const scrollDelta = (delta / maxThumbMove) * maxScroll;
+                    const newScrollLeft = Math.max(0, Math.min(maxScroll, startScroll + scrollDelta));
+
+                    // MessageBus経由でプラグインにスクロール位置を送信（親→子）
+                    messageBus.sendToWindow(windowId, 'set-scroll-position', {
+                        windowId: windowId,
+                        scrollLeft: newScrollLeft
+                    });
+                }
+            }
+        };
+
+        // ドラッグ終了
+        const handleMouseUp = () => {
+            if (isDragging) {
+                isDragging = false;
+                thumb.classList.remove('dragging');
+            }
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+
+        // トラッククリック
+        const handleTrackClick = (e) => {
+            if (e.target === thumb || thumb.contains(e.target)) return;
+
+            const state = getState();
+            if (!state) return;
+
+            // スクロール不要な場合はクリック無効
+            if (direction === 'vertical' && state.scrollHeight <= state.clientHeight) return;
+            if (direction === 'horizontal' && state.scrollWidth <= state.clientWidth) return;
+
+            const trackRect = track.getBoundingClientRect();
+
+            if (direction === 'vertical') {
+                const clickPos = e.clientY - trackRect.top;
+                const thumbHeight = parseFloat(thumb.style.height);
+                const targetRatio = (clickPos - thumbHeight / 2) / (trackRect.height - thumbHeight);
+                const clampedRatio = Math.max(0, Math.min(1, targetRatio));
+                const newScrollTop = clampedRatio * (state.scrollHeight - state.clientHeight);
+
+                messageBus.sendToWindow(windowId, 'set-scroll-position', {
+                    windowId: windowId,
+                    scrollTop: newScrollTop
+                });
+            } else {
+                const clickPos = e.clientX - trackRect.left;
+                const thumbWidth = parseFloat(thumb.style.width);
+                const targetRatio = (clickPos - thumbWidth / 2) / (trackRect.width - thumbWidth);
+                const clampedRatio = Math.max(0, Math.min(1, targetRatio));
+                const newScrollLeft = clampedRatio * (state.scrollWidth - state.clientWidth);
+
+                messageBus.sendToWindow(windowId, 'set-scroll-position', {
+                    windowId: windowId,
+                    scrollLeft: newScrollLeft
+                });
+            }
+        };
+
+        track.addEventListener('click', handleTrackClick);
+
+        // クリーンアップ関数を返す
+        return () => {
+            thumb.removeEventListener('mousedown', handleMouseDown);
+            track.removeEventListener('click', handleTrackClick);
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+    }
+
+    /**
+     * iframe内のスクロールコンテナを検出
+     * プラグインごとに異なるスクロールコンテナをサポート
+     * @param {Document} iframeDoc - iframeのdocument
+     * @returns {HTMLElement|null} スクロールコンテナ要素
+     */
+    findScrollContainer(iframeDoc) {
+        if (!iframeDoc) return null;
+        // 検索順序: data属性 → .plugin-content → body
+        return iframeDoc.querySelector('[data-scroll-container="true"]') ||
+               iframeDoc.querySelector('.plugin-content') ||
+               iframeDoc.body;
     }
 
     /**
@@ -271,9 +523,9 @@ export class ScrollbarManager {
         if (!thumb || !track || !content || !iframe) return;
 
         try {
-            // iframe内の.plugin-contentまたはbodyを取得
+            // iframe内のスクロールコンテナを取得
             const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-            const pluginContent = iframeDoc.querySelector('.plugin-content') || iframeDoc.body;
+            const pluginContent = this.findScrollContainer(iframeDoc);
 
             if (!pluginContent) return;
 
@@ -366,7 +618,7 @@ export class ScrollbarManager {
         const getScrollElement = () => {
             if (scrollElement) return scrollElement;
             const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-            scrollElement = iframeDoc.querySelector('.plugin-content') || iframeDoc.body;
+            scrollElement = this.findScrollContainer(iframeDoc);
             return scrollElement;
         };
 
@@ -478,32 +730,43 @@ export class ScrollbarManager {
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('mouseup', handleMouseUp);
 
-        // iframe内の.plugin-contentまたはbodyにscrollイベントリスナーを登録
+        // iframe内のスクロールコンテナにscrollイベントリスナーを登録
         // iframeの読み込みを待ってから登録
         const setupScrollListener = (retryCount = 0) => {
             try {
                 const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                // .plugin-contentがあればそれを使用、なければbodyを使用
-                let pluginContent = iframeDoc.querySelector('.plugin-content');
+                // スクロールコンテナを検出
+                let pluginContent = this.findScrollContainer(iframeDoc);
 
                 if (!pluginContent && retryCount < 5) {
-                    // .plugin-contentが見つからない場合、少し待ってから再試行
+                    // スクロールコンテナが見つからない場合、少し待ってから再試行
                     setTimeout(() => setupScrollListener(retryCount + 1), window.RETRY_DELAY_MS);
                     return;
                 }
 
-                // 5回試してもなければbodyを使用
                 if (!pluginContent) {
-                    pluginContent = iframeDoc.body;
-                    if (!pluginContent) {
-                        logger.warn('iframe内のスクロール要素が見つかりません');
-                        return;
-                    }
+                    logger.warn('iframe内のスクロール要素が見つかりません');
+                    return;
                 }
+
+                // スクロール要素をキャッシュに保存
+                scrollElement = pluginContent;
 
                 pluginContent.addEventListener('scroll', () => {
                     this.forceUpdateScrollbarForPlugin(iframe, content, scrollbar, direction);
                 });
+
+                // リサイズ監視（プラグインコンテンツサイズ変更時に更新）
+                try {
+                    const resizeObserver = new ResizeObserver(() => {
+                        setTimeout(() => {
+                            this.forceUpdateScrollbarForPlugin(iframe, content, scrollbar, direction);
+                        }, window.QUICK_UI_UPDATE_DELAY_MS || 50);
+                    });
+                    resizeObserver.observe(pluginContent);
+                } catch (resizeError) {
+                    // ResizeObserver非対応環境では無視
+                }
 
                 // 初期表示時のスクロールバーを更新
                 this.forceUpdateScrollbarForPlugin(iframe, content, scrollbar, direction);

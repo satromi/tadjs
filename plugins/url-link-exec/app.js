@@ -22,13 +22,8 @@ class UrlLinkExec extends window.PluginBase {
         this.urls = [];
         this.currentIndex = 0;
 
-        // MessageBus初期化
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: false,
-                pluginName: 'UrlLinkExec'
-            });
-            this.messageBus.start();
+        // MessageBusはPluginBaseで初期化済み
+        if (this.messageBus) {
             this.setupMessageBusHandlers();
         }
 

@@ -2,9 +2,12 @@ import {
     DIALOG_TIMEOUT_MS,
     DEFAULT_TIMEOUT_MS,
     ERROR_CHECK_TIMEOUT_MS,
-    DEFAULT_INPUT_WIDTH
+    DEFAULT_INPUT_WIDTH,
+    escapeXml as escapeXmlUtil,
+    unescapeXml as unescapeXmlUtil
 } from './util.js';
 import { getLogger } from './logger.js';
+import { throttle } from './performance-utils.js';
 
 const logger = getLogger('PluginBase');
 
@@ -34,6 +37,8 @@ export class PluginBase {
         this.virtualObjectRenderer = null;
         this.openedRealObjects = new Map();
         this.iconManager = null;
+        this.iconData = {};  // アイコンデータキャッシュ { realId: base64Data }
+        this.bgColor = '#ffffff';  // 背景色（デフォルト白）
         this.debug = window.TADjsConfig?.debug || false;
 
         // ダブルクリック+ドラッグの共通状態管理
@@ -62,6 +67,34 @@ export class PluginBase {
 
         // ウィンドウのアクティブ状態
         this.isWindowActive = false;
+
+        // 編集状態フラグ（エディタ系プラグイン用）
+        // コンテンツ変更時にtrueに設定、保存後にfalseにリセット
+        // handleCloseRequest()で保存確認ダイアログ表示の判断に使用
+        this.isModified = false;
+
+        // ファイルデータ（initハンドラで設定）
+        this.fileData = null;
+
+        // 選択範囲の保存用（ウィンドウ非アクティブ時に保存）
+        this.savedSelection = null;
+
+        // スクロール通知機能（MessageBus経由で親ウィンドウにスクロール状態を通知）
+        this.scrollContainerSelector = '.plugin-content';  // スクロールコンテナのCSSセレクタ
+        this._scrollNotificationEnabled = false;           // スクロール通知が有効かどうか
+        this._lastScrollState = null;                      // 最後に送信したスクロール状態
+
+        // MessageBusの初期化（即座に開始）
+        // サブクラスで独自のMessageBus初期化が必要な場合は、
+        // super()呼び出し後にthis.messageBusを上書き可能
+        if (window.MessageBus) {
+            this.messageBus = new window.MessageBus({
+                debug: this.debug,
+                pluginName: pluginName
+            });
+            this.messageBus.start();
+            logger.debug(`[${pluginName}] MessageBus initialized by PluginBase`);
+        }
     }
 
     /**
@@ -97,12 +130,111 @@ export class PluginBase {
     }
 
     /**
+     * 親ウィンドウ経由でデータファイルを読み込む（MessageBus利用）
+     * プラグインからJSON/xtadファイル等を読み込む際に使用
+     *
+     * @param {string} fileName - ファイル名
+     * @returns {Promise<Blob>} ファイルデータ（Blobオブジェクト）
+     * @throws {Error} ファイル読み込みエラー
+     *
+     * @example
+     * const jsonFile = await this.loadDataFileFromParent('realId.json');
+     * const jsonText = await jsonFile.text();
+     * const jsonData = JSON.parse(jsonText);
+     */
+    async loadDataFileFromParent(fileName) {
+        const messageId = this.generateMessageId('load');
+
+        if (this.messageBus) {
+            this.messageBus.send('load-data-file-request', {
+                messageId: messageId,
+                fileName: fileName
+            });
+        } else {
+            throw new Error('MessageBusが初期化されていません');
+        }
+
+        try {
+            const result = await this.messageBus.waitFor('load-data-file-response', DEFAULT_TIMEOUT_MS, (data) => {
+                return data.messageId === messageId;
+            });
+            if (result.success) {
+                return result.data;
+            } else {
+                throw new Error(result.error || 'ファイル読み込み失敗');
+            }
+        } catch (error) {
+            throw new Error('ファイル読み込みエラー: ' + error.message);
+        }
+    }
+
+    /**
+     * 仮身のメタデータ（applist、relationship、updateDate等）をJSONファイルから読み込む
+     * ドキュメント読み込み時や仮身表示時に使用
+     *
+     * @param {Object} virtualObj - 仮身オブジェクト（link_idを持つ）
+     * @returns {Promise<void>}
+     *
+     * 読み込み後、virtualObjに以下のプロパティが設定される:
+     * - applist: アプリケーションリスト
+     * - metadata: JSONファイルの全データ
+     * - updateDate: 更新日時
+     *
+     * @example
+     * const virtualObject = { link_id: 'realId_0.xtad', ... };
+     * await this.loadVirtualObjectMetadata(virtualObject);
+     * // virtualObject.metadata.relationship で続柄にアクセス可能
+     */
+    async loadVirtualObjectMetadata(virtualObj) {
+        try {
+            // 実身IDを抽出してJSONファイル名を生成（共通メソッドを使用）
+            const baseFileId = window.RealObjectSystem.extractRealId(virtualObj.link_id);
+            const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(baseFileId);
+
+            // 1. 親ウィンドウのfileObjectsから直接取得を試みる
+            if (window.parent && window.parent.tadjsDesktop && window.parent.tadjsDesktop.fileObjects) {
+                const jsonFile = window.parent.tadjsDesktop.fileObjects[jsonFileName];
+
+                if (jsonFile) {
+                    const jsonText = await jsonFile.text();
+                    const jsonData = JSON.parse(jsonText);
+
+                    virtualObj.applist = jsonData.applist || {};
+                    virtualObj.metadata = jsonData;
+                    virtualObj.updateDate = jsonData.updateDate;
+                    return;
+                }
+            }
+
+            // 2. MessageBus経由で親ウィンドウからファイル読み込み
+            try {
+                const jsonFile = await this.loadDataFileFromParent(jsonFileName);
+                const jsonText = await jsonFile.text();
+                const jsonData = JSON.parse(jsonText);
+                virtualObj.applist = jsonData.applist || {};
+                virtualObj.metadata = jsonData;
+                virtualObj.updateDate = jsonData.updateDate;
+                return;
+            } catch (loadError) {
+                // MessageBus経由でも失敗した場合はデフォルト値を設定
+                logger.debug(`[${this.pluginName}] メタデータ読み込み失敗: ${jsonFileName}`, loadError.message);
+            }
+
+            // 読み込み失敗時はデフォルト値を設定
+            virtualObj.applist = virtualObj.applist || {};
+        } catch (error) {
+            logger.debug(`[${this.pluginName}] loadVirtualObjectMetadata エラー:`, error.message);
+            virtualObj.applist = virtualObj.applist || {};
+        }
+    }
+
+    /**
      * 実身データを読み込む
      * @param {string} realId - 実身ID
      * @returns {Promise<Object>} 実身データ
      */
     async loadRealObjectData(realId) {
-        const messageId = `load-real-${Date.now()}-${Math.random()}`;
+        const messageId = this.generateMessageId('load-real');
 
         // 親ウィンドウに実身データ読み込みを要求
         this.messageBus.send('load-real-object', {
@@ -170,9 +302,12 @@ export class PluginBase {
      * @param {string} message - メッセージ
      * @param {string} defaultValue - デフォルト値
      * @param {number} inputWidth - 入力欄の幅（文字数）
-     * @returns {Promise<string|null>} 入力値（キャンセル時はnull）
+     * @param {Object} options - オプション
+     * @param {boolean} options.colorPicker - カラーピッカーを表示するかどうか
+     * @param {Object} options.checkbox - チェックボックス設定 { label: string, checked: boolean }
+     * @returns {Promise<string|{value: string, checkbox: boolean}|null>} 入力値（checkboxオプション使用時はオブジェクト、キャンセル時はnull）
      */
-    async showInputDialog(message, defaultValue = '', inputWidth = DEFAULT_INPUT_WIDTH) {
+    async showInputDialog(message, defaultValue = '', inputWidth = DEFAULT_INPUT_WIDTH, options = {}) {
         // ユーザー入力を待つダイアログなので、タイムアウトを無効化（0に設定）
         // ボタンが押されるまで無期限に待機する
         const INPUT_DIALOG_TIMEOUT_MS = 0;
@@ -182,6 +317,8 @@ export class PluginBase {
                 message: message,
                 defaultValue: defaultValue,
                 inputWidth: inputWidth,
+                colorPicker: options.colorPicker || false,
+                checkbox: options.checkbox || null,
                 buttons: [
                     { label: '取り消し', value: 'cancel' },
                     { label: '設　定', value: 'ok' }
@@ -205,7 +342,15 @@ export class PluginBase {
                     resolve(null);
                 } else {
                     logger.info(`[${this.pluginName}] 設定ボタンが押されました, value:`, dialogResult.value);
-                    resolve(dialogResult.value);
+                    // checkboxオプションが指定されている場合はオブジェクトで返す
+                    if (options.checkbox) {
+                        resolve({
+                            value: dialogResult.value,
+                            checkbox: dialogResult.checkbox || false
+                        });
+                    } else {
+                        resolve(dialogResult.value);
+                    }
                 }
             }, INPUT_DIALOG_TIMEOUT_MS);
         });
@@ -275,6 +420,42 @@ export class PluginBase {
      */
     async changeVirtualObjectAttributes() {
         return await window.RealObjectSystem.changeVirtualObjectAttributes(this);
+    }
+
+    /**
+     * 続柄を設定
+     * @returns {Promise<Object>} { success: boolean, relationship?: string[], cancelled?: boolean }
+     */
+    async setRelationship() {
+        const result = await window.RealObjectSystem.setRelationship(this);
+
+        // 成功した場合、メモリ上のmetadata.relationshipを更新し、フックを呼び出す
+        if (result && result.success && this.contextMenuVirtualObject?.virtualObj) {
+            const virtualObj = this.contextMenuVirtualObject.virtualObj;
+
+            // メタデータがなければ作成
+            if (!virtualObj.metadata) {
+                virtualObj.metadata = {};
+            }
+            virtualObj.metadata.relationship = result.relationship || [];
+
+            // プラグイン固有の再描画処理を呼び出す
+            this.onRelationshipUpdated(virtualObj, result);
+        }
+
+        return result;
+    }
+
+    /**
+     * 続柄更新後のフック（サブクラスでオーバーライド可能）
+     * setRelationship()成功後に呼ばれる。仮身の再描画などに使用
+     *
+     * @param {Object} virtualObj - 更新された仮身オブジェクト
+     * @param {Object} result - setRelationshipの結果 { success: true, relationship: string[] }
+     */
+    onRelationshipUpdated(virtualObj, result) {
+        // デフォルト実装: 何もしない
+        // サブクラスで再描画処理をオーバーライド
     }
 
     /**
@@ -373,6 +554,97 @@ export class PluginBase {
         document.addEventListener('mousedown', () => {
             this.activateWindow();
         });
+    }
+
+    // ========================================
+    // スクロール通知機能（MessageBus経由）
+    // ========================================
+
+    /**
+     * スクロール通知機能を初期化
+     * スクロールコンテナのscrollイベントを監視し、MessageBus経由で親に通知
+     *
+     * サブクラスのinit()から呼び出すこと
+     * scrollContainerSelectorで対象を指定可能（デフォルト: .plugin-content）
+     */
+    initScrollNotification() {
+        const container = document.querySelector(this.scrollContainerSelector);
+        if (!container) {
+            logger.warn(`[${this.pluginName}] スクロールコンテナが見つかりません: ${this.scrollContainerSelector}`);
+            return;
+        }
+
+        if (!this.messageBus) {
+            logger.warn(`[${this.pluginName}] MessageBusが未初期化のためスクロール通知をスキップ`);
+            return;
+        }
+
+        // スクロールイベントをthrottle（16ms ≒ 60fps）
+        const throttledHandler = throttle(() => {
+            this._sendScrollState(container);
+        }, 16);
+
+        container.addEventListener('scroll', throttledHandler);
+
+        // 初期状態を送信（windowIdが設定された後に送信するため遅延）
+        setTimeout(() => {
+            this._sendScrollState(container);
+        }, 100);
+
+        this._scrollNotificationEnabled = true;
+        logger.debug(`[${this.pluginName}] スクロール通知初期化完了: ${this.scrollContainerSelector}`);
+    }
+
+    /**
+     * スクロール状態をMessageBus経由で親に送信
+     * @param {HTMLElement} container - スクロールコンテナ
+     * @private
+     */
+    _sendScrollState(container) {
+        if (!this.messageBus || !this.windowId) return;
+
+        const state = {
+            scrollTop: container.scrollTop,
+            scrollLeft: container.scrollLeft,
+            scrollHeight: container.scrollHeight,
+            scrollWidth: container.scrollWidth,
+            clientHeight: container.clientHeight,
+            clientWidth: container.clientWidth
+        };
+
+        // 前回と同じ状態なら送信しない
+        if (this._lastScrollState &&
+            this._lastScrollState.scrollTop === state.scrollTop &&
+            this._lastScrollState.scrollLeft === state.scrollLeft &&
+            this._lastScrollState.scrollHeight === state.scrollHeight &&
+            this._lastScrollState.scrollWidth === state.scrollWidth &&
+            this._lastScrollState.clientHeight === state.clientHeight &&
+            this._lastScrollState.clientWidth === state.clientWidth) {
+            return;
+        }
+
+        this._lastScrollState = state;
+
+        this.messageBus.send('scroll-state-update', {
+            windowId: this.windowId,
+            ...state
+        });
+    }
+
+    /**
+     * 親からのスクロール位置設定要求を処理
+     * @param {Object} data - { scrollTop?: number, scrollLeft?: number }
+     */
+    handleSetScrollPosition(data) {
+        const container = document.querySelector(this.scrollContainerSelector);
+        if (!container) return;
+
+        if (typeof data.scrollTop === 'number') {
+            container.scrollTop = data.scrollTop;
+        }
+        if (typeof data.scrollLeft === 'number') {
+            container.scrollLeft = data.scrollLeft;
+        }
     }
 
     /**
@@ -848,7 +1120,7 @@ export class PluginBase {
      */
     async duplicateRealObjectForDrag(virtualObject) {
         const sourceRealId = window.RealObjectSystem.extractRealId(virtualObject.link_id);
-        const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).substring(2, 11);
+        const messageId = this.generateMessageId('duplicate');
 
         this.messageBus.send('duplicate-real-object', {
             realId: sourceRealId,
@@ -982,6 +1254,78 @@ export class PluginBase {
         return dragData;
     }
 
+    /**
+     * DOM要素のdatasetから仮身オブジェクトを構築
+     * data-link-* 属性を link_* 形式に変換し、短い形式のプロパティも追加
+     *
+     * @param {DOMStringMap} dataset - DOM要素のdataset（element.dataset）
+     * @returns {Object} 仮身オブジェクト（link_id, link_name, tbcol, frcol, chsz等を含む）
+     *
+     * @example
+     * // dragstartハンドラーでの使用例
+     * const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
+     * this.setVirtualObjectDragData(e, [virtualObj], 'basic-text-editor');
+     *
+     * @example
+     * // 仮身を開く際の使用例
+     * const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
+     * this.openVirtualObjectReal(virtualObj, pluginId);
+     */
+    buildVirtualObjFromDataset(dataset) {
+        const virtualObj = {};
+
+        // data-link-* 形式の属性を抽出（dataset.linkXxx形式）
+        for (const key in dataset) {
+            if (key.startsWith('link')) {
+                const attrName = key.replace(/^link/, '').toLowerCase();
+                virtualObj['link_' + attrName] = dataset[key];
+            }
+        }
+
+        // 仮身属性を短い形式でも追加（仮身一覧プラグインとの互換性のため）
+        // 色属性（link_tbcol → tbcol）
+        if (virtualObj.link_tbcol) virtualObj.tbcol = virtualObj.link_tbcol;
+        if (virtualObj.link_frcol) virtualObj.frcol = virtualObj.link_frcol;
+        if (virtualObj.link_chcol) virtualObj.chcol = virtualObj.link_chcol;
+        if (virtualObj.link_bgcol) virtualObj.bgcol = virtualObj.link_bgcol;
+
+        // サイズ・レイアウト属性
+        if (virtualObj.link_chsz) virtualObj.chsz = parseFloat(virtualObj.link_chsz);
+        if (virtualObj.link_width) virtualObj.width = parseInt(virtualObj.link_width);
+        if (virtualObj.link_heightpx) virtualObj.heightPx = parseInt(virtualObj.link_heightpx);
+        if (virtualObj.link_dlen) virtualObj.dlen = parseInt(virtualObj.link_dlen);
+
+        // 座標属性
+        if (virtualObj.link_vobjleft) virtualObj.vobjleft = parseInt(virtualObj.link_vobjleft);
+        if (virtualObj.link_vobjtop) virtualObj.vobjtop = parseInt(virtualObj.link_vobjtop);
+        if (virtualObj.link_vobjright) virtualObj.vobjright = parseInt(virtualObj.link_vobjright);
+        if (virtualObj.link_vobjbottom) virtualObj.vobjbottom = parseInt(virtualObj.link_vobjbottom);
+
+        // 表示属性
+        if (virtualObj.link_framedisp) virtualObj.framedisp = virtualObj.link_framedisp;
+        if (virtualObj.link_namedisp) virtualObj.namedisp = virtualObj.link_namedisp;
+        if (virtualObj.link_pictdisp) virtualObj.pictdisp = virtualObj.link_pictdisp;
+        if (virtualObj.link_roledisp) virtualObj.roledisp = virtualObj.link_roledisp;
+        if (virtualObj.link_typedisp) virtualObj.typedisp = virtualObj.link_typedisp;
+        if (virtualObj.link_updatedisp) virtualObj.updatedisp = virtualObj.link_updatedisp;
+
+        // applist属性（data-applist形式で直接設定されている）
+        if (dataset.applist) {
+            try {
+                virtualObj.applist = JSON.parse(dataset.applist);
+            } catch (e) {
+                virtualObj.applist = {};
+            }
+        }
+
+        // autoopen属性
+        if (dataset.autoopen) {
+            virtualObj.autoopen = dataset.autoopen;
+        }
+
+        return virtualObj;
+    }
+
     // ========================================
     // 共通MessageBusハンドラ登録
     // ========================================
@@ -1087,7 +1431,14 @@ export class PluginBase {
             this.onWindowDeactivated();
         });
 
-        logger.info(`[${this.pluginName}] 共通MessageBusハンドラ登録完了 (10件)`);
+        // set-scroll-position メッセージ（親からのスクロール位置設定要求）
+        this.messageBus.on('set-scroll-position', (data) => {
+            if (data.windowId === this.windowId) {
+                this.handleSetScrollPosition(data);
+            }
+        });
+
+        logger.info(`[${this.pluginName}] 共通MessageBusハンドラ登録完了 (11件)`);
 
         // plugin-ready シグナルを親ウィンドウに送信
         // これにより親ウィンドウはプラグインの準備完了を確認してからinitを送信できる
@@ -1285,6 +1636,79 @@ export class PluginBase {
         }
     }
 
+    /**
+     * スクロール位置を保持しながら要素にフォーカス
+     * 一部のブラウザでfocus()呼び出し時にスクロール位置がリセットされる問題を回避
+     *
+     * @param {HTMLElement} element - フォーカスする要素
+     */
+    focusWithScrollPreservation(element) {
+        if (!element) return;
+        const scrollPos = {
+            x: element.scrollLeft,
+            y: element.scrollTop
+        };
+        element.focus();
+        requestAnimationFrame(() => {
+            element.scrollLeft = scrollPos.x;
+            element.scrollTop = scrollPos.y;
+        });
+    }
+
+    /**
+     * 現在の選択範囲（カーソル位置）を保存
+     * ウィンドウ非アクティブ時に呼び出し、復元時に使用
+     */
+    _saveSelection() {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) {
+            this.savedSelection = null;
+            return;
+        }
+
+        const range = selection.getRangeAt(0);
+        this.savedSelection = {
+            startContainer: range.startContainer,
+            startOffset: range.startOffset,
+            endContainer: range.endContainer,
+            endOffset: range.endOffset,
+            collapsed: range.collapsed
+        };
+    }
+
+    /**
+     * 保存された選択範囲（カーソル位置）を復元
+     * ウィンドウアクティブ時に呼び出し
+     * @returns {boolean} 復元に成功した場合true
+     */
+    _restoreSelection() {
+        if (!this.savedSelection) return false;
+
+        try {
+            const selection = window.getSelection();
+            if (!selection) return false;
+
+            // 保存されたノードがまだDOMに存在するか確認
+            if (!document.contains(this.savedSelection.startContainer) ||
+                !document.contains(this.savedSelection.endContainer)) {
+                this.savedSelection = null;
+                return false;
+            }
+
+            const range = document.createRange();
+            range.setStart(this.savedSelection.startContainer, this.savedSelection.startOffset);
+            range.setEnd(this.savedSelection.endContainer, this.savedSelection.endOffset);
+
+            selection.removeAllRanges();
+            selection.addRange(range);
+            return true;
+        } catch (e) {
+            // オフセットが無効な場合などのエラーを無視
+            this.savedSelection = null;
+            return false;
+        }
+    }
+
     // ========================================
     // 共通ユーティリティメソッド
     // ========================================
@@ -1311,6 +1735,166 @@ export class PluginBase {
      */
     error(...args) {
         logger.error(`[${this.pluginName}]`, ...args);
+    }
+
+    /**
+     * ユニークなメッセージIDを生成
+     * MessageBusでの request/response ペアリングに使用
+     *
+     * @param {string} [prefix='msg'] - プレフィックス（操作種別を示す）
+     * @returns {string} ユニークなメッセージID
+     *
+     * @example
+     * const messageId = this.generateMessageId('duplicate');
+     * // => 'duplicate-1734567890123-a1b2c3d4e'
+     *
+     * this.messageBus.send('duplicate-real-object', { realId, messageId });
+     * const result = await this.messageBus.waitFor('real-object-duplicated', TIMEOUT,
+     *     (data) => data.messageId === messageId);
+     */
+    generateMessageId(prefix = 'msg') {
+        return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    }
+
+    // ========================================
+    // XML エスケープ処理（util.jsに委譲）
+    // ========================================
+
+    /**
+     * XML特殊文字をエスケープ
+     * @param {string} text - エスケープする文字列
+     * @returns {string} エスケープ済み文字列
+     */
+    escapeXml(text) {
+        return escapeXmlUtil(text);
+    }
+
+    /**
+     * XML特殊文字をアンエスケープ
+     * @param {string} text - アンエスケープする文字列
+     * @returns {string} アンエスケープ済み文字列
+     */
+    unescapeXml(text) {
+        return unescapeXmlUtil(text);
+    }
+
+    // ========================================
+    // アイコン読み込みヘルパー
+    // ========================================
+
+    /**
+     * 単一アイコンを読み込んでthis.iconDataに格納
+     * @param {string} realId - 実身ID
+     * @returns {Promise<string|null>} アイコンデータ（base64）、失敗時はnull
+     */
+    async loadAndStoreIcon(realId) {
+        if (!this.iconManager) return null;
+        try {
+            const iconData = await this.iconManager.loadIcon(realId);
+            if (iconData) {
+                this.iconData[realId] = iconData;
+            }
+            return iconData;
+        } catch (error) {
+            logger.debug(`[${this.pluginName}] アイコン読み込みエラー:`, realId, error.message);
+            return null;
+        }
+    }
+
+    /**
+     * 複数アイコンを一括読み込んでthis.iconDataに格納
+     * @param {string[]} realIds - 実身ID配列
+     * @returns {Promise<void>}
+     */
+    async loadAndStoreIcons(realIds) {
+        if (!this.iconManager || !realIds || realIds.length === 0) return;
+
+        // 重複を除去
+        const uniqueIds = [...new Set(realIds)];
+
+        const promises = uniqueIds.map(realId =>
+            this.iconManager.loadIcon(realId)
+                .then(iconData => {
+                    if (iconData) {
+                        this.iconData[realId] = iconData;
+                    }
+                })
+                .catch(() => {})
+        );
+
+        await Promise.all(promises);
+    }
+
+    // ========================================
+    // 背景色変更（共通処理）
+    // ========================================
+
+    /**
+     * 背景色変更ダイアログを表示し、背景色を変更する
+     * サブクラスでapplyBackgroundColor()をオーバーライドして
+     * プラグイン固有の背景色適用処理を実装する
+     */
+    async changeBgColor() {
+        // 現在の背景色を取得
+        const currentBgColor = this.bgColor ||
+            this.currentFile?.windowConfig?.backgroundColor ||
+            this.fileData?.windowConfig?.backgroundColor ||
+            '#ffffff';
+
+        const result = await this.showInputDialog(
+            '背景色を入力してください（例: #ffffff）',
+            currentBgColor,
+            20,
+            { colorPicker: true }
+        );
+
+        // キャンセルまたは空の場合は何もしない
+        if (!result || (typeof result === 'object' && !result.value)) {
+            return;
+        }
+
+        // 入力値を取得
+        const newBgColor = typeof result === 'object' ? result.value : result;
+
+        this.bgColor = newBgColor;
+
+        // プラグイン固有の背景色適用（サブクラスでオーバーライド）
+        this.applyBackgroundColor(newBgColor);
+
+        this.isModified = true;
+
+        // 親ウィンドウに背景色更新を通知
+        if (this.messageBus && this.realId) {
+            this.messageBus.send('update-background-color', {
+                fileId: this.realId,
+                backgroundColor: newBgColor
+            });
+        }
+
+        // currentFile/fileDataを更新
+        if (this.currentFile) {
+            if (!this.currentFile.windowConfig) {
+                this.currentFile.windowConfig = {};
+            }
+            this.currentFile.windowConfig.backgroundColor = newBgColor;
+        }
+        if (this.fileData) {
+            if (!this.fileData.windowConfig) {
+                this.fileData.windowConfig = {};
+            }
+            this.fileData.windowConfig.backgroundColor = newBgColor;
+        }
+    }
+
+    /**
+     * 背景色をUIに適用する（サブクラスでオーバーライド）
+     * @param {string} color - 背景色
+     */
+    applyBackgroundColor(color) {
+        // 背景色を記録（changeBgColorで現在色を取得するため）
+        this.bgColor = color;
+        // デフォルト実装: document.bodyに適用
+        document.body.style.backgroundColor = color;
     }
 
     // ========================================
@@ -1407,7 +1991,7 @@ export class PluginBase {
         const realId = this.extractRealId(linkId);
         this.messageBus.send('copy-virtual-object', {
             realId: realId,
-            messageId: `copy-virtual-${Date.now()}-${Math.random()}`
+            messageId: this.generateMessageId('copy-virtual')
         });
     }
 
@@ -1426,7 +2010,7 @@ export class PluginBase {
         const realId = this.extractRealId(linkId);
         this.messageBus.send('delete-virtual-object', {
             realId: realId,
-            messageId: `delete-virtual-${Date.now()}-${Math.random()}`
+            messageId: this.generateMessageId('delete-virtual')
         });
     }
 
@@ -1460,7 +2044,7 @@ export class PluginBase {
             return null;
         }
 
-        const messageId = `get-clipboard-${Date.now()}-${Math.random()}`;
+        const messageId = this.generateMessageId('get-clipboard');
 
         this.messageBus.send('get-clipboard', {
             messageId: messageId
@@ -1760,4 +2344,241 @@ export class PluginBase {
             logger.error(`[${this.pluginName}] 画像ファイル保存エラー(Element):`, error);
         }
     }
+
+    // ========================================
+    // 仮身属性処理ヘルパー（内部メソッド）
+    // ========================================
+
+    /**
+     * カラーコードが有効かどうかを検証
+     * @param {string} color - 検証するカラーコード
+     * @returns {boolean} 有効な場合true
+     */
+    _isValidVobjColor(color) {
+        return color && PluginBase.VOBJ_COLOR_REGEX.test(color);
+    }
+
+    /**
+     * ブール値を文字列 'true'/'false' に変換
+     * @param {boolean|string} value - 変換する値
+     * @returns {string} 'true' または 'false'
+     */
+    _boolToVobjString(value) {
+        if (typeof value === 'string') {
+            return value.toLowerCase() === 'true' ? 'true' : 'false';
+        }
+        return value ? 'true' : 'false';
+    }
+
+    /**
+     * 仮身オブジェクトにデフォルト値を設定
+     * 既に値がある属性は上書きしない
+     * @param {Object} vobj - 仮身オブジェクト
+     * @param {Object} [overrides] - デフォルト値のオーバーライド
+     * @returns {Object} デフォルト値が設定されたvobjオブジェクト
+     */
+    _ensureVobjDefaults(vobj, overrides = {}) {
+        const defaults = { ...PluginBase.VOBJ_DEFAULT_ATTRS, ...overrides };
+
+        for (const [key, defaultValue] of Object.entries(defaults)) {
+            if (!vobj[key]) {
+                vobj[key] = defaultValue;
+            }
+        }
+
+        return vobj;
+    }
+
+    /**
+     * DOM要素のdatasetから仮身属性を読み取り、vobjにマージ
+     * link_プレフィックスの有無に対応
+     * @param {Object} vobj - 仮身オブジェクト
+     * @param {HTMLElement} element - DOM要素
+     * @returns {Object} 属性がマージされたvobjオブジェクト
+     */
+    _mergeVobjFromDataset(vobj, element) {
+        if (!element || !element.dataset) return vobj;
+
+        // 各属性についてlink_プレフィックス版とdataset版をフォールバック
+        const attrMappings = [
+            ['pictdisp', 'linkPictdisp'],
+            ['namedisp', 'linkNamedisp'],
+            ['roledisp', 'linkRoledisp'],
+            ['typedisp', 'linkTypedisp'],
+            ['updatedisp', 'linkUpdatedisp'],
+            ['framedisp', 'linkFramedisp'],
+            ['frcol', 'linkFrcol'],
+            ['chcol', 'linkChcol'],
+            ['tbcol', 'linkTbcol'],
+            ['bgcol', 'linkBgcol'],
+            ['chsz', 'linkChsz'],
+            ['autoopen', 'linkAutoopen'],
+            ['link_id', 'linkId'],
+            ['link_name', 'linkName']
+        ];
+
+        for (const [vobjKey, datasetKey] of attrMappings) {
+            if (!vobj[vobjKey]) {
+                // link_プレフィックス版、dataset版、デフォルト値の順で探す
+                const linkKey = `link_${vobjKey}`;
+                vobj[vobjKey] = vobj[linkKey]
+                    || element.dataset[datasetKey]
+                    || PluginBase.VOBJ_DEFAULT_ATTRS[vobjKey]
+                    || '';
+            }
+        }
+
+        return vobj;
+    }
+
+    /**
+     * 属性変更オブジェクトを仮身オブジェクトに適用
+     * 共通の正規化処理（ブール変換、カラー検証）を実行
+     * @param {Object} vobj - 仮身オブジェクト（変更される）
+     * @param {Object} attrs - 適用する属性変更
+     * @returns {Object} 変更があった属性のキーと新しい値を含むオブジェクト
+     */
+    _applyVobjAttrs(vobj, attrs) {
+        const changes = {};
+
+        // 表示関連のブール属性を適用
+        for (const attrName of PluginBase.VOBJ_DISPLAY_BOOL_ATTRS) {
+            if (attrs[attrName] !== undefined) {
+                const newValue = this._boolToVobjString(attrs[attrName]);
+                if (vobj[attrName] !== newValue) {
+                    changes[attrName] = { old: vobj[attrName], new: newValue };
+                    vobj[attrName] = newValue;
+                }
+            }
+        }
+
+        // カラー属性を適用（検証付き）
+        for (const attrName of PluginBase.VOBJ_COLOR_ATTRS) {
+            if (attrs[attrName] && this._isValidVobjColor(attrs[attrName])) {
+                if (vobj[attrName] !== attrs[attrName]) {
+                    changes[attrName] = { old: vobj[attrName], new: attrs[attrName] };
+                    vobj[attrName] = attrs[attrName];
+                }
+            }
+        }
+
+        // 文字サイズの適用
+        if (attrs.chsz !== undefined) {
+            const newChsz = attrs.chsz.toString();
+            if (vobj.chsz !== newChsz) {
+                changes.chsz = { old: vobj.chsz, new: newChsz };
+                vobj.chsz = newChsz;
+            }
+        }
+
+        // 自動起動の適用
+        if (attrs.autoopen !== undefined) {
+            const newValue = this._boolToVobjString(attrs.autoopen);
+            if (vobj.autoopen !== newValue) {
+                changes.autoopen = { old: vobj.autoopen, new: newValue };
+                vobj.autoopen = newValue;
+            }
+        }
+
+        return changes;
+    }
+
+    /**
+     * 属性変更をDOM要素のdatasetに反映
+     * @param {HTMLElement} element - 対象のDOM要素
+     * @param {Object} vobj - 属性を含む仮身オブジェクト
+     */
+    _syncVobjToDataset(element, vobj) {
+        if (!element) return;
+
+        element.dataset.linkPictdisp = vobj.pictdisp;
+        element.dataset.linkNamedisp = vobj.namedisp;
+        element.dataset.linkRoledisp = vobj.roledisp;
+        element.dataset.linkTypedisp = vobj.typedisp;
+        element.dataset.linkUpdatedisp = vobj.updatedisp;
+        element.dataset.linkFramedisp = vobj.framedisp;
+        element.dataset.linkFrcol = vobj.frcol;
+        element.dataset.linkChcol = vobj.chcol;
+        element.dataset.linkTbcol = vobj.tbcol;
+        element.dataset.linkBgcol = vobj.bgcol;
+        element.dataset.linkChsz = vobj.chsz;
+        element.dataset.linkAutoopen = vobj.autoopen;
+    }
+
+    /**
+     * 属性変更をDOM要素のスタイルに反映（閉じた仮身用）
+     * @param {HTMLElement} element - 対象のDOM要素
+     * @param {Object} attrs - 適用する属性
+     */
+    _applyVobjStyles(element, attrs) {
+        if (!element) return;
+
+        // 枠線の色
+        if (attrs.frcol && this._isValidVobjColor(attrs.frcol)) {
+            element.style.borderColor = attrs.frcol;
+        }
+        // 仮身文字色
+        if (attrs.chcol && this._isValidVobjColor(attrs.chcol)) {
+            element.style.color = attrs.chcol;
+        }
+        // 仮身背景色
+        if (attrs.tbcol && this._isValidVobjColor(attrs.tbcol)) {
+            element.style.backgroundColor = attrs.tbcol;
+        }
+    }
+
+    /**
+     * 変更があったかどうかを判定
+     * @param {Object} changes - _applyVobjAttrs()が返す変更オブジェクト
+     * @returns {boolean} 変更があった場合true
+     */
+    _hasVobjAttrChanges(changes) {
+        return Object.keys(changes).length > 0;
+    }
+
+    /**
+     * 特定の属性が変更されたかどうかを判定
+     * @param {Object} changes - _applyVobjAttrs()が返す変更オブジェクト
+     * @param {string} attrName - 確認する属性名
+     * @returns {boolean} 指定属性が変更された場合true
+     */
+    _isVobjAttrChanged(changes, attrName) {
+        return attrName in changes;
+    }
 }
+
+// ========================================
+// 仮身属性の静的定数
+// ========================================
+
+/** カラーコード検証用正規表現 */
+PluginBase.VOBJ_COLOR_REGEX = /^#[0-9A-Fa-f]{6}$/;
+
+/** 仮身属性のデフォルト値 */
+PluginBase.VOBJ_DEFAULT_ATTRS = {
+    pictdisp: 'true',
+    namedisp: 'true',
+    roledisp: 'false',
+    typedisp: 'false',
+    updatedisp: 'false',
+    framedisp: 'true',
+    frcol: '#000000',
+    chcol: '#000000',
+    tbcol: '#ffffff',
+    bgcol: '#ffffff',
+    chsz: '14',
+    autoopen: 'false'
+};
+
+/** 表示関連のブール属性名一覧 */
+PluginBase.VOBJ_DISPLAY_BOOL_ATTRS = [
+    'pictdisp',
+    'namedisp',
+    'roledisp',
+    'typedisp',
+    'updatedisp',
+    'framedisp'
+];
+
+/** カラー属性名一覧 */
+PluginBase.VOBJ_COLOR_ATTRS = ['frcol', 'chcol', 'tbcol', 'bgcol'];

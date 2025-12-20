@@ -495,6 +495,20 @@ export class MessageBus {
     }
 
     /**
+     * ウィンドウが登録されているかを確認
+     * 親モードでのみ使用
+     *
+     * @param {string} windowId - ウィンドウID
+     * @returns {boolean} 登録されていればtrue
+     */
+    isWindowRegistered(windowId) {
+        if (this.mode !== 'parent') {
+            return false;
+        }
+        return this.windowToChild.has(windowId);
+    }
+
+    /**
      * windowIdを指定して子iframeにメッセージを送信
      * 親モードでのみ使用
      *

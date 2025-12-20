@@ -23,13 +23,8 @@ class ExistingDataExec extends window.PluginBase {
         this.realName = null;
         this.extension = null;
 
-        // MessageBus初期化
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: false,
-                pluginName: 'ExistingDataExec'
-            });
-            this.messageBus.start();
+        // MessageBusはPluginBaseで初期化済み
+        if (this.messageBus) {
             this.setupMessageBusHandlers();
         }
 

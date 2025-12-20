@@ -17,14 +17,7 @@ class UserConfigApp extends window.PluginBase {
         this.dataFolderChanged = false; // データフォルダが変更されたかどうか
         // this.realId, this.messageBus は PluginBase で定義済み
 
-        // MessageBus初期化
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: false,
-                pluginName: 'UserConfig'
-            });
-            this.messageBus.start();
-        }
+        // MessageBusはPluginBaseで初期化済み
         this.init();
     }
 

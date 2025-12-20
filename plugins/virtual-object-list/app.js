@@ -59,23 +59,15 @@ class VirtualObjectListApp extends window.PluginBase {
         // コンテキストメニューを閉じた直後かどうかのフラグ
         this.justClosedContextMenu = false;
 
-        // MessageBusの初期化（即座に開始）
-        this.messageBus = null;
-        this.childMessageBus = null; // 開いた仮身（子iframe）との通信用
+        // MessageBusはPluginBaseで初期化済み
+        // 以下は開いた仮身（子iframe）との通信用の追加設定
+        this.childMessageBus = null;
         this.iconRequestMap = new Map(); // messageId -> source のマッピング（リレー用）
         this.imagePathRequestMap = new Map(); // messageId -> source のマッピング（画像パスリレー用）
         this.expandedIframes = new Set(); // 開いた仮身のiframeを管理（アイコンリレー用）
 
+        // 開いた仮身（子iframe）との通信用（親モード）のMessageBusを追加初期化
         if (window.MessageBus) {
-            // 親ウィンドウとの通信用（子モード）
-            this.messageBus = new window.MessageBus({
-                debug: this.debug,
-                pluginName: 'VirtualObjectList'
-            });
-            this.messageBus.start();
-            logger.debug('[VirtualObjectList] MessageBus initialized');
-
-            // 開いた仮身（子iframe）との通信用（親モード）
             this.childMessageBus = new window.MessageBus({
                 debug: this.debug,
                 pluginName: 'VirtualObjectList-Child',
@@ -83,8 +75,6 @@ class VirtualObjectListApp extends window.PluginBase {
             });
             this.childMessageBus.start();
             logger.debug('[VirtualObjectList] Child MessageBus initialized');
-        } else {
-            logger.warn('[VirtualObjectList] MessageBus not available');
         }
 
         // クロスウィンドウドロップ処理の共通化
@@ -1214,7 +1204,8 @@ class VirtualObjectListApp extends window.PluginBase {
                     { text: '開く', action: 'open-real-object', disabled: isOpened },
                     { text: '閉じる', action: 'close-real-object', disabled: !isOpened },
                     { separator: true },
-                    { text: '属性変更', action: 'change-virtual-object-attributes' }
+                    { text: '属性変更', action: 'change-virtual-object-attributes' },
+                    { text: '続柄設定', action: 'set-relationship' }
                 ];
 
                 menuDefinition.push({
@@ -1369,6 +1360,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 break;
             case 'change-virtual-object-attributes':
                 this.changeVirtualObjectAttributes();
+                break;
+            case 'set-relationship':
+                this.setRelationship();
                 break;
             case 'rename-real-object':
                 this.renameRealObject();
@@ -1650,7 +1644,7 @@ class VirtualObjectListApp extends window.PluginBase {
         this.notifyXmlDataChanged();
 
         // 親ウィンドウに新たな実身への保存を要求
-        const messageId = 'save-as-new-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        const messageId = this.generateMessageId('save-as-new');
 
         // MessageBusでsave-as-new-real-objectを送信
         this.messageBus.send('save-as-new-real-object', {
@@ -1928,7 +1922,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // 親ウィンドウに実身複製を要求（共通メソッドを使用）
         if (window.parent && window.parent !== window) {
-            const messageId = `duplicate-real-${Date.now()}-${Math.random()}`;
+            const messageId = this.generateMessageId('duplicate-real');
 
             this.messageBus.send('duplicate-real-object', {
                 realId: realId,
@@ -2061,7 +2055,7 @@ class VirtualObjectListApp extends window.PluginBase {
         const autoopen = obj.autoopen || 'false';
 
         // メッセージIDを生成
-        const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        const messageId = this.generateMessageId('duplicate');
 
         // MessageBusでduplicate-real-objectを送信
         this.messageBus.send('duplicate-real-object', {
@@ -2267,6 +2261,42 @@ class VirtualObjectListApp extends window.PluginBase {
     }
 
     /**
+     * 続柄設定ダイアログを表示
+     */
+    async setRelationship() {
+        const selectedVirtualObject = this.getSelectedVirtualObject();
+        if (!selectedVirtualObject) {
+            logger.warn('[VirtualObjectList] 選択中の仮身がありません');
+            return { success: false };
+        }
+
+        // 実身IDを抽出（共通メソッドを使用）
+        const realId = window.RealObjectSystem.extractRealId(selectedVirtualObject.link_id);
+
+        // 共通メソッド用にcontextMenuVirtualObjectを一時設定
+        this.contextMenuVirtualObject = {
+            element: null,
+            realId: realId,
+            virtualObj: selectedVirtualObject
+        };
+
+        // 親クラスのsetRelationship()を呼び出す（metadata更新とフック呼び出しを含む）
+        const result = await super.setRelationship();
+
+        // contextMenuVirtualObjectをクリア
+        this.contextMenuVirtualObject = null;
+
+        return result;
+    }
+
+    /**
+     * 続柄更新後の再描画（PluginBaseフック）
+     */
+    onRelationshipUpdated(virtualObj, result) {
+        this.renderVirtualObjects();
+    }
+
+    /**
      * ステータスメッセージを設定
      */
     setStatus(message) {
@@ -2287,149 +2317,74 @@ class VirtualObjectListApp extends window.PluginBase {
         // vobjIndexを取得（querySelector用）
         const vobjIndex = this.virtualObjects.indexOf(vobj);
 
-        // 変更があったかどうかを追跡
-        let hasChanges = false;
-        let pictdispChanged = false;
-        let chszChanged = false;
+        // chsz変更前の値を保存（サイズ調整用）
+        const oldChsz = parseInt(vobj.chsz) || 14;
 
-        // 表示項目の設定（値が実際に変更された場合のみ）
-        if (attrs.pictdisp !== undefined) {
-            const oldValue = vobj.pictdisp;
-            const newValue = attrs.pictdisp ? 'true' : 'false';
-            if (oldValue !== newValue) {
-                vobj.pictdisp = newValue;
-                pictdispChanged = true;
-                hasChanges = true;
-                logger.debug('[VirtualObjectList] pictdisp変更:', oldValue, '->', newValue);
-            }
-        }
-        if (attrs.namedisp !== undefined) {
-            const oldValue = vobj.namedisp;
-            const newValue = attrs.namedisp ? 'true' : 'false';
-            if (oldValue !== newValue) {
-                vobj.namedisp = newValue;
-                hasChanges = true;
-                logger.debug('[VirtualObjectList] namedisp変更:', oldValue, '->', newValue);
-            }
-        }
-        if (attrs.roledisp !== undefined) {
-            const oldValue = vobj.roledisp;
-            const newValue = attrs.roledisp ? 'true' : 'false';
-            if (oldValue !== newValue) {
-                vobj.roledisp = newValue;
-                hasChanges = true;
-                logger.debug('[VirtualObjectList] roledisp変更:', oldValue, '->', newValue);
-            }
-        }
-        if (attrs.typedisp !== undefined) {
-            const oldValue = vobj.typedisp;
-            const newValue = attrs.typedisp ? 'true' : 'false';
-            if (oldValue !== newValue) {
-                vobj.typedisp = newValue;
-                hasChanges = true;
-                logger.debug('[VirtualObjectList] typedisp変更:', oldValue, '->', newValue);
-            }
-        }
-        if (attrs.updatedisp !== undefined) {
-            const oldValue = vobj.updatedisp;
-            const newValue = attrs.updatedisp ? 'true' : 'false';
-            if (oldValue !== newValue) {
-                vobj.updatedisp = newValue;
-                hasChanges = true;
-                logger.debug('[VirtualObjectList] updatedisp変更:', oldValue, '->', newValue);
-            }
-        }
-        if (attrs.framedisp !== undefined) {
-            const oldValue = vobj.framedisp;
-            const newValue = attrs.framedisp ? 'true' : 'false';
-            if (oldValue !== newValue) {
-                vobj.framedisp = newValue;
-                hasChanges = true;
-                logger.debug('[VirtualObjectList] framedisp変更:', oldValue, '->', newValue);
-            }
+        // PluginBaseの共通メソッドで属性を適用し、変更を取得
+        const changes = this._applyVobjAttrs(vobj, attrs);
+
+        // 変更がない場合は早期リターン
+        if (!this._hasVobjAttrChanges(changes)) {
+            logger.debug('[VirtualObjectList] 属性に変更がないため処理をスキップ');
+            return;
         }
 
-        // 色の設定（値が実際に変更された場合のみ）
-        const colorRegex = /^#[0-9A-Fa-f]{6}$/;
-        if (attrs.frcol && colorRegex.test(attrs.frcol) && vobj.frcol !== attrs.frcol) {
-            logger.debug('[VirtualObjectList] frcol変更:', vobj.frcol, '->', attrs.frcol);
-            vobj.frcol = attrs.frcol;
-            hasChanges = true;
-        }
-        if (attrs.chcol && colorRegex.test(attrs.chcol) && vobj.chcol !== attrs.chcol) {
-            logger.debug('[VirtualObjectList] chcol変更:', vobj.chcol, '->', attrs.chcol);
-            vobj.chcol = attrs.chcol;
-            hasChanges = true;
-        }
-        if (attrs.tbcol && colorRegex.test(attrs.tbcol) && vobj.tbcol !== attrs.tbcol) {
-            logger.debug('[VirtualObjectList] tbcol変更:', vobj.tbcol, '->', attrs.tbcol);
-            vobj.tbcol = attrs.tbcol;
-            hasChanges = true;
-        }
-        if (attrs.bgcol && colorRegex.test(attrs.bgcol) && vobj.bgcol !== attrs.bgcol) {
-            logger.debug('[VirtualObjectList] bgcol変更:', vobj.bgcol, '->', attrs.bgcol);
-            vobj.bgcol = attrs.bgcol;
-            hasChanges = true;
+        // 変更をログ出力
+        for (const [key, change] of Object.entries(changes)) {
+            logger.debug(`[VirtualObjectList] ${key}変更:`, change.old, '->', change.new);
         }
 
-        // 文字サイズの設定（値が実際に変更された場合のみ）
-        if (attrs.chsz !== undefined) {
-            const oldChsz = parseInt(vobj.chsz) || 14;
-            const newChsz = parseInt(attrs.chsz);
+        const chszChanged = this._isVobjAttrChanged(changes, 'chsz');
+        const pictdispChanged = this._isVobjAttrChanged(changes, 'pictdisp');
 
-            // 値が実際に変更された場合のみ処理
-            if (oldChsz !== newChsz) {
-                vobj.chsz = newChsz.toString();
-                chszChanged = true;
-                hasChanges = true;
+        // 文字サイズ変更時のサイズ調整
+        if (chszChanged) {
+            const newChsz = parseInt(vobj.chsz);
 
-                // DOMから実際の仮身要素を取得し、コンテンツエリアの有無で開閉状態を判定
-                const vobjElement = document.querySelector(`[data-vobj-index="${vobjIndex}"]`);
-                const hasContentArea = vobjElement ?
-                    (vobjElement.querySelector('.virtual-object-content-area') !== null ||
-                     vobjElement.querySelector('.virtual-object-content-iframe') !== null) : false;
+            // DOMから実際の仮身要素を取得し、コンテンツエリアの有無で開閉状態を判定
+            const vobjElement = document.querySelector(`[data-vobj-index="${vobjIndex}"]`);
+            const hasContentArea = vobjElement ?
+                (vobjElement.querySelector('.virtual-object-content-area') !== null ||
+                 vobjElement.querySelector('.virtual-object-content-iframe') !== null) : false;
 
-                // 現在のサイズを取得
-                const vobjHeight = vobj.vobjbottom - vobj.vobjtop;
-                const vobjWidth = vobj.vobjright - vobj.vobjleft;
+            // 現在のサイズを取得
+            const vobjHeight = vobj.vobjbottom - vobj.vobjtop;
+            const vobjWidth = vobj.vobjright - vobj.vobjleft;
 
-                logger.debug('[VirtualObjectList] chsz変更:', {
-                    oldChsz,
-                    newChsz,
-                    vobjHeight,
-                    hasContentArea
-                });
+            logger.debug('[VirtualObjectList] chsz変更:', {
+                oldChsz,
+                newChsz,
+                vobjHeight,
+                hasContentArea
+            });
 
-                if (!hasContentArea) {
-                    // 閉じた仮身の場合、高さを新しいchszに合わせて調整
-                    // chszはポイント（pt）なのでピクセル（px）に変換
-                    const lineHeight = 1.2;
-                    const newChszPx = window.convertPtToPx(newChsz);
-                    const textHeight = Math.ceil(newChszPx * lineHeight);
-                    const newHeight = textHeight + 8;
-                    vobj.vobjbottom = vobj.vobjtop + newHeight;
-                    logger.debug('[VirtualObjectList] 閉じた仮身の高さを調整:', vobjHeight, '->', newHeight, `(${newChsz}pt = ${newChszPx}px)`);
-                } else {
-                    // 開いた仮身の場合、chszに比例して高さを調整
-                    const lineHeight = 1.2;
-                    const newChszPx = window.convertPtToPx(newChsz);
-                    const textHeight = Math.ceil(newChszPx * lineHeight);
-                    const newMinOpenHeight = textHeight + 30;
-                    const heightRatio = newChsz / oldChsz;
-                    const adjustedHeight = Math.max(newMinOpenHeight, Math.round(vobjHeight * heightRatio));
-                    vobj.vobjbottom = vobj.vobjtop + adjustedHeight;
-                    logger.debug('[VirtualObjectList] 開いた仮身の高さを比例調整:', vobjHeight, '->', adjustedHeight, 'ratio:', heightRatio);
-                }
-
-                // 幅も文字サイズに応じて調整(最小幅を確保)
+            if (!hasContentArea) {
+                // 閉じた仮身の場合、高さを新しいchszに合わせて調整
+                // chszはポイント（pt）なのでピクセル（px）に変換
+                const lineHeight = 1.2;
                 const newChszPx = window.convertPtToPx(newChsz);
-                const minWidth = Math.max(50, newChszPx * 6); // chszPxの6倍を最小幅とする
-                if (vobjWidth < minWidth) {
-                    vobj.vobjright = vobj.vobjleft + minWidth;
-                    logger.debug('[VirtualObjectList] 最小幅を確保:', vobjWidth, '->', minWidth);
-                }
+                const textHeight = Math.ceil(newChszPx * lineHeight);
+                const newHeight = textHeight + 8;
+                vobj.vobjbottom = vobj.vobjtop + newHeight;
+                logger.debug('[VirtualObjectList] 閉じた仮身の高さを調整:', vobjHeight, '->', newHeight, `(${newChsz}pt = ${newChszPx}px)`);
             } else {
-                logger.debug('[VirtualObjectList] chszは変更なし:', oldChsz);
+                // 開いた仮身の場合、chszに比例して高さを調整
+                const lineHeight = 1.2;
+                const newChszPx = window.convertPtToPx(newChsz);
+                const textHeight = Math.ceil(newChszPx * lineHeight);
+                const newMinOpenHeight = textHeight + 30;
+                const heightRatio = newChsz / oldChsz;
+                const adjustedHeight = Math.max(newMinOpenHeight, Math.round(vobjHeight * heightRatio));
+                vobj.vobjbottom = vobj.vobjtop + adjustedHeight;
+                logger.debug('[VirtualObjectList] 開いた仮身の高さを比例調整:', vobjHeight, '->', adjustedHeight, 'ratio:', heightRatio);
+            }
+
+            // 幅も文字サイズに応じて調整(最小幅を確保)
+            const newChszPx = window.convertPtToPx(newChsz);
+            const minWidth = Math.max(50, newChszPx * 6); // chszPxの6倍を最小幅とする
+            if (vobjWidth < minWidth) {
+                vobj.vobjright = vobj.vobjleft + minWidth;
+                logger.debug('[VirtualObjectList] 最小幅を確保:', vobjWidth, '->', minWidth);
             }
         }
 
@@ -2456,23 +2411,6 @@ class VirtualObjectListApp extends window.PluginBase {
                     logger.debug('[VirtualObjectList] pictdisp変更による高さ調整:', currentHeight, '->', newHeight);
                 }
             }
-        }
-
-        // 自動起動の設定（値が実際に変更された場合のみ）
-        if (attrs.autoopen !== undefined) {
-            const oldValue = vobj.autoopen;
-            const newValue = attrs.autoopen ? 'true' : 'false';
-            if (oldValue !== newValue) {
-                vobj.autoopen = newValue;
-                hasChanges = true;
-                logger.debug('[VirtualObjectList] autoopen変更:', oldValue, '->', newValue);
-            }
-        }
-
-        // 変更がない場合は早期リターン
-        if (!hasChanges) {
-            logger.debug('[VirtualObjectList] 属性に変更がないため処理をスキップ');
-            return;
         }
 
         // xmlTADを更新
@@ -4109,12 +4047,15 @@ class VirtualObjectListApp extends window.PluginBase {
 
     /**
      * 背景色を適用
+     * @param {string} [color] - 適用する背景色（省略時はthis.bgcolまたはwindowConfigから取得）
      */
-    applyBackgroundColor() {
-        // 開いた仮身の場合はthis.bgcolを優先、それ以外はwindowConfig.backgroundColor
-        const bgColor = this.bgcol || (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor);
+    applyBackgroundColor(color) {
+        // 引数がなければ既存の方式でbgColorを取得
+        const bgColor = color || this.bgcol || (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor);
 
         if (bgColor) {
+            // PluginBase互換: changeBgColorで現在色を取得するため
+            this.bgColor = bgColor;
             // DOM要素が生成されるまで待機
             setTimeout(() => {
                 // 開いた仮身として表示される場合は、body全体に背景色を適用
@@ -4124,139 +4065,15 @@ class VirtualObjectListApp extends window.PluginBase {
                     if (pluginContent) {
                         pluginContent.style.backgroundColor = bgColor;
                     }
-                    logger.debug('[VirtualObjectList] 背景色を適用 (開いた仮身):', bgColor);
                 }
 
                 // 通常のウィンドウ表示の場合は、canvasに背景色を適用
                 const canvas = document.querySelector('.virtual-canvas');
                 if (canvas) {
                     canvas.style.background = bgColor;
-                    if (!this.bgcol) {
-                        logger.debug('[VirtualObjectList] 背景色を適用 (ウィンドウ設定):', bgColor);
-                    }
-                } else if (!this.bgcol) {
-                    // 開いた仮身でない場合のみ警告
-                    logger.warn('[VirtualObjectList] .virtual-canvas 要素が見つかりません');
                 }
             }, 100);
-        } else {
-            logger.debug('[VirtualObjectList] 背景色が設定されていません');
         }
-    }
-
-    /**
-     * 背景色変更ダイアログを表示
-     */
-    async changeBgColor() {
-        logger.debug('[VirtualObjectList] changeBgColor開始');
-        logger.debug('[VirtualObjectList] this.realId:', this.realId);
-        logger.debug('[VirtualObjectList] this.messageBus:', !!this.messageBus);
-
-        const selectedVirtualObject = this.getSelectedVirtualObject();
-
-        // 現在の背景色を取得
-        const currentBgColor = (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor)
-            ? this.fileData.windowConfig.backgroundColor
-            : '#ffffff';
-
-        logger.debug('[VirtualObjectList] 現在の背景色:', currentBgColor);
-
-        // ダイアログのHTML要素を作成
-        const dialogHtml = `
-            <div style="margin-bottom: 10px;">ウインドウ背景色を選択してください。</div>
-            <div style="margin-bottom: 10px;">
-                <label style="display: flex; align-items: center;">
-                    <input type="checkbox" id="useLinkBgColor" style="margin-right: 5px;">
-                    仮身背景色と同じ
-                </label>
-            </div>
-            <div style="margin-bottom: 10px;">
-                <label style="display: block; margin-bottom: 5px;">#FFFFFF形式で入力：</label>
-                <input type="text" id="bgColorInput" placeholder="#FFFFFF" value="${currentBgColor}"
-                       style="width: 100%; padding: 5px; box-sizing: border-box;">
-            </div>
-        `;
-
-        logger.debug('[VirtualObjectList] ダイアログ表示を要求');
-
-        return new Promise((resolve) => {
-            this.messageBus.sendWithCallback('show-custom-dialog', {
-                dialogHtml: dialogHtml,
-                buttons: [
-                    { label: '取消', value: 'cancel' },
-                    { label: '設定', value: 'ok' }
-                ],
-                defaultButton: 1,
-                inputs: {
-                    checkbox: 'useLinkBgColor',
-                    text: 'bgColorInput'
-                }
-            }, (result) => {
-                logger.debug('[VirtualObjectList] ダイアログコールバック実行:', result);
-                logger.debug('[VirtualObjectList] result.error:', result.error);
-                logger.debug('[VirtualObjectList] result.button:', result.button);
-                logger.debug('[VirtualObjectList] result.result:', result.result);
-                logger.debug('[VirtualObjectList] result keys:', Object.keys(result));
-
-                if (result.error) {
-                    logger.warn('[VirtualObjectList] Change bg color dialog error:', result.error);
-                    resolve(null);
-                    return;
-                }
-
-                // show-custom-dialogからのレスポンスはresult.resultに格納されている可能性がある
-                const dialogResult = result.result || result;
-                logger.debug('[VirtualObjectList] dialogResult:', dialogResult);
-                logger.debug('[VirtualObjectList] dialogResult.button:', dialogResult.button);
-
-                if (dialogResult.button === 'ok') {
-                    logger.debug('[VirtualObjectList] OKボタンが押されました');
-                    const useLinkBgColor = dialogResult.checkbox;
-                    const inputColor = dialogResult.input;
-
-                    let newBgColor;
-                    if (useLinkBgColor && selectedVirtualObject) {
-                        // 選択された仮身のbgcolを使用
-                        newBgColor = selectedVirtualObject.bgcol || '#ffffff';
-                    } else {
-                        // 入力された色を使用
-                        if (/^#[0-9A-Fa-f]{6}$/.test(inputColor)) {
-                            newBgColor = inputColor;
-                        } else {
-                            logger.warn('[VirtualObjectList] 無効な色形式:', inputColor);
-                            resolve(result);
-                            return;
-                        }
-                    }
-
-                    // キャンバスの背景色を変更
-                    const canvas = document.querySelector('.virtual-canvas');
-                    if (canvas) {
-                        canvas.style.background = newBgColor;
-                        logger.debug('[VirtualObjectList] 背景色を変更しました:', newBgColor);
-                    }
-
-                    // 実身管理用セグメントのbackgroundColorを更新
-                    if (this.realId) {
-                                    this.messageBus.send('update-background-color', {
-                            fileId: this.realId,
-                            backgroundColor: newBgColor
-                        });
-                        logger.debug('[VirtualObjectList] 背景色更新を親ウィンドウに通知:', this.realId, newBgColor);
-                    }
-
-                    // this.fileDataを更新（再表示時に正しい色を適用するため）
-                    if (!this.fileData.windowConfig) {
-                        this.fileData.windowConfig = {};
-                    }
-                    this.fileData.windowConfig.backgroundColor = newBgColor;
-                } else {
-                    logger.debug('[VirtualObjectList] OKボタンが押されませんでした。button:', dialogResult.button);
-                }
-
-                resolve(result);
-            }, 300000); // タイムアウト5分（ユーザー操作待ち）
-        });
     }
 
     /**
@@ -4710,17 +4527,7 @@ class VirtualObjectListApp extends window.PluginBase {
         }
     }
 
-    /**
-     * XMLエスケープ（基本文章編集から移植）
-     */
-    escapeXml(text) {
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&apos;');
-    }
+    // escapeXml は PluginBase に移動済み
 
     /**
      * RGB形式を#rrggbb形式に変換（基本文章編集から移植）
@@ -4812,7 +4619,7 @@ class VirtualObjectListApp extends window.PluginBase {
      * 親ウィンドウにファイル読み込みを依頼
      */
     async loadDataFileFromParent(fileName) {
-        const messageId = `load-${Date.now()}-${Math.random()}`;
+        const messageId = this.generateMessageId('load');
 
         // MessageBusでload-data-file-requestを送信
         this.messageBus.send('load-data-file-request', {

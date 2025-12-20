@@ -16,34 +16,45 @@ html, body {
 }
 
 .plugin-content {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
+    overflow: auto;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* カスタムスクロールバーを使用するためブラウザ標準のスクロールバーを非表示 */
+.plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.plugin-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE, Edge */
 }
 
 .spreadsheet-container {
-    flex: 1;
-    overflow: hidden;
-    position: relative;
+    display: inline-block;
+    min-width: 100%;
 }
 
 .spreadsheet-grid {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+    display: inline-block;
+    min-width: 100%;
 }
 
 /* ヘッダー行（列番号） */
 .grid-header {
     display: flex;
-    flex-shrink: 0;
     background-color: #e8e8e8;
     border-bottom: 1px solid #999;
     height: 24px;
-    overflow: hidden;
+    position: sticky;
+    top: 0;
+    z-index: 10;
 }
 
 .header-corner {
@@ -80,8 +91,6 @@ html, body {
 
 /* データ領域 */
 .grid-body {
-    flex: 1;
-    overflow: auto;
     position: relative;
     outline: none; /* フォーカス時の青い枠線を非表示 */
 }
@@ -288,24 +297,7 @@ html, body {
     font-size: inherit;
 }
 
-/* スクロールバーのカスタマイズ */
-.grid-body::-webkit-scrollbar {
-    width: 12px;
-    height: 12px;
-}
-
-.grid-body::-webkit-scrollbar-track {
-    background: #f0f0f0;
-}
-
-.grid-body::-webkit-scrollbar-thumb {
-    background: #c0c0c0;
-    border-radius: 6px;
-}
-
-.grid-body::-webkit-scrollbar-thumb:hover {
-    background: #a0a0a0;
-}
+/* 注: スクロールバーはカスタムスクロールバー（親ウィンドウ）を使用 */
 
 /* リサイズハンドル */
 .column-resize-handle {

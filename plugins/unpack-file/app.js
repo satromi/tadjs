@@ -20,14 +20,7 @@ class UnpackFileManager extends window.PluginBase {
         this.rawData = null;
         this.fileName = null; // BPKファイル名を保存
 
-        // MessageBusを初期化
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: false,
-                pluginName: 'UnpackFile'
-            });
-            this.messageBus.start();
-        }
+        // MessageBusはPluginBaseで初期化済み
 
         this.init();
     }

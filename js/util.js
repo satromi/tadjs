@@ -1,5 +1,7 @@
 /**
  * 共通ユーティリティ関数
+ * TADjs Desktopに各種定数と便利な関数を提供
+ * @module util
  */
 
 // ========================================
@@ -292,4 +294,34 @@ export function escapeHtml(text) {
         '/': '&#x2F;'
     };
     return String(text).replace(/[&<>"'/]/g, (s) => map[s]);
+}
+
+/**
+ * XML特殊文字をエスケープ
+ * @param {string} text - エスケープする文字列
+ * @returns {string} エスケープ済み文字列
+ */
+export function escapeXml(text) {
+    if (typeof text !== 'string') return '';
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
+/**
+ * XML特殊文字をアンエスケープ
+ * @param {string} text - アンエスケープする文字列
+ * @returns {string} アンエスケープ済み文字列
+ */
+export function unescapeXml(text) {
+    if (typeof text !== 'string') return '';
+    return text
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&gt;/g, '>')
+        .replace(/&lt;/g, '<')
+        .replace(/&amp;/g, '&');
 }

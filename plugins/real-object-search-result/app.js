@@ -24,14 +24,7 @@ class RealObjectSearchResultApp extends window.PluginBase {
             this.virtualObjectRenderer = new window.VirtualObjectRenderer();
         }
 
-        // MessageBusを初期化
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: false,
-                pluginName: 'RealObjectSearchResult'
-            });
-            this.messageBus.start();
-        }
+        // MessageBusはPluginBaseで初期化済み
 
         // IconCacheManagerを初期化
         if (window.IconCacheManager && this.messageBus) {

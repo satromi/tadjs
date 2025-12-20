@@ -18,14 +18,7 @@ class TrashRealObjectsApp extends window.PluginBase {
         this.copyMode = false; // コピーモード
         this.clipboard = null; // クリップボードに保存された屑実身データ
 
-        // MessageBusを初期化
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: false,
-                pluginName: 'TrashRealObjects'
-            });
-            this.messageBus.start();
-        }
+        // MessageBusはPluginBaseで初期化済み
 
         // IconCacheManagerを初期化
         if (window.IconCacheManager && this.messageBus) {
@@ -199,7 +192,7 @@ class TrashRealObjectsApp extends window.PluginBase {
     }
 
     async loadTrashRealObjects() {
-        const messageId = `load-trash-${Date.now()}-${Math.random()}`;
+        const messageId = this.generateMessageId('load-trash');
         this.currentLoadMessageId = messageId;
 
         this.messageBus.send('get-unreferenced-real-objects', {

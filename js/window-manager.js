@@ -21,6 +21,7 @@ export class WindowManager {
      * @param {Function} options.initScrollbar - スクロールバー初期化関数
      * @param {Function} options.forceUpdateScrollbar - スクロールバー更新関数
      * @param {Function} options.initScrollbarForPlugin - プラグインスクロールバー初期化
+     * @param {Function} options.initScrollbarForPluginWithMessageBus - MessageBusベースプラグインスクロールバー初期化
      * @param {Function} options.forceUpdateScrollbarForPlugin - プラグインスクロールバー更新
      * @param {Function} options.getToolPanelRelations - ツールパネル関連情報取得関数
      */
@@ -30,6 +31,7 @@ export class WindowManager {
         this.initScrollbar = options.initScrollbar;
         this.forceUpdateScrollbar = options.forceUpdateScrollbar;
         this.initScrollbarForPlugin = options.initScrollbarForPlugin;
+        this.initScrollbarForPluginWithMessageBus = options.initScrollbarForPluginWithMessageBus;
         this.forceUpdateScrollbarForPlugin = options.forceUpdateScrollbarForPlugin;
         this.getToolPanelRelations = options.getToolPanelRelations;
 
@@ -126,9 +128,18 @@ export class WindowManager {
 
         if (iframe) {
             // プラグインウィンドウの場合、iframe専用の初期化
+            // 従来のcross-frame DOM方式（後方互換性のため残す）
             if (this.initScrollbarForPlugin) {
                 this.initScrollbarForPlugin(iframe, content, vScrollbar, 'vertical');
                 this.initScrollbarForPlugin(iframe, content, hScrollbar, 'horizontal');
+            }
+
+            // MessageBusベースのスクロールバー制御も追加
+            // プラグインがinitScrollNotification()を呼び出した場合、こちらが使用される
+            const windowId = windowElement.id;
+            if (windowId && this.initScrollbarForPluginWithMessageBus) {
+                this.initScrollbarForPluginWithMessageBus(vScrollbar, 'vertical', windowId);
+                this.initScrollbarForPluginWithMessageBus(hScrollbar, 'horizontal', windowId);
             }
         } else {
             // 通常のウィンドウ（TADウィンドウなど）の場合
@@ -289,10 +300,19 @@ export class WindowManager {
      * @param {string} windowId - ウィンドウID
      */
     setActiveWindow(windowId) {
+        // 既にアクティブなウィンドウの場合は何もしない
+        // （重複呼び出しでiframe.focus()によるカーソル位置リセットを防止）
+        if (this.activeWindow === windowId && windowId !== null) {
+            return;
+        }
+
         // 前のアクティブウィンドウに非アクティブ化を通知
+        // （既に登録解除されているウィンドウにはメッセージを送信しない）
         const previousActiveWindow = this.activeWindow;
         if (previousActiveWindow && previousActiveWindow !== windowId && this.parentMessageBus) {
-            this.parentMessageBus.sendToWindow(previousActiveWindow, 'window-deactivated', {});
+            if (this.parentMessageBus.isWindowRegistered(previousActiveWindow)) {
+                this.parentMessageBus.sendToWindow(previousActiveWindow, 'window-deactivated', {});
+            }
         }
 
         // 全ウインドウを非アクティブに
@@ -342,7 +362,8 @@ export class WindowManager {
             }
 
             // 新しいアクティブウィンドウにアクティブ化を通知
-            if (this.parentMessageBus) {
+            // （まだ登録されていないウィンドウにはメッセージを送信しない）
+            if (this.parentMessageBus && this.parentMessageBus.isWindowRegistered(windowId)) {
                 this.parentMessageBus.sendToWindow(windowId, 'window-activated', {});
             }
         } else {

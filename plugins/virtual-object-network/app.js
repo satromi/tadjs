@@ -32,14 +32,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         // ノード数上限（16bit）
         this.maxNodes = 65535;
 
-        // MessageBusを初期化
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: false,
-                pluginName: 'VirtualObjectNetwork'
-            });
-            this.messageBus.start();
-        }
+        // MessageBusはPluginBaseで初期化済み
 
         // IconCacheManagerを初期化
         if (window.IconCacheManager && this.messageBus) {
@@ -193,7 +186,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
      */
     async getRealObjectInfo(realId) {
         return new Promise((resolve) => {
-            const messageId = `get-real-info-${Date.now()}-${Math.random()}`;
+            const messageId = this.generateMessageId('get-real-info');
             let resolved = false;
             let timeoutId = null;
 
@@ -302,7 +295,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
      */
     async getVirtualObjectsFromRealObject(realId) {
         return new Promise((resolve) => {
-            const messageId = `get-vobjs-${Date.now()}-${Math.random()}`;
+            const messageId = this.generateMessageId('get-vobjs');
             let resolved = false;
             let timeoutId = null;
 

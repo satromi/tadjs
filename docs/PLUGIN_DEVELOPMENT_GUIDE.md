@@ -6,21 +6,145 @@ BTRON Desktopのプラグイン開発に関する総合ガイドです。
 
 ## 目次
 
-1. [概要](#1-概要)
-2. [基本構造](#2-基本構造)
-3. [PluginBaseの使用](#3-pluginbaseの使用)
-4. [MessageBus通信](#4-messagebus通信)
-5. [仮身/実身操作](#5-仮身実身操作)
-6. [ダイアログ表示](#6-ダイアログ表示)
-7. [ツールパネル（子ウィンドウ）](#7-ツールパネル子ウィンドウ)
-8. [参考実装](#8-参考実装)
-9. [トラブルシューティング](#9-トラブルシューティング)
+1. [クイックスタート](#1-クイックスタート)
+2. [概要](#2-概要)
+3. [基本構造](#3-基本構造)
+4. [PluginBaseの使用](#4-pluginbaseの使用)
+5. [共通メソッド一覧](#5-共通メソッド一覧)
+6. [MessageBus通信](#6-messagebus通信)
+7. [仮身/実身操作](#7-仮身実身操作)
+8. [ダイアログ表示](#8-ダイアログ表示)
+9. [ツールパネル（子ウィンドウ）](#9-ツールパネル子ウィンドウ)
+10. [実身のファイル構成と読み書き](#10-実身のファイル構成と読み書き)
+11. [参考実装](#11-参考実装)
+12. [トラブルシューティング](#12-トラブルシューティング)
 
 ---
 
-## 1. 概要
+## 1. クイックスタート
 
-### 1.1 アーキテクチャ
+### 1.1 最小構成のプラグイン
+
+**ステップ1**: `plugins/my-plugin/` ディレクトリを作成
+
+**ステップ2**: `plugin.json` を作成
+
+```json
+{
+  "id": "my-plugin",
+  "name": "マイプラグイン",
+  "version": "1.0.0",
+  "type": "accessory",
+  "main": "index.html",
+  "window": {
+    "width": 600,
+    "height": 400
+  }
+}
+```
+
+**ステップ3**: `index.html` を作成
+
+```html
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>マイプラグイン</title>
+    <script src="../../js/logger.js"></script>
+    <script src="../../js/util.js"></script>
+    <script src="../../js/message-bus-global.js"></script>
+    <script src="../../js/plugin-base-global.js"></script>
+</head>
+<body>
+    <div class="plugin-content">
+        <h1>マイプラグイン</h1>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
+```
+
+**ステップ4**: `app.js` を作成
+
+```javascript
+const logger = window.getLogger('MyPlugin');
+
+class MyPlugin extends window.PluginBase {
+    constructor() {
+        super('MyPlugin');
+        // MessageBusはPluginBaseで自動初期化される
+    }
+
+    async init() {
+        // 共通コンポーネント初期化
+        this.initializeCommonComponents('[MY_PLUGIN]');
+
+        // 共通イベントハンドラ設定
+        this.setupWindowActivation();
+        this.setupContextMenu();
+
+        // MessageBusハンドラ設定
+        this.setupMessageBusHandlers();
+    }
+
+    setupMessageBusHandlers() {
+        // 共通ハンドラを登録（必須）
+        this.setupCommonMessageBusHandlers();
+
+        // initメッセージでファイルデータを受け取る
+        this.messageBus.on('init', (data) => {
+            this.windowId = data.windowId;
+            this.realId = data.realId;
+            this.fileData = data.fileData;
+            this.onInitialized(data);
+        });
+    }
+
+    onInitialized(data) {
+        logger.info('プラグイン初期化完了', data);
+    }
+
+    // メニュー定義（必須）
+    async getMenuDefinition() {
+        return [
+            { label: 'ファイル', submenu: [
+                { label: '閉じる', action: 'close' }
+            ]}
+        ];
+    }
+
+    // メニューアクション実行（必須）
+    executeMenuAction(action, additionalData) {
+        switch (action) {
+            case 'close':
+                this.requestCloseWindow();
+                break;
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    window.myPlugin = new MyPlugin();
+    window.myPlugin.init();
+});
+```
+
+### 1.2 開発者が覚えるべき重要ポイント
+
+| ポイント | 説明 |
+|---------|------|
+| **MessageBusは自動初期化** | `super('PluginName')` 呼び出しで自動的に初期化・開始される |
+| **setupCommonMessageBusHandlers()は必須** | ウィンドウ操作やメニュー処理を自動で行う |
+| **fileDataプロパティを使用** | `this.fileData`で初期化時のファイルデータにアクセス |
+| **isModifiedで編集状態管理** | `this.isModified = true` で保存確認ダイアログ制御 |
+| **generateMessageId()でID生成** | MessageBusのrequest/responseペアリングに使用 |
+
+---
+
+## 2. 概要
+
+### 2.1 アーキテクチャ
 
 プラグインは以下の構造で動作します：
 
@@ -42,20 +166,20 @@ BTRON Desktopのプラグイン開発に関する総合ガイドです。
 - 親ウィンドウとは **postMessage**（MessageBus）で通信
 - 共通機能は **PluginBase** クラスを継承して利用
 
-### 1.2 プラグインタイプ
+### 2.2 プラグインタイプ
 
 | タイプ | 説明 | 例 |
 |-------|------|-----|
-| `base` | 原紙タイプ（原紙箱に表示） | basic-text-editor, basic-figure-editor, basic-calc-editor, unpack-file, virtual-object-list |
+| `base` | 原紙タイプ（原紙箱に表示） | basic-text-editor, basic-figure-editor, basic-calc-editor |
 | `accessory` | 小物タイプ（アクセサリメニューから起動） | system-config, user-config, file-import |
 | `utility` | ユーティリティタイプ | trash-real-objects |
 | `genko` | 原稿タイプ | tadjs-view |
 
 ---
 
-## 2. 基本構造
+## 3. 基本構造
 
-### 2.1 ディレクトリ構成
+### 3.1 ディレクトリ構成
 
 ```text
 plugins/
@@ -66,7 +190,7 @@ plugins/
     └── style.css        # スタイル（任意）
 ```
 
-### 2.2 plugin.json仕様
+### 3.2 plugin.json仕様
 
 ```json
 {
@@ -112,7 +236,7 @@ plugins/
 | `window.openable` | - | true: 仮身を開いた時にiframe表示可能 |
 | `basefile` | - | 原紙ファイルの定義（baseタイプのみ） |
 
-### 2.3 index.html構成
+### 3.3 index.html構成
 
 ```html
 <!DOCTYPE html>
@@ -121,7 +245,7 @@ plugins/
     <meta charset="UTF-8">
     <title>プラグイン名</title>
     <link rel="stylesheet" href="style.css">
-    <!-- 共通ライブラリの読み込み -->
+    <!-- 共通ライブラリの読み込み（順序重要） -->
     <script src="../../js/logger.js"></script>
     <script src="../../js/util.js"></script>
     <script src="../../js/message-bus-global.js"></script>
@@ -138,182 +262,512 @@ plugins/
 
 ---
 
-## 3. PluginBaseの使用
+## 4. PluginBaseの使用
 
-### 3.1 継承パターン
+### 4.1 継承パターン（推奨）
 
 ```javascript
-/**
- * マイプラグイン
- * @extends PluginBase
- */
 const logger = window.getLogger('MyPlugin');
 
 class MyPlugin extends window.PluginBase {
     constructor() {
-        super('MyPlugin');  // プラグイン名を渡す
+        super('MyPlugin');  // MessageBusは自動初期化される
 
         // プラグイン固有のプロパティ
-        this.isModified = false;
+        // this.isModified は PluginBase で定義済み
+        // this.fileData は PluginBase で定義済み
     }
 
-    /**
-     * 初期化処理
-     */
     async init() {
-        // MessageBusの初期化
-        this.messageBus = new window.MessageBus({
-            pluginName: this.pluginName,
-            debug: this.debug
-        });
-        this.messageBus.start();
-
         // 共通コンポーネントの初期化
         this.initializeCommonComponents('[MY_PLUGIN]');
 
         // 共通イベントハンドラの設定
-        this.setupWindowActivation();
-        this.setupContextMenu();
-        this.setupVirtualObjectRightButtonHandlers();
+        this.setupWindowActivation();      // ウィンドウアクティベーション
+        this.setupContextMenu();           // コンテキストメニュー
+        this.setupVirtualObjectRightButtonHandlers(); // 仮身ドラッグ
 
         // MessageBusハンドラの設定
         this.setupMessageBusHandlers();
+    }
 
-        // initメッセージを送信して初期化データを受け取る
-        this.messageBus.sendWithCallback('init', {}, (data) => {
+    setupMessageBusHandlers() {
+        // 共通ハンドラ登録（必須）
+        this.setupCommonMessageBusHandlers();
+
+        // クロスウィンドウドロップ対応（仮身ドラッグ対応時）
+        this.setupCrossWindowDropSuccessHandler();
+
+        // initメッセージ
+        this.messageBus.on('init', (data) => {
             this.windowId = data.windowId;
             this.realId = data.realId;
+            this.fileData = data.fileData;  // PluginBaseのプロパティに保存
             this.onInitialized(data);
         });
+
+        // プラグイン固有のハンドラ
+        // ...
+    }
+
+    onInitialized(data) {
+        // 初期化完了後の処理
+        this.loadContent(data.fileData);
+    }
+
+    // メニュー定義（必須）
+    async getMenuDefinition() {
+        return [
+            { label: 'ファイル', submenu: [
+                { label: '保存', action: 'save', shortcut: 'Ctrl+S' },
+                { label: '閉じる', action: 'close' }
+            ]}
+        ];
+    }
+
+    // メニューアクション実行（必須）
+    executeMenuAction(action, additionalData) {
+        // execute-with-アクション（実行メニュー）の処理
+        if (this.handleExecuteWithAction(action)) return;
+
+        switch (action) {
+            case 'save':
+                this.saveFile();
+                break;
+            case 'close':
+                this.requestCloseWindow();
+                break;
+        }
     }
 }
 
-// DOMContentLoaded後に初期化
 document.addEventListener('DOMContentLoaded', () => {
     window.myPlugin = new MyPlugin();
     window.myPlugin.init();
 });
 ```
 
-### 3.2 初期化フロー
+### 4.2 初期化フロー
 
 ```text
 1. constructor()
-   └── super('PluginName') を呼び出し
+   └── super('PluginName')
+       ├── MessageBus 自動初期化・開始  ← 重要：手動初期化は不要
+       ├── isModified = false
+       └── fileData = null
 
 2. init()
-   ├── MessageBus初期化・開始
    ├── initializeCommonComponents() - 共通コンポーネント初期化
    ├── setupWindowActivation() - ウィンドウアクティベーション設定
    ├── setupContextMenu() - コンテキストメニュー設定
    ├── setupVirtualObjectRightButtonHandlers() - 仮身ドラッグ設定
-   ├── setupMessageBusHandlers() - MessageBusハンドラ登録
-   │   └── setupCommonMessageBusHandlers() - 共通ハンドラ登録
-   └── 'init' メッセージ送信 → onInitialized() コールバック
+   └── setupMessageBusHandlers()
+       ├── setupCommonMessageBusHandlers() - 共通ハンドラ登録
+       ├── setupCrossWindowDropSuccessHandler() - ドロップ成功ハンドラ
+       └── 'init' ハンドラ登録
+           └── plugin-readyシグナル送信
 
-3. onInitialized(data)
-   └── プラグイン固有の初期化処理
+3. 親ウィンドウから 'init' メッセージ受信
+   └── onInitialized() コールバック
 ```
 
-### 3.3 共通メソッド一覧
+### 4.3 PluginBase共通プロパティ
 
-#### ダイアログ表示
+| プロパティ | 型 | 説明 |
+|-----------|-----|------|
+| `pluginName` | string | プラグイン名（ログ表示用） |
+| `messageBus` | MessageBus | 通信用MessageBusインスタンス（自動初期化） |
+| `windowId` | string | ウィンドウID（initで設定） |
+| `realId` | string | 実身ID（initで設定） |
+| `fileData` | object | ファイルデータ（initハンドラで設定） |
+| `bgColor` | string | 背景色（デフォルト: '#ffffff'） |
+| `isModified` | boolean | 編集状態フラグ（保存確認ダイアログ制御） |
+| `isWindowActive` | boolean | ウィンドウアクティブ状態 |
+| `dialogVisible` | boolean | 親ウィンドウのダイアログ表示状態 |
+| `virtualObjectRenderer` | object | 仮身レンダラー |
+| `iconManager` | object | アイコンキャッシュマネージャー |
+| `iconData` | object | アイコンデータキャッシュ `{ realId: base64Data }` |
+| `openedRealObjects` | Map | 開いている実身のマップ |
 
-| メソッド | 戻り値 | 説明 |
-|---------|--------|------|
-| `showInputDialog(message, defaultValue, inputWidth)` | `string \| null` | 入力ダイアログ。キャンセル時はnull |
-| `showSaveConfirmDialog()` | `'yes' \| 'no' \| 'cancel'` | 保存確認ダイアログ |
-| `showMessageDialog(message, buttons, defaultButton)` | `string` | カスタムボタンダイアログ |
+---
 
-#### 仮身/実身操作
+## 5. 共通メソッド一覧
+
+PluginBaseが提供する共通メソッドの一覧です。開発者はこれらを活用することで、統一された実装が可能です。
+
+### 5.1 初期化・セットアップ
 
 | メソッド | 説明 |
 |---------|------|
-| `loadRealObjectData(realId)` | 実身データを読み込む |
-| `duplicateRealObject()` | 選択中の仮身が指す実身を複製 |
-| `renameRealObject()` | 選択中の仮身が指す実身の名前を変更 |
-| `closeRealObject()` | 選択中の仮身が指す実身を閉じる |
-| `extractRealId(linkId)` | linkIdから実身IDを抽出 |
-| `requestCopyVirtualObject(linkId)` | 仮身コピー（refCount+1） |
-| `requestDeleteVirtualObject(linkId)` | 仮身削除（refCount-1） |
+| `initializeCommonComponents(logPrefix)` | VirtualObjectRenderer, IconCacheManager初期化 |
+| `setupWindowActivation()` | mousedownでウィンドウをアクティブ化 |
+| `setupContextMenu()` | 右クリックメニュー設定 |
+| `setupVirtualObjectRightButtonHandlers()` | 仮身ドラッグ用右ボタン監視 |
+| `setupCommonMessageBusHandlers()` | 共通MessageBusハンドラ登録（**必須**） |
+| `setupCrossWindowDropSuccessHandler()` | クロスウィンドウドロップ成功ハンドラ |
 
-#### ウィンドウ操作
+### 5.2 ダイアログ表示
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `showInputDialog(message, defaultValue, inputWidth, options)` | `string \| null` | 入力ダイアログ。キャンセル時null |
+| `showSaveConfirmDialog()` | `'yes' \| 'no' \| 'cancel'` | 保存確認ダイアログ |
+| `showMessageDialog(message, buttons, defaultButton)` | `string` | カスタムボタンダイアログ |
+
+**showInputDialogのオプション**:
+
+```javascript
+// カラーピッカー付き入力ダイアログ
+const result = await this.showInputDialog(
+    '背景色を入力してください',
+    '#ffffff',
+    20,
+    { colorPicker: true }
+);
+```
+
+### 5.3 仮身/実身操作
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `loadRealObjectData(realId)` | `Promise<Object>` | 実身データを読み込む |
+| `getAppListData(realId)` | `Promise<Object>` | 実身のappListデータを取得 |
+| `duplicateRealObject()` | `Promise<Object>` | 選択中の仮身が指す実身を複製 |
+| `renameRealObject()` | `Promise<Object>` | 選択中の仮身が指す実身の名前を変更 |
+| `closeRealObject()` | void | 選択中の仮身が指す実身を閉じる |
+| `changeVirtualObjectAttributes()` | `Promise<void>` | 仮身の属性を変更 |
+| `extractRealId(linkId)` | string | linkIdから実身IDを抽出 |
+| `requestCopyVirtualObject(linkId)` | void | 仮身コピー（refCount+1） |
+| `requestDeleteVirtualObject(linkId)` | void | 仮身削除（refCount-1） |
+| `openTrashRealObjects()` | void | ごみ箱実身を開く |
+
+### 5.4 ウィンドウ操作
 
 | メソッド | 説明 |
 |---------|------|
 | `activateWindow()` | ウィンドウをアクティブ化 |
 | `toggleMaximize()` | 最大化/復元を切り替え |
+| `toggleFullscreen()` | 全画面表示切り替え（toggleMaximizeのエイリアス） |
 | `closeContextMenu()` | コンテキストメニューを閉じる |
+| `requestContextMenu(x, y)` | コンテキストメニュー要求を送信 |
+| `requestCloseWindow()` | ウィンドウを閉じるリクエスト送信 |
 | `updateWindowConfig(config)` | ウィンドウ設定を保存 |
+| `sendStatusMessage(message)` | ステータスメッセージを送信 |
+| `setStatus(message)` | ステータスメッセージを設定（sendStatusMessageのエイリアス） |
 
-#### クリップボード
+### 5.5 クリップボード
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `getClipboard()` | `Promise<any>` | クリップボードデータを取得 |
+| `setClipboard(data)` | void | クリップボードにデータを設定 |
+| `getGlobalClipboard()` | `Promise<Object\|null>` | グローバルクリップボードから取得 |
+| `setTextClipboard(text)` | void | テキストをクリップボードに設定 |
+| `setImageClipboard(source, options)` | void | 画像をクリップボードに設定 |
+| `imageElementToDataUrl(img, mimeType)` | `string\|null` | 画像要素をDataURLに変換 |
+| `imageElementToDataUrlAsync(img, mimeType)` | `Promise<string\|null>` | 非同期でDataURLに変換 |
+| `loadImageFromUrl(url, options)` | `Promise<string\|null>` | URLから画像を読み込みDataURL生成 |
+
+### 5.6 仮身ドラッグ
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `initializeVirtualObjectDragStart(e)` | `Object` | ドラッグ開始時の共通処理 |
+| `setVirtualObjectDragData(e, virtualObjects, source, isDuplicateDrag)` | `Object` | ドラッグデータを設定 |
+| `detectVirtualObjectDragMove(e)` | `boolean` | ドラッグ中の移動を検出 |
+| `parseDragData(dataTransfer)` | `Object\|null` | ドロップ時のデータをパース |
+| `notifyCrossWindowDropSuccess(dragData, virtualObjects)` | void | クロスウィンドウドロップ成功通知 |
+| `cleanupVirtualObjectDragState()` | void | ドラッグ状態をクリーンアップ |
+| `disableIframePointerEvents()` | void | iframeのpointer-eventsを無効化 |
+| `enableIframePointerEvents()` | void | iframeのpointer-eventsを再有効化 |
+| `duplicateRealObjectForDrag(virtualObject)` | `Promise<Object>` | ダブルクリックドラッグ時の実身複製 |
+| `handleBaseFileDrop(dragData, clientX, clientY, additionalData)` | void | 原紙箱からのドロップ処理 |
+
+### 5.7 ダブルクリック+ドラッグ
 
 | メソッド | 説明 |
 |---------|------|
-| `getClipboard()` | クリップボードデータを取得 |
-| `setClipboard(data)` | クリップボードにデータを設定 |
+| `setDoubleClickDragCandidate(element, event)` | ダブルクリック+ドラッグ候補を設定 |
+| `resetDoubleClickTimer()` | ダブルクリックタイマーをリセット |
+| `shouldStartDblClickDrag(event, threshold)` | ドラッグを開始すべきか判定 |
+| `cleanupDblClickDragState()` | ダブルクリック+ドラッグ状態をクリーンアップ |
 
-#### 仮身ドラッグ
+### 5.8 スクロール位置管理
 
-| メソッド | 説明 |
-|---------|------|
-| `initializeVirtualObjectDragStart(e)` | ドラッグ開始時の共通処理 |
-| `setVirtualObjectDragData(e, virtualObjects, source)` | ドラッグデータを設定 |
-| `parseDragData(dataTransfer)` | ドロップ時のデータをパース |
-| `notifyCrossWindowDropSuccess(dragData, virtualObjects)` | クロスウィンドウドロップ成功通知 |
-| `cleanupVirtualObjectDragState()` | ドラッグ状態をクリーンアップ |
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `getScrollPosition()` | `{x, y}\|null` | 現在のスクロール位置を取得 |
+| `setScrollPosition(scrollPos)` | void | スクロール位置を設定 |
+| `saveScrollPosition()` | void | スクロール位置を保存 |
+| `focusWithScrollPreservation(element)` | void | スクロール位置を保持しながらフォーカス |
 
-### 3.4 フックメソッド（オーバーライド可能）
+**カスタムスクロールコンテナ**:
+
+デフォルトでは `.plugin-content` がスクロールコンテナとして使用されます。異なる要素をスクロールコンテナとして使用する場合は、`getScrollPosition()` と `setScrollPosition()` をオーバーライドしてください。
 
 ```javascript
-// コンテキストメニュー表示前の処理
-onContextMenu(e) {
-    // 選択状態の更新など
+// 例: .grid-body をスクロールコンテナとして使用
+getScrollPosition() {
+    const gridBody = document.querySelector('.grid-body');
+    if (gridBody) {
+        return { x: gridBody.scrollLeft, y: gridBody.scrollTop };
+    }
+    return null;
 }
 
-// ウィンドウリサイズ完了時
-onWindowResizedEnd(data) {
-    // レイアウト再計算など
+setScrollPosition(scrollPos) {
+    if (!scrollPos) return;
+    const gridBody = document.querySelector('.grid-body');
+    if (gridBody) {
+        gridBody.scrollLeft = scrollPos.x || 0;
+        gridBody.scrollTop = scrollPos.y || 0;
+    }
+}
+```
+
+**ウィンドウスクロールバーとの連動**:
+
+ウィンドウのスクロールバーは以下の優先順位でスクロールコンテナを検出します：
+
+1. `[data-scroll-container="true"]` 属性を持つ要素
+2. `.grid-body` 要素
+3. `.plugin-content` 要素
+4. `body` 要素
+
+### 5.9 画像ファイル操作
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `saveImageFile(source, fileName, mimeType)` | `Promise<boolean>` | 画像ファイルを保存 |
+| `deleteImageFile(fileName)` | void | 画像ファイルを削除 |
+| `savePixelmapImageFile(imageData, fileName)` | `Promise<void>` | ImageDataからPNG保存 |
+| `saveImageFromElement(imageElement, fileName)` | `Promise<void>` | 画像要素からPNG保存 |
+
+### 5.10 メニュー関連
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `handleExecuteWithAction(action)` | `boolean` | execute-with-アクションを処理 |
+| `buildExecuteSubmenu(applistData, labelKey)` | `Array` | 実行サブメニューをapplistから生成 |
+| `openVirtualObjectReal(virtualObj, pluginId, messageId)` | void | 仮身の実身を指定プラグインで開く |
+| `getContextMenuVirtualObject()` | `Object\|null` | コンテキストメニューで選択中の仮身を取得 |
+
+### 5.11 背景色管理
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `changeBgColor()` | `Promise<void>` | 背景色変更ダイアログを表示し、背景色を変更 |
+| `applyBackgroundColor(color)` | void | 背景色をUIに適用（サブクラスでオーバーライド） |
+
+**重要**: `applyBackgroundColor()` をオーバーライドする場合、必ず `this.bgColor = color` を先頭で実行してください。
+
+```javascript
+// サブクラスでのオーバーライド例
+applyBackgroundColor(color) {
+    this.bgColor = color;  // 必須: changeBgColor()で現在色を取得するため
+    this.editor.style.backgroundColor = color;
+    document.body.style.backgroundColor = color;
+}
+```
+
+### 5.12 アイコン管理
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `loadAndStoreIcon(realId)` | `Promise<void>` | アイコンを読み込んでキャッシュに保存 |
+| `loadAndStoreIcons(realIds)` | `Promise<void>` | 複数のアイコンを一括読み込み |
+
+```javascript
+// アイコン読み込み
+await this.loadAndStoreIcon(realId);
+
+// キャッシュからアイコンを取得
+const iconBase64 = this.iconData[realId];
+if (iconBase64) {
+    img.src = `data:image/x-icon;base64,${iconBase64}`;
+}
+```
+
+### 5.13 ファイル操作
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `loadDataFileFromParent(fileName)` | `Promise<Blob>` | 親ウィンドウ経由でデータファイルを読み込む |
+| `loadVirtualObjectMetadata(virtualObj)` | `Promise<Object>` | 仮身のメタデータを読み込む |
+
+```javascript
+// JSONファイルを読み込む例
+const jsonFile = await this.loadDataFileFromParent('realId.json');
+const jsonText = await jsonFile.text();
+const jsonData = JSON.parse(jsonText);
+```
+
+### 5.14 ユーティリティ
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `generateMessageId(prefix)` | `string` | ユニークなメッセージIDを生成 |
+| `extractRealId(linkId)` | `string` | linkIdから実身IDを抽出 |
+| `escapeXml(text)` | `string` | XMLエスケープ |
+| `unescapeXml(text)` | `string` | XMLアンエスケープ |
+| `log(...args)` | void | ログ出力（プラグイン名付き） |
+| `warn(...args)` | void | 警告ログ出力 |
+| `error(...args)` | void | エラーログ出力 |
+
+```javascript
+// XMLエスケープ/アンエスケープ
+const escaped = this.escapeXml('<tag>');   // '&lt;tag&gt;'
+const unescaped = this.unescapeXml('&lt;tag&gt;');  // '<tag>'
+
+// 実身ID抽出
+const realId = this.extractRealId('019a6c96-e262-7dfd-a3bc-1e85d495d60d_0.xtad');
+// => '019a6c96-e262-7dfd-a3bc-1e85d495d60d'
+```
+
+### 5.15 フックメソッド（オーバーライド用）
+
+| メソッド | 呼び出しタイミング |
+|---------|------------------|
+| `onContextMenu(e)` | コンテキストメニュー表示前 |
+| `onWindowResizedEnd(data)` | ウィンドウリサイズ完了時 |
+| `onWindowMaximizeToggled(data)` | ウィンドウ最大化切り替え時 |
+| `onWindowActivated()` | ウィンドウがアクティブになった時 |
+| `onWindowDeactivated()` | ウィンドウが非アクティブになった時 |
+| `onSaveBeforeClose()` | クローズ前の保存処理 |
+| `onDragModeChanged(newMode)` | ドラッグモード変更時（move→copy） |
+| `onDeleteSourceVirtualObject(data)` | 移動モードでソースの仮身を削除 |
+| `onCrossWindowDropSuccess(data)` | クロスウィンドウドロップ成功後 |
+| `getVirtualObjectCurrentAttrs(vobj, element)` | 仮身の現在の属性値を取得 |
+| `applyVirtualObjectAttributes(attrs)` | 仮身に属性を適用 |
+| `applyBackgroundColor(color)` | 背景色をUIに適用（`this.bgColor`を更新すること） |
+
+### 5.16 仮身属性ヘルパー（内部メソッド）
+
+`applyVirtualObjectAttributes()` フックメソッド内で使用する内部ヘルパーメソッドです。
+メソッド名は `_` プレフィックス付きで、サブクラスから直接呼び出して使用します。
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `_isValidVobjColor(color)` | `boolean` | カラーコード（#RRGGBB形式）の検証 |
+| `_boolToVobjString(value)` | `string` | ブール値を `'true'`/`'false'` 文字列に変換 |
+| `_ensureVobjDefaults(vobj, overrides)` | `Object` | 仮身にデフォルト属性値を設定 |
+| `_mergeVobjFromDataset(vobj, element)` | `Object` | element.datasetからvobjに属性をマージ |
+| `_applyVobjAttrs(vobj, attrs)` | `Object` | 属性を適用し、変更情報を返す |
+| `_syncVobjToDataset(element, vobj)` | void | vobjの属性をelement.datasetに同期 |
+| `_applyVobjStyles(element, attrs)` | void | 閉じた仮身のスタイル（枠線色、文字色、背景色）を適用 |
+| `_hasVobjAttrChanges(changes)` | `boolean` | 変更があったかどうかを判定 |
+| `_isVobjAttrChanged(changes, attrName)` | `boolean` | 特定の属性が変更されたかを判定 |
+
+**静的定数**:
+
+| 定数 | 説明 |
+| ------ | ------ |
+| `PluginBase.VOBJ_COLOR_REGEX` | カラーコード検証用正規表現 `/^#[0-9A-Fa-f]{6}$/` |
+| `PluginBase.VOBJ_DEFAULT_ATTRS` | 仮身属性のデフォルト値オブジェクト |
+| `PluginBase.VOBJ_DISPLAY_BOOL_ATTRS` | 表示関連ブール属性名の配列 |
+| `PluginBase.VOBJ_COLOR_ATTRS` | カラー属性名の配列 `['frcol', 'chcol', 'tbcol', 'bgcol']` |
+
+**使用例**:
+
+```javascript
+// applyVirtualObjectAttributes() の実装例
+applyVirtualObjectAttributes(attrs) {
+    const vobj = this.contextMenuVirtualObject?.virtualObj;
+    const element = this.contextMenuVirtualObject?.element;
+    if (!vobj) return;
+
+    // datasetから現在値をマージ（DOM要素がある場合）
+    if (element) {
+        this._mergeVobjFromDataset(vobj, element);
+    }
+
+    // 属性を適用し、変更情報を取得
+    const changes = this._applyVobjAttrs(vobj, attrs);
+
+    // 変更がなければ早期リターン
+    if (!this._hasVobjAttrChanges(changes)) {
+        return;
+    }
+
+    // 特定の属性変更時の処理
+    if (this._isVobjAttrChanged(changes, 'chsz')) {
+        // 文字サイズ変更時の処理
+    }
+
+    // DOM要素にスタイルを適用（閉じた仮身の場合）
+    if (element) {
+        this._applyVobjStyles(element, attrs);
+        this._syncVobjToDataset(element, vobj);
+    }
+
+    this.isModified = true;
+}
+```
+
+### 5.17 選択位置（カーソル）保存ヘルパー（内部メソッド）
+
+ウィンドウの非アクティブ/アクティブ切り替え時に選択範囲（カーソル位置）を保持するためのヘルパーメソッドです。
+
+| メソッド | 戻り値 | 説明 |
+|---------|--------|------|
+| `_saveSelection()` | void | 現在の選択範囲を `this.savedSelection` に保存 |
+| `_restoreSelection()` | `boolean` | 保存された選択範囲を復元（成功時true） |
+
+**プロパティ**:
+
+| プロパティ | 型 | 説明 |
+|-----------|-----|------|
+| `savedSelection` | `Object\|null` | 保存された選択範囲情報 |
+
+**使用例**:
+
+```javascript
+// ウィンドウ非アクティブ時に選択位置を保存
+onWindowDeactivated() {
+    this._saveSelection();
+    this.saveScrollPosition();
 }
 
-// ウィンドウ最大化切り替え時
-onWindowMaximizeToggled(data) {
-    // 表示調整など
-}
+// ウィンドウアクティブ時に選択位置を復元
+onWindowActivated() {
+    const pluginContent = document.querySelector('.plugin-content');
+    const savedScrollPos = pluginContent ? {
+        x: pluginContent.scrollLeft,
+        y: pluginContent.scrollTop
+    } : null;
 
-// クローズ前の保存処理
-async onSaveBeforeClose() {
-    await this.saveFile();
-}
+    this.editor.focus();
 
-// ドラッグモード変更時（move→copy）
-onDragModeChanged(newMode) {
-    // カーソル変更など
-}
-
-// 移動モードでソースの仮身を削除（必須実装）
-onDeleteSourceVirtualObject(data) {
-    // 仮身要素を削除
-}
-
-// クロスウィンドウドロップ成功後の処理
-onCrossWindowDropSuccess(data) {
-    // 状態のクリーンアップ
+    if (pluginContent && savedScrollPos) {
+        requestAnimationFrame(() => {
+            pluginContent.scrollLeft = savedScrollPos.x;
+            pluginContent.scrollTop = savedScrollPos.y;
+            this._restoreSelection();
+        });
+    }
 }
 ```
 
 ---
 
-## 4. MessageBus通信
+## 6. MessageBus通信
 
-### 4.1 目的
+### 6.1 概要
 
-- **一貫性**: すべてのプラグインで統一されたメッセージング API
-- **信頼性**: タイムアウト処理、エラーハンドリングの自動化
-- **保守性**: 手動イベントリスナー管理を不要に
-- **デバッグ性**: デバッグモードで全メッセージを追跡可能
+MessageBusは、プラグインと親ウィンドウ間の通信を統一的に管理するクラスです。
 
-### 4.2 基本API
+**重要**: PluginBaseを継承すると、MessageBusは**自動的に初期化**されます。手動で初期化する必要はありません。
+
+```javascript
+class MyPlugin extends window.PluginBase {
+    constructor() {
+        super('MyPlugin');
+        // this.messageBus は既に初期化・開始済み
+    }
+}
+```
+
+### 6.2 基本API
 
 #### `on(messageType, handler)`
 
@@ -359,7 +813,7 @@ this.messageBus.sendWithCallback('show-input-dialog', {
         return;
     }
     console.log('入力値:', result.value);
-}, 30000); // タイムアウト30秒
+}, 30000); // タイムアウト30秒（0で無制限）
 ```
 
 #### `waitFor(messageType, timeout, filter)`
@@ -367,7 +821,9 @@ this.messageBus.sendWithCallback('show-input-dialog', {
 Promiseベースでメッセージを待ちます（**推奨**）。
 
 ```javascript
-const messageId = `load-${Date.now()}`;
+// generateMessageId()でユニークなIDを生成
+const messageId = this.generateMessageId('load');
+
 this.messageBus.send('load-request', { messageId });
 
 try {
@@ -380,49 +836,70 @@ try {
 }
 ```
 
-### 4.3 共通MessageBusハンドラ
+### 6.3 共通MessageBusハンドラ
 
 `setupCommonMessageBusHandlers()` で以下が自動登録されます：
 
 | メッセージタイプ | 説明 |
 |-----------------|------|
 | `window-moved` | ウィンドウ移動時の設定更新 |
-| `window-resized-end` | リサイズ完了時の設定更新 |
-| `window-maximize-toggled` | 最大化切り替え時 |
-| `menu-action` | メニューアクション実行 |
-| `get-menu-definition` | メニュー定義取得要求 |
-| `window-close-request` | クローズ要求 |
+| `window-resized-end` | リサイズ完了時の設定更新 + `onWindowResizedEnd()`フック |
+| `window-maximize-toggled` | 最大化切り替え時 + `onWindowMaximizeToggled()`フック |
+| `menu-action` | メニューアクション実行 → `executeMenuAction()`呼び出し |
+| `get-menu-definition` | メニュー定義取得要求 → `getMenuDefinition()`呼び出し |
+| `window-close-request` | クローズ要求 → `handleCloseRequest()`呼び出し |
+| `parent-dialog-opened` | 親ウィンドウでダイアログが開いた |
+| `parent-dialog-closed` | 親ウィンドウでダイアログが閉じた |
+| `window-activated` | ウィンドウがアクティブになった + `onWindowActivated()`フック |
+| `window-deactivated` | ウィンドウが非アクティブになった + `onWindowDeactivated()`フック |
 
-### 4.4 メッセージタイプ一覧
+### 6.4 メッセージタイプ一覧
 
 #### 送信（プラグイン → 親）
 
 | メッセージタイプ | 用途 |
 |-----------------|------|
-| `init` | 初期化（windowId, realIdを取得） |
-| `xml-data-changed` | XMLデータの変更通知 |
-| `close-window` | ウィンドウを閉じる |
 | `activate-window` | ウィンドウをアクティブ化 |
+| `close-window` | ウィンドウを閉じる |
+| `toggle-maximize` | 最大化/復元切り替え |
+| `close-context-menu` | コンテキストメニューを閉じる |
+| `context-menu-request` | コンテキストメニュー要求 |
+| `xml-data-changed` | XMLデータの変更通知 |
 | `show-input-dialog` | 入力ダイアログ表示 |
 | `show-save-confirm-dialog` | 保存確認ダイアログ表示 |
 | `show-message-dialog` | メッセージダイアログ表示 |
+| `load-real-object` | 実身データ読み込み要求 |
 | `duplicate-real-object` | 実身を複製 |
 | `copy-virtual-object` | 仮身コピー（refCount+1） |
 | `delete-virtual-object` | 仮身削除（refCount-1） |
 | `cross-window-drop-success` | クロスウィンドウドロップ成功通知 |
 | `update-window-config` | ウィンドウ設定を保存 |
+| `window-close-response` | クローズ要求への応答 |
+| `status-message` | ステータスメッセージ |
+| `get-clipboard` | クリップボードデータ取得要求 |
+| `set-clipboard` | クリップボードにデータ設定 |
+| `save-image-file` | 画像ファイル保存 |
+| `delete-image-file` | 画像ファイル削除 |
 
 #### 受信（親 → プラグイン）
 
 | メッセージタイプ | 用途 |
 |-----------------|------|
-| `file-data` | ファイルデータの受信 |
+| `init` | 初期化（windowId, realId, fileDataを受け取る） |
 | `menu-action` | メニューアクション実行指示 |
+| `get-menu-definition` | メニュー定義取得要求 |
 | `window-close-request` | クローズ要求 |
+| `window-moved` | ウィンドウ移動完了 |
+| `window-resized-end` | リサイズ完了 |
+| `window-maximize-toggled` | 最大化切り替え完了 |
+| `window-activated` | ウィンドウアクティブ化 |
+| `window-deactivated` | ウィンドウ非アクティブ化 |
+| `real-object-loaded` | 実身データ読み込み完了 |
 | `real-object-duplicated` | 実身複製完了 |
 | `clipboard-data` | クリップボードデータ |
+| `cross-window-drop-success` | クロスウィンドウドロップ成功（ソース側で受信） |
 
-### 4.5 ベストプラクティス
+### 6.5 ベストプラクティス
 
 #### 推奨事項
 
@@ -438,7 +915,17 @@ try {
    window.parent.postMessage(data, '*');
    ```
 
-2. **エラーハンドリングを必ず実装**
+2. **generateMessageId()でID生成**
+
+   ```javascript
+   // ✅ Good - PluginBaseのメソッドを使用
+   const messageId = this.generateMessageId('duplicate');
+
+   // ❌ Bad - 手動でID生成
+   const messageId = `${prefix}-${Date.now()}-${Math.random()}`;
+   ```
+
+3. **エラーハンドリングを必ず実装**
 
    ```javascript
    // ✅ Good
@@ -451,23 +938,17 @@ try {
    });
    ```
 
-3. **messageIdの一意性を保証**
-
-   ```javascript
-   const messageId = `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-   ```
-
 4. **適切なタイムアウト設定**
 
    - デフォルト: 5000ms
-   - ダイアログ待ち: 30000ms
+   - ダイアログ待ち: 30000ms または 0（無制限）
    - 時間のかかる処理: 適宜調整
 
 ---
 
-## 5. 仮身/実身操作
+## 7. 仮身/実身操作
 
-### 5.1 仮身コピー（左クリック+右クリック+ドラッグ）
+### 7.1 仮身コピー（左クリック+右クリック+ドラッグ）
 
 仮身をドラッグ中に右クリックを押すと「コピーモード」になります。
 コピーモードでは、同じ実身への新しい参照（仮身）が作成されます。
@@ -514,20 +995,13 @@ handleDragEnd(e) {
 }
 ```
 
-### 5.2 実身複製（ダブルクリック+ドラッグ）
+### 7.2 実身複製（ダブルクリック+ドラッグ）
 
 仮身をダブルクリックしてからドラッグすると「実身複製」になります。
-新しい実身が作成され、その実身への仮身が配置されます。
 
 ```javascript
-/**
- * ダブルクリック+ドラッグによる実身複製
- *
- * 重要: ダイアログを先に表示してからMessageBusメッセージを送信すること
- *       （タイムアウト防止のため）
- */
 async handleDoubleClickDragDuplicate(virtualObject, dropX, dropY) {
-    // 重要: ダイアログを先に表示
+    // 重要: ダイアログを先に表示（タイムアウト防止）
     const defaultName = virtualObject.link_name + 'のコピー';
     const newName = await this.showInputDialog(
         '新しい実身の名称を入力してください',
@@ -542,7 +1016,7 @@ async handleDoubleClickDragDuplicate(virtualObject, dropX, dropY) {
 
     // ダイアログ完了後にメッセージを送信
     const sourceRealId = this.extractRealId(virtualObject.link_id);
-    const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+    const messageId = this.generateMessageId('duplicate');
 
     this.messageBus.send('duplicate-real-object', {
         realId: sourceRealId,
@@ -568,7 +1042,7 @@ async handleDoubleClickDragDuplicate(virtualObject, dropX, dropY) {
 }
 ```
 
-### 5.3 refCount管理
+### 7.3 refCount管理
 
 仮身は実身への参照カウント（refCount）で管理されます。
 
@@ -581,7 +1055,7 @@ async handleDoubleClickDragDuplicate(virtualObject, dropX, dropY) {
 
 **重要**: 移動モードのクロスウィンドウドロップでは、refCountは変更しません。
 
-### 5.4 クロスウィンドウドロップ
+### 7.4 クロスウィンドウドロップ
 
 異なるウィンドウ間での仮身ドラッグ&ドロップを処理します。
 
@@ -609,9 +1083,9 @@ onCrossWindowDropSuccess(data) {
 
 ---
 
-## 6. ダイアログ表示
+## 8. ダイアログ表示
 
-### 6.1 入力ダイアログ
+### 8.1 入力ダイアログ
 
 ```javascript
 // 戻り値は文字列またはnull（キャンセル時）
@@ -628,7 +1102,7 @@ if (name) {
 }
 ```
 
-### 6.2 保存確認ダイアログ
+### 8.2 保存確認ダイアログ
 
 ```javascript
 const result = await this.showSaveConfirmDialog();
@@ -647,7 +1121,7 @@ switch (result) {
 }
 ```
 
-### 6.3 メッセージダイアログ
+### 8.3 メッセージダイアログ
 
 ```javascript
 const result = await this.showMessageDialog(
@@ -664,7 +1138,7 @@ if (result === 'delete') {
 }
 ```
 
-### 6.4 戻り値の注意点
+### 8.4 戻り値の注意点
 
 **重要**: `showInputDialog`の戻り値は**文字列**です。オブジェクトではありません。
 
@@ -678,7 +1152,7 @@ const name = await this.showInputDialog('名前', '');
 if (name) { ... }  // name は文字列または null
 ```
 
-### 6.5 ダイアログ先行パターン
+### 8.5 ダイアログ先行パターン
 
 MessageBusメッセージを送信する前にダイアログを表示することで、タイムアウトを防ぎます。
 
@@ -696,14 +1170,14 @@ if (name) {
 
 ---
 
-## 7. ツールパネル（子ウィンドウ）
+## 9. ツールパネル（子ウィンドウ）
 
-### 7.1 概要
+### 9.1 概要
 
 ツールパネルは、メインウィンドウとは別の小さなウィンドウとして表示されるUIです。
 basic-figure-editorで使用されています。
 
-### 7.2 親側（エディタ）の実装
+### 9.2 親側（エディタ）の実装
 
 ```javascript
 class FigureEditor extends window.PluginBase {
@@ -722,7 +1196,6 @@ class FigureEditor extends window.PluginBase {
 
         // ツールパネルウィンドウ移動
         this.messageBus.on('tool-panel-window-moved', (data) => {
-            // ツールパネルの位置を保存
             this.updatePanelPosition(data.pos);
         });
 
@@ -765,7 +1238,7 @@ class FigureEditor extends window.PluginBase {
 }
 ```
 
-### 7.3 子側（ツールパネル）の実装
+### 9.3 子側（ツールパネル）の実装
 
 ```javascript
 // tool-panel.js
@@ -781,7 +1254,6 @@ class ToolPanel {
     }
 
     init(data) {
-        // 初期化処理
         this.setupToolButtons();
         this.sendToParent('tool-panel-ready', {});
     }
@@ -801,11 +1273,7 @@ class ToolPanel {
 
     selectTool(toolType) {
         this.selectedTool = toolType;
-
-        // 親ウィンドウに通知
-        this.sendToParent('tool-selected', {
-            tool: toolType
-        });
+        this.sendToParent('tool-selected', { tool: toolType });
 
         // UI更新
         document.querySelectorAll('.tool-button').forEach(btn => {
@@ -817,7 +1285,7 @@ class ToolPanel {
 const toolPanel = new ToolPanel();
 ```
 
-### 7.4 親子間通信パターン
+### 9.4 親子間通信パターン
 
 | 方向 | メッセージタイプ | 内容 |
 |------|-----------------|------|
@@ -826,127 +1294,6 @@ const toolPanel = new ToolPanel();
 | 子→親 | `tool-selected` | ツール選択通知 |
 | 子→親 | `show-tool-panel-popup` | ポップアップメニュー表示要求 |
 | 子→親 | `start-drag-tool-panel` | ドラッグ開始通知 |
-
----
-
-## 8. 参考実装
-
-### 8.1 プラグイン別特徴
-
-| プラグイン | 主な特徴 |
-|-----------|---------|
-| **basic-text-editor** | リッチテキスト編集、仮身挿入、仮身化機能 |
-| **basic-figure-editor** | Canvas描画、ツールパネル、図形操作 |
-| **basic-calc-editor** | スプレッドシート、セル編集、数式計算 |
-| **virtual-object-list** | 仮身一覧表示、ドラッグ&ドロップ |
-| **base-file-manager** | 原紙箱、ファイルコピー |
-
-### 8.2 実装パターン別索引
-
-| 実装パターン | 参考プラグイン |
-|-------------|---------------|
-| シンプルなPluginBase継承 | virtual-object-list, tadjs-view |
-| 仮身ドラッグ&ドロップ | basic-text-editor, basic-calc-editor |
-| ダブルクリック+ドラッグ（実身複製） | basic-text-editor, basic-figure-editor |
-| ツールパネル子ウィンドウ | basic-figure-editor |
-| メニュー定義とアクション | 全プラグイン共通 |
-| 保存確認ダイアログ | basic-text-editor, basic-figure-editor |
-
----
-
-## 9. トラブルシューティング
-
-### 9.1 タイムアウトエラー
-
-```text
-Callback timeout for messageId: show-input-dialog_xxx (30000ms)
-```
-
-**原因**: ダイアログ表示と他のメッセージ送信が競合
-
-**対策**: ダイアログを先に表示し、結果を得てからメッセージを送信
-
-```javascript
-// ❌ 誤った順序
-this.messageBus.send('duplicate-real-object', { ... });
-const name = await this.showInputDialog('名前', '');
-
-// ✅ 正しい順序
-const name = await this.showInputDialog('名前', '');
-if (name) {
-    this.messageBus.send('duplicate-real-object', { ... });
-}
-```
-
-### 9.2 ダイアログの戻り値エラー
-
-```text
-TypeError: Cannot read property 'value' of undefined
-```
-
-**原因**: `showInputDialog`の戻り値を誤って解釈
-
-**対策**: 戻り値は直接文字列として使用
-
-```javascript
-// ❌ 誤り
-const result = await this.showInputDialog('名前', '');
-const name = result.value;
-
-// ✅ 正しい
-const name = await this.showInputDialog('名前', '');
-```
-
-### 9.3 仮身コピーが動作しない
-
-**原因**: `shouldMove`の判定が誤っている
-
-**対策**: コピーモードは`effectiveMode === 'move'`がfalseの場合
-
-```javascript
-// ❌ 誤り（isDuplicateDragを含めてしまう）
-const shouldMove = (effectiveMode === 'move') || !dragData?.isDuplicateDrag;
-
-// ✅ 正しい
-const shouldMove = effectiveMode === 'move';
-```
-
-### 9.4 クロスウィンドウドロップで元が消えない
-
-**原因**: `onDeleteSourceVirtualObject`が実装されていない
-
-**対策**: フックメソッドを実装
-
-```javascript
-onDeleteSourceVirtualObject(data) {
-    const linkId = data.virtualObjectId || data.virtualObjects?.[0]?.link_id;
-    // 元の仮身要素を削除
-    const element = document.querySelector(`[data-link-id="${linkId}"]`);
-    if (element) {
-        element.parentNode.removeChild(element);
-    }
-}
-```
-
-### 9.5 デバッグ方法
-
-1. **開発者ツールを開く**: `Ctrl+Shift+I`
-
-2. **MessageBusのデバッグモードを有効化**:
-
-   ```javascript
-   this.messageBus = new window.MessageBus({
-       debug: true,  // すべてのメッセージをログ出力
-       pluginName: 'PluginName'
-   });
-   ```
-
-3. **ログ出力例**:
-
-   ```text
-   [MessageBus:PluginName] Sent message: init {"fileData":{...}}
-   [MessageBus:PluginName] Received message: window-moved {"pos":[10,20],...}
-   ```
 
 ---
 
@@ -1011,100 +1358,19 @@ onDeleteSourceVirtualObject(data) {
 }
 ```
 
-**主要フィールド**:
+### 10.3 プラグインからの実身読み込み
 
-| フィールド | 型 | 説明 |
-|-----------|-----|------|
-| `name` | string | 実身名（表示名） |
-| `refCount` | number | 参照カウント（仮身の数） |
-| `editable` | boolean | 編集可能フラグ |
-| `readable` | boolean | 読み取り可能フラグ |
-| `makeDate` | string | 作成日時（ISO 8601） |
-| `updateDate` | string | 更新日時（ISO 8601） |
-| `window` | object | ウィンドウ設定 |
-| `applist` | object | 対応アプリケーション一覧 |
-
-### 10.3 XTAD（XML TAD）構造
-
-```xml
-<tad version="1.0" encoding="UTF-8">
-<document>
-<p>
-テキスト内容がここに入ります。<br/>
-改行は&lt;br/&gt;タグを使用します。
-</p>
-<p>
-<font size="18"/>見出しテキスト
-</p>
-<p>
-<font size="14"/>通常テキストに戻る<br/>
-<link id="019a6c9b-e67e-7a35-a461-0d199550e4cf_0.xtad"
-      name="実身/仮身"
-      tbcol="#e1f2f9"
-      frcol="#000000"
-      chcol="#000000"
-      bgcol="#ffffff"
-      width="150"
-      heightpx="30"
-      chsz="14"
-      framedisp="true"
-      namedisp="true"
-      pictdisp="true"
-      roledisp="false"
-      typedisp="false"
-      updatedisp="false"
-      autoopen="false"
-      applist="{&quot;basic-text-editor&quot;:{&quot;name&quot;:&quot;基本文章編集&quot;,&quot;defaultOpen&quot;:true}}"></link>
-</p>
-</document>
-</tad>
-```
-
-**主要要素**:
-
-| 要素 | 説明 |
-|------|------|
-| `<tad>` | ルート要素（version, encoding属性） |
-| `<document>` | ドキュメントコンテナ |
-| `<p>` | 段落 |
-| `<br/>` | 改行 |
-| `<font>` | フォント設定（size, color属性） |
-| `<bold>` | 太字 |
-| `<link>` | 仮身（他の実身への参照） |
-| `<image>` | 画像（ピクセルマップ） |
-| `<figure>` | 図形セグメント |
-
-**`<link>`要素の属性**:
-
-| 属性 | 説明 | デフォルト |
-|------|------|-----------|
-| `id` | 参照先の実身ID（`{realId}_0.xtad`形式） | 必須 |
-| `name` | 表示名 | 必須 |
-| `tbcol` | タイトルバー背景色 | `#e1f2f9` |
-| `frcol` | 枠線色 | `#000000` |
-| `chcol` | 文字色 | `#000000` |
-| `bgcol` | 背景色 | `#ffffff` |
-| `width` | 幅（ピクセル） | `150` |
-| `heightpx` | 高さ（ピクセル） | `30` |
-| `chsz` | 文字サイズ | `14` |
-| `pictdisp` | アイコン表示 | `true` |
-| `namedisp` | 名前表示 | `true` |
-| `framedisp` | 枠線表示 | `true` |
-| `roledisp` | 役割表示 | `false` |
-| `typedisp` | 種類表示 | `false` |
-| `updatedisp` | 更新日時表示 | `false` |
-| `autoopen` | 自動オープン | `false` |
-| `applist` | 対応アプリJSON（エスケープ済み） | `{}` |
-
-### 10.4 プラグインからの実身読み込み
-
-#### 10.4.1 init時の自動読み込み
+#### 10.3.1 init時の自動読み込み
 
 プラグインは`init`メッセージで実身データを受け取ります：
 
 ```javascript
 this.messageBus.on('init', (data) => {
     const { fileData, windowId } = data;
+
+    // PluginBaseのプロパティに保存
+    this.fileData = fileData;
+    this.windowId = windowId;
 
     // メタデータ
     const metadata = fileData.metadata;
@@ -1120,285 +1386,218 @@ this.messageBus.on('init', (data) => {
 });
 ```
 
-#### 10.4.2 JSONファイルの直接読み込み
+#### 10.3.2 loadRealObjectDataメソッドによる読み込み
 
 ```javascript
-async loadRealObjectJson(realId) {
-    const jsonFileName = `${realId}.json`;
-    const messageId = `load-json-${Date.now()}-${Math.random()}`;
-
-    // 読み込み要求
-    this.messageBus.send('load-data-file-request', {
-        fileName: jsonFileName,
-        messageId: messageId
-    });
-
-    // レスポンス待機
-    const result = await this.messageBus.waitFor(
-        'load-data-file-response',
-        10000,  // 10秒タイムアウト
-        (data) => data.messageId === messageId
-    );
-
-    if (result.success) {
-        const jsonText = result.content || await result.data.text();
-        return JSON.parse(jsonText);
-    }
-    return null;
-}
+// PluginBaseのメソッドを使用
+const realObject = await this.loadRealObjectData(realId);
+// realObject = { metadata, records, applist }
 ```
 
-#### 10.4.3 load-real-objectメッセージによる読み込み
+### 10.4 プラグインからの実身保存
 
-```javascript
-async loadRealObject(realId) {
-    const messageId = `load-real-${Date.now()}-${Math.random()}`;
-
-    this.messageBus.send('load-real-object', {
-        realId: realId,
-        messageId: messageId
-    });
-
-    const result = await this.messageBus.waitFor(
-        'real-object-loaded',
-        10000,
-        (data) => data.messageId === messageId
-    );
-
-    if (result.success) {
-        // result.realObject = { metadata, records, applist }
-        return result.realObject;
-    }
-    return null;
-}
-```
-
-### 10.5 プラグインからの実身保存
-
-#### 10.5.1 save-real-objectメッセージ
-
-```javascript
-async saveRealObject(realId, realObject) {
-    const messageId = `save-real-${Date.now()}-${Math.random()}`;
-
-    this.messageBus.send('save-real-object', {
-        realId: realId,
-        realObject: {
-            metadata: {
-                name: realObject.name,
-                updateDate: new Date().toISOString(),
-                // ... その他のメタデータ
-            },
-            records: [
-                {
-                    xtad: realObject.xtadContent,  // XML文字列
-                    images: []
-                }
-            ]
-        },
-        messageId: messageId
-    });
-
-    const result = await this.messageBus.waitFor(
-        'real-object-saved',
-        10000,
-        (data) => data.messageId === messageId
-    );
-
-    return result.success;
-}
-```
-
-#### 10.5.2 xml-data-changedメッセージ（簡易保存）
+#### 10.4.1 xml-data-changedメッセージ（簡易保存）
 
 XTADコンテンツのみを更新する場合：
 
 ```javascript
 this.messageBus.send('xml-data-changed', {
-    fileId: this.currentFileId,
+    fileId: this.realId,
     xmlData: this.generateXtadXml()
 });
 ```
 
-### 10.6 実身の作成
-
-#### 10.6.1 create-real-objectメッセージ
-
-新規実身を作成する場合：
-
-```javascript
-async createRealObject(realName, initialXtad) {
-    const messageId = `create-real-${Date.now()}-${Math.random()}`;
-
-    this.messageBus.send('create-real-object', {
-        realName: realName,       // 実身名
-        initialXtad: initialXtad, // 初期XTADコンテンツ
-        messageId: messageId
-    });
-
-    const result = await this.messageBus.waitFor(
-        'real-object-created',
-        10000,
-        (data) => data.messageId === messageId
-    );
-
-    if (result.success) {
-        return result.realId;  // 新しい実身ID（UUID v7）
-    }
-    return null;
-}
-```
-
-#### 10.6.2 UUID v7の生成と取り扱い
-
-**重要**: 実身ID（UUID v7）は親ウィンドウ側で生成されます。プラグインからは生成しません。
-
-```text
-プラグイン                          親ウィンドウ (tadjs-desktop.js)
-    |                                        |
-    |  create-real-object                    |
-    |  { realName, initialXtad }             |
-    | -------------------------------------> |
-    |                                        | UUID v7を生成
-    |                                        | ファイルを作成:
-    |                                        |   - {realId}.json
-    |                                        |   - {realId}_0.xtad
-    |                                        |
-    |  real-object-created                   |
-    |  { realId, realName, success }         |
-    | <------------------------------------- |
-    |                                        |
-```
-
-**UUID v7の特徴**:
-
-- 時間ベースのソート可能なUUID
-- 形式: `019a1132-762b-7b02-ba2a-a918a9b37c39`
-- 先頭48ビットがタイムスタンプ（ミリ秒精度）
-- 生成は `RealObjectSystem.generateUUIDv7()` で行われる
-
-**プラグインからの利用**:
-
-```javascript
-// 実身作成後、レスポンスからrealIdを取得
-const result = await this.messageBus.waitFor('real-object-created', ...);
-
-// 取得したrealIdを使って仮身を追加
-if (result.success) {
-    const newRealId = result.realId;
-    const linkId = `${newRealId}_0.xtad`;  // 仮身のlink_id形式
-
-    // 仮身要素を作成
-    const linkElement = document.createElement('span');
-    linkElement.className = 'virtual-object';
-    linkElement.dataset.linkId = linkId;
-    linkElement.dataset.linkName = result.realName;
-    // ...
-}
-```
-
-### 10.7 参照カウント管理
-
-#### 10.7.1 仮身コピー（参照カウント+1）
-
-```javascript
-this.messageBus.send('copy-virtual-object', {
-    realId: realId,
-    messageId: messageId
-});
-// レスポンス: 'virtual-object-copied'
-```
-
-#### 10.7.2 仮身削除（参照カウント-1）
-
-```javascript
-this.messageBus.send('delete-virtual-object', {
-    realId: realId,
-    messageId: messageId
-});
-// レスポンス: 'virtual-object-deleted'
-```
-
-#### 10.7.3 実身複製（新しい実身として完全コピー）
-
-```javascript
-this.messageBus.send('copy-real-object', {
-    sourceRealId: sourceRealId,
-    messageId: messageId
-});
-// レスポンス: 'real-object-copied' { newRealId, newName }
-```
-
-### 10.8 画像ファイルの読み書き
-
-ピクセルマップ等の画像ファイルを扱う場合：
-
-#### 10.8.1 画像保存
-
-```javascript
-// ファイル名形式: {realId}_{recordNo}_{imgNo}.png
-const fileName = `${realId}_0_${imgNo}.png`;
-
-this.messageBus.send('save-image-file', {
-    fileName: fileName,
-    imageData: Array.from(imageDataUint8Array),
-    messageId: messageId
-});
-```
-
-#### 10.8.2 画像読み込み
-
-```javascript
-this.messageBus.send('load-image-file', {
-    fileName: fileName,
-    messageId: messageId
-});
-
-// レスポンス
-this.messageBus.on('load-image-response', (data) => {
-    if (data.success) {
-        const imageData = new Uint8Array(data.imageData);
-        const blob = new Blob([imageData], { type: data.mimeType });
-        const url = URL.createObjectURL(blob);
-        // 画像を表示
-    }
-});
-```
-
-### 10.9 link_idから実身IDを抽出
+### 10.5 link_idから実身IDを抽出
 
 仮身の`link_id`（例: `019a6c96-e262-7dfd-a3bc-1e85d495d60d_0.xtad`）から実身IDを抽出：
 
 ```javascript
-function extractRealId(linkId) {
-    if (!linkId) return '';
-    // .xtadまたは.jsonの拡張子を削除
-    let realId = linkId.replace(/\.(xtad|json)$/, '');
-    // 末尾の_数字を削除
-    realId = realId.replace(/_\d+$/, '');
-    return realId;
-}
-
-// 使用例
-const linkId = '019a6c96-e262-7dfd-a3bc-1e85d495d60d_0.xtad';
-const realId = extractRealId(linkId);  // '019a6c96-e262-7dfd-a3bc-1e85d495d60d'
+// PluginBaseのメソッドを使用
+const realId = this.extractRealId(linkId);
+// => '019a6c96-e262-7dfd-a3bc-1e85d495d60d'
 ```
 
-### 10.10 RealObjectSystem静的メソッド
+---
 
-`RealObjectSystem`クラスには便利な静的メソッドが用意されています：
+## 11. 参考実装
+
+### 11.1 プラグイン別特徴
+
+| プラグイン | 主な特徴 |
+|-----------|---------|
+| **basic-text-editor** | リッチテキスト編集、仮身挿入、仮身化機能 |
+| **basic-figure-editor** | Canvas描画、ツールパネル、図形操作 |
+| **basic-calc-editor** | スプレッドシート、セル編集、数式計算 |
+| **virtual-object-list** | 仮身一覧表示、ドラッグ&ドロップ |
+| **base-file-manager** | 原紙箱、ファイルコピー |
+
+### 11.2 実装パターン別索引
+
+| 実装パターン | 参考プラグイン |
+|-------------|---------------|
+| シンプルなPluginBase継承 | virtual-object-list, tadjs-view |
+| 仮身ドラッグ&ドロップ | basic-text-editor, basic-calc-editor |
+| ダブルクリック+ドラッグ（実身複製） | basic-text-editor, basic-figure-editor |
+| ツールパネル子ウィンドウ | basic-figure-editor |
+| メニュー定義とアクション | 全プラグイン共通 |
+| 保存確認ダイアログ | basic-text-editor, basic-figure-editor |
+
+---
+
+## 12. トラブルシューティング
+
+### 12.1 タイムアウトエラー
+
+```text
+Callback timeout for messageId: show-input-dialog_xxx (30000ms)
+```
+
+**原因**: ダイアログ表示と他のメッセージ送信が競合
+
+**対策**: ダイアログを先に表示し、結果を得てからメッセージを送信
 
 ```javascript
-import { RealObjectSystem } from '../js/real-object-system.js';
+// ❌ 誤った順序
+this.messageBus.send('duplicate-real-object', { ... });
+const name = await this.showInputDialog('名前', '');
 
-// link_idから実身IDを抽出
-const realId = RealObjectSystem.extractRealId(linkId);
-
-// 実身IDからJSONファイル名を生成
-const jsonFileName = RealObjectSystem.getRealObjectJsonFileName(realId);
-
-// applistデータを取得（プラグインインスタンス経由）
-const applist = await RealObjectSystem.getAppListData(this, realId);
+// ✅ 正しい順序
+const name = await this.showInputDialog('名前', '');
+if (name) {
+    this.messageBus.send('duplicate-real-object', { ... });
+}
 ```
 
+### 12.2 ダイアログの戻り値エラー
 
+```text
+TypeError: Cannot read property 'value' of undefined
+```
+
+**原因**: `showInputDialog`の戻り値を誤って解釈
+
+**対策**: 戻り値は直接文字列として使用
+
+```javascript
+// ❌ 誤り
+const result = await this.showInputDialog('名前', '');
+const name = result.value;
+
+// ✅ 正しい
+const name = await this.showInputDialog('名前', '');
+```
+
+### 12.3 仮身コピーが動作しない
+
+**原因**: `shouldMove`の判定が誤っている
+
+**対策**: コピーモードは`effectiveMode === 'move'`がfalseの場合
+
+```javascript
+// ❌ 誤り（isDuplicateDragを含めてしまう）
+const shouldMove = (effectiveMode === 'move') || !dragData?.isDuplicateDrag;
+
+// ✅ 正しい
+const shouldMove = effectiveMode === 'move';
+```
+
+### 12.4 クロスウィンドウドロップで元が消えない
+
+**原因**: `onDeleteSourceVirtualObject`が実装されていない
+
+**対策**: フックメソッドを実装
+
+```javascript
+onDeleteSourceVirtualObject(data) {
+    const linkId = data.virtualObjectId || data.virtualObjects?.[0]?.link_id;
+    // 元の仮身要素を削除
+    const element = document.querySelector(`[data-link-id="${linkId}"]`);
+    if (element) {
+        element.parentNode.removeChild(element);
+    }
+}
+```
+
+### 12.5 カーソル位置がリセットされる
+
+**原因**: ウィンドウアクティベーション時に`focus()`でスクロール位置がリセットされる
+
+**対策**: `focusWithScrollPreservation()`を使用
+
+```javascript
+onWindowActivated() {
+    if (this.editor) {
+        // スクロール位置を保持しながらフォーカス
+        this.focusWithScrollPreservation(this.editor);
+    }
+}
+```
+
+### 12.6 デバッグ方法
+
+1. **開発者ツールを開く**: `Ctrl+Shift+I`
+
+2. **MessageBusのデバッグモードを有効化**:
+
+   ```javascript
+   // plugin-base-global.jsを読み込む前に設定
+   window.TADjsConfig = { debug: true };
+   ```
+
+3. **ログ出力例**:
+
+   ```text
+   [MessageBus:PluginName] Sent message: init {"fileData":{...}}
+   [MessageBus:PluginName] Received message: window-moved {"pos":[10,20],...}
+   ```
+
+---
+
+## 付録: 移行チェックリスト
+
+既存プラグインをPluginBase対応に移行する際のチェックリスト：
+
+- [ ] `extends window.PluginBase` を使用
+- [ ] `super('PluginName')` を呼び出し（MessageBus自動初期化）
+- [ ] MessageBusの手動初期化コードを削除
+- [ ] `setupCommonMessageBusHandlers()` を呼び出し
+- [ ] `this.fileData` プロパティを使用
+- [ ] `this.isModified` で編集状態を管理
+- [ ] `this.generateMessageId(prefix)` でメッセージID生成
+- [ ] `getMenuDefinition()` を実装
+- [ ] `executeMenuAction(action, additionalData)` を実装
+- [ ] 仮身ドラッグ対応: `setupCrossWindowDropSuccessHandler()` を呼び出し
+- [ ] 仮身ドラッグ対応: `onDeleteSourceVirtualObject()` を実装
+- [ ] 背景色対応: `applyBackgroundColor()` で必ず `this.bgColor = color` を設定
+
+---
+
+## 参考リソース
+
+### ソースファイル
+
+| ファイル | 説明 |
+| --------- | ------ |
+| `js/plugin-base.js` | **PluginBase クラス（推奨の基底クラス）** |
+| `js/plugin-base-global.js` | PluginBaseのグローバル版 |
+| `js/message-bus.js` | MessageBus（ウィンドウ間通信） |
+| `js/message-bus-global.js` | MessageBusのグローバル版 |
+| `js/icon-cache-manager.js` | IconCacheManager（アイコンキャッシュ） |
+| `js/virtual-object-renderer.js` | 仮身レンダラー |
+| `js/logger.js` | ロガー |
+| `js/util.js` | ユーティリティ関数 |
+| `tadjs-desktop.js` | メインアプリケーション |
+
+### プラグイン実装例
+
+| プラグイン | パス | 特徴 |
+| ----------- | ------ | ------ |
+| 基本文章編集 | `plugins/basic-text-editor/` | リッチテキスト編集、仮身挿入 |
+| 基本図形編集 | `plugins/basic-figure-editor/` | Canvas描画、ツールパネル |
+| 基本表計算 | `plugins/basic-calc-editor/` | スプレッドシート、数式計算 |
+| 仮身一覧 | `plugins/virtual-object-list/` | 仮身一覧表示、ドラッグ&ドロップ |
+| 原紙箱 | `plugins/base-file-manager/` | 原紙管理 |
+
+### ドキュメント
+
+- `pluginBuildGuide.md` - プラグイン開発の詳細ガイド

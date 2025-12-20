@@ -22,16 +22,7 @@ class BaseFileManager extends window.PluginBase {
         this.iconCache = new Map(); // アイコンキャッシュ (realId -> base64)
         this.isLoadingBaseFiles = false; // 原紙ファイル読み込み中フラグ（二重呼び出し防止）
 
-        // MessageBusの初期化（即座に開始）
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: this.debug,
-                pluginName: 'BaseFileManager'
-            });
-            this.messageBus.start();
-        } else {
-            logger.warn('[BaseFileManager] MessageBus not available');
-        }
+        // MessageBusはPluginBaseで初期化済み
 
         this.init();
     }

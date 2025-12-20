@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.24
+ * TADjs Ver0.25
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs

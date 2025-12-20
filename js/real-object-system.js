@@ -933,6 +933,51 @@ export class RealObjectSystem {
     }
 
     /**
+     * 続柄設定（プラグイン共通）
+     * 実身のrelationship配列を設定する
+     * @param {Object} plugin プラグインインスタンス（messageBus、contextMenuVirtualObject、setStatus、generateMessageIdを持つ）
+     * @returns {Promise<Object>} { success: boolean, relationship?: string[], cancelled?: boolean }
+     */
+    static async setRelationship(plugin) {
+        if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
+            logger.warn('選択中の仮身がありません');
+            return { success: false };
+        }
+
+        const realId = plugin.contextMenuVirtualObject.realId;
+        const messageId = plugin.generateMessageId('set-relationship');
+
+        plugin.messageBus.send('set-relationship', {
+            realId: realId,
+            messageId: messageId
+        });
+
+        try {
+            // レスポンスを待つ（ユーザー入力を待つのでタイムアウト無効）
+            const result = await plugin.messageBus.waitFor('relationship-set', 0, (data) => {
+                return data.messageId === messageId;
+            });
+
+            if (result.success) {
+                const relationshipText = result.relationship.length > 0
+                    ? result.relationship.join(' ')
+                    : '（なし）';
+                plugin.setStatus(`続柄を設定しました: ${relationshipText}`);
+                return { success: true, relationship: result.relationship };
+            }
+
+            if (result.cancelled) {
+                return { success: false, cancelled: true };
+            }
+
+            return { success: false };
+        } catch (error) {
+            logger.error('続柄設定エラー:', error);
+            return { success: false, error: error };
+        }
+    }
+
+    /**
      * 実身を複製（プラグイン共通）
      * @param {Object} plugin プラグインインスタンス（messageBus、contextMenuVirtualObject、setStatusを持つ）
      */

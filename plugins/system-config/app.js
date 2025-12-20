@@ -16,14 +16,7 @@ class SystemConfigApp extends window.PluginBase {
         this.selectedBackground = null;
         // this.realId, this.messageBus は PluginBase で定義済み
 
-        // MessageBus初期化
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: false,
-                pluginName: 'SystemConfig'
-            });
-            this.messageBus.start();
-        }
+        // MessageBusはPluginBaseで初期化済み
         this.init();
     }
 

@@ -26,18 +26,7 @@ class TADjsViewPlugin extends window.PluginBase {
         this.tadRecordDataArray = null; // BPKのtadRecordDataArray（tad.jsから取得）
         // this.debug は PluginBase で定義済み（window.TADjsConfig?.debug || false）
 
-        // MessageBusの初期化（即座に開始）
-        // this.messageBus は PluginBase で定義済み
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: this.debug,
-                pluginName: 'TADjsView'
-            });
-            this.messageBus.start();
-            logger.debug('[TADjsView] MessageBus initialized');
-        } else {
-            logger.warn('[TADjsView] MessageBus not available');
-        }
+        // MessageBusはPluginBaseで初期化済み
 
         // 初期化
         this.init();

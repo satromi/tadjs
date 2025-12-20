@@ -1149,7 +1149,7 @@ input[type="text"], input[type="password"], textarea, .config-input {
 
 /* ダイアログ入力フィールド */
 .dialog-input {
-    width: 100%;
+    width: auto;
     margin-bottom: 16px;
     padding: 4px;
     border: 2px inset #808080;
@@ -1157,6 +1157,46 @@ input[type="text"], input[type="password"], textarea, .config-input {
     font-size: 11px;
     background: white;
     box-sizing: border-box;
+}
+
+/* ダイアログ用カラーピッカー */
+.dialog-color-picker {
+    width: 28px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid #808080;
+    cursor: pointer;
+    margin-left: 6px;
+    margin-bottom: 16px;
+    vertical-align: middle;
+}
+
+.dialog-color-picker::-webkit-color-swatch-wrapper {
+    padding: 2px;
+}
+
+.dialog-color-picker::-webkit-color-swatch {
+    border: none;
+}
+
+/* ダイアログ用チェックボックスコンテナ */
+.dialog-checkbox-container {
+    margin-bottom: 10px;
+    font-family: 'MS Sans Serif', sans-serif;
+    font-size: 11px;
+}
+
+.dialog-checkbox-container label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.dialog-checkbox-container input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    margin: 0 6px 0 0;
+    cursor: pointer;
 }
 
 /* ダイアログボタンコンテナ */
@@ -1323,9 +1363,27 @@ input[type="text"], input[type="password"], textarea, .config-input {
 }
 
 .vobj-attr-color-input {
-    width: 90px;
+    width: 70px;
     padding: 1px;
     font-size: 11px;
+}
+
+.vobj-attr-color-picker {
+    width: 24px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid #808080;
+    cursor: pointer;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.vobj-attr-color-picker::-webkit-color-swatch-wrapper {
+    padding: 1px;
+}
+
+.vobj-attr-color-picker::-webkit-color-swatch {
+    border: none;
 }
 
 .vobj-attr-size-label {

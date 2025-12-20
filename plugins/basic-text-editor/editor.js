@@ -60,18 +60,7 @@ class BasicTextEditor extends window.PluginBase {
         // パフォーマンス最適化用のデバウンス/スロットル関数
         this.debouncedUpdateContentHeight = null;  // init()で初期化
 
-        // MessageBusの初期化（即座に開始）
-        this.messageBus = null;
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: this.debug,
-                pluginName: 'BasicTextEditor'
-            });
-            this.messageBus.start();
-            logger.debug('[EDITOR] MessageBus initialized');
-        } else {
-            logger.warn('[EDITOR] MessageBus not available');
-        }
+        // MessageBusはPluginBaseで初期化済み
 
         this.init();
     }
@@ -141,11 +130,9 @@ class BasicTextEditor extends window.PluginBase {
 
                 // 背景色の設定（開いた仮身表示用）
                 if (data.fileData.bgcol) {
-                    document.body.style.backgroundColor = data.fileData.bgcol;
-                    this.editor.style.backgroundColor = data.fileData.bgcol;
+                    this.applyBackgroundColor(data.fileData.bgcol);
                 } else if (data.fileData.windowConfig && data.fileData.windowConfig.backgroundColor) {
-                    document.body.style.backgroundColor = data.fileData.windowConfig.backgroundColor;
-                    this.editor.style.backgroundColor = data.fileData.windowConfig.backgroundColor;
+                    this.applyBackgroundColor(data.fileData.windowConfig.backgroundColor);
                 }
             }
 
@@ -212,8 +199,7 @@ class BasicTextEditor extends window.PluginBase {
 
             // 背景色の設定
             if (data.bgcol) {
-                document.body.style.backgroundColor = data.bgcol;
-                this.editor.style.backgroundColor = data.bgcol;
+                this.applyBackgroundColor(data.bgcol);
             }
 
             // realObjectからデータを読み込む
@@ -2142,6 +2128,35 @@ class BasicTextEditor extends window.PluginBase {
             logger.debug('[EDITOR] readonlyモードのためアイコン事前ロードをスキップ');
         }
 
+        // 仮身のメタデータ（relationship等）を事前ロード
+        const metadataCache = {};
+        for (const linkMatch of linkMatches) {
+            const attrMap = {};
+            const attrRegex = /(\w+)="([^"]*)"/g;
+            let attrMatch;
+
+            while ((attrMatch = attrRegex.exec(linkMatch.attributes)) !== null) {
+                attrMap[attrMatch[1]] = attrMatch[2];
+            }
+
+            if (attrMap.id) {
+                // フルIDから実身IDのみを抽出（_0.xtadなどを削除）
+                const realId = attrMap.id.replace(/_\d+\.xtad$/i, '');
+                if (!metadataCache[realId]) {
+                    // 一時的なvirtualObjを作成してメタデータをロード
+                    const tempVobj = { link_id: attrMap.id };
+                    try {
+                        await this.loadVirtualObjectMetadata(tempVobj);
+                        if (tempVobj.metadata) {
+                            metadataCache[realId] = tempVobj.metadata;
+                        }
+                    } catch (e) {
+                        // メタデータ読み込み失敗は無視
+                    }
+                }
+            }
+        }
+
         // キャッシュからアイコンデータを取得してiconDataオブジェクトを作成
         const iconData = {};
         for (const linkMatch of linkMatches) {
@@ -2198,6 +2213,9 @@ class BasicTextEditor extends window.PluginBase {
             // VirtualObjectRendererを使って仮身要素を作成
             if (this.virtualObjectRenderer) {
                 // VirtualObjectオブジェクトを構築
+                // フルIDから実身IDのみを抽出
+                const realId = attrMap.id.replace(/_\d+\.xtad$/i, '');
+
                 const virtualObject = {
                     link_id: attrMap.id,
                     link_name: displayName,
@@ -2218,6 +2236,19 @@ class BasicTextEditor extends window.PluginBase {
                     updatedisp: attrMap.updatedisp || 'false',
                     autoopen: attrMap.autoopen || 'false'
                 };
+
+                // 事前ロードしたメタデータを適用（relationship, updateDate等）
+                if (metadataCache[realId]) {
+                    virtualObject.metadata = metadataCache[realId];
+                    // applistもJSONから取得したものを優先（より正確）
+                    if (metadataCache[realId].applist) {
+                        virtualObject.applist = metadataCache[realId].applist;
+                    }
+                    // updateDateをvirtualObjectに直接設定（VirtualObjectRendererが参照）
+                    if (metadataCache[realId].updateDate) {
+                        virtualObject.updateDate = metadataCache[realId].updateDate;
+                    }
+                }
 
                 // アイコンデータを渡す（同期的に設定される）
                 // readonlyモード（開いた仮身表示）ではiconDataが空のため、iconBasePathで直接読み込み
@@ -3349,87 +3380,7 @@ class BasicTextEditor extends window.PluginBase {
         return null;
     }
 
-    /**
-     * datasetからvirtualObjを構築
-     */
-    buildVirtualObjFromDataset(dataset) {
-        const virtualObj = {};
-
-        // デバッグ: dataset内のすべてのキーをログ出力
-        logger.debug('[EDITOR] buildVirtualObjFromDataset: dataset内のすべてのキー:', Object.keys(dataset));
-
-        // data-link-* 形式の属性を抽出（dataset.linkXxx形式）
-        for (const key in dataset) {
-            if (key.startsWith('link')) {
-                const attrName = key.replace(/^link/, '').toLowerCase();
-                virtualObj['link_' + attrName] = dataset[key];
-                // デバッグ: 各link属性の変換をログ出力
-                logger.debug(`[EDITOR] buildVirtualObjFromDataset: ${key} → link_${attrName} = ${dataset[key]}`);
-            }
-        }
-
-        // 仮身属性を短い形式でも追加（仮身一覧プラグインとの互換性のため）
-        // data-link-* から変換されたlink_*属性を、短い形式にも展開
-        if (virtualObj.link_id) virtualObj.link_id = virtualObj.link_id;
-        if (virtualObj.link_name) virtualObj.link_name = virtualObj.link_name;
-
-        // 色属性（link_tbcol → tbcol）
-        logger.debug('[EDITOR] buildVirtualObjFromDataset: 色属性変換前:', {
-            link_tbcol: virtualObj.link_tbcol,
-            link_frcol: virtualObj.link_frcol,
-            link_chcol: virtualObj.link_chcol,
-            link_bgcol: virtualObj.link_bgcol
-        });
-
-        if (virtualObj.link_tbcol) virtualObj.tbcol = virtualObj.link_tbcol;
-        if (virtualObj.link_frcol) virtualObj.frcol = virtualObj.link_frcol;
-        if (virtualObj.link_chcol) virtualObj.chcol = virtualObj.link_chcol;
-        if (virtualObj.link_bgcol) virtualObj.bgcol = virtualObj.link_bgcol;
-
-        logger.debug('[EDITOR] buildVirtualObjFromDataset: 色属性変換後:', {
-            tbcol: virtualObj.tbcol,
-            frcol: virtualObj.frcol,
-            chcol: virtualObj.chcol,
-            bgcol: virtualObj.bgcol
-        });
-
-        // サイズ・レイアウト属性
-        if (virtualObj.link_chsz) virtualObj.chsz = parseFloat(virtualObj.link_chsz);
-        if (virtualObj.link_width) virtualObj.width = parseInt(virtualObj.link_width);
-        if (virtualObj.link_heightpx) virtualObj.heightPx = parseInt(virtualObj.link_heightpx);
-        if (virtualObj.link_dlen) virtualObj.dlen = parseInt(virtualObj.link_dlen);
-
-        // 座標属性
-        if (virtualObj.link_vobjleft) virtualObj.vobjleft = parseInt(virtualObj.link_vobjleft);
-        if (virtualObj.link_vobjtop) virtualObj.vobjtop = parseInt(virtualObj.link_vobjtop);
-        if (virtualObj.link_vobjright) virtualObj.vobjright = parseInt(virtualObj.link_vobjright);
-        if (virtualObj.link_vobjbottom) virtualObj.vobjbottom = parseInt(virtualObj.link_vobjbottom);
-
-        // 表示属性
-        if (virtualObj.link_framedisp) virtualObj.framedisp = virtualObj.link_framedisp;
-        if (virtualObj.link_namedisp) virtualObj.namedisp = virtualObj.link_namedisp;
-        if (virtualObj.link_pictdisp) virtualObj.pictdisp = virtualObj.link_pictdisp;
-        if (virtualObj.link_roledisp) virtualObj.roledisp = virtualObj.link_roledisp;
-        if (virtualObj.link_typedisp) virtualObj.typedisp = virtualObj.link_typedisp;
-        if (virtualObj.link_updatedisp) virtualObj.updatedisp = virtualObj.link_updatedisp;
-
-        // applist属性（data-applist形式で直接設定されている）
-        if (dataset.applist) {
-            try {
-                virtualObj.applist = JSON.parse(dataset.applist);
-            } catch (e) {
-                logger.warn('[EDITOR] applistのパースに失敗:', e);
-                virtualObj.applist = {};
-            }
-        }
-
-        // autoopen属性
-        if (dataset.autoopen) {
-            virtualObj.autoopen = dataset.autoopen;
-        }
-
-        return virtualObj;
-    }
+    // buildVirtualObjFromDataset() は PluginBase で定義
 
     /**
      * 仮身の右クリックメニューを表示
@@ -4424,17 +4375,7 @@ class BasicTextEditor extends window.PluginBase {
         return text;
     }
 
-    /**
-     * XMLエスケープ
-     */
-    escapeXml(text) {
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&apos;');
-    }
+    // escapeXml は PluginBase に移動済み
 
     /**
      * RGB/RGBA形式の色を#rrggbb形式に変換（共通ユーティリティを使用）
@@ -4529,7 +4470,7 @@ class BasicTextEditor extends window.PluginBase {
         this.isModified = false;
 
         // 親ウィンドウに新たな実身への保存を要求
-        const messageId = 'save-as-new-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        const messageId = this.generateMessageId('save-as-new');
 
         this.messageBus.send('save-as-new-real-object', {
             realId: this.realId,
@@ -4868,7 +4809,8 @@ class BasicTextEditor extends window.PluginBase {
                     { label: '開く', action: 'open-real-object', disabled: isOpened },
                     { label: '閉じる', action: 'close-real-object', disabled: !isOpened },
                     { separator: true },
-                    { label: '属性変更', action: 'change-virtual-object-attributes' }
+                    { label: '属性変更', action: 'change-virtual-object-attributes' },
+                    { label: '続柄設定', action: 'set-relationship' }
                 ];
 
                 menuDef.push({
@@ -5292,6 +5234,10 @@ class BasicTextEditor extends window.PluginBase {
                 this.changeVirtualObjectAttributes();
                 break;
 
+            case 'set-relationship':
+                this.setRelationship();
+                break;
+
             // 実身操作
             case 'rename-real-object':
                 this.renameRealObject();
@@ -5639,46 +5585,13 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
-     * 背景色変更
+     * 背景色をUIに適用（PluginBaseのオーバーライド）
+     * @param {string} color - 背景色
      */
-    async changeBgColor() {
-        logger.debug('[EDITOR] changeBgColor開始');
-
-        // 現在の背景色を取得
-        const currentBgColor = (this.currentFile && this.currentFile.windowConfig && this.currentFile.windowConfig.backgroundColor)
-            ? this.currentFile.windowConfig.backgroundColor
-            : '#ffffff';
-
-        logger.debug('[EDITOR] 現在の背景色:', currentBgColor);
-
-        const color = await this.showInputDialog('背景色を入力してください（例: #ffffff, white）', currentBgColor, 20);
-        logger.debug('[EDITOR] showInputDialogの戻り値:', color);
-
-        if (color) {
-            logger.debug('[EDITOR] 背景色を変更します:', color);
-            this.editor.style.backgroundColor = color;
-            document.body.style.backgroundColor = color;
-            this.setStatus(`背景色を${color}に変更しました`);
-
-            // 親ウィンドウに背景色更新を通知（管理用セグメントに保存）
-            if (window.parent && window.parent !== window && this.realId) {
-                    this.messageBus.send('update-background-color', {
-                    fileId: this.realId,
-                    backgroundColor: color
-                });
-                logger.debug('[EDITOR] 背景色更新を親ウィンドウに通知:', this.realId, color);
-            }
-
-            // this.currentFileを更新（再表示時に正しい色を適用するため）
-            if (this.currentFile) {
-                if (!this.currentFile.windowConfig) {
-                    this.currentFile.windowConfig = {};
-                }
-                this.currentFile.windowConfig.backgroundColor = color;
-            }
-        } else {
-            logger.debug('[EDITOR] 背景色変更がキャンセルされました');
-        }
+    applyBackgroundColor(color) {
+        this.bgColor = color;
+        this.editor.style.backgroundColor = color;
+        document.body.style.backgroundColor = color;
     }
 
     /**
@@ -5750,7 +5663,7 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         // 親ウィンドウに仮身化を要求
-        const messageId = 'virtualize-' + Date.now() + '-' + Math.random().toString(36).substring(2, 11);
+        const messageId = this.generateMessageId('virtualize');
 
         this.messageBus.send('virtualize-selection', {
             messageId: messageId,
@@ -6492,7 +6405,7 @@ class BasicTextEditor extends window.PluginBase {
      * 親ウィンドウからシステムフォント一覧を要求
      */
     async requestSystemFontsFromParent() {
-        const messageId = `get_fonts_${Date.now()}_${Math.random()}`;
+        const messageId = this.generateMessageId('get-fonts');
         logger.debug('[EDITOR] 親ウィンドウにフォント要求を送信開始 messageId:', messageId);
 
         // 親ウィンドウに要求
@@ -7204,7 +7117,7 @@ class BasicTextEditor extends window.PluginBase {
      * カスタム文字色
      */
     async customColor() {
-        const color = await this.showInputDialog('文字色を入力してください（例: #ff0000, #000000）', '#000000', 20);
+        const color = await this.showInputDialog('文字色を入力してください（例: #ff0000, #000000）', '#000000', 20, { colorPicker: true });
         if (color) {
             document.execCommand('foreColor', false, color);
             this.setStatus(`文字色: ${color}`);
@@ -7333,12 +7246,47 @@ class BasicTextEditor extends window.PluginBase {
     // updateWindowConfig() は基底クラス PluginBase で定義
 
     /**
+     * ウィンドウが非アクティブになった時の処理（PluginBase hook override）
+     * 選択位置とスクロール位置を保存
+     */
+    onWindowDeactivated() {
+        // 選択範囲（カーソル位置）を保存
+        this._saveSelection();
+        // スクロール位置を保存
+        this.saveScrollPosition();
+    }
+
+    /**
      * ウィンドウがアクティブになった時の処理（PluginBase hook override）
-     * エディタにフォーカスを設定
+     * スクロール位置と選択位置を復元してフォーカスを設定
      */
     onWindowActivated() {
-        if (this.editor) {
-            this.editor.focus();
+        if (!this.editor) return;
+
+        // .plugin-contentのスクロール位置を保存
+        const pluginContent = document.querySelector('.plugin-content');
+        const savedScrollPos = pluginContent ? {
+            x: pluginContent.scrollLeft,
+            y: pluginContent.scrollTop
+        } : null;
+
+        // エディタにフォーカスを設定
+        this.editor.focus();
+
+        // スクロール位置を復元（フォーカスでリセットされる場合があるため）
+        if (pluginContent && savedScrollPos) {
+            requestAnimationFrame(() => {
+                pluginContent.scrollLeft = savedScrollPos.x;
+                pluginContent.scrollTop = savedScrollPos.y;
+
+                // 選択範囲（カーソル位置）を復元
+                this._restoreSelection();
+            });
+        } else {
+            // pluginContentがない場合も選択範囲の復元を試みる
+            requestAnimationFrame(() => {
+                this._restoreSelection();
+            });
         }
     }
 
@@ -8892,6 +8840,7 @@ class BasicTextEditor extends window.PluginBase {
         vo.style.verticalAlign = 'middle';
         vo.style.background = tbcol;
         vo.style.border = `1px solid ${frcol}`;
+        vo.style.borderWidth = '1px';  // 明示的にボーダー幅をリセット
         vo.style.padding = '4px 8px';
         vo.style.margin = '0 2px';
         vo.style.color = chcol;
@@ -8907,6 +8856,9 @@ class BasicTextEditor extends window.PluginBase {
         vo.style.height = 'auto';
         vo.style.minWidth = 'auto';
         vo.style.minHeight = 'auto';
+        // 選択状態のスタイルをリセット（枠が太くなる問題対策）
+        vo.style.outline = 'none';
+        vo.classList.remove('selected');
 
         // 内容をクリアして再構築
         vo.innerHTML = '';
@@ -9085,6 +9037,30 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
+     * 続柄更新後の再描画（PluginBaseフック）
+     * 仮身のDOM要素を再描画して続柄表示を更新
+     * applyVirtualObjectAttributesと同じcollapseVirtualObjectパターンを使用
+     * 注意: roledispは自動的に変更しない（ユーザーが明示的に仮身属性で設定するまでオフのまま）
+     */
+    async onRelationshipUpdated(virtualObj, result) {
+        const element = this.contextMenuVirtualObject?.element;
+        if (!element || !element.parentNode) return;
+
+        // applyVirtualObjectAttributesと同様にcollapseVirtualObjectで再描画
+        // これにより一貫した表示が保証される（roledispがtrueなら続柄が表示される）
+        if (!element.classList.contains('expanded')) {
+            // 閉じた仮身の場合、collapseVirtualObjectで再描画
+            const originalWidth = parseFloat(element.style.width) || element.offsetWidth;
+            element.classList.add('expanded');
+            await this.collapseVirtualObject(element);
+            element.style.width = originalWidth + 'px';
+            element.style.minWidth = originalWidth + 'px';
+        }
+
+        this.isModified = true;
+    }
+
+    /**
      * 仮身オブジェクトから現在の属性値を取得（element.dataset対応）
      * @param {Object} vobj - 仮身オブジェクト
      * @param {HTMLElement|null} element - DOM要素
@@ -9137,63 +9113,21 @@ class BasicTextEditor extends window.PluginBase {
         const element = this.contextMenuVirtualObject.element;
         if (!vobj || !element) return;
 
-        // datasetから現在の属性値を読み取って、vobjに設定（link_プレフィックスの有無に対応）
-        if (!vobj.pictdisp) vobj.pictdisp = vobj.link_pictdisp || element.dataset.linkPictdisp || 'true';
-        if (!vobj.namedisp) vobj.namedisp = vobj.link_namedisp || element.dataset.linkNamedisp || 'true';
-        if (!vobj.roledisp) vobj.roledisp = vobj.link_roledisp || element.dataset.linkRoledisp || 'false';
-        if (!vobj.typedisp) vobj.typedisp = vobj.link_typedisp || element.dataset.linkTypedisp || 'false';
-        if (!vobj.updatedisp) vobj.updatedisp = vobj.link_updatedisp || element.dataset.linkUpdatedisp || 'false';
-        if (!vobj.framedisp) vobj.framedisp = vobj.link_framedisp || element.dataset.linkFramedisp || 'true';
-        if (!vobj.frcol) vobj.frcol = vobj.link_frcol || element.dataset.linkFrcol || '#000000';
-        if (!vobj.chcol) vobj.chcol = vobj.link_chcol || element.dataset.linkChcol || '#000000';
-        if (!vobj.tbcol) vobj.tbcol = vobj.link_tbcol || element.dataset.linkTbcol || '#ffffff';
-        if (!vobj.bgcol) vobj.bgcol = vobj.link_bgcol || element.dataset.linkBgcol || '#ffffff';
-        if (!vobj.chsz) vobj.chsz = vobj.link_chsz || element.dataset.linkChsz || '14';
-        if (!vobj.autoopen) vobj.autoopen = vobj.link_autoopen || element.dataset.linkAutoopen || 'false';
-        if (!vobj.link_id) vobj.link_id = vobj.link_link_id || element.dataset.linkId || '';
-        if (!vobj.link_name) vobj.link_name = vobj.link_link_name || element.dataset.linkName || '';
+        // datasetから現在の属性値を読み取って、vobjにマージ（link_プレフィックスの有無に対応）
+        this._mergeVobjFromDataset(vobj, element);
 
-        // 表示項目の設定
-        if (attrs.pictdisp !== undefined) vobj.pictdisp = attrs.pictdisp ? 'true' : 'false';
-        if (attrs.namedisp !== undefined) vobj.namedisp = attrs.namedisp ? 'true' : 'false';
-        if (attrs.roledisp !== undefined) vobj.roledisp = attrs.roledisp ? 'true' : 'false';
-        if (attrs.typedisp !== undefined) vobj.typedisp = attrs.typedisp ? 'true' : 'false';
-        if (attrs.updatedisp !== undefined) vobj.updatedisp = attrs.updatedisp ? 'true' : 'false';
-        if (attrs.framedisp !== undefined) vobj.framedisp = attrs.framedisp ? 'true' : 'false';
-
-        // 色の設定（#ffffff形式のみ）
-        const colorRegex = /^#[0-9A-Fa-f]{6}$/;
-        if (attrs.frcol && colorRegex.test(attrs.frcol)) vobj.frcol = attrs.frcol;
-        if (attrs.chcol && colorRegex.test(attrs.chcol)) vobj.chcol = attrs.chcol;
-        if (attrs.tbcol && colorRegex.test(attrs.tbcol)) vobj.tbcol = attrs.tbcol;
-        if (attrs.bgcol && colorRegex.test(attrs.bgcol)) vobj.bgcol = attrs.bgcol;
-
-        // 文字サイズの設定
-        if (attrs.chsz !== undefined) vobj.chsz = attrs.chsz.toString();
-
-        // 自動起動の設定
-        if (attrs.autoopen !== undefined) vobj.autoopen = attrs.autoopen ? 'true' : 'false';
+        // PluginBaseの共通メソッドで属性を適用し、変更を取得
+        const changes = this._applyVobjAttrs(vobj, attrs);
 
         // DOM要素に属性を適用（閉じた仮身の場合）
         if (element && element.classList.contains('virtual-object')) {
-            // 枠線の色
-            if (attrs.frcol && colorRegex.test(attrs.frcol)) {
-                element.style.borderColor = attrs.frcol;
-            }
-            // 仮身文字色
-            if (attrs.chcol && colorRegex.test(attrs.chcol)) {
-                element.style.color = attrs.chcol;
-            }
-            // 仮身背景色
-            if (attrs.tbcol && colorRegex.test(attrs.tbcol)) {
-                element.style.backgroundColor = attrs.tbcol;
-            }
-            // 文字サイズ（chszはポイント値なのでピクセルに変換）
-            // 実際に変更された場合のみ処理
-            const currentChsz = parseFloat(vobj.chsz) || 14;
-            const newChsz = attrs.chsz !== undefined ? parseFloat(attrs.chsz) : currentChsz;
-            if (attrs.chsz !== undefined && newChsz !== currentChsz) {
-                const chszPx = window.convertPtToPx(attrs.chsz);
+            // 基本スタイル（枠線、文字色、背景色）を適用
+            this._applyVobjStyles(element, attrs);
+
+            // 文字サイズ変更時の追加処理（閉じた仮身のサイズ調整）
+            if (this._isVobjAttrChanged(changes, 'chsz')) {
+                const newChsz = parseFloat(vobj.chsz);
+                const chszPx = window.convertPtToPx(newChsz);
                 element.style.fontSize = chszPx + 'px';
 
                 // chsz変更時は、閉じた仮身の最低縦幅(originalHeight)を再計算
@@ -9218,20 +9152,7 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         // XMLデータに反映するため、dataset属性を更新（data-link-*形式で保存）
-        if (element) {
-            element.dataset.linkPictdisp = vobj.pictdisp;
-            element.dataset.linkNamedisp = vobj.namedisp;
-            element.dataset.linkRoledisp = vobj.roledisp;
-            element.dataset.linkTypedisp = vobj.typedisp;
-            element.dataset.linkUpdatedisp = vobj.updatedisp;
-            element.dataset.linkFramedisp = vobj.framedisp;
-            element.dataset.linkFrcol = vobj.frcol;
-            element.dataset.linkChcol = vobj.chcol;
-            element.dataset.linkTbcol = vobj.tbcol;
-            element.dataset.linkBgcol = vobj.bgcol;
-            element.dataset.linkChsz = vobj.chsz;
-            element.dataset.linkAutoopen = vobj.autoopen;
-        }
+        this._syncVobjToDataset(element, vobj);
 
         // elementのdatasetから必要な情報を取得して、完全なvobjオブジェクトを構築
         const completeVobj = {
@@ -9441,7 +9362,7 @@ class BasicTextEditor extends window.PluginBase {
         const originalVobj = this.contextMenuVirtualObject.virtualObj;
         const originalElement = this.contextMenuVirtualObject.element;
 
-        const messageId = `duplicate-real-${Date.now()}-${Math.random()}`;
+        const messageId = this.generateMessageId('duplicate-real');
 
         this.messageBus.send('duplicate-real-object', {
             realId: realId,
@@ -9528,7 +9449,7 @@ class BasicTextEditor extends window.PluginBase {
             logger.debug('[EDITOR] 実身複製がキャンセルされました');
             return;
         }
-        const messageId = 'duplicate-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
+        const messageId = this.generateMessageId('duplicate');
 
         // MessageBus経由で実身複製を要求（名前を含める）
         this.messageBus.send('duplicate-real-object', {
@@ -9739,6 +9660,9 @@ class BasicTextEditor extends window.PluginBase {
             // 透明度の復元はdragendハンドラで処理される
         }
     }
+
+    // loadDataFileFromParent() および loadVirtualObjectMetadata() は
+    // PluginBase から継承（js/plugin-base.js）
 
 }
 

@@ -120,9 +120,12 @@ export class DialogManager {
      * @param {number} inputWidth - 入力欄の幅（文字数）
      * @param {Array<{label: string, value: any}>} buttons - ボタン定義の配列
      * @param {number} defaultButton - デフォルトボタンのインデックス (0始まり)
-     * @returns {Promise<{button: any, value: string}>} - 選択されたボタンと入力値
+     * @param {Object} options - オプション
+     * @param {boolean} options.colorPicker - カラーピッカーを表示するかどうか
+     * @param {Object} options.checkbox - チェックボックス設定 { label: string, checked: boolean }
+     * @returns {Promise<{button: any, value: string, checkbox: boolean}>} - 選択されたボタン、入力値、チェックボックス状態
      */
-    showInputDialog(message, defaultValue = '', inputWidth = window.DEFAULT_INPUT_WIDTH, buttons = [{ label: '取消', value: 'cancel' }, { label: 'OK', value: 'ok' }], defaultButton = 1) {
+    showInputDialog(message, defaultValue = '', inputWidth = window.DEFAULT_INPUT_WIDTH, buttons = [{ label: '取消', value: 'cancel' }, { label: 'OK', value: 'ok' }], defaultButton = 1, options = {}) {
         logger.info('[DialogManager] showInputDialog called:', { message, defaultValue, inputWidth });
 
         return new Promise((resolve) => {
@@ -142,7 +145,7 @@ export class DialogManager {
 
             if (!overlay || !dialog || !messageText || !inputField || !buttonsContainer) {
                 logger.error('[DialogManager] Missing required DOM elements!');
-                resolve({ button: 'cancel', value: '' });
+                resolve({ button: 'cancel', value: '', checkbox: false });
                 return;
             }
 
@@ -153,6 +156,72 @@ export class DialogManager {
             inputField.value = defaultValue;
             inputField.style.width = `${inputWidth}ch`;
             inputField.select();
+
+            // 既存のチェックボックスを削除
+            const existingCheckbox = document.getElementById('dialog-checkbox-container');
+            if (existingCheckbox) {
+                existingCheckbox.remove();
+            }
+
+            // チェックボックスオプションが有効な場合
+            let checkboxElement = null;
+            if (options.checkbox && options.checkbox.label) {
+                const container = document.createElement('div');
+                container.id = 'dialog-checkbox-container';
+                container.className = 'dialog-checkbox-container';
+
+                const label = document.createElement('label');
+                checkboxElement = document.createElement('input');
+                checkboxElement.type = 'checkbox';
+                checkboxElement.id = 'dialog-checkbox';
+                checkboxElement.checked = options.checkbox.checked || false;
+
+                const labelText = document.createTextNode(options.checkbox.label);
+                label.appendChild(checkboxElement);
+                label.appendChild(labelText);
+                container.appendChild(label);
+
+                // メッセージの後、入力欄の前に挿入
+                inputField.parentNode.insertBefore(container, inputField);
+            }
+
+            // 既存のカラーピッカーを削除
+            const existingColorPicker = document.getElementById('dialog-color-picker');
+            if (existingColorPicker) {
+                existingColorPicker.remove();
+            }
+
+            // カラーピッカーオプションが有効な場合
+            let colorPicker = null;
+            if (options.colorPicker) {
+                colorPicker = document.createElement('input');
+                colorPicker.type = 'color';
+                colorPicker.id = 'dialog-color-picker';
+                colorPicker.className = 'dialog-color-picker';
+                // デフォルト値が有効なカラーコードでない場合は黒をセット
+                colorPicker.value = /^#[0-9A-Fa-f]{6}$/.test(defaultValue) ? defaultValue : '#000000';
+                inputField.parentNode.insertBefore(colorPicker, inputField.nextSibling);
+
+                // カラーピッカー→テキスト入力の同期
+                colorPicker.addEventListener('input', () => {
+                    inputField.value = colorPicker.value;
+                });
+                // テキスト入力→カラーピッカーの同期
+                inputField.addEventListener('input', () => {
+                    if (/^#[0-9A-Fa-f]{6}$/.test(inputField.value)) {
+                        colorPicker.value = inputField.value;
+                    }
+                });
+            }
+
+            // 結果を生成する関数
+            const getResult = (buttonValue) => {
+                return {
+                    button: buttonValue,
+                    value: inputField.value,
+                    checkbox: checkboxElement ? checkboxElement.checked : false
+                };
+            };
 
             // ボタンをクリア
             buttonsContainer.innerHTML = '';
@@ -170,10 +239,7 @@ export class DialogManager {
 
                 button.addEventListener('click', () => {
                     this.hideInputDialog();
-                    resolve({
-                        button: buttonDef.value,
-                        value: inputField.value
-                    });
+                    resolve(getResult(buttonDef.value));
                 });
 
                 buttonsContainer.appendChild(button);
@@ -185,10 +251,7 @@ export class DialogManager {
                     e.preventDefault();
                     this.hideInputDialog();
                     document.removeEventListener('keydown', handleKeyDown);
-                    resolve({
-                        button: buttons[defaultButton].value,
-                        value: inputField.value
-                    });
+                    resolve(getResult(buttons[defaultButton].value));
                 }
             };
             document.addEventListener('keydown', handleKeyDown);
@@ -235,8 +298,33 @@ export class DialogManager {
             const messageText = document.getElementById('input-dialog-message');
             const buttonsContainer = document.getElementById('input-dialog-buttons');
 
+            // showInputDialogで追加された要素をクリア
+            const existingCheckbox = document.getElementById('dialog-checkbox-container');
+            if (existingCheckbox) {
+                existingCheckbox.remove();
+            }
+            const existingColorPicker = document.getElementById('dialog-color-picker');
+            if (existingColorPicker) {
+                existingColorPicker.remove();
+            }
+
             // カスタムHTMLを設定
             messageText.innerHTML = dialogHtml;
+
+            // innerHTML で挿入された script タグは実行されないため、手動で実行
+            // DOM要素が準備された後に実行するため setTimeout を使用
+            const scripts = messageText.querySelectorAll('script');
+            scripts.forEach(script => {
+                const scriptContent = script.textContent;
+                script.remove();
+                setTimeout(() => {
+                    try {
+                        eval(scriptContent);
+                    } catch (e) {
+                        console.error('ダイアログスクリプト実行エラー:', e);
+                    }
+                }, 0);
+            });
 
             // ボタンをクリア
             buttonsContainer.innerHTML = '';
@@ -412,18 +500,22 @@ export class DialogManager {
                         <label class="vobj-attr-color-label">
                             <span>枠</span>
                             <input type="text" id="frcol" value="${attrs.frcol}" class="vobj-attr-color-input">
+                            <input type="color" id="frcol-picker" value="${attrs.frcol}" class="vobj-attr-color-picker">
                         </label>
                         <label class="vobj-attr-color-label">
                             <span>仮身文字</span>
                             <input type="text" id="chcol" value="${attrs.chcol}" class="vobj-attr-color-input">
+                            <input type="color" id="chcol-picker" value="${attrs.chcol}" class="vobj-attr-color-picker">
                         </label>
                         <label class="vobj-attr-color-label">
                             <span>仮身背景</span>
                             <input type="text" id="tbcol" value="${attrs.tbcol}" class="vobj-attr-color-input">
+                            <input type="color" id="tbcol-picker" value="${attrs.tbcol}" class="vobj-attr-color-picker">
                         </label>
                         <label class="vobj-attr-color-label last">
                             <span>表示領域背景</span>
                             <input type="text" id="bgcol" value="${attrs.bgcol}" class="vobj-attr-color-input">
+                            <input type="color" id="bgcol-picker" value="${attrs.bgcol}" class="vobj-attr-color-picker">
                         </label>
                         <label class="vobj-attr-checkbox-label">
                             <input type="checkbox" id="autoopen" ${attrs.autoopen ? 'checked' : ''}> <span>自動起動</span>
@@ -479,6 +571,25 @@ export class DialogManager {
                     }
                     if (!matched) {
                         chszSelect.selectedIndex = -1; // 該当する倍率がない場合は選択解除
+                    }
+                });
+
+                // カラーピッカーとテキスト入力の同期
+                const colorFields = ['frcol', 'chcol', 'tbcol', 'bgcol'];
+                colorFields.forEach(fieldId => {
+                    const textInput = document.getElementById(fieldId);
+                    const colorPicker = document.getElementById(fieldId + '-picker');
+                    if (textInput && colorPicker) {
+                        // カラーピッカー変更時: テキスト入力を更新
+                        colorPicker.addEventListener('input', () => {
+                            textInput.value = colorPicker.value;
+                        });
+                        // テキスト入力変更時: 有効なカラーコードならカラーピッカーを更新
+                        textInput.addEventListener('input', () => {
+                            if (/^#[0-9A-Fa-f]{6}$/.test(textInput.value)) {
+                                colorPicker.value = textInput.value;
+                            }
+                        });
                     }
                 });
             </script>

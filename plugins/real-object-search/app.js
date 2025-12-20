@@ -17,14 +17,7 @@ class RealObjectSearchApp extends window.PluginBase {
         this.isSearching = false;
         this.searchAborted = false;
 
-        // MessageBusを初期化
-        if (window.MessageBus) {
-            this.messageBus = new window.MessageBus({
-                debug: false,
-                pluginName: 'RealObjectSearch'
-            });
-            this.messageBus.start();
-        }
+        // MessageBusはPluginBaseで初期化済み
 
         this.init();
     }
@@ -224,7 +217,7 @@ class RealObjectSearchApp extends window.PluginBase {
         this.setStringSearchButtonsEnabled(false, true);
         this.resetStringCounts();
 
-        const messageId = `search-${Date.now()}-${Math.random()}`;
+        const messageId = this.generateMessageId('search');
 
         this.messageBus.send('search-real-objects', {
             messageId: messageId,
@@ -362,7 +355,7 @@ class RealObjectSearchApp extends window.PluginBase {
         this.setDateSearchButtonsEnabled(false, true);
         this.resetCounts();
 
-        const messageId = `search-${Date.now()}-${Math.random()}`;
+        const messageId = this.generateMessageId('search');
 
         this.messageBus.send('search-real-objects', {
             messageId: messageId,
