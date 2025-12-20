@@ -1,6 +1,6 @@
 # TADjs
 
-Ver 0.26
+Ver 0.27
 satromi@gmai.com
 
 ## 紹介
