@@ -643,6 +643,10 @@ class BasicFigureEditor extends window.PluginBase {
         this.setupEventListeners();
         this.setupContextMenu();
         this.setupWindowActivation();
+
+        // スクロール通知初期化（MessageBus経由で親ウィンドウにスクロール状態を通知）
+        this.initScrollNotification();
+
         this.setupGlobalMouseHandlers();
         this.setupVirtualObjectRightButtonHandlers();
 
@@ -1193,7 +1197,7 @@ class BasicFigureEditor extends window.PluginBase {
      * スクロールバー更新通知（即座実行版）
      */
     notifyScrollbarUpdateImmediate() {
-        this.messageBus.send('update-scrollbars');
+        this.notifyScrollChange();
     }
 
     /**

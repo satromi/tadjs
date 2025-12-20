@@ -22,8 +22,7 @@ class VirtualObjectListApp extends window.PluginBase {
         this.clipboard = null; // クリップボード（仮身データ）
         this.isFullscreen = false; // 全画面表示フラグ
 
-        // this.windowId は基底クラスで定義されるが、このプラグインは独自の形式を使うので上書き
-        this.windowId = `window-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        // this.windowId は基底クラスで定義済み（親ウィンドウからinitメッセージで設定される）
 
         // 仮身ドラッグのプラグイン固有状態管理
         // 共通状態（isDragging, hasMoved, dragMode, startX/Y, isRightButtonPressed）は
@@ -101,6 +100,9 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // ウィンドウアクティベーション
         this.setupWindowActivation();
+
+        // スクロール通知初期化（MessageBus経由で親ウィンドウにスクロール状態を通知）
+        this.initScrollNotification();
 
         // 右クリックメニュー
         this.setupContextMenu();
@@ -4972,8 +4974,8 @@ class VirtualObjectListApp extends window.PluginBase {
 
         listElement.appendChild(canvas);
 
-        // スクロールバー更新を通知
-        this.messageBus.send('update-scrollbars');
+        // スクロールバー更新を通知（MessageBus経由）
+        this.notifyScrollChange();
 
         // 背景色を適用
         this.applyBackgroundColor();
@@ -6280,8 +6282,8 @@ class VirtualObjectListApp extends window.PluginBase {
             // 自動保存
             this.notifyXmlDataChanged();
 
-            // スクロールバー更新を通知
-            this.messageBus.send('update-scrollbars');
+            // スクロールバー更新を通知（MessageBus経由）
+            this.notifyScrollChange();
 
         } catch (error) {
             logger.error('[VirtualObjectList] xmlTAD更新エラー:', error);
@@ -6333,8 +6335,8 @@ class VirtualObjectListApp extends window.PluginBase {
 
         logger.debug('[VirtualObjectList] キャンバスサイズ更新:', finalWidth, 'x', finalHeight, '(コンテンツ:', maxRight, 'x', maxBottom, ', ウィンドウ:', windowWidth, 'x', windowHeight, ')');
 
-        // スクロールバー更新を通知
-        this.messageBus.send('update-scrollbars');
+        // スクロールバー更新を通知（MessageBus経由）
+        this.notifyScrollChange();
     }
 
     /**
@@ -6381,8 +6383,8 @@ class VirtualObjectListApp extends window.PluginBase {
 
         logger.debug('[VirtualObjectList] キャンバスサイズ調整完了:', finalWidth, 'x', finalHeight);
 
-        // スクロールバー更新を通知
-        this.messageBus.send('update-scrollbars');
+        // スクロールバー更新を通知（MessageBus経由）
+        this.notifyScrollChange();
     }
 
     /**

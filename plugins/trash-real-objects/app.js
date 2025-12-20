@@ -42,6 +42,9 @@ class TrashRealObjectsApp extends window.PluginBase {
         // ウィンドウアクティブ化（PluginBase共通）
         this.setupWindowActivation();
 
+        // スクロール通知初期化（MessageBus経由で親ウィンドウにスクロール状態を通知）
+        this.initScrollNotification();
+
         // キーボードショートカットを設定
         this.setupKeyboardShortcuts();
     }
@@ -74,12 +77,18 @@ class TrashRealObjectsApp extends window.PluginBase {
      * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
+        // 共通MessageBusハンドラを登録（PluginBaseで定義）
+        // set-scroll-position など親ウィンドウからの制御メッセージを処理
+        this.setupCommonMessageBusHandlers();
+
         // 初期化メッセージ
         this.messageBus.on('init', async (data) => {
             logger.info('[TrashRealObjects] init受信');
 
-            // MessageBusにwindowIdを設定（レスポンスルーティング用）
+            // ウィンドウIDを保存
             if (data.windowId) {
+                this.windowId = data.windowId;
+                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
                 this.messageBus.setWindowId(data.windowId);
             }
 
@@ -212,9 +221,7 @@ class TrashRealObjectsApp extends window.PluginBase {
             emptyMessage.textContent = '屑実身はありません';
             listElement.appendChild(emptyMessage);
             // スクロールバーを更新
-            if (this.messageBus) {
-                this.messageBus.send('update-scrollbars');
-            }
+            this.notifyScrollChange();
             return;
         }
 
@@ -225,9 +232,7 @@ class TrashRealObjectsApp extends window.PluginBase {
         });
 
         // スクロールバーを更新
-        if (this.messageBus) {
-            this.messageBus.send('update-scrollbars');
-        }
+        this.notifyScrollChange();
     }
 
     createTrashObjectElement(obj, index) {

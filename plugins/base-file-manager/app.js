@@ -42,6 +42,9 @@ class BaseFileManager extends window.PluginBase {
 
         // キーボードショートカット
         this.setupKeyboardShortcuts();
+
+        // スクロール通知初期化（MessageBus経由で親ウィンドウにスクロール状態を通知）
+        this.initScrollNotification();
     }
 
     setupMessageHandler() {
@@ -63,8 +66,10 @@ class BaseFileManager extends window.PluginBase {
 
         // init メッセージ
         this.messageBus.on('init', async (data) => {
-            // MessageBusにwindowIdを設定（レスポンスルーティング用）
+            // ウィンドウIDを保存
             if (data.windowId) {
+                this.windowId = data.windowId;
+                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
                 this.messageBus.setWindowId(data.windowId);
             }
 
@@ -409,6 +414,8 @@ class BaseFileManager extends window.PluginBase {
             emptyMessage.className = 'empty-message';
             emptyMessage.textContent = '原紙ファイルがありません';
             listElement.appendChild(emptyMessage);
+            // スクロールバー更新を通知
+            this.notifyScrollChange();
             return;
         }
 
@@ -417,6 +424,9 @@ class BaseFileManager extends window.PluginBase {
             const vobjElement = this.createVirtualObject(baseFile, index);
             listElement.appendChild(vobjElement);
         });
+
+        // スクロールバー更新を通知
+        this.notifyScrollChange();
     }
 
     /**

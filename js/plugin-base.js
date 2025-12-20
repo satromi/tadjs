@@ -579,6 +579,9 @@ export class PluginBase {
             return;
         }
 
+        // スクロールコンテナをキャッシュ（notifyScrollChange用）
+        this._scrollContainer = container;
+
         // スクロールイベントをthrottle（16ms ≒ 60fps）
         const throttledHandler = throttle(() => {
             this._sendScrollState(container);
@@ -586,13 +589,50 @@ export class PluginBase {
 
         container.addEventListener('scroll', throttledHandler);
 
-        // 初期状態を送信（windowIdが設定された後に送信するため遅延）
-        setTimeout(() => {
-            this._sendScrollState(container);
-        }, 100);
+        // 初期状態を送信（windowIdが設定されるまでリトライ）
+        this._scheduleInitialScrollState(container, 0);
 
         this._scrollNotificationEnabled = true;
         logger.debug(`[${this.pluginName}] スクロール通知初期化完了: ${this.scrollContainerSelector}`);
+    }
+
+    /**
+     * 初期スクロール状態の送信をスケジュール（windowId設定待ち）
+     * @param {HTMLElement} container - スクロールコンテナ
+     * @param {number} retryCount - リトライ回数
+     * @private
+     */
+    _scheduleInitialScrollState(container, retryCount) {
+        const maxRetries = 20; // 最大20回 × 100ms = 2秒
+        const retryInterval = 100;
+
+        if (this.windowId) {
+            // windowIdが設定されている場合は即座に送信
+            this._sendScrollState(container);
+            logger.debug(`[${this.pluginName}] 初期スクロール状態送信完了`);
+        } else if (retryCount < maxRetries) {
+            // windowIdが未設定の場合はリトライ
+            setTimeout(() => {
+                this._scheduleInitialScrollState(container, retryCount + 1);
+            }, retryInterval);
+        } else {
+            logger.warn(`[${this.pluginName}] 初期スクロール状態送信タイムアウト（windowId未設定）`);
+        }
+    }
+
+    /**
+     * スクロール状態変更を親ウィンドウに手動通知
+     * プログラムによるスクロール（scrollIntoView等）後に呼び出すこと
+     *
+     * 使用例:
+     *   this.scrollCellIntoView(cell);
+     *   this.notifyScrollChange();
+     */
+    notifyScrollChange() {
+        if (!this._scrollNotificationEnabled || !this._scrollContainer) {
+            return;
+        }
+        this._sendScrollState(this._scrollContainer);
     }
 
     /**
@@ -1347,6 +1387,12 @@ export class PluginBase {
             logger.warn(`[${this.pluginName}] messageBusが初期化されていないため、共通ハンドラ登録をスキップ`);
             return;
         }
+
+        // NOTE: initハンドラは各プラグインで個別に実装する必要がある
+        // （MessageBusのon()は同じタイプのハンドラを上書きするため、共通化不可）
+        // 各プラグインのinitハンドラで以下を実行すること:
+        //   1. this.windowId = data.windowId;
+        //   2. this.messageBus.setWindowId(data.windowId);
 
         // window-moved メッセージ
         this.messageBus.on('window-moved', (data) => {

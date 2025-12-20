@@ -127,15 +127,9 @@ export class WindowManager {
         const iframe = windowElement.querySelector('iframe');
 
         if (iframe) {
-            // プラグインウィンドウの場合、iframe専用の初期化
-            // 従来のcross-frame DOM方式（後方互換性のため残す）
-            if (this.initScrollbarForPlugin) {
-                this.initScrollbarForPlugin(iframe, content, vScrollbar, 'vertical');
-                this.initScrollbarForPlugin(iframe, content, hScrollbar, 'horizontal');
-            }
-
-            // MessageBusベースのスクロールバー制御も追加
-            // プラグインがinitScrollNotification()を呼び出した場合、こちらが使用される
+            // プラグインウィンドウの場合、MessageBusベースのスクロールバー制御のみ使用
+            // 従来のcross-frame DOM方式は競合を避けるため無効化
+            // プラグインはinitScrollNotification()を呼び出してスクロール状態を通知する必要がある
             const windowId = windowElement.id;
             if (windowId && this.initScrollbarForPluginWithMessageBus) {
                 this.initScrollbarForPluginWithMessageBus(vScrollbar, 'vertical', windowId);

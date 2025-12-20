@@ -22,6 +22,14 @@ class CalcEditor extends window.PluginBase {
         this.rowHeaderWidth = 50;
         this.colHeaderHeight = 24;
 
+        // 動的グリッド拡張設定
+        this.currentMaxRow = this.defaultRows;  // 現在のグリッド行数
+        this.currentMaxCol = this.defaultCols;  // 現在のグリッド列数
+        this.maxRowLimit = 1000000;  // 行の上限（32bit範囲相当）
+        this.maxColLimit = 16384;    // 列の上限（XFD = 16384、Excel互換）
+        this.rowExpandChunk = 50;    // 行拡張のチャンクサイズ
+        this.colExpandChunk = 10;    // 列拡張のチャンクサイズ
+
         // データ管理
         this.cells = new Map(); // "col,row" -> { value, formula, displayValue, style, merge }
         this.virtualObjects = new Map(); // "col,row" -> virtualObjectData
@@ -513,6 +521,104 @@ class CalcEditor extends window.PluginBase {
         }
 
         logger.info(`[CalcEditor] グリッド生成完了: ${this.defaultCols}列 x ${this.defaultRows}行`);
+    }
+
+    /**
+     * グリッドを指定された行・列まで拡張
+     * @param {number} toRow - 必要な行番号
+     * @param {number} toCol - 必要な列番号
+     * @returns {boolean} 拡張が行われたかどうか
+     */
+    expandGridTo(toRow, toCol) {
+        // 上限チェック
+        toRow = Math.min(toRow, this.maxRowLimit);
+        toCol = Math.min(toCol, this.maxColLimit);
+
+        // 拡張が必要かチェック
+        if (toRow <= this.currentMaxRow && toCol <= this.currentMaxCol) {
+            return false;
+        }
+
+        const headerContainer = document.getElementById('grid-header');
+        const bodyContainer = document.getElementById('grid-body');
+
+        // 列ヘッダーの拡張
+        if (toCol > this.currentMaxCol) {
+            const newMaxCol = Math.max(toCol, this.currentMaxCol + this.colExpandChunk);
+            const targetMaxCol = Math.min(newMaxCol, this.maxColLimit);
+
+            for (let col = this.currentMaxCol + 1; col <= targetMaxCol; col++) {
+                const colHeader = document.createElement('div');
+                colHeader.className = 'column-header';
+                colHeader.textContent = this.colToLetter(col);
+                colHeader.dataset.col = col;
+                headerContainer.appendChild(colHeader);
+            }
+
+            // 既存の行に新しいセルを追加
+            const rows = bodyContainer.querySelectorAll('.grid-row');
+            rows.forEach((gridRow) => {
+                const rowNum = parseInt(gridRow.dataset.row);
+                for (let col = this.currentMaxCol + 1; col <= targetMaxCol; col++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.col = col;
+                    cell.dataset.row = rowNum;
+                    gridRow.appendChild(cell);
+                }
+            });
+
+            this.currentMaxCol = targetMaxCol;
+            logger.info(`[CalcEditor] 列を拡張: ${targetMaxCol}列まで`);
+
+            // カスタム行高を新しいセルに適用
+            this.rowHeights.forEach((_, row) => {
+                this.applyRowHeight(row);
+            });
+        }
+
+        // 行の拡張
+        if (toRow > this.currentMaxRow) {
+            const newMaxRow = Math.max(toRow, this.currentMaxRow + this.rowExpandChunk);
+            const targetMaxRow = Math.min(newMaxRow, this.maxRowLimit);
+
+            for (let row = this.currentMaxRow + 1; row <= targetMaxRow; row++) {
+                const gridRow = document.createElement('div');
+                gridRow.className = 'grid-row';
+                gridRow.dataset.row = row;
+
+                // 行ヘッダー
+                const rowHeader = document.createElement('div');
+                rowHeader.className = 'row-header';
+                rowHeader.textContent = row;
+                rowHeader.dataset.row = row;
+                gridRow.appendChild(rowHeader);
+
+                // セル生成
+                for (let col = 1; col <= this.currentMaxCol; col++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.col = col;
+                    cell.dataset.row = row;
+                    gridRow.appendChild(cell);
+                }
+
+                bodyContainer.appendChild(gridRow);
+            }
+
+            this.currentMaxRow = targetMaxRow;
+            logger.info(`[CalcEditor] 行を拡張: ${targetMaxRow}行まで`);
+
+            // カスタム列幅を新しいセルに適用
+            this.columnWidths.forEach((_, col) => {
+                this.applyColumnWidth(col);
+            });
+        }
+
+        // スクロールバー更新を通知
+        this.notifyScrollChange();
+
+        return true;
     }
 
     /**
@@ -1136,9 +1242,9 @@ class CalcEditor extends window.PluginBase {
                 case 'ArrowDown':
                     e.preventDefault();
                     if (e.shiftKey && this.anchorCell) {
-                        const newRow = Math.min(this.defaultRows, row + 1);
+                        const newRow = Math.min(this.maxRowLimit, row + 1);
                         this.selectRange(this.anchorCell.col, this.anchorCell.row, col, newRow);
-                    } else if (row < this.defaultRows) {
+                    } else if (row < this.maxRowLimit) {
                         this.selectCell(col, row + 1);
                     }
                     break;
@@ -1154,9 +1260,9 @@ class CalcEditor extends window.PluginBase {
                 case 'ArrowRight':
                     e.preventDefault();
                     if (e.shiftKey && this.anchorCell) {
-                        const newCol = Math.min(this.defaultCols, col + 1);
+                        const newCol = Math.min(this.maxColLimit, col + 1);
                         this.selectRange(this.anchorCell.col, this.anchorCell.row, newCol, row);
-                    } else if (col < this.defaultCols) {
+                    } else if (col < this.maxColLimit) {
                         this.selectCell(col + 1, row);
                     }
                     break;
@@ -1233,6 +1339,12 @@ class CalcEditor extends window.PluginBase {
                     if (e.ctrlKey) {
                         e.preventDefault();
                         this.openFindReplaceWindow();
+                    }
+                    break;
+                case 'l':
+                    if (e.ctrlKey) {
+                        e.preventDefault();
+                        this.toggleFullscreen();
                     }
                     break;
                 default:
@@ -1486,9 +1598,19 @@ class CalcEditor extends window.PluginBase {
      * @param {boolean} clearRange - 範囲選択をクリアするか（デフォルトtrue）
      */
     selectCell(col, row, clearRange = true) {
-        // 範囲外チェック
-        if (col < 1 || col > this.defaultCols || row < 1 || row > this.defaultRows) {
+        // 下限チェック
+        if (col < 1 || row < 1) {
             return;
+        }
+
+        // 上限チェック
+        if (col > this.maxColLimit || row > this.maxRowLimit) {
+            return;
+        }
+
+        // グリッド拡張が必要な場合は拡張
+        if (col > this.currentMaxCol || row > this.currentMaxRow) {
+            this.expandGridTo(row, col);
         }
 
         // 結合セルの場合は起点セルを選択
@@ -1535,6 +1657,8 @@ class CalcEditor extends window.PluginBase {
             cell.classList.add('selected');
             // カスタムスクロール（stickyヘッダーを考慮）
             this.scrollCellIntoView(cell);
+            // スクロール状態を親ウィンドウに通知（スクロールバー連動）
+            this.notifyScrollChange();
             // フィルハンドルの位置を更新
             this.updateFillHandlePosition(cell);
         }
@@ -1578,9 +1702,18 @@ class CalcEditor extends window.PluginBase {
         const minRow = Math.min(startRow, endRow);
         const maxRow = Math.max(startRow, endRow);
 
-        // 範囲外チェック
-        if (minCol < 1 || maxCol > this.defaultCols || minRow < 1 || maxRow > this.defaultRows) {
+        // 下限チェック
+        if (minCol < 1 || minRow < 1) {
             return;
+        }
+
+        // 上限チェック（上限を超えている場合は上限に制限）
+        const clampedMaxCol = Math.min(maxCol, this.maxColLimit);
+        const clampedMaxRow = Math.min(maxRow, this.maxRowLimit);
+
+        // グリッド拡張が必要な場合は拡張
+        if (clampedMaxCol > this.currentMaxCol || clampedMaxRow > this.currentMaxRow) {
+            this.expandGridTo(clampedMaxRow, clampedMaxCol);
         }
 
         // 以前の選択を解除
@@ -1697,12 +1830,12 @@ class CalcEditor extends window.PluginBase {
         // 以前の選択を解除
         this.clearSelection();
 
-        // 列全体を範囲選択
+        // 列全体を範囲選択（現在のグリッド範囲内）
         this.selectionRange = {
             startCol: col,
             startRow: 1,
             endCol: col,
-            endRow: this.defaultRows
+            endRow: this.currentMaxRow
         };
         this.selectedCell = { col, row: 1 };
         this.anchorCell = { col, row: 1 };
@@ -1734,11 +1867,11 @@ class CalcEditor extends window.PluginBase {
         // 以前の選択を解除
         this.clearSelection();
 
-        // 行全体を範囲選択
+        // 行全体を範囲選択（現在のグリッド範囲内）
         this.selectionRange = {
             startCol: 1,
             startRow: row,
-            endCol: this.defaultCols,
+            endCol: this.currentMaxCol,
             endRow: row
         };
         this.selectedCell = { col: 1, row };
@@ -3755,6 +3888,10 @@ class CalcEditor extends window.PluginBase {
             bodyContainer.removeChild(bodyContainer.firstChild);
         }
 
+        // 現在のグリッドサイズをリセット
+        this.currentMaxRow = this.defaultRows;
+        this.currentMaxCol = this.defaultCols;
+
         // グリッドを再生成
         this.initGrid();
 
@@ -4116,6 +4253,27 @@ class CalcEditor extends window.PluginBase {
             }
 
             logger.info(`[CalcEditor] ${this.cells.size}セル読み込み完了`);
+
+            // データがある範囲までグリッドを拡張
+            let maxDataRow = this.defaultRows;
+            let maxDataCol = this.defaultCols;
+            for (const [key, cellData] of this.cells) {
+                const [colStr, rowStr] = key.split(',');
+                const col = parseInt(colStr);
+                const row = parseInt(rowStr);
+                if (col > maxDataCol) maxDataCol = col;
+                if (row > maxDataRow) maxDataRow = row;
+            }
+            // 結合セルも考慮
+            for (const [key, mergeInfo] of this.mergedCells) {
+                if (mergeInfo.endCol > maxDataCol) maxDataCol = mergeInfo.endCol;
+                if (mergeInfo.endRow > maxDataRow) maxDataRow = mergeInfo.endRow;
+            }
+            // グリッドを拡張
+            if (maxDataRow > this.currentMaxRow || maxDataCol > this.currentMaxCol) {
+                this.expandGridTo(maxDataRow, maxDataCol);
+                logger.info(`[CalcEditor] データ範囲に合わせてグリッド拡張: ${this.colToLetter(maxDataCol)}${maxDataRow}まで`);
+            }
 
             // autoopen属性がtrueの仮身を自動的に開く
             await this.autoOpenVirtualObjects();
@@ -5123,7 +5281,7 @@ class CalcEditor extends window.PluginBase {
                 submenu: [
                     { label: '操作パネル表示オンオフ', action: 'toggle-operation-panel', checked: this.operationPanelVisible },
                     { separator: true },
-                    { label: '全画面表示オンオフ', action: 'toggle-fullscreen' },
+                    { label: '全画面表示オンオフ', action: 'toggle-fullscreen', shortcut: 'Ctrl+L' },
                     { label: '再表示', action: 'refresh-view' },
                     { label: '背景色変更', action: 'change-bg-color' }
                 ]

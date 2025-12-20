@@ -82,6 +82,9 @@ class BasicTextEditor extends window.PluginBase {
         this.setupContextMenu();
         this.setupWindowActivation();
 
+        // スクロール通知初期化（MessageBus経由で親ウィンドウにスクロール状態を通知）
+        this.initScrollNotification();
+
         // 仮身ドラッグ用の右ボタンハンドラーを設定（PluginBase共通機能）
         this.setupVirtualObjectRightButtonHandlers();
 
@@ -1594,7 +1597,7 @@ class BasicTextEditor extends window.PluginBase {
             this.messageBus.send(message.type, message);
 
             // スクロールバー更新要求を送信
-            this.messageBus.send('update-scrollbars');
+            this.notifyScrollChange();
         }
     }
 

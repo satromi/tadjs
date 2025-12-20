@@ -56,6 +56,9 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         // ウィンドウアクティブ化（PluginBase共通）
         this.setupWindowActivation();
 
+        // スクロール通知初期化（MessageBus経由で親ウィンドウにスクロール状態を通知）
+        this.initScrollNotification();
+
         // キーボードショートカットを設定
         this.setupKeyboardShortcuts();
 
@@ -67,12 +70,18 @@ class VirtualObjectNetworkApp extends window.PluginBase {
      * MessageBusのハンドラを登録
      */
     setupMessageBusHandlers() {
+        // 共通MessageBusハンドラを登録（PluginBaseで定義）
+        // set-scroll-position など親ウィンドウからの制御メッセージを処理
+        this.setupCommonMessageBusHandlers();
+
         // 初期化メッセージ
         this.messageBus.on('init', async (data) => {
             logger.info('[VirtualObjectNetwork] init受信:', data);
 
-            // MessageBusにwindowIdを設定
+            // ウィンドウIDを保存
             if (data.windowId) {
+                this.windowId = data.windowId;
+                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
                 this.messageBus.setWindowId(data.windowId);
             }
 
@@ -405,9 +414,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         }
 
         // スクロールバー更新を通知
-        if (this.messageBus) {
-            this.messageBus.send('update-scrollbars');
-        }
+        this.notifyScrollChange();
     }
 
     /**
