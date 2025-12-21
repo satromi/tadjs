@@ -1,0 +1,22 @@
+{
+  "id": "realobject-config",
+  "name": "管理情報",
+  "version": "1.0.0",
+  "type": "utility",
+  "description": "実身の管理情報を参照・編集します",
+  "icon": "info",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": true,
+  "window": {
+    "width": 420,
+    "height": 380,
+    "resizable": false,
+    "scrollable": false,
+    "openable": true
+  },
+  "permissions": [
+    "file-read",
+    "file-write"
+  ]
+}

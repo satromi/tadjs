@@ -1219,6 +1219,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 const realObjSubmenu = [
                     { text: '実身名変更', action: 'rename-real-object' },
                     { text: '実身複製', action: 'duplicate-real-object' },
+                    { text: '管理情報', action: 'open-realobject-config' },
                     { text: '仮身ネットワーク', action: 'open-virtual-object-network' },
                     { text: '実身/仮身検索', action: 'open-real-object-search' }
                 ];
@@ -1371,6 +1372,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 break;
             case 'duplicate-real-object':
                 this.duplicateRealObject();
+                break;
+            case 'open-realobject-config':
+                this.openRealObjectConfig();
                 break;
             case 'open-trash-real-objects':
                 this.openTrashRealObjects();
@@ -1981,6 +1985,33 @@ class VirtualObjectListApp extends window.PluginBase {
                 this.setStatus('実身の複製に失敗しました');
             }
         }
+
+        // contextMenuVirtualObjectをクリア
+        this.contextMenuVirtualObject = null;
+    }
+
+    /**
+     * 管理情報ウィンドウを開く
+     */
+    openRealObjectConfig() {
+        const selectedVirtualObject = this.getSelectedVirtualObject();
+        if (!selectedVirtualObject) {
+            this.setStatus('仮身を選択してください');
+            return;
+        }
+
+        // 実身IDを抽出
+        const realId = window.RealObjectSystem.extractRealId(selectedVirtualObject.link_id);
+
+        // 共通メソッド用にcontextMenuVirtualObjectを一時設定
+        this.contextMenuVirtualObject = {
+            element: null,
+            realId: realId,
+            virtualObj: selectedVirtualObject
+        };
+
+        // 管理情報ウィンドウを開く
+        window.RealObjectSystem.openRealObjectConfig(this, realId);
 
         // contextMenuVirtualObjectをクリア
         this.contextMenuVirtualObject = null;

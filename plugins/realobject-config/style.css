@@ -1,0 +1,231 @@
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 11px;
+    background: #dedede;
+}
+
+.realobject-config-dialog {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+.tab-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.tab-header {
+    display: flex;
+    border-bottom: 1px solid #808080;
+    background: #e0e0e0;
+    flex-shrink: 0;
+}
+
+.tab {
+    padding: 6px 12px;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+    font-size: 11px;
+    user-select: none;
+    border-bottom: none;
+}
+
+.tab.active {
+    background: #dedede;
+    border-style: inset;
+}
+
+.tab-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: #dedede;
+    padding: 0;
+}
+
+.tab-panel {
+    display: none;
+    padding: 12px;
+    padding-right: 0;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+.config-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-right: 12px;
+}
+
+.config-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.config-item label {
+    font-size: 11px;
+    min-width: 80px;
+    font-weight: normal;
+    flex-shrink: 0;
+}
+
+.config-value {
+    font-size: 11px;
+    color: #000080;
+    font-family: 'Courier New', monospace;
+    word-break: break-all;
+}
+
+.config-value-path {
+    font-size: 10px;
+}
+
+.config-unit {
+    font-size: 11px;
+    color: #404040;
+}
+
+.config-button {
+    border: 1px outset #c0c0c0;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-family: 'Noto Sans JP', sans-serif;
+    background: #c0c0c0;
+    cursor: pointer;
+}
+
+.config-button:active {
+    border-style: inset;
+}
+
+.dialog-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 8px;
+    border-top: 1px solid #808080;
+    background: #e0e0e0;
+}
+
+.dialog-button {
+    border: 1px outset #c0c0c0;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-family: 'Noto Sans JP', sans-serif;
+    background: #c0c0c0;
+    cursor: pointer;
+    min-width: 60px;
+}
+
+.dialog-button:active {
+    border-style: inset;
+}
+
+/* 付箋指定タブのスタイル */
+.applist-section {
+    margin-top: 8px;
+}
+
+.applist-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.applist-header label {
+    font-size: 11px;
+    font-weight: normal;
+}
+
+.applist-buttons {
+    display: flex;
+    gap: 4px;
+}
+
+.applist-table-container {
+    border: 2px inset #808080;
+    background: white;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.applist-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+}
+
+.applist-table thead {
+    background: #e0e0e0;
+    position: sticky;
+    top: 0;
+}
+
+.applist-table th {
+    padding: 4px 6px;
+    text-align: left;
+    font-weight: normal;
+    border-bottom: 1px solid #808080;
+}
+
+.applist-table td {
+    padding: 2px 6px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.applist-table tbody tr:hover {
+    background: #f0f0f0;
+}
+
+.applist-table tbody tr.selected {
+    background: #c0c0e0;
+}
+
+.col-select {
+    width: 24px;
+    text-align: center;
+}
+
+.col-name {
+    width: 100px;
+}
+
+.col-plugin {
+    width: 130px;
+}
+
+.col-default {
+    width: 60px;
+    text-align: center;
+}
+
+.applist-table input[type="text"] {
+    width: 100%;
+    border: 1px inset #c0c0c0;
+    padding: 1px 3px;
+    font-size: 11px;
+    font-family: 'Noto Sans JP', sans-serif;
+    background: white;
+    box-sizing: border-box;
+}
+
+.applist-table .default-mark {
+    color: #006600;
+    font-weight: bold;
+}
+
+/* スクロールバーラッパーの背景色 */
+.plugin-scrollbar-wrapper {
+    background: #dedede;
+}

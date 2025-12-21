@@ -415,6 +415,19 @@ export class PluginBase {
     }
 
     /**
+     * 管理情報ウィンドウを開く
+     * contextMenuVirtualObjectが設定されている前提
+     */
+    openRealObjectConfig() {
+        const realId = this.contextMenuVirtualObject?.realId;
+        if (!realId) {
+            this.setStatus('仮身を選択してください');
+            return;
+        }
+        window.RealObjectSystem.openRealObjectConfig(this, realId);
+    }
+
+    /**
      * 仮身の属性を変更
      * @returns {Promise<void>}
      */
@@ -684,6 +697,304 @@ export class PluginBase {
         }
         if (typeof data.scrollLeft === 'number') {
             container.scrollLeft = data.scrollLeft;
+        }
+    }
+
+    // ========================================
+    // カスタムスクロールバー機能
+    // ========================================
+
+    /**
+     * カスタムスクロールバーを初期化
+     * btron-desktop.cssのスクロールバースタイルを使用してカスタムスクロールバーを表示
+     *
+     * @param {string} containerSelector - スクロールコンテナのCSSセレクタ
+     * @param {Object} options - オプション
+     * @param {boolean} options.vertical - 縦スクロールバーを表示（デフォルト: true）
+     * @param {boolean} options.horizontal - 横スクロールバーを表示（デフォルト: false）
+     *
+     * @example
+     * // 縦スクロールバーのみ
+     * this.initCustomScrollbar('.tab-content');
+     *
+     * // 縦横両方
+     * this.initCustomScrollbar('.content', { vertical: true, horizontal: true });
+     */
+    initCustomScrollbar(containerSelector, options = {}) {
+        const { vertical = true, horizontal = false } = options;
+        const container = document.querySelector(containerSelector);
+
+        if (!container) {
+            logger.warn(`[${this.pluginName}] カスタムスクロールバー: コンテナが見つかりません: ${containerSelector}`);
+            return;
+        }
+
+        // ラッパーを作成してコンテナを囲む
+        const wrapper = document.createElement('div');
+        wrapper.className = 'plugin-scrollbar-wrapper';
+
+        // コンテナの親に挿入し、コンテナをラッパーに移動
+        container.parentNode.insertBefore(wrapper, container);
+        wrapper.appendChild(container);
+
+        // コンテナにスクロールコンテンツ用クラス追加
+        container.classList.add('plugin-scrollbar-content');
+
+        // カスタムスクロールバー状態を保存
+        this._customScrollbars = this._customScrollbars || {};
+        this._scrollbarWrapper = wrapper;
+        this._scrollContainer = container;
+
+        // 縦スクロールバー（ラッパーに追加）
+        if (vertical) {
+            this._createCustomScrollbar(wrapper, container, 'vertical');
+        }
+
+        // 横スクロールバー（ラッパーに追加）
+        if (horizontal) {
+            this._createCustomScrollbar(wrapper, container, 'horizontal');
+        }
+
+        // スクロールコーナー（縦横両方の場合）
+        if (vertical && horizontal) {
+            this._createScrollCorner(wrapper);
+        }
+
+        // スクロールイベントでツマミ位置を同期
+        container.addEventListener('scroll', throttle(() => {
+            this._updateScrollbarThumbPosition(container, 'vertical');
+            this._updateScrollbarThumbPosition(container, 'horizontal');
+        }, 16));
+
+        // ResizeObserverでコンテナサイズ変更を監視
+        const resizeObserver = new ResizeObserver(() => {
+            this._updateScrollbarVisibility(container, 'vertical');
+            this._updateScrollbarVisibility(container, 'horizontal');
+            this._updateScrollbarThumbPosition(container, 'vertical');
+            this._updateScrollbarThumbPosition(container, 'horizontal');
+        });
+        resizeObserver.observe(container);
+
+        // MutationObserverでコンテンツ変更・属性変更を監視
+        const mutationObserver = new MutationObserver(() => {
+            // レイアウト再計算を待ってから更新
+            requestAnimationFrame(() => {
+                this._updateScrollbarVisibility(container, 'vertical');
+                this._updateScrollbarVisibility(container, 'horizontal');
+                this._updateScrollbarThumbPosition(container, 'vertical');
+                this._updateScrollbarThumbPosition(container, 'horizontal');
+            });
+        });
+        // childList: コンテンツ追加/削除, attributes: class変更（タブ切替）, subtree: 子孫要素も監視
+        mutationObserver.observe(container, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'style']
+        });
+
+        // 初期状態を設定（即座に実行してチラつきを防ぐ）
+        this._updateScrollbarVisibility(container, 'vertical');
+        this._updateScrollbarVisibility(container, 'horizontal');
+        this._updateScrollbarThumbPosition(container, 'vertical');
+        this._updateScrollbarThumbPosition(container, 'horizontal');
+
+        logger.debug(`[${this.pluginName}] カスタムスクロールバー初期化完了: ${containerSelector}`);
+    }
+
+    /**
+     * カスタムスクロールバーDOM要素を作成
+     * @param {HTMLElement} wrapper - スクロールバーを配置するラッパー要素
+     * @param {HTMLElement} scrollContainer - スクロールコンテナ
+     * @param {string} direction - 'vertical' | 'horizontal'
+     * @private
+     */
+    _createCustomScrollbar(wrapper, scrollContainer, direction) {
+        const scrollbar = document.createElement('div');
+        scrollbar.className = `custom-scrollbar ${direction}`;
+
+        const track = document.createElement('div');
+        track.className = 'scroll-track';
+
+        const thumb = document.createElement('div');
+        thumb.className = 'scroll-thumb';
+
+        const indicator = document.createElement('div');
+        indicator.className = 'scroll-thumb-indicator';
+
+        thumb.appendChild(indicator);
+        track.appendChild(thumb);
+        scrollbar.appendChild(track);
+        wrapper.appendChild(scrollbar);  // ラッパーに追加（スクロール領域の外）
+
+        // ツマミドラッグイベントを設定
+        this._setupThumbDrag(scrollContainer, thumb, direction);
+
+        // トラッククリックでスクロール
+        track.addEventListener('click', (e) => {
+            if (e.target === thumb || thumb.contains(e.target)) return;
+            this._handleTrackClick(scrollContainer, track, e, direction);
+        });
+
+        // 状態を保存
+        this._customScrollbars[direction] = { scrollbar, track, thumb };
+    }
+
+    /**
+     * スクロールコーナーを作成
+     * @param {HTMLElement} container - スクロールコンテナ
+     * @private
+     */
+    _createScrollCorner(container) {
+        const corner = document.createElement('div');
+        corner.className = 'scroll-corner';
+        container.appendChild(corner);
+        this._customScrollbars.corner = corner;
+    }
+
+    /**
+     * ツマミのドラッグイベントを設定
+     * @param {HTMLElement} container - スクロールコンテナ
+     * @param {HTMLElement} thumb - ツマミ要素
+     * @param {string} direction - 'vertical' | 'horizontal'
+     * @private
+     */
+    _setupThumbDrag(container, thumb, direction) {
+        let isDragging = false;
+        let startPos = 0;
+        let startScroll = 0;
+
+        const onMouseDown = (e) => {
+            e.preventDefault();
+            isDragging = true;
+            thumb.classList.add('dragging');
+            startPos = direction === 'vertical' ? e.clientY : e.clientX;
+            startScroll = direction === 'vertical' ? container.scrollTop : container.scrollLeft;
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        };
+
+        const onMouseMove = (e) => {
+            if (!isDragging) return;
+
+            const scrollbarData = this._customScrollbars[direction];
+            if (!scrollbarData) return;
+
+            const track = scrollbarData.track;
+            const trackRect = track.getBoundingClientRect();
+            const currentPos = direction === 'vertical' ? e.clientY : e.clientX;
+            const delta = currentPos - startPos;
+
+            // トラックサイズに対するスクロール量を計算
+            const trackSize = direction === 'vertical' ? trackRect.height : trackRect.width;
+            const contentSize = direction === 'vertical' ? container.scrollHeight : container.scrollWidth;
+            const viewportSize = direction === 'vertical' ? container.clientHeight : container.clientWidth;
+
+            const scrollRatio = contentSize / trackSize;
+            const newScroll = startScroll + (delta * scrollRatio);
+
+            if (direction === 'vertical') {
+                container.scrollTop = Math.max(0, Math.min(newScroll, contentSize - viewportSize));
+            } else {
+                container.scrollLeft = Math.max(0, Math.min(newScroll, contentSize - viewportSize));
+            }
+        };
+
+        const onMouseUp = () => {
+            isDragging = false;
+            thumb.classList.remove('dragging');
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        thumb.addEventListener('mousedown', onMouseDown);
+    }
+
+    /**
+     * トラッククリック時のスクロール処理
+     * @param {HTMLElement} container - スクロールコンテナ
+     * @param {HTMLElement} track - トラック要素
+     * @param {MouseEvent} e - クリックイベント
+     * @param {string} direction - 'vertical' | 'horizontal'
+     * @private
+     */
+    _handleTrackClick(container, track, e, direction) {
+        const trackRect = track.getBoundingClientRect();
+        const clickPos = direction === 'vertical'
+            ? e.clientY - trackRect.top
+            : e.clientX - trackRect.left;
+        const trackSize = direction === 'vertical' ? trackRect.height : trackRect.width;
+
+        const contentSize = direction === 'vertical' ? container.scrollHeight : container.scrollWidth;
+        const viewportSize = direction === 'vertical' ? container.clientHeight : container.clientWidth;
+
+        const scrollRatio = clickPos / trackSize;
+        const targetScroll = (contentSize - viewportSize) * scrollRatio;
+
+        if (direction === 'vertical') {
+            container.scrollTop = targetScroll;
+        } else {
+            container.scrollLeft = targetScroll;
+        }
+    }
+
+    /**
+     * スクロールバーのツマミ位置を更新
+     * @param {HTMLElement} container - スクロールコンテナ
+     * @param {string} direction - 'vertical' | 'horizontal'
+     * @private
+     */
+    _updateScrollbarThumbPosition(container, direction) {
+        const scrollbarData = this._customScrollbars?.[direction];
+        if (!scrollbarData) return;
+
+        const { track, thumb } = scrollbarData;
+        const trackRect = track.getBoundingClientRect();
+        const trackSize = direction === 'vertical' ? trackRect.height : trackRect.width;
+
+        const contentSize = direction === 'vertical' ? container.scrollHeight : container.scrollWidth;
+        const viewportSize = direction === 'vertical' ? container.clientHeight : container.clientWidth;
+        const scrollPos = direction === 'vertical' ? container.scrollTop : container.scrollLeft;
+
+        // ツマミサイズ（最小20px）
+        const thumbSize = Math.max(20, (viewportSize / contentSize) * trackSize);
+
+        // ツマミ位置
+        const maxScroll = contentSize - viewportSize;
+        const scrollRatio = maxScroll > 0 ? scrollPos / maxScroll : 0;
+        const thumbPos = scrollRatio * (trackSize - thumbSize);
+
+        if (direction === 'vertical') {
+            thumb.style.height = `${thumbSize}px`;
+            thumb.style.top = `${thumbPos}px`;
+        } else {
+            thumb.style.width = `${thumbSize}px`;
+            thumb.style.left = `${thumbPos}px`;
+        }
+    }
+
+    /**
+     * スクロールバーの表示/非表示を更新
+     * @param {HTMLElement} container - スクロールコンテナ
+     * @param {string} direction - 'vertical' | 'horizontal'
+     * @private
+     */
+    _updateScrollbarVisibility(container, direction) {
+        const scrollbarData = this._customScrollbars?.[direction];
+        if (!scrollbarData) return;
+
+        const { scrollbar } = scrollbarData;
+        const contentSize = direction === 'vertical' ? container.scrollHeight : container.scrollWidth;
+        const viewportSize = direction === 'vertical' ? container.clientHeight : container.clientWidth;
+
+        // スクロール可能な場合のみ表示（常に表示する場合はコメントアウト）
+        const needsScrollbar = contentSize > viewportSize;
+        scrollbar.style.display = needsScrollbar ? 'block' : 'none';
+
+        // ツマミも表示/非表示を切り替え
+        const thumb = scrollbarData.thumb;
+        if (thumb) {
+            thumb.style.display = needsScrollbar ? 'flex' : 'none';
         }
     }
 

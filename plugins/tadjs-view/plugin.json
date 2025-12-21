@@ -2,7 +2,12 @@
   "id": "tadjs-view",
   "name": "TADjs表示",
   "version": "1.0.0",
-  "type": "genko",
+  "type": "base",
+  "basefile": {
+    "json": "019d0001-0000-7001-8001-000000000001.json",
+    "xmltad": "019d0001-0000-7001-8001-000000000001_0.xtad",
+    "ico": "019d0001-0000-7001-8001-000000000001.ico"
+  },
   "description": "TADファイルとBPKファイルを表示します",
   "icon": "📄",
   "author": "satromi",

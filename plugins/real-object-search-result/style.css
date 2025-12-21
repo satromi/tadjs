@@ -102,6 +102,10 @@ body {
     color: #660066;
 }
 
+.match-info.match-relationship {
+    color: #996600;
+}
+
 .match-info.match-both {
     color: #006600;
 }

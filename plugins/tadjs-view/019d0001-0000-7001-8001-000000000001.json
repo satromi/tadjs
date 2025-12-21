@@ -1,0 +1,40 @@
+{
+  "name": "TADjs表示",
+  "linktype": false,
+  "makeDate": "2025-12-21T00:00:00Z",
+  "updateDate": "2025-12-21T00:00:00Z",
+  "accessDate": "2025-12-21T00:00:00Z",
+  "periodDate": null,
+  "refCount": 1,
+  "editable": false,
+  "readable": true,
+  "maker": "TRON User",
+  "window": {
+    "pos": {
+      "x": 100,
+      "y": 100
+    },
+    "width": 800,
+    "height": 600,
+    "minWidth": 200,
+    "minHeight": 200,
+    "resizable": true,
+    "scrollable": true,
+    "maximize": false,
+    "maximizable": true,
+    "minimizable": true,
+    "closable": true,
+    "alwaysOnTop": false,
+    "wordWrap": true,
+    "skipTaskbar": false,
+    "frame": true,
+    "transparent": false,
+    "backgroundColor": "#ffffff"
+  },
+  "applist": {
+    "tadjs-view": {
+      "name": "TADjs表示",
+      "defaultOpen": true
+    }
+  }
+}

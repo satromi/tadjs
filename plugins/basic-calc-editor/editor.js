@@ -5245,6 +5245,10 @@ class CalcEditor extends window.PluginBase {
                 this.duplicateRealObject();
                 break;
 
+            case 'open-realobject-config':
+                this.openRealObjectConfig();
+                break;
+
             // 屑実身操作
             case 'open-trash-real-objects':
                 this.openTrashRealObjects();
@@ -5339,6 +5343,7 @@ class CalcEditor extends window.PluginBase {
                 submenu: [
                     { label: '実身名変更', action: 'rename-real-object' },
                     { label: '実身複製', action: 'duplicate-real-object' },
+                    { label: '管理情報', action: 'open-realobject-config' },
                     { label: '仮身ネットワーク', action: 'open-virtual-object-network' },
                     { label: '実身/仮身検索', action: 'open-real-object-search' }
                 ]

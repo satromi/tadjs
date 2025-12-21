@@ -2,13 +2,13 @@
   "name": "TADjsについて",
   "linktype": false,
   "makeDate": "2025-11-10T07:06:59.063Z",
-  "updateDate": "2025-11-24T07:28:14.843Z",
-  "accessDate": "2025-11-24T07:22:28.052Z",
+  "updateDate": "2025-12-14T09:20:15.972Z",
+  "accessDate": "2025-12-14T09:17:22.921Z",
   "periodDate": null,
-  "refCount": 2,
+  "refCount": 3,
   "editable": true,
   "readable": true,
-  "maker": "TRON User",
+  "maker": "TADjs User",
   "window": {
     "pos": {
       "x": 142,
@@ -28,7 +28,12 @@
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
-    "backgroundColor": "#ffffff"
+    "backgroundColor": "#ffffff",
+    "scrollPos": {
+      "x": 0,
+      "y": 0
+    },
+    "wordWrap": true
   },
   "applist": {
     "basic-text-editor": {

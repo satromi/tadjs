@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理情報</title>
+    <link rel="stylesheet" href="../../tadjs-desktop.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="realobject-config-dialog">
+        <div class="tab-container">
+            <div class="tab-header">
+                <div class="tab active" data-tab="info">実身情報</div>
+                <div class="tab" data-tab="owner">使用者管理</div>
+                <div class="tab" data-tab="applist">付箋指定</div>
+            </div>
+            <div class="tab-content">
+                <!-- 実身情報タブ -->
+                <div class="tab-panel active" id="info-panel">
+                    <div class="config-section">
+                        <div class="config-item">
+                            <label>続柄：</label>
+                            <span class="config-value" id="relationship">-</span>
+                        </div>
+                        <div class="config-item">
+                            <label>所在：</label>
+                            <span class="config-value config-value-path" id="file-path">-</span>
+                        </div>
+                        <div class="config-item">
+                            <label>サイズ：</label>
+                            <span class="config-value" id="file-size">-</span>
+                            <span class="config-unit">バイト</span>
+                        </div>
+                        <div class="config-item">
+                            <label>作成日時：</label>
+                            <span class="config-value" id="make-date">-</span>
+                        </div>
+                        <div class="config-item">
+                            <label>更新日時：</label>
+                            <span class="config-value" id="update-date">-</span>
+                        </div>
+                        <div class="config-item">
+                            <label>参照仮身数：</label>
+                            <span class="config-value" id="ref-count">-</span>
+                        </div>
+                        <div class="config-item">
+                            <label>含む仮身数：</label>
+                            <span class="config-value" id="link-count">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 使用者管理タブ -->
+                <div class="tab-panel" id="owner-panel">
+                    <div class="config-section">
+                        <div class="config-item">
+                            <label>所有者：</label>
+                            <span class="config-value" id="owner">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 付箋指定タブ -->
+                <div class="tab-panel" id="applist-panel">
+                    <div class="config-section">
+                        <div class="config-item">
+                            <label>データタイプ：</label>
+                            <span class="config-value" id="data-type">-</span>
+                        </div>
+                        <div class="applist-section">
+                            <div class="applist-header">
+                                <label>機能付箋：</label>
+                                <div class="applist-buttons">
+                                    <button class="config-button" id="add-row-button">行追加</button>
+                                    <button class="config-button" id="delete-row-button">行削除</button>
+                                    <button class="config-button" id="set-default-button">デフォルト起動</button>
+                                </div>
+                            </div>
+                            <div class="applist-table-container">
+                                <table class="applist-table" id="applist-table">
+                                    <thead>
+                                        <tr>
+                                            <th class="col-select"></th>
+                                            <th class="col-name">正式名称</th>
+                                            <th class="col-plugin">プラグイン名</th>
+                                            <th class="col-default">デフォルト</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="applist-tbody">
+                                        <!-- 動的に行が追加される -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="dialog-buttons">
+            <button class="dialog-button" id="apply-button">適用</button>
+            <button class="dialog-button" id="cancel-button">キャンセル</button>
+        </div>
+    </div>
+
+    <!-- ロガーをグローバル変数として読み込み -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
+    <script type="module">
+        import {
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS
+        } from '../../js/util.js';
+        window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+        window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
+    </script>
+    <!-- メッセージバスをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
+    </script>
+    <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
+    <script type="module">
+        import { PluginBase } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+    </script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>

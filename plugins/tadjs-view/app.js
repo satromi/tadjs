@@ -72,6 +72,11 @@ class TADjsViewPlugin extends window.PluginBase {
      * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
+        // 共通MessageBusハンドラを登録（PluginBaseで定義）
+        // window-moved, window-resized-end, window-maximize-toggled,
+        // menu-action, get-menu-definition, window-close-request
+        this.setupCommonMessageBusHandlers();
+
         // init メッセージ
         this.messageBus.on('init', (data) => {
             logger.debug('[TADjsView] [MessageBus] init受信:', data);
@@ -123,48 +128,29 @@ class TADjsViewPlugin extends window.PluginBase {
             }
         });
 
-        // window-moved メッセージ
-        this.messageBus.on('window-moved', (data) => {
-            logger.debug('[TADjsView] [MessageBus] window-moved受信');
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-        });
-
-        // window-resized-end メッセージ
-        this.messageBus.on('window-resized-end', (data) => {
-            logger.debug('[TADjsView] [MessageBus] window-resized-end受信');
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-        });
-
-        // window-maximize-toggled メッセージ
-        this.messageBus.on('window-maximize-toggled', (data) => {
-            logger.debug('[TADjsView] [MessageBus] window-maximize-toggled受信');
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height,
-                maximize: data.maximize
-            });
-        });
-
-        // get-menu-definition メッセージ
-        this.messageBus.on('get-menu-definition', (data) => {
-            logger.debug('[TADjsView] [MessageBus] get-menu-definition受信');
-            // 右クリックメニュー定義要求に応答（表示専用プラグインなので空メニュー）
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: []
-            });
-        });
+        // 注: window-moved, window-resized-end, window-maximize-toggled,
+        //     get-menu-definition, window-close-request は
+        //     setupCommonMessageBusHandlers() で登録済み
 
         logger.debug('[TADjsView] MessageBusハンドラ登録完了');
+    }
+
+    /**
+     * メニュー定義を取得（表示専用プラグインなので空）
+     * setupCommonMessageBusHandlers()のget-menu-definitionハンドラから呼ばれる
+     * @returns {Array} メニュー定義（空配列）
+     */
+    getMenuDefinition() {
+        return [];
+    }
+
+    /**
+     * メニューアクションを実行（表示専用プラグインなので何もしない）
+     * setupCommonMessageBusHandlers()のmenu-actionハンドラから呼ばれる
+     * @param {string} action - アクション名
+     */
+    handleMenuAction(action) {
+        // 表示専用プラグインのため、メニューアクションは何もしない
     }
 
     // setupWindowActivation() は PluginBase 共通メソッドを使用

@@ -51,6 +51,9 @@ class SystemConfigApp extends window.PluginBase {
 
         // ウィンドウアクティベーション
         this.setupWindowActivation();
+
+        // カスタムスクロールバーを初期化
+        this.initCustomScrollbar('.tab-content');
     }
 
     setupMessageBusHandlers() {

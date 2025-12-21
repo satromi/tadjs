@@ -388,6 +388,7 @@ document.addEventListener('DOMContentLoaded', () => {
 | `iconManager` | object | アイコンキャッシュマネージャー |
 | `iconData` | object | アイコンデータキャッシュ `{ realId: base64Data }` |
 | `openedRealObjects` | Map | 開いている実身のマップ |
+| `scrollContainerSelector` | string | スクロールコンテナのCSSセレクタ（デフォルト: '.plugin-content'） |
 
 ---
 
@@ -405,6 +406,7 @@ PluginBaseが提供する共通メソッドの一覧です。開発者はこれ�
 | `setupVirtualObjectRightButtonHandlers()` | 仮身ドラッグ用右ボタン監視 |
 | `setupCommonMessageBusHandlers()` | 共通MessageBusハンドラ登録（**必須**） |
 | `setupCrossWindowDropSuccessHandler()` | クロスウィンドウドロップ成功ハンドラ |
+| `initScrollNotification()` | スクロール通知初期化（親ウィンドウのスクロールバーと連動） |
 
 ### 5.2 ダイアログ表示
 
@@ -436,6 +438,7 @@ const result = await this.showInputDialog(
 | `renameRealObject()` | `Promise<Object>` | 選択中の仮身が指す実身の名前を変更 |
 | `closeRealObject()` | void | 選択中の仮身が指す実身を閉じる |
 | `changeVirtualObjectAttributes()` | `Promise<void>` | 仮身の属性を変更 |
+| `setRelationship()` | `Promise<Object>` | 選択中の仮身の続柄を設定 |
 | `extractRealId(linkId)` | string | linkIdから実身IDを抽出 |
 | `requestCopyVirtualObject(linkId)` | void | 仮身コピー（refCount+1） |
 | `requestDeleteVirtualObject(linkId)` | void | 仮身削除（refCount-1） |
@@ -482,6 +485,7 @@ const result = await this.showInputDialog(
 | `enableIframePointerEvents()` | void | iframeのpointer-eventsを再有効化 |
 | `duplicateRealObjectForDrag(virtualObject)` | `Promise<Object>` | ダブルクリックドラッグ時の実身複製 |
 | `handleBaseFileDrop(dragData, clientX, clientY, additionalData)` | void | 原紙箱からのドロップ処理 |
+| `buildVirtualObjFromDataset(dataset)` | `Object` | DOM要素のdatasetから仮身オブジェクトを構築 |
 
 ### 5.7 ダブルクリック+ドラッグ
 
@@ -500,6 +504,9 @@ const result = await this.showInputDialog(
 | `setScrollPosition(scrollPos)` | void | スクロール位置を設定 |
 | `saveScrollPosition()` | void | スクロール位置を保存 |
 | `focusWithScrollPreservation(element)` | void | スクロール位置を保持しながらフォーカス |
+| `initScrollNotification()` | void | スクロール通知を初期化（親ウィンドウのスクロールバーと連動） |
+| `notifyScrollChange()` | void | スクロール状態変更を親に手動通知 |
+| `handleSetScrollPosition(data)` | void | 親からのスクロール位置設定要求を処理 |
 
 **カスタムスクロールコンテナ**:
 
@@ -522,6 +529,35 @@ setScrollPosition(scrollPos) {
         gridBody.scrollLeft = scrollPos.x || 0;
         gridBody.scrollTop = scrollPos.y || 0;
     }
+}
+```
+
+**スクロール通知機能（親ウィンドウのスクロールバー連動）**:
+
+プラグイン内のスクロール状態を親ウィンドウのカスタムスクロールバーに連動させる機能です。
+
+```javascript
+async init() {
+    // 共通コンポーネント初期化
+    this.initializeCommonComponents('[MY_PLUGIN]');
+
+    // スクロールコンテナが.plugin-content以外の場合は設定
+    this.scrollContainerSelector = '.grid-body';
+
+    // スクロール通知を初期化（scrollイベントを監視して親に通知）
+    this.initScrollNotification();
+
+    // MessageBusハンドラ設定
+    this.setupMessageBusHandlers();
+}
+
+// プログラムでスクロールした後に手動通知
+scrollCellIntoView(cell) {
+    cell.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // スクロール完了後に親に通知
+    setTimeout(() => {
+        this.notifyScrollChange();
+    }, 100);
 }
 ```
 
@@ -637,6 +673,7 @@ const realId = this.extractRealId('019a6c96-e262-7dfd-a3bc-1e85d495d60d_0.xtad')
 | `onDragModeChanged(newMode)` | ドラッグモード変更時（move→copy） |
 | `onDeleteSourceVirtualObject(data)` | 移動モードでソースの仮身を削除 |
 | `onCrossWindowDropSuccess(data)` | クロスウィンドウドロップ成功後 |
+| `onRelationshipUpdated(virtualObj, result)` | 続柄設定成功後（仮身の再描画に使用） |
 | `getVirtualObjectCurrentAttrs(vobj, element)` | 仮身の現在の属性値を取得 |
 | `applyVirtualObjectAttributes(attrs)` | 仮身に属性を適用 |
 | `applyBackgroundColor(color)` | 背景色をUIに適用（`this.bgColor`を更新すること） |
@@ -747,6 +784,61 @@ onWindowActivated() {
     }
 }
 ```
+
+### 5.18 共通キーボードショートカットパターン
+
+BTRONデスクトップのプラグインでは、以下のキーボードショートカットが共通で使用されています。
+
+**標準ショートカット一覧**:
+
+| ショートカット | アクション | 説明 |
+|---------------|-----------|------|
+| `Ctrl+S` | 保存 | 元の実身に保存 |
+| `Ctrl+E` | 閉じる | ウィンドウを閉じる |
+| `Ctrl+L` | 全画面表示 | 全画面表示オン/オフ切り替え |
+| `Ctrl+O` | 開く | 選択中の仮身をdefaultOpenアプリで開く |
+| `Ctrl+C` | コピー | クリップボードへコピー |
+| `Ctrl+X` | 切り取り | クリップボードへ移動 |
+| `Ctrl+V` | 貼り付け | クリップボードからコピー |
+| `Ctrl+Z` | 移動 | クリップボードから移動（BTRONでは「元に戻す」ではない） |
+| `Ctrl+A` | 全選択 | すべて選択 |
+| `Ctrl+F` | 検索 | 検索/置換ダイアログを開く |
+
+**実装例**:
+
+```javascript
+// キーボードイベントハンドラーの設定
+setupKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && !e.shiftKey && !e.altKey) {
+            switch (e.key.toLowerCase()) {
+                case 's': // Ctrl+S: 保存
+                    e.preventDefault();
+                    this.saveFile();
+                    break;
+                case 'e': // Ctrl+E: ウィンドウを閉じる
+                    e.preventDefault();
+                    this.requestCloseWindow();
+                    break;
+                case 'l': // Ctrl+L: 全画面表示オンオフ
+                    e.preventDefault();
+                    this.toggleFullscreen();
+                    break;
+                case 'o': // Ctrl+O: 選択中の仮身を開く
+                    e.preventDefault();
+                    this.openSelectedVirtualObject();
+                    break;
+            }
+        }
+    });
+}
+```
+
+**注意事項**:
+
+- `Ctrl+Z`はBTRONでは「クリップボードから移動」であり、一般的な「元に戻す」ではありません
+- `toggleFullscreen()`はPluginBaseで提供されている共通メソッドです
+- `requestCloseWindow()`はPluginBaseで提供されている共通メソッドです
 
 ---
 
@@ -880,6 +972,7 @@ try {
 | `set-clipboard` | クリップボードにデータ設定 |
 | `save-image-file` | 画像ファイル保存 |
 | `delete-image-file` | 画像ファイル削除 |
+| `scroll-state-update` | スクロール状態を親に通知（scrollTop, scrollLeft等） |
 
 #### 受信（親 → プラグイン）
 
@@ -898,6 +991,7 @@ try {
 | `real-object-duplicated` | 実身複製完了 |
 | `clipboard-data` | クリップボードデータ |
 | `cross-window-drop-success` | クロスウィンドウドロップ成功（ソース側で受信） |
+| `set-scroll-position` | スクロール位置設定要求（handleSetScrollPosition()で処理） |
 
 ### 6.5 ベストプラクティス
 

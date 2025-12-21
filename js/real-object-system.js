@@ -1071,6 +1071,27 @@ export class RealObjectSystem {
     }
 
     /**
+     * 管理情報ウィンドウを開く（プラグイン共通）
+     * @param {Object} plugin プラグインインスタンス（setStatusを持つ）
+     * @param {string} realId 対象の実身ID
+     */
+    static openRealObjectConfig(plugin, realId) {
+        if (window.parent && window.parent !== window && window.parent.pluginManager) {
+            try {
+                const fileData = {
+                    realId: realId
+                };
+                window.parent.pluginManager.launchPlugin('realobject-config', fileData);
+                logger.info('管理情報ウィンドウ起動:', realId);
+                plugin.setStatus('管理情報ウィンドウを起動しました');
+            } catch (error) {
+                logger.error('管理情報ウィンドウ起動エラー:', error);
+                plugin.setStatus('管理情報ウィンドウの起動に失敗しました');
+            }
+        }
+    }
+
+    /**
      * 画像ファイルを保存
      * @param {string} fileName ファイル名
      * @param {Array|Uint8Array} imageDataArray 画像データ

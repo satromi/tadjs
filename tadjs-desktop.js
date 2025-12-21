@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.27
+ * TADjs Ver 0.28
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -5847,7 +5847,8 @@ class TADjsDesktop {
                     name: metadata.name || '無題',
                     type: metadata.type || 'unknown',
                     updateDate: metadata.updateDate,
-                    applist: metadata.applist || {}
+                    applist: metadata.applist || {},
+                    filePath: jsonPath  // ファイルパスを追加
                 };
                 success = true;
             } else {
@@ -6037,10 +6038,11 @@ class TADjsDesktop {
             let matchType = null;
             let matchedText = null;
             let nameMatched = false;
+            let relationshipMatched = false;
             let contentMatched = false;
 
             // 実身名検索
-            if (searchTarget === 'name' || searchTarget === 'both') {
+            if (searchTarget === 'name' || searchTarget === 'all') {
                 const name = metadata.name || '';
                 if (useRegex) {
                     if (searchPattern.test(name)) {
@@ -6053,8 +6055,26 @@ class TADjsDesktop {
                 }
             }
 
-            // 全文検索
-            if (searchTarget === 'content' || searchTarget === 'both') {
+            // 続柄検索
+            if (searchTarget === 'relationship' || searchTarget === 'all') {
+                const relationships = metadata.relationship || [];
+                for (const rel of relationships) {
+                    if (useRegex) {
+                        if (searchPattern.test(rel)) {
+                            relationshipMatched = true;
+                            break;
+                        }
+                    } else {
+                        if (rel.toLowerCase().includes(searchText.toLowerCase())) {
+                            relationshipMatched = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 本文検索
+            if (searchTarget === 'content' || searchTarget === 'all') {
                 const textContent = await this.extractTextFromRealObject(metadata.realId);
                 if (textContent) {
                     if (useRegex) {
@@ -6081,13 +6101,13 @@ class TADjsDesktop {
                 }
             }
 
-            // マッチタイプを決定
-            if (nameMatched && contentMatched) {
-                matchType = 'both';
-            } else if (nameMatched) {
-                matchType = 'name';
-            } else if (contentMatched) {
-                matchType = 'content';
+            // マッチタイプを決定（複合表示形式: name+relationship+content）
+            const matchTypes = [];
+            if (nameMatched) matchTypes.push('name');
+            if (relationshipMatched) matchTypes.push('relationship');
+            if (contentMatched) matchTypes.push('content');
+            if (matchTypes.length > 0) {
+                matchType = matchTypes.join('+');
             }
 
             if (matchType) {
@@ -6166,8 +6186,8 @@ class TADjsDesktop {
             }
         }
 
-        // 検索対象を決定（デフォルトは両方）
-        const effectiveSearchTarget = searchTarget || 'both';
+        // 検索対象を決定（デフォルトは全て）
+        const effectiveSearchTarget = searchTarget || 'all';
 
         for (const metadata of allMetadata) {
             // 中断チェック
@@ -6182,6 +6202,7 @@ class TADjsDesktop {
             let matchedText = null;
             let matchType = null;
             let nameMatched = false;
+            let relationshipMatched = false;
             let contentMatched = false;
 
             // 日付フィルタリング（FROM/TOが指定されている場合のみ）
@@ -6218,7 +6239,7 @@ class TADjsDesktop {
             // 文字列検索（searchTextが指定されている場合）
             if (searchText) {
                 // 実身名検索
-                if (effectiveSearchTarget === 'name' || effectiveSearchTarget === 'both') {
+                if (effectiveSearchTarget === 'name' || effectiveSearchTarget === 'all') {
                     const name = metadata.name || '';
                     if (useRegex) {
                         if (searchPattern.test(name)) {
@@ -6231,8 +6252,26 @@ class TADjsDesktop {
                     }
                 }
 
-                // 全文検索
-                if (effectiveSearchTarget === 'content' || effectiveSearchTarget === 'both') {
+                // 続柄検索
+                if (effectiveSearchTarget === 'relationship' || effectiveSearchTarget === 'all') {
+                    const relationships = metadata.relationship || [];
+                    for (const rel of relationships) {
+                        if (useRegex) {
+                            if (searchPattern.test(rel)) {
+                                relationshipMatched = true;
+                                break;
+                            }
+                        } else {
+                            if (rel.toLowerCase().includes(searchText.toLowerCase())) {
+                                relationshipMatched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // 本文検索
+                if (effectiveSearchTarget === 'content' || effectiveSearchTarget === 'all') {
                     const textContent = await this.extractTextFromRealObject(metadata.realId);
                     if (textContent) {
                         if (useRegex) {
@@ -6258,15 +6297,15 @@ class TADjsDesktop {
                 }
 
                 // 文字列一致を判定
-                stringMatched = nameMatched || contentMatched;
+                stringMatched = nameMatched || relationshipMatched || contentMatched;
 
-                // マッチタイプを決定
-                if (nameMatched && contentMatched) {
-                    matchType = 'both';
-                } else if (nameMatched) {
-                    matchType = 'name';
-                } else if (contentMatched) {
-                    matchType = 'content';
+                // マッチタイプを決定（複合表示形式: name+relationship+content）
+                const matchTypes = [];
+                if (nameMatched) matchTypes.push('name');
+                if (relationshipMatched) matchTypes.push('relationship');
+                if (contentMatched) matchTypes.push('content');
+                if (matchTypes.length > 0) {
+                    matchType = matchTypes.join('+');
                 }
             } else {
                 // 文字列指定なしの場合は一致扱い

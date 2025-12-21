@@ -291,21 +291,41 @@ class RealObjectSearchResultApp extends window.PluginBase {
         const matchInfo = document.createElement('span');
         matchInfo.className = 'match-info';
 
-        if (result.matchType === 'name') {
-            matchInfo.classList.add('match-name');
-            matchInfo.textContent = '[名前一致]';
-        } else if (result.matchType === 'content') {
-            matchInfo.classList.add('match-content');
-            const matchText = result.matchedText ?
-                (result.matchedText.length > 30 ? result.matchedText.substring(0, 30) + '...' : result.matchedText) :
-                '';
-            matchInfo.textContent = `[内容一致] ${matchText}`;
-        } else if (result.matchType === 'date') {
+        // matchTypeの解析（複合表示形式: name+relationship+content）
+        const matchTypeLabels = {
+            'name': '名前',
+            'relationship': '続柄',
+            'content': '本文',
+            'date': '日付'
+        };
+
+        if (result.matchType === 'date') {
+            // 日付のみ一致（文字列検索なし）
             matchInfo.classList.add('match-date');
             matchInfo.textContent = '[日付一致]';
-        } else if (result.matchType === 'both') {
-            matchInfo.classList.add('match-both');
-            matchInfo.textContent = '[名前+内容一致]';
+        } else if (result.matchType) {
+            // 複合表示形式を解析
+            const types = result.matchType.split('+');
+            const labels = types.map(t => matchTypeLabels[t] || t).join('+');
+
+            // CSSクラスを追加（最初のタイプを優先）
+            if (types.includes('relationship')) {
+                matchInfo.classList.add('match-relationship');
+            } else if (types.includes('name')) {
+                matchInfo.classList.add('match-name');
+            } else if (types.includes('content')) {
+                matchInfo.classList.add('match-content');
+            }
+
+            // 本文一致の場合はマッチテキストを表示
+            if (types.includes('content') && result.matchedText) {
+                const matchText = result.matchedText.length > 30
+                    ? result.matchedText.substring(0, 30) + '...'
+                    : result.matchedText;
+                matchInfo.textContent = `[${labels}一致] ${matchText}`;
+            } else {
+                matchInfo.textContent = `[${labels}一致]`;
+            }
         }
 
         row.appendChild(matchInfo);

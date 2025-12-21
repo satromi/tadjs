@@ -4825,6 +4825,7 @@ class BasicTextEditor extends window.PluginBase {
                 const realObjSubmenu = [
                     { label: '実身名変更', action: 'rename-real-object' },
                     { label: '実身複製', action: 'duplicate-real-object' },
+                    { label: '管理情報', action: 'open-realobject-config' },
                     { label: '仮身ネットワーク', action: 'open-virtual-object-network' },
                     { label: '実身/仮身検索', action: 'open-real-object-search' }
                 ];
@@ -5247,6 +5248,10 @@ class BasicTextEditor extends window.PluginBase {
                 break;
             case 'duplicate-real-object':
                 this.duplicateRealObject();
+                break;
+
+            case 'open-realobject-config':
+                this.openRealObjectConfig();
                 break;
 
             // 屑実身操作

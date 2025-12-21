@@ -46,6 +46,9 @@ class UserConfigApp extends window.PluginBase {
 
         // 設定を読み込み
         this.loadConfig();
+
+        // カスタムスクロールバーを初期化
+        this.initCustomScrollbar('.tab-content');
     }
 
     /**
