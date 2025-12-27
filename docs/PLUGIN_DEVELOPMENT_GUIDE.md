@@ -18,6 +18,7 @@ BTRON Desktopのプラグイン開発に関する総合ガイドです。
 10. [実身のファイル構成と読み書き](#10-実身のファイル構成と読み書き)
 11. [参考実装](#11-参考実装)
 12. [トラブルシューティング](#12-トラブルシューティング)
+13. [CSSスタイルガイド](#13-cssスタイルガイド)
 
 ---
 
@@ -574,10 +575,39 @@ scrollCellIntoView(cell) {
 
 | メソッド | 戻り値 | 説明 |
 |---------|--------|------|
+| `getImageFilePath(fileName)` | `Promise<string\|null>` | 画像ファイルの絶対パスを取得 |
+| `getNextImageNumber()` | `Promise<number>` | 次の画像番号を取得（メモリ+ディスク両方を考慮） |
+| `getNextImageFileNumber(realId, recordNo)` | `Promise<number>` | ディスク上の既存ファイルから次の番号を取得 |
 | `saveImageFile(source, fileName, mimeType)` | `Promise<boolean>` | 画像ファイルを保存 |
 | `deleteImageFile(fileName)` | void | 画像ファイルを削除 |
 | `savePixelmapImageFile(imageData, fileName)` | `Promise<void>` | ImageDataからPNG保存 |
 | `saveImageFromElement(imageElement, fileName)` | `Promise<void>` | 画像要素からPNG保存 |
+
+**画像番号管理の仕組み**:
+
+`getNextImageNumber()` は以下の2つのソースから最大値を取得し、+1を返します：
+
+1. **メモリ上の最大値**: `getMemoryMaxImageNumber()` フックメソッドから取得
+2. **ディスク上の最大値**: `getNextImageFileNumber()` でファイル一覧から取得
+
+```javascript
+// 画像挿入時の使用例
+async insertImage(imageData) {
+    const imgNo = await this.getNextImageNumber();  // awaitが必須
+    const fileName = `${this.realId}_0_${imgNo}.png`;
+    await this.saveImageFile(imageData, fileName);
+    // ...
+}
+
+// 画像パス取得の使用例
+async loadImage(fileName) {
+    const filePath = await this.getImageFilePath(fileName);
+    if (filePath) {
+        const img = new Image();
+        img.src = `file://${filePath}`;
+    }
+}
+```
 
 ### 5.10 メニュー関連
 
@@ -677,6 +707,39 @@ const realId = this.extractRealId('019a6c96-e262-7dfd-a3bc-1e85d495d60d_0.xtad')
 | `getVirtualObjectCurrentAttrs(vobj, element)` | 仮身の現在の属性値を取得 |
 | `applyVirtualObjectAttributes(attrs)` | 仮身に属性を適用 |
 | `applyBackgroundColor(color)` | 背景色をUIに適用（`this.bgColor`を更新すること） |
+| `getMemoryMaxImageNumber()` | メモリ上の画像の最大番号を取得（`getNextImageNumber()`から呼ばれる） |
+
+**getMemoryMaxImageNumber() の実装例**:
+
+`getNextImageNumber()` が内部で呼び出すフックメソッドです。プラグイン固有のデータ構造から最大画像番号を返します。デフォルトでは `-1` を返します。
+
+```javascript
+// basic-text-editor での実装例
+getMemoryMaxImageNumber() {
+    let maxImgNo = -1;
+    const images = this.editor.querySelectorAll('img[data-img-no]');
+    images.forEach(img => {
+        const imgNo = parseInt(img.getAttribute('data-img-no'));
+        if (!isNaN(imgNo) && imgNo > maxImgNo) {
+            maxImgNo = imgNo;
+        }
+    });
+    return maxImgNo;  // 最大値を返す（+1しない）
+}
+
+// basic-figure-editor での実装例
+getMemoryMaxImageNumber() {
+    let maxImgNo = -1;
+    this.shapes.forEach(shape => {
+        if (shape.type === 'image' && shape.imgNo !== undefined) {
+            maxImgNo = Math.max(maxImgNo, shape.imgNo);
+        }
+    });
+    return maxImgNo;  // 最大値を返す（+1しない）
+}
+```
+
+**重要**: このメソッドは最大値を返します。`getNextImageNumber()` が自動的に +1 して次の番号を計算します。
 
 ### 5.16 仮身属性ヘルパー（内部メソッド）
 
@@ -1695,3 +1758,227 @@ onWindowActivated() {
 ### ドキュメント
 
 - `pluginBuildGuide.md` - プラグイン開発の詳細ガイド
+
+---
+
+## 13. CSSスタイルガイド
+
+### 13.1 ファイル構成と役割
+
+プラグインのCSSは以下の2層構造で管理されます：
+
+| ファイル | 役割 | 管理 |
+|---------|------|------|
+| `tadjs-desktop.css` | 共通スタイル（全プラグイン共通） | PluginBase/システム |
+| `plugins/xxx/style.css` | プラグイン固有スタイル | 各プラグイン |
+
+**読み込み順序**（index.html）:
+
+```html
+<link rel="stylesheet" href="../../tadjs-desktop.css">  <!-- 先に読み込み -->
+<link rel="stylesheet" href="style.css">                 <!-- 後に読み込み -->
+```
+
+### 13.2 共通スタイルクラス
+
+`tadjs-desktop.css` で定義される共通クラス：
+
+| クラス | 用途 |
+|-------|------|
+| `.plugin-content` | プラグインのメインコンテンツ領域 |
+| `.plugin-scrollbar-wrapper` | カスタムスクロールバーのラッパー |
+| `.plugin-scrollbar-content` | スクロール可能なコンテンツ領域 |
+| `.custom-scrollbar.vertical` | 縦スクロールバー |
+| `.scroll-track` | スクロールバーのトラック |
+| `.scroll-thumb` | スクロールバーのツマミ |
+
+### 13.3 CSS詳細度の注意点
+
+**重要**: `tadjs-desktop.css` にプラグイン固有セレクタ（例: `.system-config-dialog .tab-content`）が存在する場合、プラグインの `style.css` で上書きするには**同等以上の詳細度**が必要です。
+
+#### 詳細度の計算
+
+| セレクタ | 詳細度 | 例 |
+|---------|--------|-----|
+| 要素セレクタ | 0,0,1 | `div` |
+| クラスセレクタ | 0,1,0 | `.tab-content` |
+| 2クラス | 0,2,0 | `.system-config-dialog .tab-content` |
+| IDセレクタ | 1,0,0 | `#version-panel` |
+
+#### 上書きパターン
+
+```css
+/* tadjs-desktop.css に以下がある場合 */
+.system-config-dialog .tab-content {
+    background: #f0f0f0;  /* 詳細度: 0,2,0 */
+}
+
+/* style.css で上書きするには同等の詳細度が必要 */
+.system-config-dialog .tab-content {
+    background: #dedede;  /* 詳細度: 0,2,0 - 後から読み込まれるので上書き可能 */
+}
+
+/* ❌ これでは上書きできない */
+.tab-content {
+    background: #dedede;  /* 詳細度: 0,1,0 - 負ける */
+}
+```
+
+### 13.4 BTRONカラーパレット
+
+BTRONスタイルで使用する標準色：
+
+| 色コード | 用途 | 視覚 |
+|---------|------|------|
+| `#dedede` | 標準背景（ダイアログ、タブパネル） | 濃い灰色 |
+| `#e0e0e0` | タブヘッダー、ダイアログボタン領域 | やや薄い灰色 |
+| `#c0c0c0` | 非アクティブタブ、ボタン背景 | 中間灰色 |
+| `#808080` | ボーダー（区切り線） | 暗い灰色 |
+| `#f0f0f0` | 明るい背景（非推奨、互換用） | 薄い灰色 |
+| `#ffffff` | コンテンツ領域（テキスト入力、リスト） | 白 |
+
+**注意**: `#f0f0f0` は旧スタイルとの互換のため残っていますが、新規実装では `#dedede` を使用してください。
+
+### 13.5 ダイアログ系プラグインの共通パターン
+
+accessory タイプのプラグイン（設定ダイアログ等）では、以下のパターンを推奨：
+
+```css
+/* ダイアログ全体 */
+.xxx-dialog {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: #dedede;
+}
+
+/* タブコンテナ */
+.tab-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #dedede;
+}
+
+/* タブヘッダー */
+.tab-header {
+    display: flex;
+    border-bottom: 1px solid #808080;
+    background: #e0e0e0;
+}
+
+/* タブボタン */
+.tab {
+    padding: 6px 12px;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+    border-bottom: none;
+}
+
+.tab.active {
+    background: #dedede;
+    border-style: inset;
+}
+
+/* タブコンテンツ */
+.tab-content {
+    flex: 1;
+    overflow-y: auto;
+    background: #dedede;
+}
+
+/* タブパネル */
+.tab-panel {
+    display: none;
+    padding: 12px;
+    background: #dedede;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+/* ダイアログボタン領域 */
+.dialog-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 8px;
+    border-top: 1px solid #808080;
+    background: #e0e0e0;
+}
+```
+
+### 13.6 カスタムスクロールバー使用時の注意
+
+`initCustomScrollbar()` を使用する場合、スクロールコンテナとその子要素に明示的な背景色を設定してください：
+
+```css
+/* スクロールコンテナと内容に背景色を設定 */
+.tab-content {
+    background: #dedede;
+}
+
+.tab-panel {
+    background: #dedede;
+    min-height: 100%;      /* スクロール領域全体をカバー */
+    box-sizing: border-box;
+}
+
+/* 必要に応じてスクロールバー関連も上書き */
+.plugin-scrollbar-wrapper {
+    background: #dedede;
+}
+
+.plugin-scrollbar-content {
+    background: #dedede;
+}
+```
+
+### 13.7 よくある問題と解決策
+
+#### スクロール時に背景色が変わる
+
+**原因**: 親要素（`tadjs-desktop.css`）の背景色が子要素より詳細度が高い
+
+**解決策**: 同等の詳細度で上書き
+
+```css
+/* tadjs-desktop.css: .xxx-dialog .tab-content { background: #f0f0f0 } がある場合 */
+.xxx-dialog .tab-content {
+    background: #dedede;  /* 同じ詳細度で上書き */
+}
+```
+
+#### タブパネルの背景が足りない
+
+**原因**: `min-height` が設定されていない
+
+**解決策**:
+
+```css
+.tab-panel {
+    min-height: 100%;
+    box-sizing: border-box;
+}
+```
+
+#### 特定要素周辺の色が違う
+
+**原因**: margin（外側）は親要素の背景を表示する
+
+**解決策**: margin を padding に変更
+
+```css
+/* ❌ margin は親の背景が見える */
+.content-section {
+    margin-right: 20px;
+}
+
+/* ✅ padding は自分の背景が見える */
+#content-panel {
+    padding-right: 20px;
+}
+```

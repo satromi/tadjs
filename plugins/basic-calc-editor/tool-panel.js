@@ -181,7 +181,21 @@ class CalcToolPanel {
         // 線の色ピッカー
         document.getElementById('borderColorPicker').addEventListener('input', (e) => {
             this.formatState.borderColor = e.target.value;
-            logger.debug(`[CalcToolPanel] 線の色変更: ${e.target.value}`);
+        });
+
+        // 集合縦棒グラフボタン
+        document.getElementById('clusteredBarChartBtn').addEventListener('click', () => {
+            this.insertClusteredBarChart();
+        });
+
+        // 積上縦棒グラフボタン
+        document.getElementById('stackedBarChartBtn').addEventListener('click', () => {
+            this.insertStackedBarChart();
+        });
+
+        // 折れ線グラフボタン
+        document.getElementById('lineChartBtn').addEventListener('click', () => {
+            this.insertLineChart();
         });
 
         // フォント選択（ポップアップ）
@@ -625,6 +639,36 @@ class CalcToolPanel {
             cellInput.value = '=' + cellInput.value;
         }
         cellInput.focus();
+    }
+
+    /**
+     * 集合縦棒グラフ挿入
+     * 選択範囲のデータからグラフを生成するようeditorに通知
+     */
+    insertClusteredBarChart() {
+        this.sendToParent('insert-chart', {
+            chartType: 'clustered-bar'
+        });
+    }
+
+    /**
+     * 積上縦棒グラフ挿入
+     * 選択範囲のデータから積上グラフを生成するようeditorに通知
+     */
+    insertStackedBarChart() {
+        this.sendToParent('insert-chart', {
+            chartType: 'stacked-bar'
+        });
+    }
+
+    /**
+     * 折れ線グラフ挿入
+     * 選択範囲のデータから折れ線グラフを生成するようeditorに通知
+     */
+    insertLineChart() {
+        this.sendToParent('insert-chart', {
+            chartType: 'line'
+        });
     }
 
     /**

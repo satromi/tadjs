@@ -262,14 +262,6 @@ class PluginManager {
             }
         };
 
-        // 古いハードコードされた登録は削除（plugin.jsonから読み込むため不要）
-        // this.registerPlugin(demoPlugin);
-        // this.registerPlugin(userConfigPlugin);
-        // this.registerPlugin(systemConfigPlugin);
-        // this.registerPlugin(virtualObjectListPlugin);
-        // this.registerPlugin(baseFileManagerPlugin);
-        // this.registerPlugin(unpackFilePlugin);
-        // this.registerPlugin(tadjsViewPlugin);
     }
 
     /**

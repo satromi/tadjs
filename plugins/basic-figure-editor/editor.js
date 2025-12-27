@@ -32,8 +32,7 @@ class BasicFigureEditor extends window.PluginBase {
         // this.realId は基底クラスで定義済み
         this.isModified = false; // 編集状態フラグ
         this.originalContent = ''; // 保存時の内容
-        this.imagePathCallbacks = {}; // 画像パス取得コールバック（messageId -> callback）
-        this.imagePathMessageId = 0; // 画像パスメッセージID
+        // imagePathCallbacks, imagePathMessageId は PluginBase.getImageFilePath() に移行済み
         // this.iconData は PluginBase で初期化済み
 
         // 図形編集用のプロパティ
@@ -128,6 +127,8 @@ class BasicFigureEditor extends window.PluginBase {
         this.editingPixelmap = null; // 編集中のピクセルマップ図形
         this.pixelmapTool = 'pencil'; // 現在のピクセルマップツール
         this.pixelmapBrushSize = 1; // ブラシサイズ（ピクセル単位）
+        this.lastPixelmapX = null; // 前回描画座標X（線補間用）
+        this.lastPixelmapY = null; // 前回描画座標Y（線補間用）
 
         // ドラッグクールダウン（連続ドラッグ防止）
         this.dragCooldown = false;
@@ -341,6 +342,13 @@ class BasicFigureEditor extends window.PluginBase {
             logger.debug('[FIGURE EDITOR] [MessageBus] ブラシサイズ変更:', this.pixelmapBrushSize);
         });
 
+        // ===== 画材パネル関連メッセージ =====
+
+        // request-open-material-panel メッセージ（道具パネルから）
+        this.messageBus.on('request-open-material-panel', async (data) => {
+            await this.openMaterialPanel(data.x, data.y);
+        });
+
         // update-font-size メッセージ
         this.messageBus.on('update-font-size', (data) => {
             this.defaultFontSize = data.fontSize;
@@ -547,16 +555,9 @@ class BasicFigureEditor extends window.PluginBase {
         // ===== その他のメッセージ =====
 
         // image-file-path-response メッセージ（レスポンス受信）
+        // 自分宛の処理は PluginBase.getImageFilePath() の waitFor で処理
+        // 開いた仮身内のプラグインへの転送のみ行う
         this.messageBus.on('image-file-path-response', (data) => {
-            logger.debug('[FIGURE EDITOR] [MessageBus] image-file-path-response受信:', data.messageId);
-
-            // 自分宛のコールバックがあれば呼び出す
-            if (this.imagePathCallbacks && this.imagePathCallbacks[data.messageId]) {
-                this.imagePathCallbacks[data.messageId](data.filePath);
-                delete this.imagePathCallbacks[data.messageId];
-            }
-
-            // 開いた仮身内のプラグインにも転送（MessageBus形式で送信）
             const iframes = document.querySelectorAll('iframe');
             iframes.forEach(iframe => {
                 if (iframe.contentWindow) {
@@ -796,6 +797,9 @@ class BasicFigureEditor extends window.PluginBase {
                 this.toolPanelPopupOpen = true;
             } else if (e.data && e.data.type === 'tool-panel-popup-closed') {
                 this.toolPanelPopupOpen = false;
+            } else if (e.data && e.data.fromMaterialPanel) {
+                // 画材パネルからのメッセージを処理
+                this.handleMaterialPanelMessage(e.data);
             }
         });
 
@@ -1541,7 +1545,7 @@ class BasicFigureEditor extends window.PluginBase {
                         startY: this.startY,
                         endX: this.startX,
                         endY: this.startY,
-                        backgroundColor: '#ffffff',
+                        backgroundColor: 'transparent',
                         imageData: null
                     };
                 }
@@ -1992,6 +1996,12 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     handleMouseUp(e) {
+        // ピクセルマップモードの描画終了時に前回座標をリセット
+        if (this.isPixelmapMode) {
+            this.lastPixelmapX = null;
+            this.lastPixelmapY = null;
+        }
+
         // 矩形選択終了
         if (this.isRectangleSelecting) {
             this.isRectangleSelecting = false;
@@ -4301,7 +4311,7 @@ class BasicFigureEditor extends window.PluginBase {
                     }
 
                     // 画像番号を取得
-                    const imgNo = this.getNextImageNumber();
+                    const imgNo = await this.getNextImageNumber();
 
                     // ファイル名を生成: fileId_recordNo_imgNo.png
                     const fileId = this.realId || 'unknown';
@@ -4359,25 +4369,41 @@ class BasicFigureEditor extends window.PluginBase {
         });
     }
 
-    getNextImageNumber() {
-        // 現在の画像セグメントから最大のimgNoを取得
+    // getNextImageNumber は PluginBase の共通実装を使用
+
+    /**
+     * メモリ上の最大画像番号を取得（PluginBase.getNextImageNumber から呼ばれる）
+     * @returns {number} 最大画像番号（-1で画像なし）
+     */
+    getMemoryMaxImageNumber() {
         let maxImgNo = -1;
         this.shapes.forEach(shape => {
             if (shape.type === 'image' && shape.imgNo !== undefined) {
                 maxImgNo = Math.max(maxImgNo, shape.imgNo);
             }
         });
-        return maxImgNo + 1;
+        return maxImgNo;
     }
 
-    getNextPixelmapNumber() {
-        // 現在のピクセルマップセグメントから最大のpixelmapNoを取得
+    async getNextPixelmapNumber() {
+        // メモリ上の最大値を取得
         let maxPixelmapNo = -1;
         this.shapes.forEach(shape => {
             if (shape.type === 'pixelmap' && shape.pixelmapNo !== undefined) {
                 maxPixelmapNo = Math.max(maxPixelmapNo, shape.pixelmapNo);
             }
         });
+
+        // ディスク上の最大値も取得
+        if (this.realId) {
+            try {
+                const diskNextNo = await this.getNextImageFileNumber(this.realId, 0);
+                maxPixelmapNo = Math.max(maxPixelmapNo, diskNextNo - 1);
+            } catch (error) {
+                // ディスク取得失敗時はメモリのみで判断
+            }
+        }
+
         return maxPixelmapNo + 1;
     }
 
@@ -5741,8 +5767,8 @@ class BasicFigureEditor extends window.PluginBase {
                 return;
             }
 
-            // 図形データをXMLに変換
-            const xmlData = this.convertToXmlTad();
+            // 図形データをXMLに変換（画像保存完了を待機）
+            const xmlData = await this.convertToXmlTad();
 
             // 親ウィンドウにXMLデータを送信
             if (this.messageBus) {
@@ -5774,8 +5800,8 @@ class BasicFigureEditor extends window.PluginBase {
         logger.debug('[FIGURE EDITOR] saveAsNewRealObject - realId:', this.realId, 'fileId:', this.realId, '使用:', realIdToUse);
 
         try {
-            // まず現在のデータを保存
-            const xmlData = this.convertToXmlTad();
+            // まず現在のデータを保存（画像保存完了を待機）
+            const xmlData = await this.convertToXmlTad();
             if (this.messageBus) {
                 this.messageBus.send('xml-data-changed', {
                     xmlData: xmlData,
@@ -5872,8 +5898,8 @@ class BasicFigureEditor extends window.PluginBase {
                     this.redraw();
                 });
 
-                // XMLデータを更新
-                const updatedXmlData = this.convertToXmlTad();
+                // XMLデータを更新（画像保存完了を待機）
+                const updatedXmlData = await this.convertToXmlTad();
                 if (this.messageBus) {
                     this.messageBus.send('xml-data-changed', {
                         xmlData: updatedXmlData,
@@ -5894,9 +5920,10 @@ class BasicFigureEditor extends window.PluginBase {
         }
     }
 
-    convertToXmlTad() {
+    async convertToXmlTad() {
         // 図形データをTAD XML形式に変換（配列を使用して高速化）
         const xmlParts = ['<tad version="02.00" encoding="UTF-8">\r\n'];
+        const savePromises = [];
 
         // 図形セグメント開始
         if (this.shapes.length > 0) {
@@ -5906,18 +5933,24 @@ class BasicFigureEditor extends window.PluginBase {
             xmlParts.push(`<figScale hunit="0.1" vunit="0.1"/>\r\n`);
 
             // 各図形を追加
-            this.shapes.forEach((shape, index) => {
-                this.shapeToXML(shape, index, xmlParts);
-            });
+            for (let index = 0; index < this.shapes.length; index++) {
+                await this.shapeToXML(this.shapes[index], index, xmlParts, savePromises);
+            }
 
             xmlParts.push('</figure>\r\n');
         }
 
         xmlParts.push('</tad>');
+
+        // 全画像保存の完了を待つ
+        if (savePromises.length > 0) {
+            await Promise.all(savePromises);
+        }
+
         return xmlParts.join('');
     }
 
-    shapeToXML(shape, index, xmlParts) {
+    async shapeToXML(shape, index, xmlParts, savePromises = null) {
         // 図形の線属性とパターン (tad.js互換)
         const l_atr = shape.lineWidth || 1;
         // 線パターン: solid=0, dotted=1, dashed=2
@@ -6131,15 +6164,19 @@ class BasicFigureEditor extends window.PluginBase {
                 if (shape.imageData) {
                     // ピクセルマップ番号を取得または生成
                     if (shape.pixelmapNo === undefined) {
-                        shape.pixelmapNo = this.getNextPixelmapNumber();
+                        shape.pixelmapNo = await this.getNextPixelmapNumber();
                     }
 
                     // ファイル名を生成: fileId_recordNo_pixelmapNo.png
                     const fileId = this.realId || 'unknown';
-                    const pixelmapFileName = `${fileId}_${shape.pixelmapNo}.png`;
+                    const recordNo = 0;  // 常に0
+                    const pixelmapFileName = `${fileId}_${recordNo}_${shape.pixelmapNo}.png`;
 
-                    // ImageDataをPNGとして保存（非同期だが、XMLは同期的に生成）
-                    this.savePixelmapImageFile(shape.imageData, pixelmapFileName);
+                    // ImageDataをPNGとして保存（Promiseを収集して後で待機）
+                    const savePromise = this.savePixelmapImageFile(shape.imageData, pixelmapFileName);
+                    if (savePromises) {
+                        savePromises.push(savePromise);
+                    }
 
                     const rotation = shape.rotation || 0;
                     const flipH = shape.flipH ? 'true' : 'false';
@@ -6162,9 +6199,9 @@ class BasicFigureEditor extends window.PluginBase {
                 if (shape.shapes) {
                     const groupZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
                     xmlParts.push(`<group left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}"${groupZIndexAttr}>\r\n`);
-                    shape.shapes.forEach((s, i) => {
-                        this.shapeToXML(s, `${index}_${i}`, xmlParts);
-                    });
+                    for (let i = 0; i < shape.shapes.length; i++) {
+                        await this.shapeToXML(shape.shapes[i], `${index}_${i}`, xmlParts, savePromises);
+                    }
                     xmlParts.push(`</group>\r\n`);
                 }
                 break;
@@ -6853,7 +6890,7 @@ class BasicFigureEditor extends window.PluginBase {
                     newShape.imageData = shape.imageData;
                 }
                 // 新しい画像番号を割り当て
-                newShape.imgNo = this.getNextImageNumber();
+                newShape.imgNo = await this.getNextImageNumber();
                 // ファイル名を更新（this.realIdを使用）
                 const fileId = this.realId || 'unknown';
                 const recordNo = 0;
@@ -6875,7 +6912,7 @@ class BasicFigureEditor extends window.PluginBase {
                     shape.imageData.height
                 );
                 // 新しいピクセルマップ番号を割り当て
-                newShape.pixelmapNo = this.getNextPixelmapNumber();
+                newShape.pixelmapNo = await this.getNextPixelmapNumber();
                 // ファイル名を更新（this.realIdを使用）
                 const fileId = this.realId || 'unknown';
                 const recordNo = 0;
@@ -6971,7 +7008,7 @@ class BasicFigureEditor extends window.PluginBase {
                 if (shape.imageData) {
                     newShape.imageData = shape.imageData;
                 }
-                newShape.imgNo = this.getNextImageNumber();
+                newShape.imgNo = await this.getNextImageNumber();
                 // ファイル名を更新（this.realIdを使用）
                 const fileId = this.realId || 'unknown';
                 const recordNo = 0;
@@ -6991,7 +7028,7 @@ class BasicFigureEditor extends window.PluginBase {
                     shape.imageData.width,
                     shape.imageData.height
                 );
-                newShape.pixelmapNo = this.getNextPixelmapNumber();
+                newShape.pixelmapNo = await this.getNextPixelmapNumber();
                 // ファイル名を更新（this.realIdを使用）
                 const fileId = this.realId || 'unknown';
                 const recordNo = 0;
@@ -8376,6 +8413,8 @@ class BasicFigureEditor extends window.PluginBase {
 
         this.isPixelmapMode = true;
         this.editingPixelmap = pixelmapShape;
+        this.lastPixelmapX = null;
+        this.lastPixelmapY = null;
 
         // ピクセルマップ枠に対応するImageDataを初期化（まだない場合）
         if (!pixelmapShape.imageData) {
@@ -8385,9 +8424,12 @@ class BasicFigureEditor extends window.PluginBase {
             offscreen.height = height;
             const offscreenCtx = offscreen.getContext('2d');
 
-            // 背景色で塗りつぶし
-            offscreenCtx.fillStyle = pixelmapShape.backgroundColor || '#ffffff';
-            offscreenCtx.fillRect(0, 0, width, height);
+            // 背景色が透明でない場合のみ塗りつぶし
+            if (pixelmapShape.backgroundColor && pixelmapShape.backgroundColor !== 'transparent') {
+                offscreenCtx.fillStyle = pixelmapShape.backgroundColor;
+                offscreenCtx.fillRect(0, 0, width, height);
+            }
+            // 透明の場合はfillRectしない（ImageDataは自動的に透明(0,0,0,0)で初期化される）
 
             pixelmapShape.imageData = offscreenCtx.getImageData(0, 0, width, height);
         }
@@ -8399,8 +8441,18 @@ class BasicFigureEditor extends window.PluginBase {
             }, '*');
         }
 
-        // 画材ツールパレットを表示
-        this.showPixelmapToolPalette();
+        // 画材パネルウィンドウを開く（ピクセルマップの右側に配置）
+        const pixelmap = this.editingPixelmap;
+        const maxX = Math.max(pixelmap.startX, pixelmap.endX);
+        const minY = Math.min(pixelmap.startY, pixelmap.endY);
+
+        // キャンバスの位置を考慮して親ウィンドウ座標に変換
+        const canvasRect = this.canvas.getBoundingClientRect();
+        const iframeRect = window.frameElement ? window.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
+        const panelX = iframeRect.left + canvasRect.left + maxX + 10;
+        const panelY = iframeRect.top + canvasRect.top + minY;
+
+        this.openMaterialPanel(panelX, panelY);
 
         this.redraw();
         logger.debug('[FIGURE EDITOR] ピクセルマップモードに入りました - 編集対象:', this.editingPixelmap);
@@ -8408,11 +8460,18 @@ class BasicFigureEditor extends window.PluginBase {
 
     // ピクセルマップモードを抜ける
     exitPixelmapMode() {
+        // ピクセルマップモードで変更があった場合、保存を予約
+        const hadModifications = this.isModified && this.editingPixelmap;
+
         this.isPixelmapMode = false;
         this.editingPixelmap = null;
+        this.lastPixelmapX = null;
+        this.lastPixelmapY = null;
 
-        // 画材ツールパレットを非表示
-        this.hidePixelmapToolPalette();
+        // 画材パネルウィンドウを閉じる（開いていれば）
+        if (this.getChildPanelWindowId('material')) {
+            this.closeChildPanelWindow('material');
+        }
 
         // 道具パネルに通常モードに戻るメッセージを送る
         if (window.parent && window.parent !== window) {
@@ -8425,6 +8484,101 @@ class BasicFigureEditor extends window.PluginBase {
         this.currentTool = 'select';
         this.redraw();
         logger.debug('[FIGURE EDITOR] ピクセルマップモードを抜けました');
+
+        // 変更があった場合は自動保存を実行（非同期）
+        if (hadModifications) {
+            logger.debug('[FIGURE EDITOR] ピクセルマップ編集後の自動保存を実行');
+            this.saveFile().catch(error => {
+                logger.error('[FIGURE EDITOR] ピクセルマップ編集後の自動保存に失敗:', error);
+            });
+        }
+    }
+
+    // ===== 画材パネル関連メソッド =====
+
+    /**
+     * 画材パネルを開く
+     * @param {number} x - 表示X座標
+     * @param {number} y - 表示Y座標
+     */
+    async openMaterialPanel(x, y) {
+        // 既に開いている場合はトグル
+        const existingWindowId = this.getChildPanelWindowId('material');
+        if (existingWindowId) {
+            this.closeChildPanelWindow('material');
+            return;
+        }
+
+        try {
+            const windowId = await this.openChildPanelWindow('material', {
+                panelUrl: 'material-panel.html',
+                title: '画材',
+                width: 175,
+                height: 100,
+                x: x,
+                y: y,
+                noTitleBar: true,
+                resizable: false,
+                initData: {
+                    currentTool: this.pixelmapTool,
+                    brushSize: this.pixelmapBrushSize,
+                    currentColor: this.strokeColor
+                }
+            });
+            logger.debug('[FIGURE EDITOR] 画材パネルを開きました:', windowId);
+        } catch (error) {
+            logger.error('[FIGURE EDITOR] 画材パネルを開けませんでした:', error);
+        }
+    }
+
+    /**
+     * 画材パネルからのメッセージを処理
+     * @param {Object} data - メッセージデータ
+     */
+    handleMaterialPanelMessage(data) {
+        switch (data.type) {
+            case 'material-tool-selected':
+                this.pixelmapTool = data.tool;
+                logger.debug('[FIGURE EDITOR] 画材ツール変更:', this.pixelmapTool);
+                // 道具パネルにも通知
+                this.sendToToolPanel({
+                    type: 'update-pixelmap-tool-selection',
+                    tool: data.tool
+                });
+                break;
+            case 'material-brush-size-changed':
+                this.pixelmapBrushSize = data.brushSize;
+                logger.debug('[FIGURE EDITOR] ブラシサイズ変更:', this.pixelmapBrushSize);
+                break;
+            case 'material-color-changed':
+                this.strokeColor = data.color;
+                logger.debug('[FIGURE EDITOR] 描画色変更:', this.strokeColor);
+                break;
+        }
+    }
+
+    /**
+     * 道具パネルにメッセージを送信
+     * @param {Object} message - メッセージデータ
+     */
+    sendToToolPanel(message) {
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                ...message,
+                fromEditor: true
+            }, '*');
+        }
+    }
+
+    /**
+     * 子パネルが閉じられたときの処理
+     * @param {string} panelType - パネルタイプ
+     * @param {string} windowId - ウィンドウID
+     */
+    onChildPanelClosed(panelType, windowId) {
+        if (panelType === 'material') {
+            logger.debug('[FIGURE EDITOR] 画材パネルが閉じられました:', windowId);
+        }
     }
 
     // ピクセルマップ枠内でピクセル描画を行う
@@ -8456,16 +8610,32 @@ class BasicFigureEditor extends window.PluginBase {
 
         logger.debug('[FIGURE EDITOR] 描画ツール実行:', this.pixelmapTool);
 
-        // 画材ツールに応じた描画処理
+        // 画材ツールに応じた描画処理（線補間対応）
+        const hasLastPos = this.lastPixelmapX !== null && this.lastPixelmapY !== null;
+
         switch (this.pixelmapTool) {
             case 'pencil':
-                this.drawPixel(pixelmap, localX, localY, this.strokeColor, 1);
+                if (hasLastPos) {
+                    this.drawLineTo(pixelmap, this.lastPixelmapX, this.lastPixelmapY, localX, localY, this.strokeColor, 1);
+                } else {
+                    this.drawPixel(pixelmap, localX, localY, this.strokeColor, 1);
+                }
                 break;
             case 'eraser':
-                this.drawPixel(pixelmap, localX, localY, pixelmap.backgroundColor, this.pixelmapBrushSize);
+                // 透明で消去（backgroundColor が transparent または未設定の場合は透明、それ以外は背景色）
+                const eraserColor = (!pixelmap.backgroundColor || pixelmap.backgroundColor === 'transparent') ? 'transparent' : pixelmap.backgroundColor;
+                if (hasLastPos) {
+                    this.drawLineTo(pixelmap, this.lastPixelmapX, this.lastPixelmapY, localX, localY, eraserColor, this.pixelmapBrushSize);
+                } else {
+                    this.drawPixel(pixelmap, localX, localY, eraserColor, this.pixelmapBrushSize);
+                }
                 break;
             case 'brush':
-                this.drawPixel(pixelmap, localX, localY, this.strokeColor, this.pixelmapBrushSize);
+                if (hasLastPos) {
+                    this.drawLineTo(pixelmap, this.lastPixelmapX, this.lastPixelmapY, localX, localY, this.strokeColor, this.pixelmapBrushSize);
+                } else {
+                    this.drawPixel(pixelmap, localX, localY, this.strokeColor, this.pixelmapBrushSize);
+                }
                 break;
             case 'airbrush':
                 this.drawAirbrush(pixelmap, localX, localY, this.strokeColor, this.pixelmapBrushSize);
@@ -8478,6 +8648,10 @@ class BasicFigureEditor extends window.PluginBase {
                 break;
         }
 
+        // 前回座標を更新（線補間用）
+        this.lastPixelmapX = localX;
+        this.lastPixelmapY = localY;
+
         this.redraw();
         this.isModified = true;
         logger.debug('[FIGURE EDITOR] 描画完了');
@@ -8486,7 +8660,9 @@ class BasicFigureEditor extends window.PluginBase {
     // 単一ピクセルまたはブラシサイズでピクセルを描画
     drawPixel(pixelmap, x, y, color, size = 1) {
         const imageData = pixelmap.imageData;
-        const rgb = this.hexToRgb(color);
+        const isTransparent = color === 'transparent';
+        const rgb = isTransparent ? { r: 0, g: 0, b: 0 } : this.hexToRgb(color);
+        const alpha = isTransparent ? 0 : 255;
 
         const halfSize = Math.floor(size / 2);
         for (let dy = -halfSize; dy <= halfSize; dy++) {
@@ -8499,9 +8675,28 @@ class BasicFigureEditor extends window.PluginBase {
                     imageData.data[index] = rgb.r;
                     imageData.data[index + 1] = rgb.g;
                     imageData.data[index + 2] = rgb.b;
-                    imageData.data[index + 3] = 255;
+                    imageData.data[index + 3] = alpha;
                 }
             }
+        }
+    }
+
+    // 2点間を線で補間描画（Bresenham's Line Algorithm）
+    drawLineTo(pixelmap, x0, y0, x1, y1, color, size) {
+        const dx = Math.abs(x1 - x0);
+        const dy = Math.abs(y1 - y0);
+        const sx = x0 < x1 ? 1 : -1;
+        const sy = y0 < y1 ? 1 : -1;
+        let err = dx - dy;
+
+        while (true) {
+            this.drawPixel(pixelmap, x0, y0, color, size);
+
+            if (x0 === x1 && y0 === y1) break;
+
+            const e2 = 2 * err;
+            if (e2 > -dy) { err -= dy; x0 += sx; }
+            if (e2 < dx) { err += dx; y0 += sy; }
         }
     }
 
@@ -8592,247 +8787,7 @@ class BasicFigureEditor extends window.PluginBase {
         return window.hexToRgb ? window.hexToRgb(hex) : {r: 0, g: 0, b: 0};
     }
 
-    // 画像ファイルの絶対パスを取得（非同期）
-    getImageFilePath(fileName) {
-        return new Promise((resolve, reject) => {
-            const messageId = `img_${this.imagePathMessageId++}`;
-
-            // コールバックを登録
-            this.imagePathCallbacks[messageId] = (filePath) => {
-                resolve(filePath);
-            };
-
-            // タイムアウト設定（5秒）
-            setTimeout(() => {
-                if (this.imagePathCallbacks[messageId]) {
-                    delete this.imagePathCallbacks[messageId];
-                    reject(new Error('画像パス取得タイムアウト'));
-                }
-            }, 5000);
-
-            this.messageBus.send('get-image-file-path', {
-                messageId: messageId,
-                fileName: fileName
-            });
-        });
-    }
-
-    // 画材ツールパレットを表示
-    showPixelmapToolPalette() {
-        // 既に存在する場合は削除
-        this.hidePixelmapToolPalette();
-
-        if (!this.editingPixelmap) {
-            logger.debug('[FIGURE EDITOR] editingPixelmapが無効なため、パレットを表示できません');
-            return;
-        }
-
-        // パレット要素を作成
-        const palette = document.createElement('div');
-        palette.id = 'pixelmap-tool-palette';
-        palette.className = 'pixelmap-tool-palette';
-
-        // ツールボタンの定義
-        const tools = [
-            { id: 'pencil', icon: '✎', title: '鉛筆' },
-            { id: 'eraser', icon: '⌫', title: '消しゴム' },
-            { id: 'brush', icon: '🖌', title: '絵筆' },
-            { id: 'airbrush', icon: '💨', title: 'エアブラシ' },
-            { id: 'paint', icon: '🎨', title: '絵の具' },
-            { id: 'cutter', icon: '✂', title: 'アートカッター' }
-        ];
-
-        // ツールボタンを作成
-        tools.forEach(tool => {
-            const button = document.createElement('button');
-            button.className = 'pixelmap-tool-btn';
-            button.dataset.tool = tool.id;
-            button.title = tool.title;
-            button.textContent = tool.icon;
-
-            // 現在のツールをアクティブ表示
-            if (this.pixelmapTool === tool.id) {
-                button.classList.add('active');
-            }
-
-            // クリックイベント
-            button.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.selectPixelmapTool(tool.id);
-            });
-
-            palette.appendChild(button);
-        });
-
-        // ブラシサイズコントロールを追加
-        const sizeControl = document.createElement('div');
-        sizeControl.className = 'brush-size-control';
-
-        const sizeLabel = document.createElement('label');
-        sizeLabel.textContent = 'サイズ:';
-        sizeLabel.style.fontSize = '10px';
-        sizeLabel.style.color = '#000';
-        sizeLabel.style.display = 'block';
-        sizeLabel.style.marginTop = '4px';
-
-        const sizeInput = document.createElement('input');
-        sizeInput.type = 'range';
-        sizeInput.min = '1';
-        sizeInput.max = '20';
-        sizeInput.value = this.pixelmapBrushSize || '1';
-        sizeInput.style.width = '100%';
-
-        const sizeValue = document.createElement('span');
-        sizeValue.textContent = sizeInput.value + 'px';
-        sizeValue.style.fontSize = '10px';
-        sizeValue.style.color = '#000';
-
-        sizeInput.addEventListener('input', (e) => {
-            this.pixelmapBrushSize = parseInt(e.target.value);
-            sizeValue.textContent = e.target.value + 'px';
-        });
-
-        sizeControl.appendChild(sizeLabel);
-        sizeControl.appendChild(sizeInput);
-        sizeControl.appendChild(sizeValue);
-        palette.appendChild(sizeControl);
-
-        // 色選択コントロールを追加
-        const colorControl = document.createElement('div');
-        colorControl.className = 'color-picker-control';
-
-        const colorLabel = document.createElement('label');
-        colorLabel.textContent = '描画色:';
-        colorLabel.style.fontSize = '10px';
-        colorLabel.style.color = '#000';
-        colorLabel.style.display = 'block';
-        colorLabel.style.marginTop = '4px';
-
-        const colorPickerWrapper = document.createElement('div');
-        colorPickerWrapper.style.display = 'flex';
-        colorPickerWrapper.style.alignItems = 'center';
-        colorPickerWrapper.style.gap = '4px';
-        colorPickerWrapper.style.marginTop = '2px';
-
-        const colorInput = document.createElement('input');
-        colorInput.type = 'color';
-        colorInput.value = this.strokeColor || '#000000';
-        colorInput.style.width = '40px';
-        colorInput.style.height = '24px';
-        colorInput.style.border = '1px solid #808080';
-        colorInput.style.cursor = 'pointer';
-
-        const colorValue = document.createElement('span');
-        colorValue.textContent = colorInput.value;
-        colorValue.style.fontSize = '10px';
-        colorValue.style.color = '#000';
-
-        colorInput.addEventListener('input', (e) => {
-            this.strokeColor = e.target.value;
-            colorValue.textContent = e.target.value;
-        });
-
-        colorPickerWrapper.appendChild(colorInput);
-        colorPickerWrapper.appendChild(colorValue);
-
-        colorControl.appendChild(colorLabel);
-        colorControl.appendChild(colorPickerWrapper);
-        palette.appendChild(colorControl);
-
-        // CSSスタイルを追加
-        const style = document.createElement('style');
-        style.textContent = `
-            .pixelmap-tool-palette {
-                position: absolute;
-                background: #c0c0c0;
-                border: 2px outset #ffffff;
-                box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-                padding: 4px;
-                z-index: 10000;
-                display: flex;
-                flex-direction: column;
-                gap: 2px;
-            }
-            .pixelmap-tool-btn {
-                width: 32px;
-                height: 32px;
-                border: 1px outset #ffffff;
-                background: #c0c0c0;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 0;
-                font-size: 16px;
-                -webkit-app-region: no-drag;
-            }
-            .pixelmap-tool-btn:hover {
-                background: #d0d0d0;
-            }
-            .pixelmap-tool-btn:active {
-                border-style: inset;
-                background: #a0a0a0;
-            }
-            .pixelmap-tool-btn.active {
-                border-style: inset;
-                background: #8080ff;
-                box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.5);
-            }
-            .brush-size-control {
-                padding: 4px;
-                background: #c0c0c0;
-                border-top: 1px solid #808080;
-                margin-top: 2px;
-            }
-            .color-picker-control {
-                padding: 4px;
-                background: #c0c0c0;
-                border-top: 1px solid #808080;
-                margin-top: 2px;
-            }
-        `;
-        document.head.appendChild(style);
-
-        // パレットをキャンバスの親要素に追加
-        const canvasContainer = this.canvas.parentElement;
-        canvasContainer.appendChild(palette);
-
-        // パレットの位置を計算
-        const pixelmap = this.editingPixelmap;
-        const minY = Math.min(pixelmap.startY, pixelmap.endY);
-        const maxX = Math.max(pixelmap.startX, pixelmap.endX);
-
-        // パレットをピクセルマップ枠の右側に配置（キャンバス座標系）
-        palette.style.left = `${maxX + 10}px`;
-        palette.style.top = `${minY}px`;
-
-        logger.debug('[FIGURE EDITOR] 画材ツールパレットを表示しました');
-    }
-
-    // 画材ツールパレットを非表示
-    hidePixelmapToolPalette() {
-        const palette = document.getElementById('pixelmap-tool-palette');
-        if (palette) {
-            palette.remove();
-            logger.debug('[FIGURE EDITOR] 画材ツールパレットを非表示にしました');
-        }
-    }
-
-    // 画材ツールを選択
-    selectPixelmapTool(toolId) {
-        this.pixelmapTool = toolId;
-        logger.debug('[FIGURE EDITOR] 画材ツール選択:', toolId);
-
-        // アクティブ状態を更新
-        const buttons = document.querySelectorAll('.pixelmap-tool-btn');
-        buttons.forEach(btn => {
-            if (btn.dataset.tool === toolId) {
-                btn.classList.add('active');
-            } else {
-                btn.classList.remove('active');
-            }
-        });
-    }
+    // getImageFilePath は PluginBase の共通実装を使用
 
     // 特定のタイプの図形を座標から探す
     findShapeAt(x, y, type) {

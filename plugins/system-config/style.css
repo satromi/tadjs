@@ -10,6 +10,7 @@ body {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    background: #dedede;
 }
 
 .tab-container {
@@ -17,6 +18,7 @@ body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    background: #dedede;
 }
 
 .tab-header {
@@ -52,6 +54,21 @@ body {
     padding: 12px;
     padding-right: 0;  /* スクロールバー用に右側パディングを削除 */
     background: #dedede;
+    min-height: 100%;  /* スクロール領域全体をカバー */
+    box-sizing: border-box;  /* padding込みで100% */
+}
+
+/* tadjs-desktop.css の .system-config-dialog 固有スタイルを上書き（詳細度 0,2,0） */
+.system-config-dialog .tab-content {
+    background: #dedede;
+}
+
+.system-config-dialog .tab-panel {
+    padding: 12px;
+    padding-right: 0;
+    background: #dedede;
+    min-height: 100%;
+    box-sizing: border-box;
 }
 
 .tab-panel.active {
@@ -228,11 +245,15 @@ body {
 }
 
 /* バージョン情報 */
+#version-panel {
+    padding-right: 20px;  /* スクロールバー用の余白（margin-rightではなくpadding-rightで確実に背景色を適用） */
+}
+
 .version-section {
     background: white;
     border: 2px inset #808080;
     padding: 0;
-    margin-right: 20px;  /* スクロールバー用の余白（16px + 4px） */
+    /* margin-right は #version-panel の padding-right に移動 */
 }
 
 .version-header {
@@ -279,7 +300,20 @@ body {
     text-align: right;
 }
 
-/* スクロールバーラッパーの背景色 */
+/* スクロールバーラッパーとコンテンツの背景色 */
 .plugin-scrollbar-wrapper {
+    background: #dedede;
+}
+
+.plugin-scrollbar-content {
+    background: #dedede;
+}
+
+/* カスタムスクロールバー本体とトラックの背景色（tadjs-desktop.cssより高い詳細度が必要） */
+.plugin-scrollbar-wrapper > .custom-scrollbar.vertical {
+    background: #dedede;
+}
+
+.plugin-scrollbar-wrapper .scroll-track {
     background: #dedede;
 }

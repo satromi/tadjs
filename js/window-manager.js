@@ -188,11 +188,16 @@ export class WindowManager {
 
         const opts = { ...defaultOptions, ...options };
 
+        // frame: false の場合はタイトルバー要素自体を生成しない
+        const titlebarHtml = opts.frame
+            ? `<div class="window-titlebar">
+                   <div class="window-icon"></div>
+                   <div class="window-title">${title}</div>
+               </div>`
+            : '';
+
         windowElement.innerHTML = `
-            <div class="window-titlebar">
-                <div class="window-icon"></div>
-                <div class="window-title">${title}</div>
-            </div>
+            ${titlebarHtml}
             <div class="window-content">
                 ${content}
             </div>
@@ -374,6 +379,17 @@ export class WindowManager {
 
         const windowInfo = this.windows.get(windowId);
         const windowElement = windowInfo.element;
+
+        // 既存のtransitionendハンドラを削除（連続toggle対策）
+        if (windowInfo._transitionEndHandler) {
+            windowElement.removeEventListener('transitionend', windowInfo._transitionEndHandler);
+            windowInfo._transitionEndHandler = null;
+        }
+        // タイムアウトもクリア
+        if (windowInfo._transitionTimeout) {
+            clearTimeout(windowInfo._transitionTimeout);
+            windowInfo._transitionTimeout = null;
+        }
         const desktop = document.getElementById('desktop');
         const desktopRect = desktop.getBoundingClientRect();
 
@@ -418,13 +434,25 @@ export class WindowManager {
 
             logger.debug(`Window ${windowId} restored to normal size`);
 
-            // CSSアニメーション完了を待つ
+            // CSSアニメーション完了を待つ（width/height両方の完了を待つ）
+            let widthDone = false;
+            let heightDone = false;
+
             const handleTransitionEnd = (e) => {
-                if (e.propertyName === 'width' || e.propertyName === 'height') {
+                if (e.propertyName === 'width') widthDone = true;
+                if (e.propertyName === 'height') heightDone = true;
+
+                if (widthDone && heightDone) {
                     windowElement.removeEventListener('transitionend', handleTransitionEnd);
+                    windowInfo._transitionEndHandler = null;
+                    if (windowInfo._transitionTimeout) {
+                        clearTimeout(windowInfo._transitionTimeout);
+                        windowInfo._transitionTimeout = null;
+                    }
 
                     if (this.parentMessageBus) {
                         this.parentMessageBus.sendToWindow(windowId, 'window-maximize-completed', {
+                            windowId: windowId,
                             maximize: false,
                             width: windowInfo.normalRect.width,
                             height: windowInfo.normalRect.height
@@ -432,7 +460,28 @@ export class WindowManager {
                     }
                 }
             };
+
+            windowInfo._transitionEndHandler = handleTransitionEnd;
             windowElement.addEventListener('transitionend', handleTransitionEnd);
+
+            // フォールバック: transitionが発火しない場合のタイムアウト
+            windowInfo._transitionTimeout = setTimeout(() => {
+                if (windowInfo._transitionEndHandler) {
+                    windowElement.removeEventListener('transitionend', windowInfo._transitionEndHandler);
+                    windowInfo._transitionEndHandler = null;
+                    windowInfo._transitionTimeout = null;
+
+                    // 強制的にwindow-maximize-completedを送信
+                    if (this.parentMessageBus) {
+                        this.parentMessageBus.sendToWindow(windowId, 'window-maximize-completed', {
+                            windowId: windowId,
+                            maximize: false,
+                            width: windowInfo.normalRect.width,
+                            height: windowInfo.normalRect.height
+                        });
+                    }
+                }
+            }, 300);  // CSS transition時間(200ms) + マージン
         } else {
             // 現在の位置とサイズを保存
             const currentRect = windowElement.getBoundingClientRect();
@@ -466,13 +515,25 @@ export class WindowManager {
 
             logger.debug(`Window ${windowId} maximized to desktop size`);
 
-            // CSSアニメーション完了を待つ
+            // CSSアニメーション完了を待つ（width/height両方の完了を待つ）
+            let widthDone = false;
+            let heightDone = false;
+
             const handleTransitionEnd = (e) => {
-                if (e.propertyName === 'width' || e.propertyName === 'height') {
+                if (e.propertyName === 'width') widthDone = true;
+                if (e.propertyName === 'height') heightDone = true;
+
+                if (widthDone && heightDone) {
                     windowElement.removeEventListener('transitionend', handleTransitionEnd);
+                    windowInfo._transitionEndHandler = null;
+                    if (windowInfo._transitionTimeout) {
+                        clearTimeout(windowInfo._transitionTimeout);
+                        windowInfo._transitionTimeout = null;
+                    }
 
                     if (this.parentMessageBus) {
                         this.parentMessageBus.sendToWindow(windowId, 'window-maximize-completed', {
+                            windowId: windowId,
                             maximize: true,
                             width: desktopRect.width,
                             height: desktopRect.height
@@ -480,7 +541,28 @@ export class WindowManager {
                     }
                 }
             };
+
+            windowInfo._transitionEndHandler = handleTransitionEnd;
             windowElement.addEventListener('transitionend', handleTransitionEnd);
+
+            // フォールバック: transitionが発火しない場合のタイムアウト
+            windowInfo._transitionTimeout = setTimeout(() => {
+                if (windowInfo._transitionEndHandler) {
+                    windowElement.removeEventListener('transitionend', windowInfo._transitionEndHandler);
+                    windowInfo._transitionEndHandler = null;
+                    windowInfo._transitionTimeout = null;
+
+                    // 強制的にwindow-maximize-completedを送信
+                    if (this.parentMessageBus) {
+                        this.parentMessageBus.sendToWindow(windowId, 'window-maximize-completed', {
+                            windowId: windowId,
+                            maximize: true,
+                            width: desktopRect.width,
+                            height: desktopRect.height
+                        });
+                    }
+                }
+            }, 300);  // CSS transition時間(200ms) + マージン
         }
     }
 

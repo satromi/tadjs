@@ -35,6 +35,12 @@ class FileImportApp extends window.PluginBase {
         // イベントリスナーの設定
         this.setupEventListeners();
 
+        // 右クリックメニュー（PluginBase共通）
+        this.setupContextMenu();
+
+        // ウィンドウアクティベーション（PluginBase共通）
+        this.setupWindowActivation();
+
         logger.info('[FileImport] 初期化完了');
     }
 

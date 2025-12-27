@@ -1,6 +1,6 @@
 {
   "name": "tadjs-desktop",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "TADjs Desktop Environment with Plugin System",
   "main": "electron/main.js",
   "scripts": {
@@ -8,7 +8,12 @@
     "dev": "electron . --dev",
     "build": "electron-builder",
     "build:win": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win --x64",
+    "build:mac": "electron-builder --mac --x64",
+    "build:mac-arm": "electron-builder --mac --arm64",
+    "build:mac-universal": "electron-builder --mac --universal",
     "package": "electron-packager . \"TADjs Desktop\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=tadjs.ico --executable-name=tadjs_desktop --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|.*\\.ps1)$\" --prune=true",
+    "package:mac": "electron-packager . \"TADjs Desktop\" --platform=darwin --arch=x64 --out=dist --overwrite --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|.*\\.ps1)$\" --prune=true",
+    "package:mac-arm": "electron-packager . \"TADjs Desktop\" --platform=darwin --arch=arm64 --out=dist --overwrite --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|.*\\.ps1)$\" --prune=true",
     "postpackage": "node scripts/postpackage.js",
     "postinstall": "node scripts/patch-font-list.js"
   },
@@ -74,11 +79,43 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "darkModeSupport": true,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
     "forceCodeSigning": false
   },
   "dependencies": {
     "font-list": "^2.0.1",
-    "fontkit": "^2.0.4",
+    "fontkit": "^2.0.4"
+  },
+  "optionalDependencies": {
     "winreg": "^1.2.5"
   }
 }

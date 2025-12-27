@@ -344,3 +344,27 @@ html, body {
 .fill-handle:hover {
     background-color: #0088ff;
 }
+
+/* グラフCanvas */
+.chart-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;  /* デフォルトはnone、グラフ上でのみautoに切り替え */
+    z-index: 50;
+}
+
+/* グラフ選択枠 */
+.chart-selection-border {
+    stroke: #0066cc;
+    stroke-width: 2;
+    fill: none;
+}
+
+/* グラフリサイズハンドル */
+.chart-resize-handle {
+    fill: #0066cc;
+    stroke: #004499;
+    stroke-width: 1;
+    cursor: se-resize;
+}

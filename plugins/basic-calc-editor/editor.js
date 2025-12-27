@@ -86,15 +86,31 @@ class CalcEditor extends window.PluginBase {
         this.selectedVirtualObjectCell = null; // 選択中の仮身セル { col, row }
         this.isResizingVirtualObject = false; // 仮身リサイズ中フラグ
         // this.iconData は PluginBase で初期化済み
-
-        // 画像パス取得関連
-        this.imagePathCallbacks = {}; // messageId -> callback
-        this.imagePathMessageId = 0;
+        // imagePathCallbacks, imagePathMessageId は PluginBase.getImageFilePath() に移行済み
 
         // 画像セル関連
         this.selectedImageCell = null; // 選択中の画像セル { col, row }
         this.isResizingImage = false; // 画像リサイズ中フラグ
         this.contextMenuImage = null; // コンテキストメニュー表示時の画像情報
+
+        // グラフ関連
+        this.charts = []; // グラフ配列
+        this.selectedChart = null; // 選択中のグラフ
+        this.chartCanvas = null; // グラフ描画用Canvas
+        this.chartCtx = null; // グラフCanvas 2D コンテキスト
+        this.isDraggingChart = false; // グラフドラッグ中フラグ
+        this.isResizingChart = false; // グラフリサイズ中フラグ
+        this.chartDragOffset = null; // ドラッグ開始時のオフセット { x, y }
+
+        // グラフ色パレット
+        this.chartColors = [
+            '#51aefb',  // 系列1（デフォルト）
+            '#ff7f50',  // 系列2
+            '#90ee90',  // 系列3
+            '#dda0dd',  // 系列4
+            '#f0e68c',  // 系列5
+            '#87ceeb'   // 系列6
+        ];
 
         // VirtualObjectRenderer初期化
         if (window.VirtualObjectRenderer) {
@@ -129,6 +145,9 @@ class CalcEditor extends window.PluginBase {
 
         // グリッド初期化
         this.initGrid();
+
+        // グラフCanvas初期化
+        this.initChartCanvas();
 
         // 仮身ドラッグ用の右ボタンハンドラーを設定（PluginBase共通機能）
         this.setupVirtualObjectRightButtonHandlers();
@@ -394,14 +413,12 @@ class CalcEditor extends window.PluginBase {
             }
         });
 
-        // 画像ファイルパス応答
-        this.messageBus.on('image-file-path-response', (data) => {
-            logger.debug('[CalcEditor] image-file-path-response受信:', data.messageId);
-            if (this.imagePathCallbacks && this.imagePathCallbacks[data.messageId]) {
-                this.imagePathCallbacks[data.messageId](data.filePath);
-                delete this.imagePathCallbacks[data.messageId];
-            }
+        // グラフ挿入
+        this.messageBus.on('insert-chart', (data) => {
+            this.insertChart(data.chartType);
         });
+
+        // image-file-path-response は PluginBase.getImageFilePath() の waitFor で処理
 
         // cross-window-drop-success ハンドラはPluginBaseの共通機能に移行
         // onDeleteSourceVirtualObject()フックで仮身削除処理を実装
@@ -521,6 +538,778 @@ class CalcEditor extends window.PluginBase {
         }
 
         logger.info(`[CalcEditor] グリッド生成完了: ${this.defaultCols}列 x ${this.defaultRows}行`);
+    }
+
+    /**
+     * グラフ描画用Canvasを初期化
+     */
+    initChartCanvas() {
+        this.chartCanvas = document.getElementById('chart-canvas');
+        if (!this.chartCanvas) {
+            return;
+        }
+        this.chartCtx = this.chartCanvas.getContext('2d');
+
+        // grid-bodyのサイズに合わせる
+        const gridBody = document.getElementById('grid-body');
+        if (gridBody) {
+            const updateCanvasSize = () => {
+                const rect = gridBody.getBoundingClientRect();
+                this.chartCanvas.width = rect.width;
+                this.chartCanvas.height = rect.height;
+                this.chartCanvas.style.width = `${rect.width}px`;
+                this.chartCanvas.style.height = `${rect.height}px`;
+                // 既存のグラフを再描画
+                this.drawCharts();
+            };
+
+            // 初期サイズ設定
+            updateCanvasSize();
+
+            // リサイズ時にサイズを更新
+            const resizeObserver = new ResizeObserver(() => {
+                updateCanvasSize();
+            });
+            resizeObserver.observe(gridBody);
+        }
+
+        // グラフCanvasのイベントリスナー設定
+        this.setupChartCanvasEvents();
+
+        // グラフCanvasのpointer-events動的制御を設定
+        this.setupChartPointerEventsControl();
+    }
+
+    /**
+     * グラフCanvas用イベントリスナーを設定
+     */
+    setupChartCanvasEvents() {
+        if (!this.chartCanvas) return;
+
+        // マウスダウン: グラフ選択・ドラッグ開始
+        this.chartCanvas.addEventListener('mousedown', (e) => {
+            const rect = this.chartCanvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            this.handleChartMouseDown(x, y, e);
+        });
+
+        // マウス移動: グラフドラッグ・リサイズ
+        this.chartCanvas.addEventListener('mousemove', (e) => {
+            const rect = this.chartCanvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            this.handleChartMouseMove(x, y, e);
+        });
+
+        // マウスアップ: ドラッグ・リサイズ終了
+        this.chartCanvas.addEventListener('mouseup', (e) => {
+            this.handleChartMouseUp(e);
+        });
+
+        // マウスリーブ: ドラッグ・リサイズ終了
+        this.chartCanvas.addEventListener('mouseleave', (e) => {
+            this.handleChartMouseUp(e);
+        });
+
+        // キーダウン: Delete キーでグラフ削除
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Delete' && this.selectedChart) {
+                this.deleteSelectedChart();
+            }
+        });
+    }
+
+    /**
+     * グラフCanvasのpointer-eventsを動的に制御するmousemoveハンドラを設定
+     * グラフ上にマウスがある時のみpointer-events: autoに切り替え
+     */
+    setupChartPointerEventsControl() {
+        const grid = document.getElementById('spreadsheet-grid');
+        if (!grid || !this.chartCanvas) return;
+
+        grid.addEventListener('mousemove', (e) => {
+            // ドラッグ・リサイズ中は常にauto
+            if (this.isDraggingChart || this.isResizingChart) {
+                this.chartCanvas.style.pointerEvents = 'auto';
+                return;
+            }
+
+            // グラフがなければnoneのまま
+            if (this.charts.length === 0) {
+                this.chartCanvas.style.pointerEvents = 'none';
+                return;
+            }
+
+            // マウス位置を計算（スクロール考慮）
+            const gridBody = document.getElementById('grid-body');
+            const gridRect = gridBody.getBoundingClientRect();
+            const scrollContainer = document.querySelector('.plugin-content');
+            const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
+            const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+
+            const x = e.clientX - gridRect.left + scrollLeft;
+            const y = e.clientY - gridRect.top + scrollTop;
+
+            // グラフ上にあるかチェック
+            const chart = this.getChartAt(x, y);
+            if (chart) {
+                this.chartCanvas.style.pointerEvents = 'auto';
+            } else {
+                this.chartCanvas.style.pointerEvents = 'none';
+            }
+        });
+    }
+
+    /**
+     * グラフマウスダウン処理
+     */
+    handleChartMouseDown(x, y, e) {
+        // 選択中のグラフがある場合、リサイズハンドルをチェック
+        if (this.selectedChart) {
+            const handle = this.getResizeHandleAt(x, y, this.selectedChart);
+            if (handle) {
+                this.isResizingChart = true;
+                this.resizeHandle = handle;
+                e.preventDefault();
+                return;
+            }
+        }
+
+        // クリック位置のグラフを検索
+        const chart = this.getChartAt(x, y);
+        if (chart) {
+            this.selectedChart = chart;
+            this.isDraggingChart = true;
+            this.chartDragOffset = {
+                x: x - chart.x,
+                y: y - chart.y
+            };
+            this.drawCharts();
+            e.preventDefault();
+        } else {
+            // グラフ外クリックで選択解除
+            if (this.selectedChart) {
+                this.selectedChart = null;
+                this.drawCharts();
+            }
+        }
+    }
+
+    /**
+     * グラフマウス移動処理
+     */
+    handleChartMouseMove(x, y, e) {
+        if (this.isDraggingChart && this.selectedChart) {
+            // ドラッグ中: グラフ位置を更新
+            this.selectedChart.x = x - this.chartDragOffset.x;
+            this.selectedChart.y = y - this.chartDragOffset.y;
+            this.drawCharts();
+            this.isModified = true;
+        } else if (this.isResizingChart && this.selectedChart) {
+            // リサイズ中: グラフサイズを更新
+            const minSize = 50;
+            const newWidth = Math.max(minSize, x - this.selectedChart.x);
+            const newHeight = Math.max(minSize, y - this.selectedChart.y);
+            this.selectedChart.width = newWidth;
+            this.selectedChart.height = newHeight;
+            this.drawCharts();
+            this.isModified = true;
+        } else {
+            // カーソル形状の更新
+            this.updateChartCursor(x, y);
+        }
+    }
+
+    /**
+     * グラフマウスアップ処理
+     */
+    handleChartMouseUp(e) {
+        this.isDraggingChart = false;
+        this.isResizingChart = false;
+        this.chartDragOffset = null;
+        this.resizeHandle = null;
+    }
+
+    /**
+     * 指定座標にあるグラフを取得
+     */
+    getChartAt(x, y) {
+        // 後に追加されたグラフを優先（逆順検索）
+        for (let i = this.charts.length - 1; i >= 0; i--) {
+            const chart = this.charts[i];
+            if (x >= chart.x && x <= chart.x + chart.width &&
+                y >= chart.y && y <= chart.y + chart.height) {
+                return chart;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * リサイズハンドル（右下）をチェック
+     */
+    getResizeHandleAt(x, y, chart) {
+        const handleSize = 8;
+        const handleX = chart.x + chart.width - handleSize;
+        const handleY = chart.y + chart.height - handleSize;
+        if (x >= handleX && x <= handleX + handleSize * 2 &&
+            y >= handleY && y <= handleY + handleSize * 2) {
+            return 'se'; // 右下ハンドル
+        }
+        return null;
+    }
+
+    /**
+     * グラフカーソル形状を更新
+     */
+    updateChartCursor(x, y) {
+        if (!this.chartCanvas) return;
+
+        // 選択中のグラフのリサイズハンドルをチェック
+        if (this.selectedChart) {
+            const handle = this.getResizeHandleAt(x, y, this.selectedChart);
+            if (handle) {
+                this.chartCanvas.style.cursor = 'se-resize';
+                return;
+            }
+        }
+
+        // グラフ上にカーソルがあるかチェック
+        const chart = this.getChartAt(x, y);
+        if (chart) {
+            this.chartCanvas.style.cursor = 'move';
+        } else {
+            this.chartCanvas.style.cursor = 'default';
+        }
+    }
+
+    /**
+     * 選択中のグラフを削除
+     */
+    deleteSelectedChart() {
+        if (!this.selectedChart) return;
+
+        const index = this.charts.indexOf(this.selectedChart);
+        if (index !== -1) {
+            this.charts.splice(index, 1);
+            this.selectedChart = null;
+            this.drawCharts();
+            this.isModified = true;
+        }
+    }
+
+    /**
+     * 全グラフを描画
+     */
+    drawCharts() {
+        if (!this.chartCtx || !this.chartCanvas) return;
+
+        // キャンバスをクリア
+        this.chartCtx.clearRect(0, 0, this.chartCanvas.width, this.chartCanvas.height);
+
+        // 各グラフを描画
+        for (const chart of this.charts) {
+            this.drawChart(chart);
+        }
+
+        // 選択枠を描画
+        if (this.selectedChart) {
+            this.drawChartSelection(this.selectedChart);
+        }
+    }
+
+    /**
+     * 個別のグラフを描画
+     */
+    drawChart(chart) {
+        if (chart.chartType === 'clustered-bar') {
+            this.drawClusteredBarChart(chart);
+        } else if (chart.chartType === 'stacked-bar') {
+            this.drawStackedBarChart(chart);
+        } else if (chart.chartType === 'line') {
+            this.drawLineChart(chart);
+        }
+    }
+
+    /**
+     * 集合縦棒グラフを描画
+     * XTADから読み込んだelements配列がある場合はそれを使用、
+     * ない場合はdataから計算して描画
+     */
+    drawClusteredBarChart(chart) {
+        const ctx = this.chartCtx;
+        const { x, y, width, height, data, elements } = chart;
+
+        // 背景を白で塗りつぶし
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x, y, width, height);
+
+        // 枠線
+        ctx.strokeStyle = '#808080';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, width, height);
+
+        // XTADから読み込んだ要素がある場合はそれを使用
+        if (elements && elements.length > 0) {
+            this.drawChartElements(chart);
+            return;
+        }
+
+        // 以下は新規グラフ作成時（elementsがない場合）の処理
+        if (!data || !data.labels || data.labels.length === 0) {
+            ctx.fillStyle = '#808080';
+            ctx.font = '12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('データなし', x + width / 2, y + height / 2);
+            return;
+        }
+
+        const padding = 30;
+        const chartArea = {
+            x: x + padding,
+            y: y + padding,
+            width: width - padding * 2,
+            height: height - padding * 2
+        };
+
+        // 最大値を計算
+        let maxValue = 0;
+        for (const series of data.series) {
+            for (const value of series.values) {
+                if (value > maxValue) maxValue = value;
+            }
+        }
+        if (maxValue === 0) maxValue = 1;
+
+        // バーの描画
+        const numLabels = data.labels.length;
+        const numSeries = data.series.length;
+        const groupWidth = chartArea.width / numLabels;
+        const barWidth = (groupWidth * 0.8) / numSeries;
+        const barGap = groupWidth * 0.1;
+
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+                const value = data.series[seriesIdx].values[labelIdx] || 0;
+                const barHeight = (value / maxValue) * chartArea.height;
+                const barX = chartArea.x + groupWidth * labelIdx + barGap + barWidth * seriesIdx;
+                const barY = chartArea.y + chartArea.height - barHeight;
+
+                ctx.fillStyle = this.chartColors[seriesIdx % this.chartColors.length];
+                ctx.fillRect(barX, barY, barWidth, barHeight);
+            }
+        }
+
+        // X軸ラベル
+        ctx.fillStyle = '#000000';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        for (let i = 0; i < numLabels; i++) {
+            const labelX = chartArea.x + groupWidth * i + groupWidth / 2;
+            const labelY = chartArea.y + chartArea.height + 15;
+            ctx.fillText(data.labels[i], labelX, labelY);
+        }
+    }
+
+    /**
+     * 積上縦棒グラフを描画
+     * 各ラベル内で系列の値を縦に積み上げる
+     */
+    drawStackedBarChart(chart) {
+        const ctx = this.chartCtx;
+        const { x, y, width, height, data, elements } = chart;
+
+        // 背景を白で塗りつぶし
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x, y, width, height);
+
+        // 枠線
+        ctx.strokeStyle = '#808080';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, width, height);
+
+        // XTADから読み込んだ要素がある場合はそれを使用
+        if (elements && elements.length > 0) {
+            this.drawChartElements(chart);
+            return;
+        }
+
+        // 以下は新規グラフ作成時（elementsがない場合）の処理
+        if (!data || !data.labels || data.labels.length === 0) {
+            ctx.fillStyle = '#808080';
+            ctx.font = '12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('データなし', x + width / 2, y + height / 2);
+            return;
+        }
+
+        const padding = 30;
+        const chartArea = {
+            x: x + padding,
+            y: y + padding,
+            width: width - padding * 2,
+            height: height - padding * 2
+        };
+
+        // 各ラベルの積上げ合計の最大値を計算
+        let maxTotal = 0;
+        const numLabels = data.labels.length;
+        const numSeries = data.series.length;
+
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            let total = 0;
+            for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+                total += data.series[seriesIdx].values[labelIdx] || 0;
+            }
+            if (total > maxTotal) maxTotal = total;
+        }
+        if (maxTotal === 0) maxTotal = 1;
+
+        // バーの描画パラメータ
+        const groupWidth = chartArea.width / numLabels;
+        const barWidth = groupWidth * 0.6;
+        const barX_offset = (groupWidth - barWidth) / 2;
+
+        // 各ラベルで積み上げバーを描画
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            const barX = chartArea.x + groupWidth * labelIdx + barX_offset;
+            let currentY = chartArea.y + chartArea.height; // 底から開始
+
+            for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+                const value = data.series[seriesIdx].values[labelIdx] || 0;
+                const segmentHeight = (value / maxTotal) * chartArea.height;
+                currentY -= segmentHeight;
+
+                ctx.fillStyle = this.chartColors[seriesIdx % this.chartColors.length];
+                ctx.fillRect(barX, currentY, barWidth, segmentHeight);
+            }
+        }
+
+        // X軸ラベル
+        ctx.fillStyle = '#000000';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        for (let i = 0; i < numLabels; i++) {
+            const labelX = chartArea.x + groupWidth * i + groupWidth / 2;
+            const labelY = chartArea.y + chartArea.height + 15;
+            ctx.fillText(data.labels[i], labelX, labelY);
+        }
+    }
+
+    /**
+     * 折れ線グラフを描画
+     */
+    drawLineChart(chart) {
+        const ctx = this.chartCtx;
+        const { x, y, width, height, data, elements } = chart;
+
+        // 背景を白で塗りつぶし
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x, y, width, height);
+
+        // 枠線
+        ctx.strokeStyle = '#808080';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, width, height);
+
+        // XTADから読み込んだ要素がある場合はそれを使用
+        if (elements && elements.length > 0) {
+            this.drawChartElements(chart);
+            return;
+        }
+
+        // 以下は新規グラフ作成時（elementsがない場合）の処理
+        if (!data || !data.labels || data.labels.length === 0) {
+            ctx.fillStyle = '#808080';
+            ctx.font = '12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('データなし', x + width / 2, y + height / 2);
+            return;
+        }
+
+        const padding = 30;
+        const chartArea = {
+            x: x + padding,
+            y: y + padding,
+            width: width - padding * 2,
+            height: height - padding * 2
+        };
+
+        // 最大値を計算
+        let maxValue = 0;
+        for (const series of data.series) {
+            for (const value of series.values) {
+                if (value > maxValue) maxValue = value;
+            }
+        }
+        if (maxValue === 0) maxValue = 1;
+
+        const numLabels = data.labels.length;
+        const numSeries = data.series.length;
+        const pointSpacing = chartArea.width / (numLabels > 1 ? numLabels - 1 : 1);
+
+        // 各系列の折れ線を描画
+        for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+            const color = this.chartColors[seriesIdx % this.chartColors.length];
+            const points = [];
+
+            // ポイントを計算
+            for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+                const value = data.series[seriesIdx].values[labelIdx] || 0;
+                const pointX = chartArea.x + (numLabels > 1 ? pointSpacing * labelIdx : chartArea.width / 2);
+                const pointY = chartArea.y + chartArea.height - (value / maxValue) * chartArea.height;
+                points.push({ x: pointX, y: pointY });
+            }
+
+            // 線を描画
+            if (points.length > 1) {
+                ctx.beginPath();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.moveTo(points[0].x, points[0].y);
+                for (let i = 1; i < points.length; i++) {
+                    ctx.lineTo(points[i].x, points[i].y);
+                }
+                ctx.stroke();
+            }
+
+            // データ点を描画
+            ctx.fillStyle = color;
+            for (const point of points) {
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // X軸ラベル
+        ctx.fillStyle = '#000000';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        for (let i = 0; i < numLabels; i++) {
+            const labelX = chartArea.x + (numLabels > 1 ? pointSpacing * i : chartArea.width / 2);
+            const labelY = chartArea.y + chartArea.height + 15;
+            ctx.fillText(data.labels[i], labelX, labelY);
+        }
+    }
+
+    /**
+     * XTADから読み込んだ要素を描画（rect, text, polyline, circle）
+     */
+    drawChartElements(chart) {
+        const ctx = this.chartCtx;
+        const { x, y, elements } = chart;
+
+        if (!elements) return;
+
+        // zIndex順に描画（ソート済み）
+        for (const elem of elements) {
+            if (elem.type === 'rect') {
+                // 矩形描画
+                ctx.fillStyle = elem.fillC || '#808080';
+                ctx.fillRect(x + elem.x, y + elem.y, elem.w, elem.h);
+                if (elem.bdC) {
+                    ctx.strokeStyle = elem.bdC;
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(x + elem.x, y + elem.y, elem.w, elem.h);
+                }
+            } else if (elem.type === 'text') {
+                // テキスト描画
+                ctx.fillStyle = elem.color || '#000000';
+                ctx.font = `${elem.fontSize || 10}px ${elem.fontFace || 'sans-serif'}`;
+                ctx.textAlign = elem.align || 'left';
+                ctx.textBaseline = 'top';
+
+                // テキストのX座標をalignに応じて調整
+                let textX = x + elem.x;
+                if (elem.align === 'center') {
+                    textX = x + elem.x + elem.w / 2;
+                } else if (elem.align === 'right') {
+                    textX = x + elem.x + elem.w;
+                }
+
+                ctx.fillText(elem.text, textX, y + elem.y);
+            } else if (elem.type === 'polyline') {
+                // 折れ線描画
+                if (elem.points && elem.points.length > 0) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = elem.stroke || '#000000';
+                    ctx.lineWidth = elem.strokeWidth || 2;
+                    ctx.moveTo(x + elem.points[0].x, y + elem.points[0].y);
+                    for (let i = 1; i < elem.points.length; i++) {
+                        ctx.lineTo(x + elem.points[i].x, y + elem.points[i].y);
+                    }
+                    ctx.stroke();
+                }
+            } else if (elem.type === 'circle') {
+                // 円描画
+                ctx.beginPath();
+                ctx.fillStyle = elem.fillC || '#000000';
+                ctx.arc(x + elem.cx, y + elem.cy, elem.r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+
+    /**
+     * グラフ選択枠を描画
+     */
+    drawChartSelection(chart) {
+        const ctx = this.chartCtx;
+        const { x, y, width, height } = chart;
+
+        // 選択枠
+        ctx.strokeStyle = '#0066cc';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 3]);
+        ctx.strokeRect(x - 1, y - 1, width + 2, height + 2);
+        ctx.setLineDash([]);
+
+        // リサイズハンドル（右下）
+        const handleSize = 8;
+        ctx.fillStyle = '#0066cc';
+        ctx.fillRect(x + width - handleSize, y + height - handleSize, handleSize, handleSize);
+    }
+
+    /**
+     * グラフを挿入
+     * @param {string} chartType - グラフタイプ（'clustered-bar'など）
+     */
+    insertChart(chartType) {
+        // 選択範囲からデータを取得
+        const dataRange = this.getSelectedRange();
+
+        // セル未選択の場合はキャンセル
+        if (!dataRange) {
+            return;
+        }
+
+        const chartData = this.getChartDataFromRange(dataRange);
+
+        // データがない場合（系列が0、またはラベルがすべて空）はキャンセル
+        if (chartData.series.length === 0 ||
+            chartData.labels.every(label => label === '')) {
+            return;
+        }
+
+        // グラフの初期位置（選択範囲の右下、または固定位置）
+        let chartX = 50;
+        let chartY = 50;
+        if (dataRange) {
+            // 選択範囲の右に配置
+            const endCell = document.querySelector(
+                `.cell[data-row="${dataRange.startRow}"][data-col="${dataRange.endCol}"]`
+            );
+            if (endCell) {
+                const rect = endCell.getBoundingClientRect();
+                const gridBody = document.getElementById('grid-body');
+                const gridRect = gridBody.getBoundingClientRect();
+                chartX = rect.right - gridRect.left + 20;
+                chartY = rect.top - gridRect.top;
+            }
+        }
+
+        // 新しいグラフオブジェクトを作成
+        const chart = {
+            id: `chart_${Date.now()}`,
+            chartType: chartType,
+            x: chartX,
+            y: chartY,
+            width: 200,
+            height: 200,
+            dataRange: dataRange ? `${this.colToLetter(dataRange.startCol)}${dataRange.startRow}:${this.colToLetter(dataRange.endCol)}${dataRange.endRow}` : null,
+            data: chartData
+        };
+
+        // グラフ配列に追加
+        this.charts.push(chart);
+
+        // 選択状態にする
+        this.selectedChart = chart;
+
+        // 再描画
+        this.drawCharts();
+
+        // 変更フラグを立てる
+        this.isModified = true;
+    }
+
+    /**
+     * 選択範囲を取得
+     * @returns {Object|null} 選択範囲 { startRow, startCol, endRow, endCol } or null
+     */
+    getSelectedRange() {
+        // selectedCellがなければnullを返す
+        if (!this.selectedCell) return null;
+
+        // selectedCellは { col, row } オブジェクト
+        const startRow = this.selectedCell.row;
+        const startCol = this.selectedCell.col;
+
+        // 値が無効な場合
+        if (startRow === undefined || startCol === undefined ||
+            isNaN(startRow) || isNaN(startCol)) {
+            return null;
+        }
+
+        // 範囲選択がある場合
+        if (this.selectionRange) {
+            return {
+                startRow: this.selectionRange.startRow,
+                startCol: this.selectionRange.startCol,
+                endRow: this.selectionRange.endRow,
+                endCol: this.selectionRange.endCol
+            };
+        }
+
+        // 単一セル選択
+        return {
+            startRow: startRow,
+            startCol: startCol,
+            endRow: startRow,
+            endCol: startCol
+        };
+    }
+
+    /**
+     * 選択範囲からグラフデータを取得
+     * @param {Object} range - 選択範囲 { startRow, startCol, endRow, endCol }
+     * @returns {Object} グラフデータ { labels: string[], series: { name: string, values: number[] }[] }
+     */
+    getChartDataFromRange(range) {
+        if (!range) {
+            return { labels: [], series: [] };
+        }
+
+        const labels = [];
+        const series = [];
+
+        // 1列目をラベル、2列目以降を系列として扱う
+        for (let row = range.startRow; row <= range.endRow; row++) {
+            const labelKey = `${range.startCol},${row}`;
+            const labelValue = this.cells.get(labelKey);
+            labels.push(labelValue?.displayValue || labelValue?.value || '');
+        }
+
+        // 2列目以降を系列として追加
+        for (let col = range.startCol + 1; col <= range.endCol; col++) {
+            const seriesData = {
+                name: this.colToLetter(col),
+                values: []
+            };
+
+            for (let row = range.startRow; row <= range.endRow; row++) {
+                const cellKey = `${col},${row}`;
+                const cellValue = this.cells.get(cellKey);
+                const numValue = parseFloat(cellValue?.displayValue || cellValue?.value || 0);
+                seriesData.values.push(isNaN(numValue) ? 0 : numValue);
+            }
+
+            series.push(seriesData);
+        }
+
+        return { labels, series };
     }
 
     /**
@@ -3071,7 +3860,7 @@ class CalcEditor extends window.PluginBase {
                 type: 'open-tool-panel-window',
                 pluginId: 'basic-calc-editor',
                 panelpos: this.panelpos || { x: 50, y: 50 },
-                panelsize: { width: 500, height: 90 }, // 3行分のサイズ
+                panelsize: { width: 500, height: 120 }, // 4行分のサイズ（グラフ行追加）
                 settings: {
                     // 初期設定
                 }
@@ -3452,7 +4241,7 @@ class CalcEditor extends window.PluginBase {
         const sourceImageInfo = cellInfo.imageInfo;
 
         // 新しい画像番号を取得
-        const imgNo = this.getNextImageNumber();
+        const imgNo = await this.getNextImageNumber();
 
         // 新しいファイル名を生成
         let realId = this.realId || 'unknown';
@@ -3510,7 +4299,7 @@ class CalcEditor extends window.PluginBase {
         const key = `${col},${row}`;
 
         // 新しい画像番号を取得
-        const imgNo = this.getNextImageNumber();
+        const imgNo = await this.getNextImageNumber();
 
         // 新しいファイル名を生成
         let realId = this.realId || 'unknown';
@@ -4252,6 +5041,9 @@ class CalcEditor extends window.PluginBase {
                 }
             }
 
+            // グラフを読み込み
+            this.loadChartsFromXtad(xtadData);
+
             logger.info(`[CalcEditor] ${this.cells.size}セル読み込み完了`);
 
             // データがある範囲までグリッドを拡張
@@ -4595,6 +5387,11 @@ class CalcEditor extends window.PluginBase {
             xtad += '</p>\n';
         }
 
+        // グラフを出力
+        for (const chart of this.charts) {
+            xtad += this.generateChartXtad(chart);
+        }
+
         xtad += '</document>\n';
         xtad += '</tad>\n';
 
@@ -4714,6 +5511,474 @@ class CalcEditor extends window.PluginBase {
 
         // フォントタグを先頭に追加
         return fontTags + result;
+    }
+
+    /**
+     * グラフのXTADデータを生成
+     * @param {Object} chart - グラフオブジェクト
+     * @returns {string} <figure>タグ
+     */
+    generateChartXtad(chart) {
+        const { x, y, width, height, chartType, dataRange, data } = chart;
+
+        let xtad = `<figure x="${Math.round(x)}" y="${Math.round(y)}" w="${Math.round(width)}" h="${Math.round(height)}">\n`;
+
+        // <calc>タグ（グラフメタデータ）
+        xtad += `<calc chartType="${chartType}"`;
+        if (dataRange) {
+            xtad += ` dataRange="${dataRange}"`;
+        }
+        xtad += `/>\n`;
+
+        // figView, figDraw, figScale
+        xtad += `<figView x="0" y="0" w="${Math.round(width)}" h="${Math.round(height)}" />\n`;
+        xtad += `<figDraw x="0" y="0" w="${Math.round(width)}" h="${Math.round(height)}"/>\n`;
+        xtad += '<figScale x="100" y="100"/>\n';
+
+        // 背景rect
+        xtad += `<rect x="0" y="0" w="${Math.round(width)}" h="${Math.round(height)}" bdC="#808080" fillC="#ffffff"/>\n`;
+
+        // グラフ種別に応じた描画要素を生成
+        if (data && data.labels && data.labels.length > 0) {
+            if (chartType === 'clustered-bar') {
+                xtad += this.generateClusteredBarChartElements(width, height, data);
+            } else if (chartType === 'stacked-bar') {
+                xtad += this.generateStackedBarChartElements(width, height, data);
+            } else if (chartType === 'line') {
+                xtad += this.generateLineChartElements(width, height, data);
+            }
+        }
+
+        xtad += '</figure>\n';
+
+        return xtad;
+    }
+
+    /**
+     * 集合縦棒グラフの描画要素（rect, text）をXTAD形式で生成
+     * drawClusteredBarChartと同じロジックで座標を計算
+     */
+    generateClusteredBarChartElements(width, height, data) {
+        let xtad = '';
+        const padding = 30;
+
+        const chartArea = {
+            x: padding,
+            y: padding,
+            width: width - padding * 2,
+            height: height - padding * 2
+        };
+
+        // 最大値を計算
+        let maxValue = 0;
+        for (const series of data.series) {
+            for (const value of series.values) {
+                if (value > maxValue) maxValue = value;
+            }
+        }
+        if (maxValue === 0) maxValue = 1;
+
+        // バーの描画パラメータ
+        const numLabels = data.labels.length;
+        const numSeries = data.series.length;
+        const groupWidth = chartArea.width / numLabels;
+        const barWidth = (groupWidth * 0.8) / numSeries;
+        const barGap = groupWidth * 0.1;
+
+        let zIndex = 100;
+
+        // 各バーのrect要素を生成
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+                const value = data.series[seriesIdx].values[labelIdx] || 0;
+                const barHeight = (value / maxValue) * chartArea.height;
+                const barX = chartArea.x + groupWidth * labelIdx + barGap + barWidth * seriesIdx;
+                const barY = chartArea.y + chartArea.height - barHeight;
+                const fillColor = this.chartColors[seriesIdx % this.chartColors.length];
+
+                xtad += `<rect x="${Math.round(barX)}" y="${Math.round(barY)}" `;
+                xtad += `w="${Math.round(barWidth)}" h="${Math.round(barHeight)}" `;
+                xtad += `fillC="${fillColor}" zIndex="${zIndex--}"/>\n`;
+            }
+        }
+
+        // X軸ラベル（各ラベルをdocument/textとして出力）
+        const labelY = chartArea.y + chartArea.height + 5;
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            const labelX = chartArea.x + groupWidth * labelIdx + groupWidth / 2;
+            const labelText = this.escapeXml(data.labels[labelIdx] || '');
+            const labelWidth = groupWidth;
+
+            xtad += '<document>\n';
+            xtad += `<text x="${Math.round(labelX - labelWidth / 2)}" y="${Math.round(labelY)}" `;
+            xtad += `w="${Math.round(labelWidth)}" h="15" align="center" zIndex="${zIndex--}"/>\n`;
+            xtad += '<font size="10" face="sans-serif" color="#000000"/>\n';
+            xtad += `${labelText}\n`;
+            xtad += '</document>\n';
+        }
+
+        return xtad;
+    }
+
+    /**
+     * 積上縦棒グラフの描画要素（rect, text）をXTAD形式で生成
+     * 各ラベル内で系列の値を縦に積み上げる
+     */
+    generateStackedBarChartElements(width, height, data) {
+        let xtad = '';
+        const padding = 30;
+
+        const chartArea = {
+            x: padding,
+            y: padding,
+            width: width - padding * 2,
+            height: height - padding * 2
+        };
+
+        // 各ラベルの積上げ合計の最大値を計算
+        let maxTotal = 0;
+        const numLabels = data.labels.length;
+        const numSeries = data.series.length;
+
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            let total = 0;
+            for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+                total += data.series[seriesIdx].values[labelIdx] || 0;
+            }
+            if (total > maxTotal) maxTotal = total;
+        }
+        if (maxTotal === 0) maxTotal = 1;
+
+        // バーの描画パラメータ
+        const groupWidth = chartArea.width / numLabels;
+        const barWidth = groupWidth * 0.6;
+        const barX_offset = (groupWidth - barWidth) / 2;
+
+        let zIndex = 100;
+
+        // 各ラベルで積み上げバーを生成
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            const barX = chartArea.x + groupWidth * labelIdx + barX_offset;
+            let currentY = chartArea.y + chartArea.height; // 底から開始
+
+            for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+                const value = data.series[seriesIdx].values[labelIdx] || 0;
+                const segmentHeight = (value / maxTotal) * chartArea.height;
+                currentY -= segmentHeight;
+                const fillColor = this.chartColors[seriesIdx % this.chartColors.length];
+
+                xtad += `<rect x="${Math.round(barX)}" y="${Math.round(currentY)}" `;
+                xtad += `w="${Math.round(barWidth)}" h="${Math.round(segmentHeight)}" `;
+                xtad += `fillC="${fillColor}" zIndex="${zIndex--}"/>\n`;
+            }
+        }
+
+        // X軸ラベル
+        const labelY = chartArea.y + chartArea.height + 5;
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            const labelX = chartArea.x + groupWidth * labelIdx + groupWidth / 2;
+            const labelText = this.escapeXml(data.labels[labelIdx] || '');
+            const labelWidth = groupWidth;
+
+            xtad += '<document>\n';
+            xtad += `<text x="${Math.round(labelX - labelWidth / 2)}" y="${Math.round(labelY)}" `;
+            xtad += `w="${Math.round(labelWidth)}" h="15" align="center" zIndex="${zIndex--}"/>\n`;
+            xtad += '<font size="10" face="sans-serif" color="#000000"/>\n';
+            xtad += `${labelText}\n`;
+            xtad += '</document>\n';
+        }
+
+        return xtad;
+    }
+
+    /**
+     * 折れ線グラフの描画要素（polyline, circle, text）をXTAD形式で生成
+     */
+    generateLineChartElements(width, height, data) {
+        let xtad = '';
+        const padding = 30;
+
+        const chartArea = {
+            x: padding,
+            y: padding,
+            width: width - padding * 2,
+            height: height - padding * 2
+        };
+
+        // 最大値を計算
+        let maxValue = 0;
+        for (const series of data.series) {
+            for (const value of series.values) {
+                if (value > maxValue) maxValue = value;
+            }
+        }
+        if (maxValue === 0) maxValue = 1;
+
+        const numLabels = data.labels.length;
+        const numSeries = data.series.length;
+        const pointSpacing = chartArea.width / (numLabels > 1 ? numLabels - 1 : 1);
+
+        let zIndex = 100;
+
+        // 各系列の折れ線とデータ点を生成
+        for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+            const color = this.chartColors[seriesIdx % this.chartColors.length];
+            const points = [];
+
+            // ポイントを計算
+            for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+                const value = data.series[seriesIdx].values[labelIdx] || 0;
+                const pointX = chartArea.x + (numLabels > 1 ? pointSpacing * labelIdx : chartArea.width / 2);
+                const pointY = chartArea.y + chartArea.height - (value / maxValue) * chartArea.height;
+                points.push({ x: Math.round(pointX), y: Math.round(pointY) });
+            }
+
+            // polyline要素を生成
+            if (points.length > 1) {
+                const pointsStr = points.map(p => `${p.x},${p.y}`).join(' ');
+                xtad += `<polyline points="${pointsStr}" stroke="${color}" strokeWidth="2" zIndex="${zIndex--}"/>\n`;
+            }
+
+            // circle要素を生成（各データ点）
+            for (const point of points) {
+                xtad += `<circle cx="${point.x}" cy="${point.y}" r="4" fillC="${color}" zIndex="${zIndex--}"/>\n`;
+            }
+        }
+
+        // X軸ラベル
+        const labelY = chartArea.y + chartArea.height + 5;
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            const labelX = chartArea.x + (numLabels > 1 ? pointSpacing * labelIdx : chartArea.width / 2);
+            const labelText = this.escapeXml(data.labels[labelIdx] || '');
+            const labelWidth = pointSpacing > 0 ? pointSpacing : chartArea.width;
+
+            xtad += '<document>\n';
+            xtad += `<text x="${Math.round(labelX - labelWidth / 2)}" y="${Math.round(labelY)}" `;
+            xtad += `w="${Math.round(labelWidth)}" h="15" align="center" zIndex="${zIndex--}"/>\n`;
+            xtad += '<font size="10" face="sans-serif" color="#000000"/>\n';
+            xtad += `${labelText}\n`;
+            xtad += '</document>\n';
+        }
+
+        return xtad;
+    }
+
+    /**
+     * XTADからグラフを読み込む
+     * @param {string} xtadData - XTADデータ
+     */
+    loadChartsFromXtad(xtadData) {
+        // <figure>タグを検索（<calc>タグを含むもののみグラフとして扱う）
+        const figurePattern = /<figure\s+x="([^"]+)"\s+y="([^"]+)"\s+w="([^"]+)"\s+h="([^"]+)"[^>]*>([\s\S]*?)<\/figure>/g;
+        let figureMatch;
+
+        while ((figureMatch = figurePattern.exec(xtadData)) !== null) {
+            const x = parseFloat(figureMatch[1]);
+            const y = parseFloat(figureMatch[2]);
+            const width = parseFloat(figureMatch[3]);
+            const height = parseFloat(figureMatch[4]);
+            const innerContent = figureMatch[5];
+
+            // <calc>タグを検索
+            const calcMatch = /<calc\s+chartType="([^"]+)"(?:\s+dataRange="([^"]+)")?[^>]*\/>/i.exec(innerContent);
+            if (calcMatch) {
+                const chartType = calcMatch[1];
+                const dataRange = calcMatch[2] || null;
+
+                // dataRangeからデータを取得
+                let chartData = { labels: [], series: [] };
+                if (dataRange) {
+                    const range = this.parseDataRange(dataRange);
+                    if (range) {
+                        chartData = this.getChartDataFromRange(range);
+                    }
+                }
+
+                // 図形要素をパース
+                const elements = this.parseChartElements(innerContent);
+
+                // グラフオブジェクトを作成
+                const chart = {
+                    id: `chart_${Date.now()}_${this.charts.length}`,
+                    chartType: chartType,
+                    x: x,
+                    y: y,
+                    width: width,
+                    height: height,
+                    dataRange: dataRange,
+                    data: chartData,
+                    elements: elements  // XTADから読み込んだ描画要素
+                };
+
+                this.charts.push(chart);
+            }
+        }
+
+        // グラフを描画
+        if (this.charts.length > 0) {
+            this.drawCharts();
+        }
+    }
+
+    /**
+     * figure内の描画要素（rect, document/text）をパース
+     * @param {string} innerContent - figureタグ内のコンテンツ
+     * @returns {Array} 描画要素の配列
+     */
+    parseChartElements(innerContent) {
+        const elements = [];
+
+        // ヘルパー: タグから属性を抽出
+        const getAttr = (tag, name) => {
+            const match = new RegExp(`${name}="([^"]*)"`, 'i').exec(tag);
+            return match ? match[1] : null;
+        };
+
+        // <rect> 要素をパース（属性の順序に依存しない）
+        const rectPattern = /<rect\s+[^>]+\/>/g;
+        let rectMatch;
+        while ((rectMatch = rectPattern.exec(innerContent)) !== null) {
+            const tag = rectMatch[0];
+            const x = getAttr(tag, 'x');
+            const y = getAttr(tag, 'y');
+            const w = getAttr(tag, 'w');
+            const h = getAttr(tag, 'h');
+
+            // x, y, w, h が必須
+            if (x !== null && y !== null && w !== null && h !== null) {
+                elements.push({
+                    type: 'rect',
+                    x: parseFloat(x),
+                    y: parseFloat(y),
+                    w: parseFloat(w),
+                    h: parseFloat(h),
+                    bdC: getAttr(tag, 'bdC'),
+                    fillC: getAttr(tag, 'fillC') || '#808080',
+                    zIndex: parseInt(getAttr(tag, 'zIndex')) || 0
+                });
+            }
+        }
+
+        // <document><text>...</document> 要素をパース
+        const docPattern = /<document>([\s\S]*?)<\/document>/g;
+        let docMatch;
+        while ((docMatch = docPattern.exec(innerContent)) !== null) {
+            const docContent = docMatch[1];
+
+            // <text> タグを抽出
+            const textTagMatch = /<text\s+[^>]+\/>/.exec(docContent);
+            if (!textTagMatch) continue;
+
+            const textTag = textTagMatch[0];
+            const tx = getAttr(textTag, 'x');
+            const ty = getAttr(textTag, 'y');
+            const tw = getAttr(textTag, 'w');
+            const th = getAttr(textTag, 'h');
+
+            if (tx === null || ty === null) continue;
+
+            // <font> タグを抽出
+            const fontTagMatch = /<font\s+[^>]+\/>/.exec(docContent);
+            let fontSize = 10;
+            let fontFace = 'sans-serif';
+            let color = '#000000';
+            if (fontTagMatch) {
+                const fontTag = fontTagMatch[0];
+                fontSize = parseInt(getAttr(fontTag, 'size')) || 10;
+                fontFace = getAttr(fontTag, 'face') || 'sans-serif';
+                color = getAttr(fontTag, 'color') || '#000000';
+            }
+
+            // テキスト内容を抽出（font、textタグ以外）
+            let textContent = docContent
+                .replace(/<text[^>]*\/>/, '')
+                .replace(/<font[^>]*\/>/, '')
+                .trim();
+            textContent = this.unescapeXml(textContent);
+
+            elements.push({
+                type: 'text',
+                x: parseFloat(tx),
+                y: parseFloat(ty),
+                w: parseFloat(tw) || 100,
+                h: parseFloat(th) || 15,
+                align: getAttr(textTag, 'align') || 'left',
+                zIndex: parseInt(getAttr(textTag, 'zIndex')) || 0,
+                fontSize: fontSize,
+                fontFace: fontFace,
+                color: color,
+                text: textContent
+            });
+        }
+
+        // <polyline> 要素をパース（折れ線グラフ用）
+        const polylinePattern = /<polyline\s+[^>]+\/>/g;
+        let polylineMatch;
+        while ((polylineMatch = polylinePattern.exec(innerContent)) !== null) {
+            const tag = polylineMatch[0];
+            const pointsStr = getAttr(tag, 'points');
+
+            if (pointsStr) {
+                // "x1,y1 x2,y2 ..." 形式をパース
+                const points = pointsStr.split(' ').map(p => {
+                    const [x, y] = p.split(',');
+                    return { x: parseFloat(x), y: parseFloat(y) };
+                }).filter(p => !isNaN(p.x) && !isNaN(p.y));
+
+                if (points.length > 0) {
+                    elements.push({
+                        type: 'polyline',
+                        points: points,
+                        stroke: getAttr(tag, 'stroke') || '#000000',
+                        strokeWidth: parseFloat(getAttr(tag, 'strokeWidth')) || 2,
+                        zIndex: parseInt(getAttr(tag, 'zIndex')) || 0
+                    });
+                }
+            }
+        }
+
+        // <circle> 要素をパース（折れ線グラフのデータ点用）
+        const circlePattern = /<circle\s+[^>]+\/>/g;
+        let circleMatch;
+        while ((circleMatch = circlePattern.exec(innerContent)) !== null) {
+            const tag = circleMatch[0];
+            const cx = getAttr(tag, 'cx');
+            const cy = getAttr(tag, 'cy');
+            const r = getAttr(tag, 'r');
+
+            if (cx !== null && cy !== null && r !== null) {
+                elements.push({
+                    type: 'circle',
+                    cx: parseFloat(cx),
+                    cy: parseFloat(cy),
+                    r: parseFloat(r),
+                    fillC: getAttr(tag, 'fillC') || '#000000',
+                    zIndex: parseInt(getAttr(tag, 'zIndex')) || 0
+                });
+            }
+        }
+
+        // zIndex順にソート（小さい順 - 背景から前景へ描画するため）
+        elements.sort((a, b) => a.zIndex - b.zIndex);
+
+        return elements;
+    }
+
+    /**
+     * データ範囲文字列をパース
+     * @param {string} rangeStr - 範囲文字列 (例: "A1:C5")
+     * @returns {Object|null} { startRow, startCol, endRow, endCol }
+     */
+    parseDataRange(rangeStr) {
+        const match = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i.exec(rangeStr);
+        if (!match) return null;
+
+        return {
+            startCol: this.letterToCol(match[1]),
+            startRow: parseInt(match[2]),
+            endCol: this.letterToCol(match[3]),
+            endRow: parseInt(match[4])
+        };
     }
 
     // escapeXml / unescapeXml は PluginBase に移動済み
@@ -5044,21 +6309,7 @@ class CalcEditor extends window.PluginBase {
         }
     }
 
-    /**
-     * 全画面表示の切り替え
-     */
-    toggleFullscreen() {
-        logger.info('[CalcEditor] 全画面表示切り替え');
-
-        // 親ウィンドウ（tadjs-desktop.js）にメッセージを送信してウィンドウを最大化/元に戻す
-        if (this.messageBus) {
-            this.messageBus.send('toggle-maximize');
-
-            // 状態を反転（実際の状態は親ウィンドウが管理）
-            this.isFullscreen = !this.isFullscreen;
-            logger.info(`[CalcEditor] 全画面表示${this.isFullscreen ? 'ON' : 'OFF'}`);
-        }
-    }
+    // toggleFullscreen()はPluginBaseで共通化（window-maximize-toggledでisFullscreenが同期される）
 
     /**
      * 表示を更新（再描画）
@@ -6198,7 +7449,7 @@ class CalcEditor extends window.PluginBase {
 
                 // 画像ファイル名を生成（realId_recordNo_imgNo.ext形式）
                 // recordNo = 0（表計算は単一レコード）、imgNoは既存画像の最大値+1
-                const imgNo = this.getNextImageNumber();
+                const imgNo = await this.getNextImageNumber();
                 const imageFileName = `${this.realId}_0_${imgNo}.${ext}`;
 
                 // 画像ファイルを保存（PluginBase共通メソッド使用）
@@ -6288,14 +7539,14 @@ class CalcEditor extends window.PluginBase {
         });
     }
 
-    // saveImageFile, deleteImageFile は PluginBase の共通実装を使用
+    // saveImageFile, deleteImageFile, getImageFilePath, getNextImageNumber は PluginBase の共通実装を使用
 
     /**
-     * 次の画像番号を取得
-     * 既存の画像セルから最大のimgNoを探し、+1を返す
-     * @returns {number} 次の画像番号
+     * メモリ上の最大画像番号を取得（PluginBase.getNextImageNumber から呼ばれる）
+     * 既存の画像セルから最大のimgNoを探す
+     * @returns {number} 最大画像番号（-1で画像なし）
      */
-    getNextImageNumber() {
+    getMemoryMaxImageNumber() {
         let maxImgNo = -1;
 
         // 全セルを走査して画像セルのimgNoを取得
@@ -6312,36 +7563,7 @@ class CalcEditor extends window.PluginBase {
             }
         });
 
-        return maxImgNo + 1;
-    }
-
-    /**
-     * 画像ファイルの絶対パスを取得（非同期）
-     * @param {string} fileName - ファイル名
-     * @returns {Promise<string>} 絶対パス
-     */
-    getImageFilePath(fileName) {
-        return new Promise((resolve, reject) => {
-            const messageId = `img_${this.imagePathMessageId++}`;
-
-            // コールバックを登録
-            this.imagePathCallbacks[messageId] = (filePath) => {
-                resolve(filePath);
-            };
-
-            // タイムアウト設定（5秒）
-            setTimeout(() => {
-                if (this.imagePathCallbacks[messageId]) {
-                    delete this.imagePathCallbacks[messageId];
-                    reject(new Error('画像パス取得タイムアウト'));
-                }
-            }, 5000);
-
-            this.messageBus.send('get-image-file-path', {
-                messageId: messageId,
-                fileName: fileName
-            });
-        });
+        return maxImgNo;
     }
 
     /**

@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.28
+ * TADjs Ver 0.29
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -41,10 +41,12 @@ class TADjsDesktop {
         this.isResizing = false;
         this.dragState = null;
         this.fileObjects = {}; // ファイルオブジェクトを保存
+        this.maxFileCacheSize = 100; // ファイルキャッシュの上限数
         this.statusMessageTimer = null; // ステータスメッセージのタイマー
         this.statusTimeUpdateInterval = null; // 時刻更新用インターバル
         this.clipboard = null; // グローバルクリップボード（仮身データ）
         this.closeConfirmCallbacks = {}; // ウィンドウクローズ確認コールバック
+        this.closingWindows = new Set(); // 現在クローズ処理中のウィンドウID（重複防止）
         this.openedRealObjects = new Map(); // 開いている実身ID -> ウィンドウIDのマッピング
         this.currentUser = null; // 現在の使用者名（xtad更新時のmakerフィールドに使用）
 
@@ -207,6 +209,9 @@ class TADjsDesktop {
             // フォールバック: 直接初期化
             this.toolPanelRelations = {};
         }
+
+        // 子パネルウィンドウ管理
+        this.childPanelRelations = {};
 
         // FileManager初期化
         if (typeof window.FileManager !== 'undefined') {
@@ -582,6 +587,12 @@ class TADjsDesktop {
                     this.scrollbarManager.updateScrollbarFromState(hScrollbar, 'horizontal', data);
                 }
             }
+        });
+
+        // window-maximize-completed: CSSアニメーション完了後のスクロールバー最終更新
+        this.parentMessageBus.on('window-maximize-completed', (data) => {
+            if (!data.windowId) return;
+            this.updateScrollbarsForWindow(data.windowId);
         });
 
         logger.info('[TADjs] 親MessageBusハンドラ登録完了');
@@ -1005,158 +1016,234 @@ class TADjsDesktop {
         // メッセージハンドラーマッピングを初期化
         this.initMessageHandlers();
 
-        // デスクトップクリックでアクティブウインドウを解除
-        document.addEventListener('mousedown', (e) => {
+        // 既存リスナーを削除（再初期化時のメモリリーク防止）
+        this.removeEventListeners();
+
+        // ハンドラー参照を保持（後で削除可能にするため）
+        this._mousedownHandler = (e) => {
             if (e.target === document.getElementById('desktop')) {
                 this.setActiveWindow(null);
             }
-        });
+        };
+
+        this._mouseupHandler = () => {
+            this.parentMessageBus.broadcast('parent-mouseup');
+        };
+
+        this._dragoverHandler = (e) => {
+            e.preventDefault();
+        };
+
+        this._dragendHandler = () => {
+            this.parentMessageBus.broadcast('parent-dragend');
+        };
+
+        this._keydownHandler = (e) => {
+            this.handleKeyboardShortcuts(e);
+        };
+
+        this._resizeHandler = () => {
+            this.handleWindowResize();
+        };
+
+        this._messageHandler = async (e) => {
+            await this.handleMessage(e);
+        };
+
+        // デスクトップクリックでアクティブウインドウを解除
+        document.addEventListener('mousedown', this._mousedownHandler);
 
         // mouseupイベントを全てのiframeに通知（ドラッグ終了検知用）
-        document.addEventListener('mouseup', () => {
-            this.parentMessageBus.broadcast('parent-mouseup');
-        });
+        document.addEventListener('mouseup', this._mouseupHandler);
 
         // dragover/dragendイベントを全てのiframeに通知
         // 注: iframe内でのドラッグ位置追跡は child-drag-position メッセージで行うため、
         // ここではtrackDragOverIframes()を呼ばない
-        document.addEventListener('dragover', (e) => {
-            e.preventDefault();
-        });
+        document.addEventListener('dragover', this._dragoverHandler);
 
-        document.addEventListener('dragend', () => {
-            this.parentMessageBus.broadcast('parent-dragend');
-        });
+        document.addEventListener('dragend', this._dragendHandler);
 
         // キーボードショートカット
-        document.addEventListener('keydown', (e) => {
-            this.handleKeyboardShortcuts(e);
-        });
+        document.addEventListener('keydown', this._keydownHandler);
 
         // リサイズイベント
-        window.addEventListener('resize', () => {
-            this.handleWindowResize();
-        });
+        window.addEventListener('resize', this._resizeHandler);
 
         // プラグインからのメッセージを受信
-        window.addEventListener('message', async (e) => {
-            // ===== MessageRouter優先処理 =====
-            if (this.messageRouter) {
-                const handled = await this.messageRouter.route(e);
-                if (handled) {
-                    return; // MessageRouterで処理された場合は終了
-                }
+        window.addEventListener('message', this._messageHandler);
+    }
+
+    /**
+     * イベントリスナーを削除（再初期化時のメモリリーク防止）
+     */
+    removeEventListeners() {
+        if (this._mousedownHandler) {
+            document.removeEventListener('mousedown', this._mousedownHandler);
+        }
+        if (this._mouseupHandler) {
+            document.removeEventListener('mouseup', this._mouseupHandler);
+        }
+        if (this._dragoverHandler) {
+            document.removeEventListener('dragover', this._dragoverHandler);
+        }
+        if (this._dragendHandler) {
+            document.removeEventListener('dragend', this._dragendHandler);
+        }
+        if (this._keydownHandler) {
+            document.removeEventListener('keydown', this._keydownHandler);
+        }
+        if (this._resizeHandler) {
+            window.removeEventListener('resize', this._resizeHandler);
+        }
+        if (this._messageHandler) {
+            window.removeEventListener('message', this._messageHandler);
+        }
+    }
+
+    /**
+     * メッセージイベントハンドラー（setupEventListenersから抽出）
+     */
+    async handleMessage(e) {
+        // ===== MessageRouter優先処理 =====
+        if (this.messageRouter) {
+            const handled = await this.messageRouter.route(e);
+            if (handled) {
+                return; // MessageRouterで処理された場合は終了
             }
+        }
 
-            // ===== 既存のif-elseチェーン =====
-            // ===== 特殊フラグ系 (fromEditor, fromToolPanel) は個別処理を維持 =====
-            if (e.data && e.data.fromEditor) {
-                // エディタからのメッセージを道具パネルに中継
-                logger.info('[TADjs] エディタメッセージを中継:', e.data.type);
+        // ===== 既存のif-elseチェーン =====
+        // ===== 特殊フラグ系 (fromEditor, fromToolPanel) は個別処理を維持 =====
+        if (e.data && e.data.fromEditor) {
+            // エディタからのメッセージを道具パネルに中継
+            logger.info('[TADjs] エディタメッセージを中継:', e.data.type);
 
-                // 送信元のiframeから編集ウィンドウを特定
-                if (e.source && e.source.frameElement) {
-                    const editorIframe = e.source.frameElement;
-                    const editorWindow = editorIframe.closest('.window');
+            // 送信元のiframeから編集ウィンドウを特定
+            if (e.source && e.source.frameElement) {
+                const editorIframe = e.source.frameElement;
+                const editorWindow = editorIframe.closest('.window');
 
-                    if (editorWindow && this.toolPanelRelations) {
-                        // この編集ウィンドウに対応する道具パネルを探す
-                        for (const [toolPanelWindowId, relation] of Object.entries(this.toolPanelRelations)) {
-                            if (relation.editorIframe === editorIframe) {
-                                const toolPanelWindow = document.getElementById(toolPanelWindowId);
-                                if (!toolPanelWindow) {
-                                    // 道具パネルウィンドウが見つからない場合はスキップ
-                                    continue;
-                                }
-                                const toolPanelIframe = toolPanelWindow.querySelector('iframe');
-
-                                if (toolPanelIframe && toolPanelIframe.contentWindow) {
-                                    const windowId = this.parentMessageBus.getWindowIdFromIframe(toolPanelIframe);
-                                    if (windowId) {
-                                        // fromEditorフラグを除去してから道具パネルに中継
-                                        const { fromEditor, ...messageData } = e.data;
-                                        this.parentMessageBus.sendToWindow(windowId, messageData.type, messageData);
-                                        logger.info('[TADjs] メッセージを道具パネルに送信:', messageData.type);
-                                    }
-                                }
-                                break;
+                if (editorWindow && this.toolPanelRelations) {
+                    // この編集ウィンドウに対応する道具パネルを探す
+                    for (const [toolPanelWindowId, relation] of Object.entries(this.toolPanelRelations)) {
+                        if (relation.editorIframe === editorIframe) {
+                            const toolPanelWindow = document.getElementById(toolPanelWindowId);
+                            if (!toolPanelWindow) {
+                                // 道具パネルウィンドウが見つからない場合はスキップ
+                                continue;
                             }
+                            const toolPanelIframe = toolPanelWindow.querySelector('iframe');
+
+                            if (toolPanelIframe && toolPanelIframe.contentWindow) {
+                                const windowId = this.parentMessageBus.getWindowIdFromIframe(toolPanelIframe);
+                                if (windowId) {
+                                    // fromEditorフラグを除去してから道具パネルに中継
+                                    const { fromEditor, ...messageData } = e.data;
+                                    this.parentMessageBus.sendToWindow(windowId, messageData.type, messageData);
+                                    logger.info('[TADjs] メッセージを道具パネルに送信:', messageData.type);
+                                }
+                            }
+                            break;
                         }
                     }
                 }
-            } else if (e.data && e.data.fromToolPanel) {
-                // 道具パネルからのメッセージ処理
+            }
+        } else if (e.data && e.data.fromToolPanel) {
+            // 道具パネルからのメッセージ処理
 
-                // 道具パネルからのメッセージを編集ウィンドウに中継（汎用）
-                logger.info('[TADjs] 道具パネルメッセージを中継:', e.data.type);
+            // 道具パネルからのメッセージを編集ウィンドウに中継（汎用）
+            logger.info('[TADjs] 道具パネルメッセージを中継:', e.data.type);
 
-                // 送信元のiframeから道具パネルウィンドウを特定
-                if (e.source && e.source.frameElement) {
-                    const toolPanelIframe = e.source.frameElement;
-                    const toolPanelWindow = toolPanelIframe.closest('.window');
+            // 送信元のiframeから道具パネルウィンドウを特定
+            if (e.source && e.source.frameElement) {
+                const toolPanelIframe = e.source.frameElement;
+                const toolPanelWindow = toolPanelIframe.closest('.window');
 
-                    if (toolPanelWindow && this.toolPanelRelations) {
-                        const windowId = toolPanelWindow.id;
-                        const relation = this.toolPanelRelations[windowId];
+                if (toolPanelWindow && this.toolPanelRelations) {
+                    const windowId = toolPanelWindow.id;
+                    const relation = this.toolPanelRelations[windowId];
 
-                        if (relation && relation.editorIframe && relation.editorIframe.contentWindow) {
-                            const editorWindowId = this.parentMessageBus.getWindowIdFromIframe(relation.editorIframe);
-                            if (editorWindowId) {
-                                // fromToolPanelフラグを除去してから編集ウィンドウに中継
-                                const { fromToolPanel, ...messageData } = e.data;
-                                this.parentMessageBus.sendToWindow(editorWindowId, messageData.type, messageData);
-                                logger.info('[TADjs] メッセージを編集ウィンドウに送信:', messageData.type);
-                            }
-                        } else {
-                            logger.warn('[TADjs] 中継失敗: relation or editorIframe not found', {
-                                hasRelation: !!relation,
-                                hasEditorIframe: !!relation?.editorIframe,
-                                hasContentWindow: !!relation?.editorIframe?.contentWindow
-                            });
+                    if (relation && relation.editorIframe && relation.editorIframe.contentWindow) {
+                        const editorWindowId = this.parentMessageBus.getWindowIdFromIframe(relation.editorIframe);
+                        if (editorWindowId) {
+                            // fromToolPanelフラグを除去してから編集ウィンドウに中継
+                            const { fromToolPanel, ...messageData } = e.data;
+                            this.parentMessageBus.sendToWindow(editorWindowId, messageData.type, messageData);
+                            logger.info('[TADjs] メッセージを編集ウィンドウに送信:', messageData.type);
                         }
                     } else {
-                        logger.warn('[TADjs] 中継失敗: toolPanelWindow or toolPanelRelations not found');
+                        logger.warn('[TADjs] 中継失敗: relation or editorIframe not found', {
+                            hasRelation: !!relation,
+                            hasEditorIframe: !!relation?.editorIframe,
+                            hasContentWindow: !!relation?.editorIframe?.contentWindow
+                        });
                     }
                 } else {
-                    logger.warn('[TADjs] 中継失敗: e.source or frameElement not found');
+                    logger.warn('[TADjs] 中継失敗: toolPanelWindow or toolPanelRelations not found');
                 }
-            } else if (e.data && e.data.type && this.messageHandlers && this.messageHandlers[e.data.type]) {
-                // 汎用メッセージハンドラー（フォールバック）
-                const handlerDef = this.messageHandlers[e.data.type];
-                logger.info('[TADjs] 汎用ハンドラー実行:', e.data.type);
+            } else {
+                logger.warn('[TADjs] 中継失敗: e.source or frameElement not found');
+            }
+        } else if (e.data && e.data.fromMaterialPanel) {
+            // 画材パネルからのメッセージ処理
+            // 親エディタウィンドウに中継
 
-                try {
-                    let result;
-                    if (typeof handlerDef.handler === 'string') {
-                        // メソッド名の文字列の場合
-                        result = handlerDef.async
-                            ? await this[handlerDef.handler](e)
-                            : this[handlerDef.handler](e);
-                    } else {
-                        // 関数の場合
-                        result = handlerDef.async
-                            ? await handlerDef.handler(e.data, e)
-                            : handlerDef.handler(e.data, e);
-                    }
+            if (e.source && e.source.frameElement) {
+                const materialPanelIframe = e.source.frameElement;
+                const materialPanelWindow = materialPanelIframe.closest('.window');
 
-                    // 自動レスポンスが有効な場合
-                    if (handlerDef.autoResponse && e.source) {
-                        this.parentMessageBus.respondTo(e.source, e.data.type + '-response', {
-                            messageId: e.data.messageId,
-                            result: result
-                        });
-                    }
-                } catch (error) {
-                    logger.error(`[TADjs] ${e.data.type}処理エラー:`, error);
-                    if (handlerDef.autoResponse && e.source) {
-                        this.parentMessageBus.respondTo(e.source, e.data.type + '-response', {
-                            messageId: e.data.messageId,
-                            error: error.message
-                        });
+                if (materialPanelWindow && this.childPanelRelations) {
+                    const windowId = materialPanelWindow.id;
+                    const relation = this.childPanelRelations[windowId];
+
+                    if (relation && relation.parentWindowId) {
+                        const parentWindow = document.getElementById(relation.parentWindowId);
+                        if (parentWindow) {
+                            const parentIframe = parentWindow.querySelector('iframe');
+                            if (parentIframe && parentIframe.contentWindow) {
+                                // fromMaterialPanelフラグを維持して親ウィンドウに中継
+                                parentIframe.contentWindow.postMessage(e.data, '*');
+                            }
+                        }
                     }
                 }
             }
-        });
+        } else if (e.data && e.data.type && this.messageHandlers && this.messageHandlers[e.data.type]) {
+            // 汎用メッセージハンドラー（フォールバック）
+            const handlerDef = this.messageHandlers[e.data.type];
+            logger.info('[TADjs] 汎用ハンドラー実行:', e.data.type);
+
+            try {
+                let result;
+                if (typeof handlerDef.handler === 'string') {
+                    // メソッド名の文字列の場合
+                    result = handlerDef.async
+                        ? await this[handlerDef.handler](e)
+                        : this[handlerDef.handler](e);
+                } else {
+                    // 関数の場合
+                    result = handlerDef.async
+                        ? await handlerDef.handler(e.data, e)
+                        : handlerDef.handler(e.data, e);
+                }
+
+                // 自動レスポンスが有効な場合
+                if (handlerDef.autoResponse && e.source) {
+                    this.parentMessageBus.respondTo(e.source, e.data.type + '-response', {
+                        messageId: e.data.messageId,
+                        result: result
+                    });
+                }
+            } catch (error) {
+                logger.error(`[TADjs] ${e.data.type}処理エラー:`, error);
+                if (handlerDef.autoResponse && e.source) {
+                    this.parentMessageBus.respondTo(e.source, e.data.type + '-response', {
+                        messageId: e.data.messageId,
+                        error: error.message
+                    });
+                }
+            }
+        }
     }
 
     /**
@@ -1768,18 +1855,27 @@ class TADjsDesktop {
             }
             const jsonPath = `plugins/${pluginId}/${basefileJsonName}`;
 
-            // JSONファイルを読み込む
-            const jsonResponse = await fetch(jsonPath);
-            if (jsonResponse.ok) {
-                basefileJson = await jsonResponse.json();
-                logger.info('[TADjs] basefile JSON読み込み完了:', basefileJson);
-            } else {
-                // JSONがない場合は空のオブジェクトを作成
+            // JSONファイルを読み込む（ネットワークエラー時はフォールバック）
+            try {
+                const jsonResponse = await fetch(jsonPath);
+                if (jsonResponse.ok) {
+                    basefileJson = await jsonResponse.json();
+                    logger.info('[TADjs] basefile JSON読み込み完了:', basefileJson);
+                } else {
+                    // JSONがない場合は空のオブジェクトを作成
+                    basefileJson = {
+                        name: newName,
+                        applist: []
+                    };
+                    logger.info('[TADjs] basefile JSONがないため、新規作成');
+                }
+            } catch (fetchError) {
+                // ネットワークエラー時のフォールバック
+                logger.warn('[TADjs] basefile JSON読み込みエラー、フォールバック使用:', fetchError);
                 basefileJson = {
                     name: newName,
                     applist: []
                 };
-                logger.info('[TADjs] basefile JSONがないため、新規作成');
             }
 
             // XTADファイルのパスを構築
@@ -2021,13 +2117,29 @@ class TADjsDesktop {
     }
 
     /**
+     * ファイルをキャッシュに追加（上限管理付き）
+     * @param {string} key - キャッシュキー
+     * @param {File|Blob} file - ファイルオブジェクト
+     */
+    addFileToCache(key, file) {
+        // キャッシュサイズ上限チェック
+        const keys = Object.keys(this.fileObjects);
+        if (keys.length >= this.maxFileCacheSize) {
+            // 最も古いエントリを削除（FIFO）
+            delete this.fileObjects[keys[0]];
+            logger.debug('[TADjs] ファイルキャッシュ上限到達、古いエントリを削除:', keys[0]);
+        }
+        this.fileObjects[key] = file;
+    }
+
+    /**
      * ファイルアイコンを初期ウインドウに追加
      * @param {File} file - ファイルオブジェクト
      * @param {number} index - ファイルのインデックス
      */
     addFileIcon(file, index) {
         // ファイルオブジェクトを保存
-        this.fileObjects[file.name] = file;
+        this.addFileToCache(file.name, file);
 
         const fileIconsContainer = document.getElementById('file-icons');
 
@@ -2594,13 +2706,16 @@ class TADjsDesktop {
         }
 
         // タイトルバーでドラッグ移動（閉じるボタン以外）
-        titlebar.addEventListener('mousedown', (e) => {
-            if (e.button !== 0) return;
-            if (e.target.classList.contains('window-close-button')) return;
-            e.preventDefault();
+        // フレームレスウィンドウ（タイトルバーなし）の場合はスキップ
+        if (titlebar) {
+            titlebar.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                if (e.target.classList.contains('window-close-button')) return;
+                e.preventDefault();
 
-            this.startWindowDrag(windowElement, e);
-        });
+                this.startWindowDrag(windowElement, e);
+            });
+        }
 
         // リサイズハンドル
         const resizeHandles = windowElement.querySelectorAll('.resize-handle');
@@ -2965,6 +3080,13 @@ class TADjsDesktop {
     async closeWindow(windowId) {
         if (!this.windows.has(windowId)) return;
 
+        // 既にクローズ処理中の場合は何もしない（重複防止）
+        if (this.closingWindows.has(windowId)) {
+            logger.debug('[TADjsDesktop] ウィンドウは既にクローズ処理中:', windowId);
+            return;
+        }
+        this.closingWindows.add(windowId);
+
         const window = this.windows.get(windowId);
 
         // closable設定を確認
@@ -2977,6 +3099,7 @@ class TADjsDesktop {
 
         if (!closable) {
             logger.info('[TADjsDesktop] closable=falseのためウィンドウを閉じることができません');
+            this.closingWindows.delete(windowId);
             return;
         }
 
@@ -2986,11 +3109,29 @@ class TADjsDesktop {
             const allowClose = await this.requestCloseConfirmation(windowId, iframe);
             if (!allowClose) {
                 logger.info('[TADjsDesktop] プラグインによりクローズがキャンセルされました');
+                this.closingWindows.delete(windowId);
                 return;
             }
         }
 
         window.element.classList.add('closing');
+
+        // 閉じられるウィンドウが子パネルウィンドウである場合、親プラグインに通知
+        if (this.childPanelRelations && this.childPanelRelations[windowId]) {
+            const relation = this.childPanelRelations[windowId];
+            const parentWindow = document.getElementById(relation.parentWindowId);
+            if (parentWindow) {
+                const parentIframe = parentWindow.querySelector('iframe');
+                if (parentIframe && parentIframe.contentWindow) {
+                    parentIframe.contentWindow.postMessage({
+                        type: 'child-panel-window-closed',
+                        windowId: windowId,
+                        panelType: relation.panelType
+                    }, '*');
+                }
+            }
+            delete this.childPanelRelations[windowId];
+        }
 
         // 道具パネルウィンドウが存在する場合は閉じる
         if (this.toolPanelRelations) {
@@ -3055,6 +3196,33 @@ class TADjsDesktop {
             }
         }
 
+        // 子パネルウィンドウが存在する場合は閉じる
+        if (this.childPanelRelations) {
+            for (const [childPanelWindowId, relation] of Object.entries(this.childPanelRelations)) {
+                if (relation.parentWindowId === windowId) {
+                    const childPanelWindow = document.getElementById(childPanelWindowId);
+                    if (childPanelWindow) {
+                        this.parentMessageBus.unregisterChild(childPanelWindowId);
+                        childPanelWindow.remove();
+                        this.windows.delete(childPanelWindowId);
+                    }
+                    // 親プラグインに子パネルが閉じられたことを通知
+                    const parentWindow = document.getElementById(windowId);
+                    if (parentWindow) {
+                        const parentIframe = parentWindow.querySelector('iframe');
+                        if (parentIframe && parentIframe.contentWindow) {
+                            parentIframe.contentWindow.postMessage({
+                                type: 'child-panel-window-closed',
+                                windowId: childPanelWindowId,
+                                panelType: relation.panelType
+                            }, '*');
+                        }
+                    }
+                    delete this.childPanelRelations[childPanelWindowId];
+                }
+            }
+        }
+
         // canvasIdがある場合は再利用可能リストに追加
         if (window.canvasId) {
             const match = window.canvasId.match(/canvas-(\d+)/);
@@ -3091,6 +3259,7 @@ class TADjsDesktop {
         setTimeout(() => {
             window.element.remove();
             this.windows.delete(windowId);
+            this.closingWindows.delete(windowId);
 
             if (this.activeWindow === windowId) {
                 this.activeWindow = null;
@@ -3158,9 +3327,21 @@ class TADjsDesktop {
         // クローズ確認が必要なプラグインの場合
         logger.info('[TADjsDesktop] プラグインにクローズ確認を要求:', pluginId);
 
+        // タイムアウト値（30秒 - プラグインがクラッシュした場合のフォールバック）
+        const CLOSE_CONFIRM_TIMEOUT_MS = 30000;
+
         return new Promise((resolve) => {
-            // コールバックを登録（タイムアウトなし - ユーザーが必ず応答するまで待つ）
+            // タイムアウトを設定（プラグインが応答しない場合のフォールバック）
+            const timeoutId = setTimeout(() => {
+                logger.warn('[TADjsDesktop] クローズ確認タイムアウト、クローズを許可:', windowId);
+                delete this.closeConfirmCallbacks[windowId];
+                resolve(true);  // タイムアウト時はクローズを許可
+            }, CLOSE_CONFIRM_TIMEOUT_MS);
+
+            // コールバックを登録
             this.closeConfirmCallbacks[windowId] = (allowClose) => {
+                clearTimeout(timeoutId);
+                delete this.closeConfirmCallbacks[windowId];
                 logger.info('[TADjsDesktop] プラグインからクローズ応答:', allowClose);
                 resolve(allowClose);
             };
@@ -3190,35 +3371,48 @@ class TADjsDesktop {
         if (this.windowManager) {
             this.windowManager.toggleMaximizeWindow(windowId);
 
-            // スクロールバー更新（アニメーション完了後）
+            // 即時スクロールバー更新（突き抜け防止）
+            this.updateScrollbarsForWindow(windowId);
+
+            // フォールバック: 全transition完了を確実に待つ
+            // window-maximize-completedはheight/widthどちらか先の完了時点で発火するため
+            // 両方完了後の最終更新として250ms後にも実行
             setTimeout(() => {
-                const windowInfo = this.windows.get(windowId);
-                if (!windowInfo) return;
-
-                const windowElement = windowInfo.element;
-                const iframe = windowElement.querySelector('iframe');
-                const content = windowElement.querySelector('.window-content') || windowElement.querySelector('.tad-content');
-
-                if (iframe && content) {
-                    const vScrollbar = windowElement.querySelector('.custom-scrollbar-vertical');
-                    const hScrollbar = windowElement.querySelector('.custom-scrollbar-horizontal');
-
-                    if (vScrollbar) {
-                        this.forceUpdateScrollbarForPlugin(iframe, content, vScrollbar, 'vertical');
-                    }
-                    if (hScrollbar) {
-                        this.forceUpdateScrollbarForPlugin(iframe, content, hScrollbar, 'horizontal');
-                    }
-                } else if (content) {
-                    const scrollbars = windowElement.querySelectorAll('.custom-scrollbar');
-                    scrollbars.forEach(scrollbar => {
-                        const direction = scrollbar.classList.contains('vertical') ? 'vertical' : 'horizontal';
-                        this.forceUpdateScrollbar(content, scrollbar, direction);
-                    });
-                }
+                this.updateScrollbarsForWindow(windowId);
             }, window.ANIMATION_COMPLETE_DELAY_MS);
         } else {
             logger.warn('[TADjs] WindowManagerが利用できません');
+        }
+    }
+
+    /**
+     * 指定ウィンドウのスクロールバーを更新
+     * @param {string} windowId - ウィンドウID
+     */
+    updateScrollbarsForWindow(windowId) {
+        const windowInfo = this.windows.get(windowId);
+        if (!windowInfo) return;
+
+        const windowElement = windowInfo.element;
+        const iframe = windowElement.querySelector('iframe');
+        const content = windowElement.querySelector('.window-content') || windowElement.querySelector('.tad-content');
+
+        if (iframe && content) {
+            const vScrollbar = windowElement.querySelector('.custom-scrollbar-vertical');
+            const hScrollbar = windowElement.querySelector('.custom-scrollbar-horizontal');
+
+            if (vScrollbar) {
+                this.forceUpdateScrollbarForPlugin(iframe, content, vScrollbar, 'vertical');
+            }
+            if (hScrollbar) {
+                this.forceUpdateScrollbarForPlugin(iframe, content, hScrollbar, 'horizontal');
+            }
+        } else if (content) {
+            const scrollbars = windowElement.querySelectorAll('.custom-scrollbar');
+            scrollbars.forEach(scrollbar => {
+                const direction = scrollbar.classList.contains('vertical') ? 'vertical' : 'horizontal';
+                this.forceUpdateScrollbar(content, scrollbar, direction);
+            });
         }
     }
 
@@ -3406,7 +3600,7 @@ class TADjsDesktop {
                 if (!savedJsons.has(file.fileId)) {
                     const jsonBlob = new Blob([JSON.stringify(file.jsonData, null, 2)], { type: 'application/json' });
                     const jsonFile = new File([jsonBlob], `${file.fileId}.json`, { type: 'application/json' });
-                    this.fileObjects[`${file.fileId}.json`] = jsonFile;
+                    this.addFileToCache(`${file.fileId}.json`, jsonFile);
                     savedJsons.add(file.fileId);
                     logger.info(`[TADjs] JSONファイル保存（メモリ）: ${file.fileId}.json (実身名: ${file.name})`);
 
@@ -3429,7 +3623,7 @@ class TADjsDesktop {
                     const xtadBlob = new Blob([file.xtadData], { type: 'application/xml' });
                     const xtadFileName = `${file.fileId}_${recordNo}.xtad`;
                     const xtadFile = new File([xtadBlob], xtadFileName, { type: 'application/xml' });
-                    this.fileObjects[xtadFileName] = xtadFile;
+                    this.addFileToCache(xtadFileName, xtadFile);
                     logger.info(`[TADjs] XTADファイル保存（メモリ）: ${xtadFileName} (${file.xtadData.length} bytes)`);
 
                     // Electron環境の場合、ディスクにも保存
@@ -3451,7 +3645,7 @@ class TADjsDesktop {
 
                 if (image.blob) {
                     const imgFile = new File([image.blob], imgFileName, { type: 'image/png' });
-                    this.fileObjects[imgFileName] = imgFile;
+                    this.addFileToCache(imgFileName, imgFile);
                     logger.info(`[TADjs] 画像ファイル保存（メモリ）: ${imgFileName} (${image.width}x${image.height})`);
 
                     // Electron環境の場合、ディスクにも保存
@@ -3613,7 +3807,7 @@ class TADjsDesktop {
                     logger.info('[TADjs] BPKファイルを読み込みます:', fileName);
                     file = await this.loadDataFileAsFile(fileName);
                     if (file) {
-                        this.fileObjects[fileName] = file;
+                        this.addFileToCache(fileName, file);
                     } else {
                         throw new Error(`ファイルが見つかりません: ${fileName}`);
                     }
@@ -3671,7 +3865,7 @@ class TADjsDesktop {
                     logger.info('[TADjs] BPKファイルを読み込みます:', bpkFileName);
                     file = await this.loadDataFileAsFile(bpkFileName);
                     if (file) {
-                        this.fileObjects[bpkFileName] = file;
+                        this.addFileToCache(bpkFileName, file);
                     } else {
                         throw new Error(`BPKファイルが見つかりません: ${bpkFileName}`);
                     }
@@ -3737,7 +3931,7 @@ class TADjsDesktop {
                 logger.info('[TADjs] JSONファイルを読み込みます:', jsonFileName);
                 jsonFile = await this.loadDataFileAsFile(jsonFileName);
                 if (jsonFile) {
-                    this.fileObjects[jsonFileName] = jsonFile;
+                    this.addFileToCache(jsonFileName, jsonFile);
                 } else {
                     throw new Error(`JSONファイルが見つかりません: ${jsonFileName}`);
                 }
@@ -3767,7 +3961,7 @@ class TADjsDesktop {
                 logger.info('[TADjs] XTADファイルを読み込みます:', xtadFileName);
                 xtadFile = await this.loadDataFileAsFile(xtadFileName);
                 if (xtadFile) {
-                    this.fileObjects[xtadFileName] = xtadFile;
+                    this.addFileToCache(xtadFileName, xtadFile);
                 } else {
                     throw new Error(`XTADファイルが見つかりません: ${xtadFileName}`);
                 }
@@ -4599,8 +4793,13 @@ class TADjsDesktop {
         if (this.dialogManager) {
             return this.dialogManager.showMessageDialog(message, buttons, defaultButton);
         }
-        logger.warn('[TADjs] DialogManagerが利用できません');
-        return Promise.resolve(null);
+        // フォールバック: ブラウザ標準ダイアログ
+        logger.warn('[TADjs] DialogManagerが利用できません、ブラウザ標準ダイアログを使用');
+        const confirmed = confirm(message);
+        const resultValue = confirmed
+            ? (buttons[defaultButton]?.value ?? buttons[0]?.value)
+            : (buttons[0]?.value ?? 'cancel');
+        return Promise.resolve(resultValue);
     }
 
     /**
@@ -4629,8 +4828,16 @@ class TADjsDesktop {
         if (this.dialogManager) {
             return this.dialogManager.showInputDialog(message, defaultValue, inputWidth, buttons, defaultButton, options);
         }
-        logger.warn('[TADjs] DialogManagerが利用できません');
-        return Promise.resolve({ button: 'cancel', value: '' });
+        // フォールバック: ブラウザ標準ダイアログ
+        logger.warn('[TADjs] DialogManagerが利用できません、ブラウザ標準ダイアログを使用');
+        const inputValue = prompt(message, defaultValue);
+        if (inputValue === null) {
+            // キャンセル
+            return Promise.resolve({ button: 'cancel', value: '' });
+        }
+        // OKボタンの値を使用
+        const okButton = buttons.find(b => b.value === 'ok') || buttons[defaultButton];
+        return Promise.resolve({ button: okButton?.value ?? 'ok', value: inputValue });
     }
 
     /**
@@ -5233,6 +5440,12 @@ class TADjsDesktop {
         );
 
         this.messageRouter.register(
+            'list-image-files',
+            this.handleListImageFiles.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
             'read-xtad-text',
             this.handleReadXtadText.bind(this),
             { autoResponse: false }
@@ -5445,6 +5658,27 @@ class TADjsDesktop {
         // 特殊フラグ系はカスタムルーティングが必要なため、個別処理を維持
         logger.info('[TADjs] Phase 4 Batch 6: 道具パネル系ハンドラー登録完了 (4件)');
         logger.info('[TADjs] 特殊フラグ系 (fromEditor, fromToolPanel) は個別処理を維持');
+
+        // 子パネルウィンドウ系ハンドラー登録
+        this.messageRouter.register(
+            'open-child-panel-window',
+            this.handleOpenChildPanelWindow.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'send-to-child-panel',
+            this.handleSendToChildPanel.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'start-drag-child-panel',
+            this.handleStartDragChildPanel.bind(this),
+            { autoResponse: false }
+        );
+
+        logger.info('[TADjs] 子パネルウィンドウ系ハンドラー登録完了 (3件)');
 
         // 検索/置換ウィンドウ系ハンドラー登録
         this.messageRouter.register(
@@ -5734,7 +5968,41 @@ class TADjsDesktop {
      */
     async handleSaveImageFile(data, event) {
         logger.info('[TADjs] 画像ファイル保存要求:', data.fileName);
-        this.saveImageFile(data.fileName, data.imageData);
+
+        let success = false;
+        try {
+            success = this.saveImageFile(data.fileName, data.imageData);
+        } catch (error) {
+            logger.error('[TADjs] 画像ファイル保存エラー:', error);
+        }
+
+        // レスポンスを返す（messageIdがある場合のみ）
+        if (event.source && data.messageId) {
+            this.parentMessageBus.respondTo(event.source, 'save-image-result', {
+                messageId: data.messageId,
+                success: success,
+                fileName: data.fileName
+            });
+        }
+    }
+
+    /**
+     * list-image-files ハンドラー
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleListImageFiles(data, event) {
+        const files = this.realObjectSystem.listImageFiles(data.realId, data.recordNo);
+
+        if (event.source && data.messageId) {
+            this.parentMessageBus.respondTo(event.source, 'list-image-files-result', {
+                messageId: data.messageId,
+                realId: data.realId,
+                recordNo: data.recordNo,
+                files: files
+            });
+        }
     }
 
     /**
@@ -7473,6 +7741,131 @@ class TADjsDesktop {
 
             if (toolPanelWindow) {
                 this.startToolPanelDrag(toolPanelWindow, data.clientX, data.clientY);
+            }
+        }
+    }
+
+    // ========================================
+    // 子パネルウィンドウ関連
+    // ========================================
+
+    /**
+     * open-child-panel-window ハンドラー
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleOpenChildPanelWindow(data, event) {
+        const { panelType, parentWindowId, pluginId, options, messageId } = data;
+
+        // パネルURLを構築
+        const panelUrl = `plugins/${pluginId}/${options.panelUrl}`;
+        const content = `<iframe src="${panelUrl}" style="width: 100%; height: 100%; border: none;"></iframe>`;
+
+        // 親ウィンドウの位置を取得（位置が指定されていない場合）
+        let x = options.x;
+        let y = options.y;
+        if (x === undefined || y === undefined) {
+            const parentWindow = document.getElementById(parentWindowId);
+            if (parentWindow) {
+                const rect = parentWindow.getBoundingClientRect();
+                x = x ?? rect.right + 10;
+                y = y ?? rect.top;
+            } else {
+                x = x ?? 100;
+                y = y ?? 100;
+            }
+        }
+
+        // ウィンドウ作成
+        const windowId = this.createWindow(options.title, content, {
+            width: options.width,
+            height: options.height,
+            x: x,
+            y: y,
+            resizable: options.resizable !== false,
+            maximizable: false,
+            minimizable: false,
+            closable: true,
+            alwaysOnTop: true,
+            scrollable: false,
+            frame: options.noTitleBar ? false : true,
+            cssClass: 'child-panel-window'
+        });
+
+        // 子パネル関連を保存
+        this.childPanelRelations[windowId] = {
+            parentWindowId,
+            pluginId,
+            panelType
+        };
+
+        // MessageBusに登録して初期化
+        setTimeout(() => {
+            const windowElement = document.getElementById(windowId);
+            if (windowElement) {
+                const iframe = windowElement.querySelector('iframe');
+                if (iframe) {
+                    this.parentMessageBus.registerChild(windowId, iframe, {
+                        windowId: windowId,
+                        pluginId: pluginId
+                    });
+
+                    // 初期化メッセージ送信
+                    this.parentMessageBus.sendToWindow(windowId, 'init-child-panel', {
+                        windowId: windowId,
+                        parentWindowId: parentWindowId,
+                        panelType: panelType,
+                        initData: options.initData
+                    });
+                }
+            }
+        }, 100);
+
+        // 作成完了を通知
+        this.parentMessageBus.sendToWindow(parentWindowId, 'child-panel-window-created', {
+            messageId,
+            windowId,
+            panelType
+        });
+    }
+
+    /**
+     * send-to-child-panel ハンドラー
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleSendToChildPanel(data, event) {
+        const { targetWindowId, type, data: messageData } = data;
+        if (targetWindowId) {
+            this.parentMessageBus.sendToWindow(targetWindowId, type, messageData);
+        }
+    }
+
+    /**
+     * start-drag-child-panel ハンドラー
+     * 子パネルウィンドウのドラッグ開始
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleStartDragChildPanel(data, event) {
+        if (event.source && event.source.frameElement) {
+            const childPanelIframe = event.source.frameElement;
+            const childPanelWindow = childPanelIframe.closest('.window');
+
+            if (childPanelWindow) {
+                // iframe内の座標を親ウィンドウの座標に変換
+                const iframeRect = childPanelIframe.getBoundingClientRect();
+                const parentClientX = iframeRect.left + data.clientX;
+                const parentClientY = iframeRect.top + data.clientY;
+
+                // 既存のウィンドウドラッグ機能を利用
+                this.startWindowDrag(childPanelWindow, {
+                    clientX: parentClientX,
+                    clientY: parentClientY
+                });
             }
         }
     }

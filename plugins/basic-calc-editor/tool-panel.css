@@ -206,6 +206,21 @@ html, body {
     background: linear-gradient(to bottom, #f0c0c0, #c08080);
 }
 
+/* グラフ行 */
+.chart-row {
+    min-height: 26px;
+}
+
+.chart-btn {
+    width: 28px;
+    height: 24px;
+}
+
+.chart-icon {
+    font-size: 14px;
+    font-weight: normal;
+}
+
 /* ドラッグ領域 */
 .drag-handle {
     position: absolute;

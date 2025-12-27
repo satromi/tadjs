@@ -60,6 +60,12 @@ class TADjsViewPlugin extends window.PluginBase {
         // Canvasに右クリックメニューイベントを設定
         this.setupContextMenu();
 
+        // スクロール通知初期化（MessageBus経由で親ウィンドウにスクロール状態を通知）
+        this.initScrollNotification();
+
+        // キーボードショートカット設定
+        this.setupKeyboardShortcuts();
+
         this.messageBus.send('plugin-ready', {
             pluginId: 'tadjs-view'
         });
@@ -80,8 +86,10 @@ class TADjsViewPlugin extends window.PluginBase {
         // init メッセージ
         this.messageBus.on('init', (data) => {
             logger.debug('[TADjsView] [MessageBus] init受信:', data);
-            // MessageBusにwindowIdを設定（レスポンスルーティング用）
+            // windowIdを保存（スクロール通知等で必要）
             if (data.windowId) {
+                this.windowId = data.windowId;
+                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
                 this.messageBus.setWindowId(data.windowId);
             }
             this.fileData = data.fileData;
@@ -136,21 +144,58 @@ class TADjsViewPlugin extends window.PluginBase {
     }
 
     /**
-     * メニュー定義を取得（表示専用プラグインなので空）
+     * メニュー定義を取得
      * setupCommonMessageBusHandlers()のget-menu-definitionハンドラから呼ばれる
-     * @returns {Array} メニュー定義（空配列）
+     * @returns {Array} メニュー定義
      */
     getMenuDefinition() {
-        return [];
+        return [
+            {
+                text: '表示',
+                submenu: [
+                    { text: '全画面表示オンオフ', action: 'toggle-fullscreen', shortcut: 'Ctrl+L' }
+                ]
+            }
+        ];
     }
 
     /**
-     * メニューアクションを実行（表示専用プラグインなので何もしない）
+     * メニューアクションを実行
      * setupCommonMessageBusHandlers()のmenu-actionハンドラから呼ばれる
      * @param {string} action - アクション名
      */
-    handleMenuAction(action) {
-        // 表示専用プラグインのため、メニューアクションは何もしない
+    executeMenuAction(action) {
+        switch (action) {
+            case 'toggle-fullscreen':
+                this.toggleFullscreen();
+                break;
+            case 'close':
+                this.messageBus.send('close-window', { windowId: this.windowId });
+                break;
+            default:
+                // 未知のアクションは無視
+                break;
+        }
+    }
+
+    /**
+     * キーボードショートカットを設定
+     */
+    setupKeyboardShortcuts() {
+        document.addEventListener('keydown', (e) => {
+            // Ctrl+E: ウィンドウを閉じる
+            if (e.ctrlKey && e.key === 'e') {
+                e.preventDefault();
+                this.executeMenuAction('close');
+                return;
+            }
+
+            // Ctrl+L: 全画面表示オンオフ
+            if (e.ctrlKey && e.key === 'l') {
+                e.preventDefault();
+                this.executeMenuAction('toggle-fullscreen');
+            }
+        });
     }
 
     // setupWindowActivation() は PluginBase 共通メソッドを使用
@@ -302,6 +347,9 @@ class TADjsViewPlugin extends window.PluginBase {
 
         // Note: setupVirtualObjectEventsは、renderTAD()のsetTimeoutで呼ばれるため、ここでは呼ばない
         // （二重呼び出しを避けるため）
+
+        // レンダリング完了後にスクロール状態を通知（スクロールバーのサイズ更新のため）
+        this.notifyScrollChange();
     }
 
     /**

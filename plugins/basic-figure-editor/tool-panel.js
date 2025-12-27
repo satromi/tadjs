@@ -640,29 +640,12 @@ class ToolPanel {
         const x = iframeRect.left + rect.left;
         const y = iframeRect.top + rect.bottom + 5;
 
-        const htmlContent = `
-            <div style="font-weight: bold; margin-bottom: 8px;">画材ツール</div>
-            <button class="material-tool-btn" data-material-tool="pencil" style="width: 100%; padding: 8px; margin-bottom: 4px; background: ${this.pixelmapTool === 'pencil' ? '#e0e0e0' : 'white'}; cursor: pointer; border: 1px solid #999;">鉛筆</button>
-            <button class="material-tool-btn" data-material-tool="brush" style="width: 100%; padding: 8px; margin-bottom: 4px; background: ${this.pixelmapTool === 'brush' ? '#e0e0e0' : 'white'}; cursor: pointer; border: 1px solid #999;">絵筆</button>
-            <button class="material-tool-btn" data-material-tool="eraser" style="width: 100%; padding: 8px; margin-bottom: 4px; background: ${this.pixelmapTool === 'eraser' ? '#e0e0e0' : 'white'}; cursor: pointer; border: 1px solid #999;">消しゴム</button>
-            <button class="material-tool-btn" data-material-tool="airbrush" style="width: 100%; padding: 8px; margin-bottom: 4px; background: ${this.pixelmapTool === 'airbrush' ? '#e0e0e0' : 'white'}; cursor: pointer; border: 1px solid #999;">エアブラシ</button>
-            <button class="material-tool-btn" data-material-tool="paint" style="width: 100%; padding: 8px; margin-bottom: 4px; background: ${this.pixelmapTool === 'paint' ? '#e0e0e0' : 'white'}; cursor: pointer; border: 1px solid #999;">絵の具</button>
-            <button class="material-tool-btn" data-material-tool="artcutter" style="width: 100%; padding: 8px; margin-bottom: 12px; background: ${this.pixelmapTool === 'artcutter' ? '#e0e0e0' : 'white'}; cursor: pointer; border: 1px solid #999;">アートカッター</button>
-            <label style="display: flex; align-items: center; gap: 8px;">
-                <span>ブラシサイズ:</span>
-                <input type="number" id="brushSizeInput" value="${this.pixelmapBrushSize}" min="1" max="20" style="width: 60px; padding: 4px;">
-            </label>
-        `;
-
-        if (window.parent && window.parent !== window) {
-            window.parent.postMessage({
-                type: 'show-tool-panel-popup',
-                popupType: 'material',
-                htmlContent: htmlContent,
-                x: x,
-                y: y
-            }, '*');
-        }
+        // 画材パネルウィンドウを開くようエディタに要求
+        this.sendToEditor({
+            type: 'request-open-material-panel',
+            x: x,
+            y: y
+        });
     }
 
     sendToEditor(message) {

@@ -18,7 +18,7 @@ class BasicTextEditor extends window.PluginBase {
         this.editor = document.getElementById('editor');
         this.currentFile = null;
         this.tadData = null;
-        this.isFullscreen = false;
+        // isFullscreenはPluginBaseで初期化・管理される
         this.wrapMode = true;
         this.viewMode = 'formatted'; // 'formatted' or 'xml'
         // this.realId は基底クラスで定義済み
@@ -54,8 +54,7 @@ class BasicTextEditor extends window.PluginBase {
         this.systemFonts = []; // システムフォント一覧
         this.virtualObjectDropSuccess = false; // 仮身ドロップ成功フラグ
         // this.windowId はPluginBaseで定義済み
-        this.imagePathCallbacks = {}; // 画像パス取得コールバック（messageId -> callback）
-        this.imagePathMessageId = 0; // 画像パス取得メッセージID
+        // imagePathCallbacks, imagePathMessageId は PluginBase.getImageFilePath() に移行済み
 
         // パフォーマンス最適化用のデバウンス/スロットル関数
         this.debouncedUpdateContentHeight = null;  // init()で初期化
@@ -426,15 +425,9 @@ class BasicTextEditor extends window.PluginBase {
         });
 
         // image-file-path-response メッセージ（親ウィンドウからのレスポンス）
+        // 自分宛の処理は PluginBase.getImageFilePath() の waitFor で処理
+        // 開いた仮身内のプラグインへの転送のみ行う
         this.messageBus.on('image-file-path-response', (data) => {
-
-            // 自分宛のコールバックがあれば呼び出す
-            if (this.imagePathCallbacks && this.imagePathCallbacks[data.messageId]) {
-                this.imagePathCallbacks[data.messageId](data.filePath);
-                delete this.imagePathCallbacks[data.messageId];
-            }
-
-            // 開いた仮身内のプラグインにも転送（MessageBus形式で送信）
             const iframes = document.querySelectorAll('iframe');
             iframes.forEach(iframe => {
                 if (iframe.contentWindow) {
@@ -1254,7 +1247,7 @@ class BasicTextEditor extends window.PluginBase {
             });
 
             // 画像番号を取得
-            const imgNo = this.getNextImageNumber();
+            const imgNo = await this.getNextImageNumber();
 
             // ファイル名を生成: realId_recordNo_imgNo.png
             // this.realIdから _数字.xtad を完全に除去
@@ -1356,7 +1349,7 @@ class BasicTextEditor extends window.PluginBase {
             });
 
             // 画像番号を取得
-            const imgNo = this.getNextImageNumber();
+            const imgNo = await this.getNextImageNumber();
 
             // ファイル名を生成: realId_recordNo_imgNo.png
             let realId = this.realId || 'unknown';
@@ -5365,18 +5358,7 @@ class BasicTextEditor extends window.PluginBase {
         }
     }
 
-    /**
-     * 全画面表示切り替え
-     */
-    toggleFullscreen() {
-        // 親ウィンドウ（tadjs-desktop.js）にメッセージを送信してウィンドウを最大化/元に戻す
-        if (this.messageBus) {
-            this.messageBus.send('toggle-maximize');
-
-            this.isFullscreen = !this.isFullscreen;
-            this.setStatus(this.isFullscreen ? '全画面表示ON' : '全画面表示OFF');
-        }
-    }
+    // toggleFullscreen()はPluginBaseで共通化（window-maximize-toggledでisFullscreenが同期される）
 
     /**
      * タブ文字を挿入
@@ -7312,10 +7294,13 @@ class BasicTextEditor extends window.PluginBase {
 
     // showSaveConfirmDialog() は基底クラス PluginBase で定義
 
+    // getNextImageNumber は PluginBase の共通実装を使用
+
     /**
-     * 次の画像番号を取得
+     * メモリ上の最大画像番号を取得（PluginBase.getNextImageNumber から呼ばれる）
+     * @returns {number} 最大画像番号（-1で画像なし）
      */
-    getNextImageNumber() {
+    getMemoryMaxImageNumber() {
         // エディタ内のすべての画像要素から最大のimgNoを取得
         let maxImgNo = -1;
         const images = this.editor.querySelectorAll('img[data-img-no]');
@@ -7325,7 +7310,7 @@ class BasicTextEditor extends window.PluginBase {
                 maxImgNo = imgNo;
             }
         });
-        return maxImgNo + 1;
+        return maxImgNo;
     }
 
     /**
@@ -7344,31 +7329,9 @@ class BasicTextEditor extends window.PluginBase {
             if (fileName && !fileName.startsWith('data:')) {
                 logger.debug('[EDITOR] 画像読み込み要求:', fileName);
 
-                // 親ウィンドウに画像ファイルパスを依頼
-                const messageId = `img_${this.imagePathMessageId++}`;
-
                 try {
-                    // コールバックパターンでレスポンスを待つ
-                    const filePath = await new Promise((resolve, reject) => {
-                        // コールバックを登録
-                        this.imagePathCallbacks[messageId] = (filePath) => {
-                            resolve(filePath);
-                        };
-
-                        // タイムアウト設定（5秒）
-                        setTimeout(() => {
-                            if (this.imagePathCallbacks[messageId]) {
-                                delete this.imagePathCallbacks[messageId];
-                                reject(new Error('画像パス取得タイムアウト'));
-                            }
-                        }, 5000);
-
-                        // リクエスト送信
-                        this.messageBus.send('get-image-file-path', {
-                            messageId: messageId,
-                            fileName: fileName
-                        });
-                    });
+                    // PluginBase共通メソッドで画像パスを取得
+                    const filePath = await this.getImageFilePath(fileName);
 
                     if (filePath) {
                         // Electron環境の場合、ファイルを直接読み込む
@@ -7921,7 +7884,7 @@ class BasicTextEditor extends window.PluginBase {
 
         if (needsNewFile && hasDataUrl) {
             // 新しい画像番号を取得
-            const imgNo = this.getNextImageNumber();
+            const imgNo = await this.getNextImageNumber();
 
             // 新しいファイル名を生成
             let realId = this.realId || 'unknown';
@@ -9066,6 +9029,28 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         this.isModified = true;
+    }
+
+    /**
+     * 実身名変更後の再描画（PluginBaseフック）
+     * 仮身のDOM要素を再描画して属性表示（実身名、続柄、日付等）を更新
+     * onRelationshipUpdatedと同じcollapseVirtualObjectパターンを使用
+     */
+    async onRealObjectRenamed(virtualObj, result) {
+        const element = this.contextMenuVirtualObject?.element;
+        if (!element || !element.parentNode) return;
+
+        // dataset.linkNameはRealObjectSystemで更新済み
+        // 閉じた仮身の場合、collapseVirtualObjectで再描画
+        if (!element.classList.contains('expanded')) {
+            const originalWidth = parseFloat(element.style.width) || element.offsetWidth;
+            element.classList.add('expanded');
+            await this.collapseVirtualObject(element);
+            element.style.width = originalWidth + 'px';
+            element.style.minWidth = originalWidth + 'px';
+        }
+        // 開いた仮身の場合はRealObjectSystemでのtextContent/dataset更新で十分
+        // （タイトルバー等への反映が必要な場合は追加処理を実装）
     }
 
     /**

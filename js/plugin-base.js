@@ -73,6 +73,10 @@ export class PluginBase {
         // handleCloseRequest()で保存確認ダイアログ表示の判断に使用
         this.isModified = false;
 
+        // 全画面表示状態フラグ
+        // window-maximize-toggledで同期される
+        this.isFullscreen = false;
+
         // ファイルデータ（initハンドラで設定）
         this.fileData = null;
 
@@ -83,6 +87,12 @@ export class PluginBase {
         this.scrollContainerSelector = '.plugin-content';  // スクロールコンテナのCSSセレクタ
         this._scrollNotificationEnabled = false;           // スクロール通知が有効かどうか
         this._lastScrollState = null;                      // 最後に送信したスクロール状態
+
+        // 子パネルウィンドウ管理（panelType => windowId）
+        this.childPanelWindows = new Map();
+
+        // プラグインID（URLから自動取得）
+        this.pluginId = this._extractPluginIdFromUrl();
 
         // MessageBusの初期化（即座に開始）
         // サブクラスで独自のMessageBus初期化が必要な場合は、
@@ -281,11 +291,18 @@ export class PluginBase {
             }, (response) => {
                 logger.info(`[${this.pluginName}] 保存確認ダイアログコールバック実行:`, response);
 
-                // Dialog result is wrapped in response.result
-                const dialogResult = response.result || response;
+                // null/undefinedチェック（タイムアウト等の異常時対応）
+                if (response == null) {
+                    logger.warn(`[${this.pluginName}] Save confirm dialog: responseがnull/undefined`);
+                    resolve('cancel');
+                    return;
+                }
 
-                if (dialogResult.error) {
-                    logger.warn(`[${this.pluginName}] Save confirm dialog error:`, dialogResult.error);
+                // Dialog result is wrapped in response.result
+                const dialogResult = response.result ?? response;
+
+                if (dialogResult == null || dialogResult.error) {
+                    logger.warn(`[${this.pluginName}] Save confirm dialog error:`, dialogResult?.error);
                     resolve('cancel');
                     return;
                 }
@@ -327,11 +344,18 @@ export class PluginBase {
             }, (result) => {
                 logger.info(`[${this.pluginName}] 入力ダイアログコールバック実行:`, result);
 
-                // Dialog result is wrapped in result.result
-                const dialogResult = result.result || result;
+                // null/undefinedチェック（タイムアウト等の異常時対応）
+                if (result == null) {
+                    logger.warn(`[${this.pluginName}] Input dialog: resultがnull/undefined`);
+                    resolve(null);
+                    return;
+                }
 
-                if (dialogResult.error) {
-                    logger.warn(`[${this.pluginName}] Input dialog error:`, dialogResult.error);
+                // Dialog result is wrapped in result.result
+                const dialogResult = result.result ?? result;
+
+                if (dialogResult == null || dialogResult.error) {
+                    logger.warn(`[${this.pluginName}] Input dialog error:`, dialogResult?.error);
                     resolve(null);
                     return;
                 }
@@ -364,6 +388,13 @@ export class PluginBase {
      * @returns {Promise<string>} 選択されたボタンのvalue
      */
     async showMessageDialog(message, buttons, defaultButton = 0) {
+        // ボタン配列の検証
+        if (!Array.isArray(buttons) || buttons.length === 0) {
+            logger.warn(`[${this.pluginName}] showMessageDialog: 無効なボタン配列、デフォルトを使用`);
+            buttons = [{ label: 'OK', value: 'ok' }];
+            defaultButton = 0;
+        }
+
         return new Promise((resolve, reject) => {
             this.messageBus.sendWithCallback('show-message-dialog', {
                 message: message,
@@ -372,11 +403,18 @@ export class PluginBase {
             }, (result) => {
                 logger.info(`[${this.pluginName}] メッセージダイアログコールバック実行:`, result);
 
-                // Dialog result is wrapped in result.result
-                const dialogResult = result.result || result;
+                // null/undefinedチェック（タイムアウト等の異常時対応）
+                if (result == null) {
+                    logger.warn(`[${this.pluginName}] Message dialog: resultがnull/undefined`);
+                    resolve(null);
+                    return;
+                }
 
-                if (dialogResult.error) {
-                    logger.warn(`[${this.pluginName}] Message dialog error:`, dialogResult.error);
+                // Dialog result is wrapped in result.result
+                const dialogResult = result.result ?? result;
+
+                if (dialogResult == null || dialogResult.error) {
+                    logger.warn(`[${this.pluginName}] Message dialog error:`, dialogResult?.error);
                     resolve(null);
                     return;
                 }
@@ -400,10 +438,21 @@ export class PluginBase {
 
     /**
      * 選択中の仮身が指し示す実身の名前を変更
-     * @returns {Promise<Object>} 結果オブジェクト
+     * @returns {Promise<Object>} 結果オブジェクト { success: boolean, newName?: string, realId?: string }
      */
     async renameRealObject() {
-        return await window.RealObjectSystem.renameRealObject(this);
+        const result = await window.RealObjectSystem.renameRealObject(this);
+
+        // 成功した場合、メモリ上のlink_nameを更新し、フックを呼び出す
+        if (result && result.success && this.contextMenuVirtualObject?.virtualObj) {
+            const virtualObj = this.contextMenuVirtualObject.virtualObj;
+            virtualObj.link_name = result.newName;
+
+            // プラグイン固有の再描画処理を呼び出す
+            await this.onRealObjectRenamed(virtualObj, result);
+        }
+
+        return result;
     }
 
     /**
@@ -472,6 +521,18 @@ export class PluginBase {
     }
 
     /**
+     * 実身名変更後のフック（サブクラスでオーバーライド可能）
+     * renameRealObject()成功後に呼ばれる。仮身の再描画などに使用
+     *
+     * @param {Object} virtualObj - 更新された仮身オブジェクト（link_nameは更新済み）
+     * @param {Object} result - renameRealObjectの結果 { success: true, newName: string, realId: string }
+     */
+    async onRealObjectRenamed(virtualObj, result) {
+        // デフォルト実装: 何もしない
+        // サブクラスで再描画処理をオーバーライド
+    }
+
+    /**
      * 仮身オブジェクトから現在の属性値を取得（サブクラスでオーバーライド可能）
      * RealObjectSystem.changeVirtualObjectAttributesから呼ばれる
      *
@@ -526,7 +587,9 @@ export class PluginBase {
      * ウィンドウの最大化/復元を切り替え
      */
     toggleMaximize() {
-        this.messageBus.send('toggle-maximize');
+        if (this.messageBus) {
+            this.messageBus.send('toggle-maximize');
+        }
     }
 
     /**
@@ -1479,7 +1542,7 @@ export class PluginBase {
         });
 
         const result = await this.messageBus.waitFor('real-object-duplicated',
-            window.DEFAULT_TIMEOUT_MS, (data) => data.messageId === messageId);
+            DEFAULT_TIMEOUT_MS, (data) => data.messageId === messageId);
 
         if (!result.success) {
             throw new Error(result.error || '実身複製失敗');
@@ -1730,6 +1793,10 @@ export class PluginBase {
         // window-maximize-toggled メッセージ
         this.messageBus.on('window-maximize-toggled', (data) => {
             logger.debug(`[${this.pluginName}] [MessageBus] window-maximize-toggled受信`);
+
+            // isFullscreen状態を同期
+            this.isFullscreen = data.maximize;
+
             this.updateWindowConfig({
                 pos: data.pos,
                 width: data.width,
@@ -1757,9 +1824,14 @@ export class PluginBase {
         });
 
         // window-close-request メッセージ
-        this.messageBus.on('window-close-request', (data) => {
+        this.messageBus.on('window-close-request', async (data) => {
             logger.debug(`[${this.pluginName}] [MessageBus] window-close-request受信`);
-            this.handleCloseRequest(data.windowId);
+            try {
+                await this.handleCloseRequest(data.windowId);
+            } catch (error) {
+                // エラー発生時はクローズを許可（ハングアップ防止）
+                this.respondCloseRequest(data.windowId, true);
+            }
         });
 
         // parent-dialog-opened メッセージ（親ウィンドウでダイアログが開いた）
@@ -1795,7 +1867,20 @@ export class PluginBase {
             }
         });
 
-        logger.info(`[${this.pluginName}] 共通MessageBusハンドラ登録完了 (11件)`);
+        // child-panel-window-closed メッセージ（子パネルウィンドウが閉じられた）
+        this.messageBus.on('child-panel-window-closed', (data) => {
+            // childPanelWindowsから削除
+            for (const [panelType, windowId] of this.childPanelWindows.entries()) {
+                if (windowId === data.windowId) {
+                    this.childPanelWindows.delete(panelType);
+                    // フックメソッド呼び出し（オーバーライド可能）
+                    this.onChildPanelClosed(panelType, windowId);
+                    break;
+                }
+            }
+        });
+
+        logger.info(`[${this.pluginName}] 共通MessageBusハンドラ登録完了 (12件)`);
 
         // plugin-ready シグナルを親ウィンドウに送信
         // これにより親ウィンドウはプラグインの準備完了を確認してからinitを送信できる
@@ -1893,7 +1978,8 @@ export class PluginBase {
             const result = await this.showSaveConfirmDialog();
             logger.debug(`[${this.pluginName}] 保存確認ダイアログ結果:`, result);
 
-            if (result === 'cancel') {
+            // resultがundefined/nullの場合はキャンセル扱い（タイムアウト等の異常時）
+            if (!result || result === 'cancel') {
                 // 取消: クローズをキャンセル
                 this.respondCloseRequest(windowId, false);
             } else if (result === 'no') {
@@ -1901,9 +1987,16 @@ export class PluginBase {
                 this.respondCloseRequest(windowId, true);
             } else if (result === 'yes') {
                 // 保存: 保存してからクローズ
-                await this.onSaveBeforeClose();
-                this.isModified = false;
-                this.respondCloseRequest(windowId, true);
+                try {
+                    await this.onSaveBeforeClose();
+                    this.isModified = false;
+                    this.respondCloseRequest(windowId, true);
+                } catch (error) {
+                    // 保存失敗時はユーザーに通知し、クローズをキャンセル
+                    logger.error(`[${this.pluginName}] onSaveBeforeClose失敗:`, error);
+                    await this.showMessageDialog('保存に失敗しました', [{ label: 'OK', value: 'ok' }], 0);
+                    this.respondCloseRequest(windowId, false);
+                }
             }
         } else {
             // 未編集の場合、そのままクローズ
@@ -2111,6 +2204,142 @@ export class PluginBase {
      */
     generateMessageId(prefix = 'msg') {
         return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    }
+
+    // ========================================
+    // 子パネルウィンドウ管理
+    // ========================================
+
+    /**
+     * URLからプラグインIDを抽出
+     * plugins/{pluginId}/index.html 形式のURLからpluginIdを取得
+     * @returns {string|null} プラグインID、取得できない場合はnull
+     * @private
+     */
+    _extractPluginIdFromUrl() {
+        try {
+            const path = window.location.pathname;
+            const match = path.match(/plugins\/([^/]+)\//);
+            return match ? match[1] : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * 子パネルウィンドウを開く
+     * @param {string} panelType - パネル種別（'material', 'settings' など）
+     * @param {Object} options - ウィンドウオプション
+     * @param {string} options.panelUrl - パネルのHTMLパス（プラグインからの相対パス）
+     * @param {string} [options.title='設定'] - ウィンドウタイトル
+     * @param {number} [options.width=200] - 幅
+     * @param {number} [options.height=300] - 高さ
+     * @param {number} [options.x] - X座標（省略時は自動配置）
+     * @param {number} [options.y] - Y座標（省略時は自動配置）
+     * @param {Object} [options.initData={}] - 初期化データ
+     * @returns {Promise<string>} 作成されたウィンドウID
+     */
+    async openChildPanelWindow(panelType, options) {
+        // 既に開いている場合はそのウィンドウIDを返す
+        if (this.childPanelWindows.has(panelType)) {
+            return this.childPanelWindows.get(panelType);
+        }
+
+        return new Promise((resolve, reject) => {
+            const messageId = this.generateMessageId('child-panel');
+
+            this.messageBus.send('open-child-panel-window', {
+                panelType,
+                parentWindowId: this.windowId,
+                pluginId: this.pluginId,
+                options: {
+                    panelUrl: options.panelUrl,
+                    title: options.title || '設定',
+                    width: options.width || 200,
+                    height: options.height || 300,
+                    x: options.x,
+                    y: options.y,
+                    noTitleBar: options.noTitleBar || false,
+                    resizable: options.resizable !== false,
+                    initData: options.initData || {}
+                },
+                messageId
+            });
+
+            this.messageBus.waitFor('child-panel-window-created', DEFAULT_TIMEOUT_MS,
+                (data) => data.messageId === messageId
+            ).then(data => {
+                this.childPanelWindows.set(panelType, data.windowId);
+                resolve(data.windowId);
+            }).catch(reject);
+        });
+    }
+
+    /**
+     * 子パネルウィンドウを閉じる
+     * @param {string} panelTypeOrWindowId - パネル種別またはウィンドウID
+     */
+    closeChildPanelWindow(panelTypeOrWindowId) {
+        let windowId = panelTypeOrWindowId;
+
+        // パネル種別で指定された場合はウィンドウIDを取得
+        if (this.childPanelWindows.has(panelTypeOrWindowId)) {
+            windowId = this.childPanelWindows.get(panelTypeOrWindowId);
+            this.childPanelWindows.delete(panelTypeOrWindowId);
+        }
+
+        this.messageBus.send('close-window', { windowId });
+    }
+
+    /**
+     * 子パネルウィンドウの表示/非表示を切り替え
+     * @param {string} panelType - パネル種別
+     * @param {Object} options - openChildPanelWindowと同じオプション
+     * @returns {Promise<string|null>} 開いた場合はウィンドウID、閉じた場合はnull
+     */
+    async toggleChildPanelWindow(panelType, options) {
+        if (this.childPanelWindows.has(panelType)) {
+            this.closeChildPanelWindow(panelType);
+            return null;
+        } else {
+            return this.openChildPanelWindow(panelType, options);
+        }
+    }
+
+    /**
+     * 子パネルウィンドウのIDを取得
+     * @param {string} panelType - パネル種別
+     * @returns {string|undefined} ウィンドウID（開いていない場合はundefined）
+     */
+    getChildPanelWindowId(panelType) {
+        return this.childPanelWindows.get(panelType);
+    }
+
+    /**
+     * 子パネルウィンドウにメッセージを送信
+     * @param {string} panelType - パネル種別
+     * @param {string} type - メッセージタイプ
+     * @param {Object} [data={}] - 送信データ
+     */
+    sendToChildPanel(panelType, type, data = {}) {
+        const windowId = this.childPanelWindows.get(panelType);
+        if (windowId) {
+            this.messageBus.send('send-to-child-panel', {
+                targetWindowId: windowId,
+                type,
+                data
+            });
+        }
+    }
+
+    /**
+     * 子パネルウィンドウが閉じられた時のフック
+     * サブクラスでオーバーライドして独自の処理を追加可能
+     * @param {string} panelType - パネル種別
+     * @param {string} windowId - ウィンドウID
+     */
+    onChildPanelClosed(panelType, windowId) {
+        // サブクラスでオーバーライド可能
     }
 
     // ========================================
@@ -2615,14 +2844,27 @@ export class PluginBase {
                 throw new Error('Invalid source: must be File, Blob, or DataURL string');
             }
 
+            const messageId = this.generateMessageId('save-image');
+
             // 親ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
             this.messageBus.send('save-image-file', {
+                messageId: messageId,
                 fileName: fileName,
                 imageData: Array.from(bytes),
                 mimeType: detectedMimeType
             });
 
-            logger.debug(`[${this.pluginName}] 画像ファイル保存依頼:`, fileName);
+            // レスポンスを待つ
+            const result = await this.messageBus.waitFor('save-image-result', 10000,
+                (data) => data.messageId === messageId
+            );
+
+            if (!result.success) {
+                logger.error(`[${this.pluginName}] 画像ファイル保存失敗:`, fileName);
+                return false;
+            }
+
+            logger.debug(`[${this.pluginName}] 画像ファイル保存完了:`, fileName);
             return true;
         } catch (error) {
             logger.error(`[${this.pluginName}] 画像ファイル保存エラー:`, error);
@@ -2634,6 +2876,7 @@ export class PluginBase {
      * ImageDataからPNG画像ファイルを保存
      * @param {ImageData} imageData - 保存するImageData
      * @param {string} fileName - 保存先ファイル名
+     * @returns {Promise<boolean>} 成功時true
      */
     async savePixelmapImageFile(imageData, fileName) {
         try {
@@ -2653,16 +2896,31 @@ export class PluginBase {
             const arrayBuffer = await blob.arrayBuffer();
             const buffer = new Uint8Array(arrayBuffer);
 
+            const messageId = this.generateMessageId('save-pixelmap');
+
             // 親ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
             this.messageBus.send('save-image-file', {
+                messageId: messageId,
                 fileName: fileName,
                 imageData: Array.from(buffer),
                 mimeType: 'image/png'
             });
 
-            logger.debug(`[${this.pluginName}] ピクセルマップ画像ファイル保存依頼:`, fileName);
+            // レスポンスを待つ
+            const result = await this.messageBus.waitFor('save-image-result', 10000,
+                (data) => data.messageId === messageId
+            );
+
+            if (!result.success) {
+                logger.error(`[${this.pluginName}] ピクセルマップ保存失敗:`, fileName);
+                return false;
+            }
+
+            logger.debug(`[${this.pluginName}] ピクセルマップ保存完了:`, fileName);
+            return true;
         } catch (error) {
             logger.error(`[${this.pluginName}] ピクセルマップ画像ファイル保存エラー:`, error);
+            return false;
         }
     }
 
@@ -2670,6 +2928,7 @@ export class PluginBase {
      * HTMLImageElementからPNG画像ファイルを保存
      * @param {HTMLImageElement} imageElement - 保存する画像要素
      * @param {string} fileName - 保存先ファイル名
+     * @returns {Promise<boolean>} 成功時true
      */
     async saveImageFromElement(imageElement, fileName) {
         try {
@@ -2689,17 +2948,119 @@ export class PluginBase {
             const arrayBuffer = await blob.arrayBuffer();
             const buffer = new Uint8Array(arrayBuffer);
 
+            const messageId = this.generateMessageId('save-image-element');
+
             // 親ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
             this.messageBus.send('save-image-file', {
+                messageId: messageId,
                 fileName: fileName,
                 imageData: Array.from(buffer),
                 mimeType: 'image/png'
             });
 
-            logger.debug(`[${this.pluginName}] 画像ファイル保存依頼(Element):`, fileName);
+            // レスポンスを待つ
+            const result = await this.messageBus.waitFor('save-image-result', 10000,
+                (data) => data.messageId === messageId
+            );
+
+            if (!result.success) {
+                logger.error(`[${this.pluginName}] 画像ファイル保存失敗(Element):`, fileName);
+                return false;
+            }
+
+            logger.debug(`[${this.pluginName}] 画像ファイル保存完了(Element):`, fileName);
+            return true;
         } catch (error) {
             logger.error(`[${this.pluginName}] 画像ファイル保存エラー(Element):`, error);
+            return false;
         }
+    }
+
+    /**
+     * ディスク上の既存ファイルを考慮した次の画像ファイル番号を取得
+     * @param {string} realId - 実身ID
+     * @param {number} recordNo - レコード番号（デフォルト: 0）
+     * @returns {Promise<number>} 次の画像番号
+     */
+    async getNextImageFileNumber(realId, recordNo = 0) {
+        try {
+            const messageId = this.generateMessageId('list-image-files');
+
+            this.messageBus.send('list-image-files', {
+                messageId: messageId,
+                realId: realId,
+                recordNo: recordNo
+            });
+
+            const result = await this.messageBus.waitFor('list-image-files-result', 5000,
+                (data) => data.messageId === messageId
+            );
+
+            if (!result.files || result.files.length === 0) {
+                return 0;
+            }
+
+            const maxNo = Math.max(...result.files.map(f => f.imageNo));
+            return maxNo + 1;
+        } catch (error) {
+            logger.warn(`[${this.pluginName}] ディスクからの連番取得失敗:`, error);
+            return 0;
+        }
+    }
+
+    /**
+     * 画像ファイルの絶対パスを取得
+     * @param {string} fileName - ファイル名
+     * @returns {Promise<string|null>} 絶対パス（取得失敗時はnull）
+     */
+    async getImageFilePath(fileName) {
+        try {
+            const messageId = this.generateMessageId('image-path');
+
+            this.messageBus.send('get-image-file-path', {
+                messageId: messageId,
+                fileName: fileName
+            });
+
+            const result = await this.messageBus.waitFor('image-file-path-response', 5000,
+                (data) => data.messageId === messageId
+            );
+
+            return result.filePath;
+        } catch (error) {
+            logger.warn(`[${this.pluginName}] 画像パス取得失敗:`, error);
+            return null;
+        }
+    }
+
+    /**
+     * メモリ上の最大画像番号を取得（子クラスでオーバーライド）
+     * @returns {number} 最大画像番号（-1で画像なし）
+     */
+    getMemoryMaxImageNumber() {
+        return -1;
+    }
+
+    /**
+     * 次の画像番号を取得（メモリ+ディスク両方を考慮）
+     * @returns {Promise<number>} 次の画像番号
+     */
+    async getNextImageNumber() {
+        // 1. メモリ上の最大値（子クラスで実装）
+        const memoryMax = this.getMemoryMaxImageNumber();
+
+        // 2. ディスク上の最大値
+        let diskMax = -1;
+        if (this.realId) {
+            try {
+                const diskNextNo = await this.getNextImageFileNumber(this.realId, 0);
+                diskMax = diskNextNo - 1;
+            } catch (error) {
+                // ディスク取得失敗時はメモリのみで判断
+            }
+        }
+
+        return Math.max(memoryMax, diskMax) + 1;
     }
 
     // ========================================

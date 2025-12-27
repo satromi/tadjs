@@ -1122,6 +1122,44 @@ export class RealObjectSystem {
     }
 
     /**
+     * 指定パターンに一致する画像ファイル一覧を取得
+     * @param {string} realId - 実身ID
+     * @param {number} recordNo - レコード番号
+     * @returns {Array<{fileName: string, imageNo: number}>} ファイル一覧
+     */
+    listImageFiles(realId, recordNo) {
+        if (!this.isElectronEnv) {
+            logger.error('画像ファイル一覧取得エラー: Electron環境が必要です');
+            return [];
+        }
+
+        try {
+            const basePath = this.getDataBasePath();
+            const files = this.fs.readdirSync(basePath);
+
+            // パターン: realId_recordNo_imageNo.png
+            const escapedRealId = realId.replace(/[-]/g, '\\-');
+            const pattern = new RegExp(`^${escapedRealId}_${recordNo}_(\\d+)\\.png$`);
+
+            const result = [];
+            for (const file of files) {
+                const match = file.match(pattern);
+                if (match) {
+                    result.push({
+                        fileName: file,
+                        imageNo: parseInt(match[1], 10)
+                    });
+                }
+            }
+
+            return result;
+        } catch (error) {
+            logger.error('画像ファイル一覧取得エラー:', error);
+            return [];
+        }
+    }
+
+    /**
      * 画像ファイルを読み込み（postMessage経由でレスポンス）
      * @param {string} fileName ファイル名
      * @param {string} messageId メッセージID
