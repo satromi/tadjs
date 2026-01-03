@@ -413,3 +413,139 @@ body.readonly-mode .virtual-object.selected:hover {
     border: none;
     display: block;
 }
+
+/* ページ区切り線（基本スタイル） */
+.page-break {
+    page-break-after: always;
+    margin: 20px 0;
+    padding: 10px 0;
+    text-align: center;
+    color: #999;
+    font-size: 12px;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* 用紙枠表示オン時のページ区切り線 */
+.page-break.page-break-visible {
+    border-top: 2px dashed #808080;
+    margin: 1em 0;
+    padding-top: 1em;
+    position: relative;
+}
+
+.page-break.page-break-visible::before {
+    content: '--- ページ区切り ---';
+    position: absolute;
+    top: -0.7em;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #ffffff;
+    padding: 0 0.5em;
+    font-size: 11px;
+    color: #808080;
+}
+
+/* 自動ページ区切り線（用紙枠表示オン時に自動計算で表示） */
+.auto-page-break {
+    border-top: 1px dashed #a0a0a0;
+    margin: 0.5em 0;
+    padding-top: 0.5em;
+    position: relative;
+    clear: both;
+}
+
+.auto-page-break::before {
+    content: '--- ' attr(data-page) 'ページ ---';
+    position: absolute;
+    top: -0.6em;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #ffffff;
+    padding: 0 0.5em;
+    font-size: 10px;
+    color: #a0a0a0;
+}
+
+/* 条件付き改ページ（基本スタイル - 条件不成立時は非表示） */
+.conditional-page-break {
+    display: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* 条件付き改ページ（条件成立時） */
+.conditional-page-break.triggered {
+    display: block;
+    page-break-after: always;
+    margin: 20px 0;
+    padding: 10px 0;
+    text-align: center;
+    color: #999;
+    font-size: 12px;
+}
+
+/* 条件付き改ページ（用紙枠表示オン時） */
+.conditional-page-break.triggered.page-break-visible {
+    border-top: 2px dashed #6080a0;
+    margin: 1em 0;
+    padding-top: 1em;
+    position: relative;
+}
+
+.conditional-page-break.triggered.page-break-visible::before {
+    content: '--- 条件付き改ページ ---';
+    position: absolute;
+    top: -0.7em;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #ffffff;
+    padding: 0 0.5em;
+    font-size: 11px;
+    color: #6080a0;
+}
+
+/* =====================================================
+   添字（上付き/下付き）スタイル - <attend>タグ対応
+   ===================================================== */
+
+/* data-attend属性を持つ添字要素の共通スタイル */
+sup[data-attend-type],
+sub[data-attend-type] {
+    font-size: 0.75em;
+    line-height: 0;
+}
+
+/* position属性: 前置（position=0）はブラウザデフォルト */
+
+/* position属性: 後置（position=1）はベースラインにより近い位置 */
+sup[data-attend-position="1"] {
+    vertical-align: super;
+    top: -0.3em;
+    position: relative;
+}
+sub[data-attend-position="1"] {
+    vertical-align: sub;
+    bottom: -0.2em;
+    position: relative;
+}
+
+/* baseline属性: 上付き（0-4で垂直位置を段階的に調整） */
+sup[data-attend-baseline="0"] { top: -0.5em; position: relative; }
+sup[data-attend-baseline="1"] { top: -0.4em; position: relative; }
+sup[data-attend-baseline="2"] { top: -0.3em; position: relative; }
+sup[data-attend-baseline="3"] { top: -0.2em; position: relative; }
+sup[data-attend-baseline="4"] { top: -0.1em; position: relative; }
+
+/* baseline属性: 下付き（0-4で垂直位置を段階的に調整） */
+sub[data-attend-baseline="0"] { top: 0.1em; position: relative; }
+sub[data-attend-baseline="1"] { top: 0.2em; position: relative; }
+sub[data-attend-baseline="2"] { top: 0.3em; position: relative; }
+sub[data-attend-baseline="3"] { top: 0.4em; position: relative; }
+sub[data-attend-baseline="4"] { top: 0.5em; position: relative; }
+
+/* targetPosition属性: 文字単位（unit=1）かつ左寄せ（targetPosition=1） */
+sup[data-attend-unit="1"][data-attend-target-position="1"],
+sub[data-attend-unit="1"][data-attend-target-position="1"] {
+    margin-left: -0.2em;
+}

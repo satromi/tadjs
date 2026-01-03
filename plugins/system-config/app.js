@@ -59,10 +59,8 @@ class SystemConfigApp extends window.PluginBase {
     setupMessageBusHandlers() {
         // init メッセージ
         this.messageBus.on('init', (data) => {
-            // MessageBusにwindowIdを設定（レスポンスルーティング用）
-            if (data.windowId) {
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
 
             // fileIdを保存（拡張子を除去）
             if (data.fileData) {

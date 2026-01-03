@@ -597,7 +597,7 @@ export class ScrollbarManager {
         const thumb = scrollbar.querySelector('.scroll-thumb');
         const track = scrollbar.querySelector('.scroll-track');
 
-        logger.info('initScrollbarForPlugin呼び出し:', {
+        logger.debug('initScrollbarForPlugin呼び出し:', {
             direction,
             thumb: !!thumb,
             track: !!track,
@@ -632,7 +632,7 @@ export class ScrollbarManager {
                     return;
                 }
 
-                logger.info('スクロール情報:', {
+                logger.debug('スクロール情報:', {
                     direction,
                     scrollHeight: pluginContent.scrollHeight,
                     scrollWidth: pluginContent.scrollWidth,
@@ -642,11 +642,11 @@ export class ScrollbarManager {
 
                 // スクロール不要な場合はドラッグ無効
                 if (direction === 'vertical' && pluginContent.scrollHeight <= pluginContent.clientHeight) {
-                    logger.info('垂直スクロール不要、ドラッグ無効');
+                    logger.debug('垂直スクロール不要、ドラッグ無効');
                     return;
                 }
                 if (direction === 'horizontal' && pluginContent.scrollWidth <= pluginContent.clientWidth) {
-                    logger.info('水平スクロール不要、ドラッグ無効');
+                    logger.debug('水平スクロール不要、ドラッグ無効');
                     return;
                 }
 
@@ -661,7 +661,7 @@ export class ScrollbarManager {
                 }
                 thumb.classList.add('dragging');
                 e.preventDefault();
-                logger.info('ドラッグ開始:', { isDragging, startPos, startScroll });
+                logger.debug('ドラッグ開始:', { isDragging, startPos, startScroll });
             } catch (error) {
                 logger.error('スクロールバードラッグ開始エラー:', error);
             }
@@ -684,7 +684,7 @@ export class ScrollbarManager {
                     const maxThumbMove = trackRect.height - thumbHeight;
                     const scrollHeight = pluginContent.scrollHeight - pluginContent.clientHeight;
 
-                    logger.info('垂直スクロール計算:', {
+                    logger.debug('垂直スクロール計算:', {
                         delta,
                         thumbHeight,
                         maxThumbMove,
@@ -695,7 +695,7 @@ export class ScrollbarManager {
                         const scrollDelta = (delta / maxThumbMove) * scrollHeight;
                         const newScrollTop = Math.max(0, Math.min(scrollHeight, startScroll + scrollDelta));
                         pluginContent.scrollTop = newScrollTop;
-                        logger.info('scrollTop設定:', newScrollTop);
+                        logger.debug('scrollTop設定:', newScrollTop);
                     }
                 } else {
                     const delta = e.clientX - startPos;
@@ -707,7 +707,7 @@ export class ScrollbarManager {
                         const scrollDelta = (delta / maxThumbMove) * scrollWidth;
                         const newScrollLeft = Math.max(0, Math.min(scrollWidth, startScroll + scrollDelta));
                         pluginContent.scrollLeft = newScrollLeft;
-                        logger.info('scrollLeft設定:', newScrollLeft);
+                        logger.debug('scrollLeft設定:', newScrollLeft);
                     }
                 }
 
@@ -721,7 +721,7 @@ export class ScrollbarManager {
         // ドラッグ終了
         const handleMouseUp = () => {
             if (isDragging) {
-                logger.info('スクロールバードラッグ終了:', direction);
+                logger.debug('スクロールバードラッグ終了:', direction);
                 isDragging = false;
                 thumb.classList.remove('dragging');
             }
@@ -782,6 +782,6 @@ export class ScrollbarManager {
             iframe.addEventListener('load', setupScrollListener, { once: true });
         }
 
-        logger.info('スクロールバーイベントハンドラ登録完了:', direction);
+        logger.debug('スクロールバーイベントハンドラ登録完了:', direction);
     }
 }

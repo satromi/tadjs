@@ -66,12 +66,8 @@ class BaseFileManager extends window.PluginBase {
 
         // init メッセージ
         this.messageBus.on('init', async (data) => {
-            // ウィンドウIDを保存
-            if (data.windowId) {
-                this.windowId = data.windowId;
-                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
 
             // fileDataを保存
             if (data.fileData) {

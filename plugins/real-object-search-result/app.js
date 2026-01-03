@@ -67,12 +67,8 @@ class RealObjectSearchResultApp extends window.PluginBase {
         this.messageBus.on('init', async (data) => {
             logger.info('[RealObjectSearchResult] init受信:', data);
 
-            // ウィンドウIDを保存
-            if (data.windowId) {
-                this.windowId = data.windowId;
-                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
 
             // 検索結果を取得
             if (data.fileData) {
@@ -87,19 +83,8 @@ class RealObjectSearchResultApp extends window.PluginBase {
             await this.renderResults();
         });
 
-        // メニューアクション
-        this.messageBus.on('menu-action', (data) => {
-            this.handleMenuAction(data.action);
-        });
-
-        // メニュー定義要求
-        this.messageBus.on('get-menu-definition', (data) => {
-            const menuDefinition = this.getMenuDefinition();
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: menuDefinition
-            });
-        });
+        // menu-action, get-menu-definition は setupCommonMessageBusHandlers() で登録済み
+        // getMenuDefinition() と executeMenuAction() をオーバーライドして処理
 
         // ウィンドウクローズ通知
         this.messageBus.on('window-closed', (data) => {
@@ -488,8 +473,9 @@ class RealObjectSearchResultApp extends window.PluginBase {
 
     /**
      * メニューアクション処理
+     * setupCommonMessageBusHandlers() の menu-action ハンドラから呼ばれる
      */
-    async handleMenuAction(action) {
+    async executeMenuAction(action) {
         switch (action) {
             case 'toggle-fullscreen':
                 this.toggleFullscreen();

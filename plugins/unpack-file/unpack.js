@@ -15,7 +15,6 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.29
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -70,6 +69,7 @@ let isTadStarted = false; // TAD開始フラグ
 let isXmlTad = false; // XMLTADフラグ
 let isXmlFig = false; // XMLFIGフラグ
 let isCalcTad = false; // 基本表計算形式TADフラグ
+let calcActiveDecorations = []; // 表計算セルのアクティブな装飾タグ追跡用
 let currentIndentLevel = 0; // XMLインデントレベル
 
 // 図形セグメント内のz-index管理用カウンタ
@@ -155,6 +155,15 @@ let figureModifierState = {
     hasArrow: false,                // 矢印修飾があるかどうか
     startArrow: false,              // 開始点に矢印を描画
     endArrow: false                 // 終了点に矢印を描画
+};
+
+// 座標変換状態管理（直後のセグメントに適用）
+let figureTransformState = {
+    active: false,                  // 変換が有効かどうか
+    dh: 0,                          // 水平方向移動量
+    dv: 0,                          // 垂直方向移動量
+    hangle: 0,                      // 回転角度（度）、反時計回り
+    vangle: 0                       // 傾斜角度（度）、-90 < vangle < +90
 };
 
 // 図形設定
@@ -702,12 +711,22 @@ let lineAlign = 0;                      // 0:左揃え,1:中央揃え,2:右揃�
 
 /**
  * Unit計算
- * @param {0x0000} unit 
- * @returns 
+ * @param {0x0000} unit
+ * @returns
  */
 function units(unit) {
     if (unit&0x8000) unit|= ~0xffff;
     return unit;
+}
+
+/**
+ * 符号なし16ビット整数を符号付き16ビット整数に変換
+ * @param {number} value 符号なし16ビット整数（0x0000～0xFFFF）
+ * @returns {number} 符号付き16ビット整数（-32768～32767）
+ */
+function toSignedInt16(value) {
+    if (value & 0x8000) value |= ~0xffff;
+    return value;
 }
 
 /**
@@ -1634,24 +1653,27 @@ function tsTextStart(tadSeg) {
     // セグメントスタックに文章セグメントを追加
     segmentStack.push(SEGMENT_TYPE.TEXT);
     currentSegmentType = SEGMENT_TYPE.TEXT;
-
+    
+    let textChar = new STARTTEXTSEG();
+    if (!startTadSegment) {
+        startTadSegment = true;
+        textChar.h_unit = units(uh2h(tadSeg[8]));
+        textChar.v_unit = units(uh2h(tadSeg[9]));
+        textChar.lang = Number(tadSeg[10]);
+        textChar.bpat = Number(tadSeg[11]);
+    }
+        
     // XMLパース出力
     if (isXmlDumpEnabled()) {
         console.debug('tsTextStart: Adding <doc> to xmlBuffer');
-        xmlBuffer.push('<document>\r\n<p>\r\n');
+        xmlBuffer.push('<document>\r\n');
+        xmlBuffer.push(`<docScale hunit="${textChar.h_unit}" vunit="${textChar.v_unit}"/>\r\n`);
+        xmlBuffer.push(`<text lang="${textChar.lang}" bpat="${textChar.bpat}"/>\r\n`);
         isInDocSegment = true;
         isXmlTad = true;
         isParagraphOpen = true;  // 段落が開始
         currentIndentLevel++;
     }
-    
-    let textChar = new STARTTEXTSEG();
-    if (!startTadSegment) {
-        startTadSegment = true;
-        textChar.h_unit = Number(uh2h(tadSeg[8]));
-        textChar.v_unit = Number(uh2h(tadSeg[9]));
-    }
-
 
     // 文章TADの場合、全体が文章であることが示されるため、指定は無効
     if (startByImageSegment) {
@@ -1668,12 +1690,16 @@ function tsTextStart(tadSeg) {
         textChar.bpat = Number(tadSeg[11]);
 
         if (isXmlDumpEnabled()) {
+            // docView/docDraw/docScale/text形式で出力
+            xmlBuffer.push(`<docView viewleft="${textChar.view.left}" viewtop="${textChar.view.top}" viewright="${textChar.view.right}" viewbottom="${textChar.view.bottom}"/>\r\n`);
+            xmlBuffer.push(`<docDraw drawleft="${textChar.draw.left}" drawtop="${textChar.draw.top}" drawright="${textChar.draw.right}" drawbottom="${textChar.draw.bottom}"/>\r\n`);
+            xmlBuffer.push(`<docScale hunit="${textChar.h_unit}" vunit="${textChar.v_unit}"/>\r\n`);
             // 図形セグメント内のテキストの場合はz-indexを付与
             if (currentSegmentType === SEGMENT_TYPE.FIGURE) {
                 figureZIndexCounter++;
-                xmlBuffer.push(`<text viewleft="${textChar.view.left}" viewtop="${textChar.view.top}" viewright="${textChar.view.right}" viewbottom="${textChar.view.bottom}" drawleft="${textChar.draw.left}" drawtop="${textChar.draw.top}" drawright="${textChar.draw.right}" drawbottom="${textChar.draw.bottom}" h_unit="${textChar.h_unit}" v_unit="${textChar.v_unit}" lang="${textChar.lang}" bpat="${textChar.bpat}" zIndex="${figureZIndexCounter}"/>\r\n`);
+                xmlBuffer.push(`<text lang="${textChar.lang}" bpat="${textChar.bpat}" zIndex="${figureZIndexCounter}"/>\r\n`);
             } else {
-                xmlBuffer.push(`<text viewleft="${textChar.view.left}" viewtop="${textChar.view.top}" viewright="${textChar.view.right}" viewbottom="${textChar.view.bottom}" drawleft="${textChar.draw.left}" drawtop="${textChar.draw.top}" drawright="${textChar.draw.right}" drawbottom="${textChar.draw.bottom}" h_unit="${textChar.h_unit}" v_unit="${textChar.v_unit}" lang="${textChar.lang}" bpat="${textChar.bpat}"/>\r\n`);
+                xmlBuffer.push(`<text lang="${textChar.lang}" bpat="${textChar.bpat}"/>\r\n`);
             }
         }
     }
@@ -1803,7 +1829,37 @@ function tsSizeOfColumnSetFusen(segLen, tadSeg) {
     if (startByImageSegment) {
         return;
     }
-    // TODO: 未実装
+    
+    const CCCC = getLastUBinUH(tadSeg[0]);
+    // 下位4ビットのコラム数を取得
+    const column = Number(CCCC & 0x0F); // 0x0F = 00001111
+
+    const colsp = Number(tadSeg[1]); // コラム感のマージンを座標系単位で指定
+
+    if (segLen > Number(0x0004)) {
+        // TopUBは予約とのこと
+        // const DIWWKKKK = getTopUBinUH(tadSeg[2]);
+
+        const DIWWKKKK = getLastUBinUH(tadSeg[2]);
+        // 上位4ビットのコラム間隔指定を取得
+        const lastColline = (DIWWKKKK >> 4) & 0x0F; // DIWW（上位4ビット）
+        // lastColline のビット配置: [D][I][W][W] = bits 3,2,1,0
+        const lastDensity = (lastColline >> 3) & 0x01;  // bit 3 = D: 0:100%、1:50%
+        const lastLine = (lastColline >> 2) & 0x01;     // bit 2 = I: 0:1本、1:2本
+        const lastWidth = lastColline & 0x03;           // bits 1-0 = WW: 0:なし、1:細線、2:中線、3:太線
+        const lastType = Number(DIWWKKKK & 0x0F); // 0:実線、1:破線、2:点線、3:一点鎖線、4:二点鎖線、5:長鎖線, 6:波線、7:予約、8:未定義
+
+        console.debug(`Column set: column=${column}, colsp=${colsp}, lastLine=${lastLine}, lastDensity=${lastDensity}, lastWidth=${lastWidth}, lastType=${lastType}`);
+
+        if (isXmlDumpEnabled()) {
+            xmlBuffer.push(`<column column="${column}" colsp="${colsp}" colline="${lastColline}" linenum="${lastLine}" lineDensity="${lastDensity}" lineWidth="${lastWidth}" lineType="${lastType}" />\r\n`);
+        }
+    } else {
+        console.debug(`Column set: column=${column}, colsp=${colsp}`);
+        if (isXmlDumpEnabled()) {
+            xmlBuffer.push(`<column column="${column}" colsp="${colsp}" />\r\n`);
+        }
+    }
 }
 
 /**
@@ -2220,6 +2276,14 @@ function tsRulerLineMoveSetFusen(segLen, tadSeg) {
 
     // XML出力（文章セグメント内の場合のみ）
     if (isXmlDumpEnabled()) {
+        // 表計算セルの場合、タブ出力前に装飾終了タグを出力
+        if (isCalcTad && calcActiveDecorations.length > 0) {
+            // 逆順で終了タグを出力
+            while (calcActiveDecorations.length > 0) {
+                const tag = calcActiveDecorations.pop();
+                xmlBuffer.push(`</${tag}>`);
+            }
+        }
         // HTML5のtab要素として出力
         xmlBuffer.push(`<tab/>`);
     }
@@ -3251,8 +3315,8 @@ function tsImageSegment(segLen, tadSeg) {
     imageSeg.draw.bottom = uh2h(tadSeg[7]);
     
     // ユニット情報
-    imageSeg.h_unit = uh2h(tadSeg[8]);
-    imageSeg.v_unit = uh2h(tadSeg[9]);
+    imageSeg.h_unit = units(uh2h(tadSeg[8]));
+    imageSeg.v_unit = units(uh2h(tadSeg[9]));
     
     // 傾き情報
     imageSeg.slope = uh2h(tadSeg[10]);
@@ -3317,10 +3381,12 @@ function tsImageSegment(segLen, tadSeg) {
     if (isXmlDumpEnabled() && imageSeg.bitmap) {
         const filename = generatePngImage(imageSeg);
 
-        // XMLタグを追加（図形セグメント内のz-index管理）
+        // XMLタグを追加（エディタ用形式: left/top/right/bottom/href）
         figureZIndexCounter++;
-        const xmlTag = `<image src="${filename}" width="${width}" height="${height}" planes="${imageSeg.planes}" pixbits="${imageSeg.pixbits}" zIndex="${figureZIndexCounter}"/>`;
+        const xmlTag = `<image lineType="0" lineWidth="1" l_pat="0" f_pat="0" angle="0" rotation="0" flipH="false" flipV="false" left="${imageSeg.bounds.left}" top="${imageSeg.bounds.top}" right="${imageSeg.bounds.right}" bottom="${imageSeg.bounds.bottom}" href="${filename}" zIndex="${figureZIndexCounter}"/>\r\n`;
         xmlBuffer.push(xmlTag);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -3564,7 +3630,10 @@ function tsFigStart(tadSeg) {
 
     // XMLダンプ機能が有効な場合、図形開始セグメントの情報をXML形式で出力
     if (isXmlDumpEnabled()) {
-        xmlBuffer.push(`<figure viewtop="${figSeg.view.top}" viewleft="${figSeg.view.left}" viewright="${figSeg.view.right}" viewbottom="${figSeg.view.bottom}" drawtop="${figSeg.draw.top}" drawleft="${figSeg.draw.left}" drawright="${figSeg.draw.right}" drawbottom="${figSeg.draw.bottom}" hunit="${figSeg.h_unit}" vunit="${figSeg.v_unit}">\r\n`);
+        xmlBuffer.push('<figure>\r\n');
+        xmlBuffer.push(`<figView top="${figSeg.view.top}" left="${figSeg.view.left}" right="${figSeg.view.right}" bottom="${figSeg.view.bottom}"/>\r\n`);
+        xmlBuffer.push(`<figDraw top="${figSeg.draw.top}" left="${figSeg.draw.left}" right="${figSeg.draw.right}" bottom="${figSeg.draw.bottom}"/>\r\n`);
+        xmlBuffer.push(`<figScale hunit="${figSeg.h_unit}" vunit="${figSeg.v_unit}"/>\r\n`);
         isXmlFig = true;
     }
 }
@@ -3593,6 +3662,8 @@ function tsFigRectAngleDraw(segLen, tadSeg) {
         return;
     }
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(tadSeg[4]);
@@ -3603,7 +3674,9 @@ function tsFigRectAngleDraw(segLen, tadSeg) {
 
     if(isXmlDumpEnabled()) {
         figureZIndexCounter++;
-        xmlBuffer.push(`<rect round="0" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}" zIndex="${figureZIndexCounter}" />\r\n`);
+        xmlBuffer.push(`<rect round="0" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}" zIndex="${figureZIndexCounter}" />\r\n`);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -3618,6 +3691,8 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
         return;
     }
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(tadSeg[4]);
@@ -3630,7 +3705,9 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
 
     if(isXmlDumpEnabled()) {
         figureZIndexCounter++;
-        xmlBuffer.push(`<rect round="1" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" figRH="${figRH}" figRV="${figRV}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}" zIndex="${figureZIndexCounter}" />\r\n`);
+        xmlBuffer.push(`<rect round="1" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" figRH="${figRH}" figRV="${figRV}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}" zIndex="${figureZIndexCounter}" />\r\n`);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -3646,6 +3723,8 @@ function tsFigPolygonDraw(segLen, tadSeg) {
     }
 
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
 
@@ -3666,7 +3745,9 @@ function tsFigPolygonDraw(segLen, tadSeg) {
             pointsArray.push(`${px},${py}`);
         }
         figureZIndexCounter++;
-        xmlBuffer.push(`<polygon l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
+        xmlBuffer.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -3682,8 +3763,10 @@ function tsFigLineDraw(segLen, tadSeg) {
     }
     
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
-    
+
     let x = Number(tadSeg[3]);
     let y = Number(tadSeg[4]);
 
@@ -3697,7 +3780,9 @@ function tsFigLineDraw(segLen, tadSeg) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
         figureZIndexCounter++;
-        xmlBuffer.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
+        xmlBuffer.push(`<line lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="0" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -3713,6 +3798,8 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     }
 
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
@@ -3727,7 +3814,9 @@ function tsFigEllipseDraw(segLen, tadSeg) {
 
     if(isXmlDumpEnabled()) {
         figureZIndexCounter++;
-        xmlBuffer.push(`<ellipse l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" zIndex="${figureZIndexCounter}" />\r\n`);
+        xmlBuffer.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" zIndex="${figureZIndexCounter}" />\r\n`);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -3743,27 +3832,29 @@ function tsFigArcDraw(segLen, tadSeg) {
     }
 
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
-    
+
     // フレーム座標（half-openなので right と bottom に +1）
     const frameLeft = Number(uh2h(tadSeg[5]));
     const frameTop = Number(uh2h(tadSeg[6]));
     const frameRight = Number(uh2h(tadSeg[7])) + 1;
     const frameBottom = Number(uh2h(tadSeg[8])) + 1;
-    
+
     // 開始・終了点
     const startX = Number(uh2h(tadSeg[9]));
     const startY = Number(uh2h(tadSeg[10]));
     const endX = Number(uh2h(tadSeg[11]));
     const endY = Number(uh2h(tadSeg[12]));
-    
+
     const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
     const centerX = frameLeft + radiusX;
     const centerY = frameTop + radiusY;
-    
+
     // 開始・終了角度を計算（楕円上の点から角度を求める）
     const startAngle = Math.atan2((startY - centerY) / radiusY, (startX - centerX) / radiusX);
     const endAngle = Math.atan2((endY - centerY) / radiusY, (endX - centerX) / radiusX);
@@ -3772,7 +3863,9 @@ function tsFigArcDraw(segLen, tadSeg) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
         figureZIndexCounter++;
-        xmlBuffer.push(`<arc l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" zIndex="${figureZIndexCounter}" />\r\n`);
+        xmlBuffer.push(`<arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" zIndex="${figureZIndexCounter}" />\r\n`);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -3788,40 +3881,42 @@ function tsFigChordDraw(segLen, tadSeg) {
     }
 
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
-    
+
     // フレーム座標（half-openなので right と bottom に +1）
     const frameLeft = Number(uh2h(tadSeg[5]));
     const frameTop = Number(uh2h(tadSeg[6]));
     const frameRight = Number(uh2h(tadSeg[7])) + 1;
     const frameBottom = Number(uh2h(tadSeg[8])) + 1;
-    
+
     // 開始・終了点の指定位置
     const startx = Number(uh2h(tadSeg[9]));
     const starty = Number(uh2h(tadSeg[10]));
     const endx = Number(uh2h(tadSeg[11]));
     const endy = Number(uh2h(tadSeg[12]));
-    
+
     const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
     const frameCenterX = frameLeft + radiusX;
     const frameCenterY = frameTop + radiusY;
-    
+
     // 楕円の中心とstart/endを結ぶ直線が楕円と交わる点を計算
     // 開始点の角度を計算
     const startAngleRaw = Math.atan2(starty - frameCenterY, startx - frameCenterX);
     // 楕円上の実際の開始点を計算
     const startXOnEllipse = frameCenterX + radiusX * Math.cos(startAngleRaw);
     const startYOnEllipse = frameCenterY + radiusY * Math.sin(startAngleRaw);
-    
+
     // 終了点の角度を計算
     const endAngleRaw = Math.atan2(endy - frameCenterY, endx - frameCenterX);
     // 楕円上の実際の終了点を計算
     const endXOnEllipse = frameCenterX + radiusX * Math.cos(endAngleRaw);
     const endYOnEllipse = frameCenterY + radiusY * Math.sin(endAngleRaw);
-    
+
     // 楕円座標系での角度を計算
     const startAngle = Math.atan2((startYOnEllipse - frameCenterY) / radiusY, (startXOnEllipse - frameCenterX) / radiusX);
     const endAngle = Math.atan2((endYOnEllipse - frameCenterY) / radiusY, (endXOnEllipse - frameCenterX) / radiusX);
@@ -3830,7 +3925,9 @@ function tsFigChordDraw(segLen, tadSeg) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
         figureZIndexCounter++;
-        xmlBuffer.push(`<chord l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startXOnEllipse}" startY="${startYOnEllipse}" endX="${endXOnEllipse}" endY="${endYOnEllipse}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" zIndex="${figureZIndexCounter}" />\r\n`);
+        xmlBuffer.push(`<chord lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startXOnEllipse}" startY="${startYOnEllipse}" endX="${endXOnEllipse}" endY="${endYOnEllipse}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" zIndex="${figureZIndexCounter}" />\r\n`);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -3844,8 +3941,10 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     if (segLen < Number(0x0018)) {
         return;
     }
-    
+
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const angle = Number(uh2h(tadSeg[3]));
     const frameLeft = Number(uh2h(tadSeg[4]));
@@ -3867,7 +3966,9 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
         figureZIndexCounter++;
-        xmlBuffer.push(`<elliptical_arc l_atr="${l_atr}" l_pat="${l_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${radianStart}" endAngle="${radianEnd}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" zIndex="${figureZIndexCounter}" />\r\n`);
+        xmlBuffer.push(`<elliptical_arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${radianStart}" endAngle="${radianEnd}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" zIndex="${figureZIndexCounter}" />\r\n`);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -3882,12 +3983,14 @@ function tsFigPolylineDraw(segLen, tadSeg) {
         return;
     }
     const l_atr = Number(uh2h(tadSeg[1]));
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(uh2h(tadSeg[2]));
     const round = Number(uh2h(tadSeg[3]));
     const np = Number(uh2h(tadSeg[4]));
 
     console.debug(`Polyline attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}`);
-    
+
 
 
     let polyLines = [];
@@ -3906,7 +4009,9 @@ function tsFigPolylineDraw(segLen, tadSeg) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
         figureZIndexCounter++;
-        xmlBuffer.push(`<polyline l_atr="${l_atr}" l_pat="${l_pat}" round="${round}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
+        xmlBuffer.push(`<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" round="${round}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -3924,11 +4029,13 @@ function tsFigCurveDraw(segLen, tadSeg) {
     // パラメータ解析
     const mode = getLastUBinUH(tadSeg[0]);
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const type = Number(tadSeg[4]);
     const np = Number(tadSeg[5]);
-    
+
     console.debug(`Curve attributes: mode=${mode}, l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}, type=${type}, np=${np}`);
     
     // mode 0 のみ処理
@@ -3972,7 +4079,9 @@ function tsFigCurveDraw(segLen, tadSeg) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
         figureZIndexCounter++;
-        xmlBuffer.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" type="${type}" closed="${isClosed ? '1' : '0'}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
+        xmlBuffer.push(`<curve lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" type="${type}" closed="${isClosed ? '1' : '0'}" start_arrow="${startArrow}" end_arrow="${endArrow}" arrow_type="simple" points="${pointsArray.join(' ')}" zIndex="${figureZIndexCounter}" />\r\n`);
+        resetFigureModifier();
+        resetFigureTransformState();
     }
 }
 
@@ -4326,8 +4435,20 @@ function tsGroupSet(segLen, tadSeg) {
         group.id = Number(uh2h(tadSeg[1]));
 
         groupList.push(group);
+
+        if(isXmlDumpEnabled()) {
+            if (group.id === 0) {
+                xmlBuffer.push(`<group>\r\n`);
+            } else {
+                xmlBuffer.push(`<group id="${group.id}">\r\n`);
+            }
+        }
     } else if (UB_SubID === Number(0x01)) {
         console.debug("グループ終了セグメント");
+
+        if(isXmlDumpEnabled()) {
+            xmlBuffer.push(`</group>\r\n`);
+        }
     }
 }
 
@@ -4502,19 +4623,12 @@ function tsFigureMemo(segLen, tadSeg) {
     }
 }
 
-
-
 /**
  * 図形要素修飾セグメントを処理
  * @param {number} segLen セグメント長
  * @param {Array} tadSeg セグメントデータ
  */
-function tsFigureModifier(segLen, tadSeg) {
-    if (segLen < 1) {
-        console.debug("図形要素修飾セグメント: セグメント長が不正");
-        return;
-    }
-
+function tsFigureArrowsModifier(segLen, tadSeg) {
     const arrow = tadSeg[1]; // UHのビット列
 
     // ビット解析: xxxxxxxxxxxxxxES
@@ -4536,8 +4650,6 @@ function tsFigureModifier(segLen, tadSeg) {
     // }
 }
 
-
-
 /**
  * 図形修飾状態をリセット
  */
@@ -4548,24 +4660,182 @@ function resetFigureModifier() {
 }
 
 /**
+ * 座標変換セグメントを処理
+ * 直後のセグメントを変形する
+ *
+ * 【データ定義】
+ * tadSeg[1] = dh（水平方向移動量）
+ * tadSeg[2] = dv（垂直方向移動量）
+ * tadSeg[3] = hangle（回転角度、≧0、反時計回り）※省略可
+ * tadSeg[4] = vangle（傾斜角度、-90 < vangle < +90）※省略可
+ *
+ * 【変形順序】
+ * 1. vangle による傾斜処理
+ * 2. hangle による回転処理
+ * 3. dh, dv による移動処理
+ *
+ * @param {number} segLen セグメント長（0x0006: dh,dvのみ、0x000A: 全パラメータ）
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tsFigureTransformation(segLen, tadSeg) {
+    // セグメント長チェック: 0x0006（dh,dvのみ）または 0x000A（全パラメータ）
+    if (segLen !== Number(0x0006) && segLen !== Number(0x0008) && segLen !== Number(0x000A)) {
+        console.debug("座標変換セグメント: セグメント長が不正 segLen=0x" + segLen.toString(16));
+        return;
+    }
+
+    // 移動量を取得（符号付き16ビット整数として解釈）
+    const dh = toSignedInt16(tadSeg[1]);
+    const dv = toSignedInt16(tadSeg[2]);
+
+    // 回転角度（省略時は0）
+    let hangle = 0;
+    if (segLen >= Number(0x0008) && tadSeg[3] !== undefined) {
+        hangle = toSignedInt16(tadSeg[3]);
+    }
+
+    // 傾斜角度（省略時は0）
+    let vangle = 0;
+    if (segLen >= Number(0x000A) && tadSeg[4] !== undefined) {
+        vangle = toSignedInt16(tadSeg[4]);
+        // 傾斜角度の範囲チェック: -90 < vangle < +90
+        if (vangle <= -90 || vangle >= 90) {
+            console.debug("座標変換セグメント: 傾斜角度が範囲外 vangle=" + vangle);
+            vangle = Math.max(-89, Math.min(89, vangle)); // 範囲内に丸める
+        }
+    }
+
+    // 変換状態を設定（直後のセグメントで使用）
+    figureTransformState.active = true;
+    figureTransformState.dh = dh;
+    figureTransformState.dv = dv;
+    figureTransformState.hangle = hangle;
+    figureTransformState.vangle = vangle;
+
+    // XML出力
+    if (isXmlDumpEnabled()) {
+        xmlBuffer.push(`<transform dh="${dh}" dv="${dv}" hangle="${hangle}" vangle="${vangle}" />\r\n`);
+    }
+
+    console.debug(`座標変換セグメント: dh=${dh}, dv=${dv}, hangle=${hangle}, vangle=${vangle}`);
+}
+
+/**
+ * 座標変換状態をリセット
+ */
+function resetFigureTransformState() {
+    figureTransformState.active = false;
+    figureTransformState.dh = 0;
+    figureTransformState.dv = 0;
+    figureTransformState.hangle = 0;
+    figureTransformState.vangle = 0;
+}
+
+/**
+ * 座標に変換を適用
+ * 変形順序: 傾斜(vangle) → 回転(hangle) → 移動(dh,dv)
+ *
+ * @param {number} x 元のX座標
+ * @param {number} y 元のY座標
+ * @returns {{x: number, y: number}} 変換後の座標
+ */
+function applyFigureTransform(x, y) {
+    if (!figureTransformState.active) {
+        return { x, y };
+    }
+
+    let newX = x;
+    let newY = y;
+
+    // 1. 傾斜処理（vangle）
+    // 水平方向の直線は変化しないが、垂直方向の直線は傾く
+    // 正のvangleで右下がりになる
+    if (figureTransformState.vangle !== 0) {
+        const vangleRad = figureTransformState.vangle * Math.PI / 180;
+        const shear = Math.tan(vangleRad);
+        newX = newX + newY * shear;
+        // newY は変化しない
+    }
+
+    // 2. 回転処理（hangle）
+    // 原点(0,0)を中心に反時計回りに回転
+    if (figureTransformState.hangle !== 0) {
+        const hangleRad = figureTransformState.hangle * Math.PI / 180;
+        const cos = Math.cos(hangleRad);
+        const sin = Math.sin(hangleRad);
+        const rotatedX = newX * cos - newY * sin;
+        const rotatedY = newX * sin + newY * cos;
+        newX = rotatedX;
+        newY = rotatedY;
+    }
+
+    // 3. 移動処理（dh, dv）
+    newX += figureTransformState.dh;
+    newY += figureTransformState.dv;
+
+    return { x: Math.round(newX), y: Math.round(newY) };
+}
+
+/**
+ * 座標配列に変換を適用
+ * @param {Array} points [[x1,y1], [x2,y2], ...] 形式の座標配列
+ * @returns {Array} 変換後の座標配列
+ */
+function applyFigureTransformToPoints(points) {
+    if (!figureTransformState.active) {
+        return points;
+    }
+    return points.map(point => {
+        const transformed = applyFigureTransform(point[0], point[1]);
+        return [transformed.x, transformed.y];
+    });
+}
+
+/**
+ * 図形修飾セグメントを処理
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tsFigureModifier(segLen, tadSeg) {
+    if (segLen < 1) {
+        console.debug("図形修飾セグメント: セグメント長が不正");
+        return;
+    }
+
+    const UB_SubID = getTopUBinUH(tadSeg[0]);
+    
+    if (UB_SubID === Number(0x00)) {
+        console.debug("図形要素修飾セグメント");
+        tsFigureArrowsModifier(segLen, tadSeg);
+    } else if (UB_SubID === Number(0x01)) {
+        console.debug("座標変換セグメント");
+        tsFigureTransformation(segLen, tadSeg);
+    }
+}
+
+/**
  * TAD描画に関する変数を初期化（デフォルト値に設定）
  * @param {number} x - 開始X座標（オプション）
  * @param {number} y - 開始Y座標（オプション）
  */
 function initTAD(x = 0, y = 0) {
     // 描画位置を初期化
-    
+
     // フォント関係を初期化（デフォルト値に設定）
     textFontSize = defaultFontSize;
     textFontStyle = 'normal';
     textFontWeight = defaultFontWeight;
     textFontStretch = 'normal';
     textFontColor = '#000000';
-    
+
     currentSegmentType = SEGMENT_TYPE.NONE;
     segmentStack = [];
 
     colorPattern = [];
+
+    // 図形修飾・変換状態をリセット
+    resetFigureModifier();
+    resetFigureTransformState();
 
     // デフォルトマスクを初期化
     initializeDefaultMasks();
@@ -4720,12 +4990,14 @@ function tsSpecitySegmentCalc(dataSeg) {
         }
 
         // 文字修飾: 1=太字, 2=斜体, 4=下線, 0x20=網掛け, 0x40=反転
+        // 開始/終了タグ形式で出力（セル終了時に終了タグを出力）
+        calcActiveDecorations = []; // セル開始時にリセット
         if (deco !== 0) {
-            if (deco & 1) xmlBuffer.push('<bold/>');
-            if (deco & 2) xmlBuffer.push('<italic/>');
-            if (deco & 4) xmlBuffer.push('<underline/>');
-            if (deco & 0x20) xmlBuffer.push('<mesh/>');
-            if (deco & 0x40) xmlBuffer.push('<invert/>');
+            if (deco & 1) { xmlBuffer.push('<bold>'); calcActiveDecorations.push('bold'); }
+            if (deco & 2) { xmlBuffer.push('<italic>'); calcActiveDecorations.push('italic'); }
+            if (deco & 4) { xmlBuffer.push('<underline>'); calcActiveDecorations.push('underline'); }
+            if (deco & 0x20) { xmlBuffer.push('<mesh>'); calcActiveDecorations.push('mesh'); }
+            if (deco & 0x40) { xmlBuffer.push('<invert>'); calcActiveDecorations.push('invert'); }
         }
 
         // 罫線: 下位4ビット=縦線(左), 上位4ビット=横線(上), 0=なし, 1=細線, 2=太線, 3=点線
@@ -5060,6 +5332,12 @@ function tadPerse(segID, segLen, tadSeg, nowPos) {
     } else if (segID === Number(TS_FAPPL)) {
         console.debug('図形アプリケーション指定付箋');
     }
+
+    if (segID !== Number(TS_FATTR)) {
+        // 図形修飾セグメント以外は矢印状態をリセット
+        resetFigureModifier();
+        resetFigureTransformState();
+    }
 }
 
 /**
@@ -5084,7 +5362,7 @@ function charTronCode(char) {
     || (char >= Number(0xfe80) && char <= Number(0xfefe))) {
         const tronCodeMask = char - Number(0xfe21) + 1;
         if (isXmlDumpEnabled()) {
-            xmlBuffer.push(`<tcode mask="${tronCodeMask}">\r\n`);
+            xmlBuffer.push(`<tcode mask="${tronCodeMask}" />\r\n`);
         }
         console.debug("TRON Code面 :" + tronCodeMask)
     }
@@ -5220,6 +5498,13 @@ function tadRawArray(raw){
             if (isXmlDumpEnabled()) {
                 // 改行文字を検出して段落タグを閉じて開く
                 if (raw8Plus1 === TC_CR || raw8Plus1 === TC_NL) {
+                    // 表計算セルの場合、改行前に装飾終了タグを出力
+                    if (isCalcTad && calcActiveDecorations.length > 0) {
+                        while (calcActiveDecorations.length > 0) {
+                            const tag = calcActiveDecorations.pop();
+                            xmlBuffer.push(`</${tag}>`);
+                        }
+                    }
                     // 文章セグメント内であれば段落タグで区切る
                     if (isInDocSegment) {
                         xmlBuffer.push('</p>\r\n<p>');
@@ -5507,6 +5792,9 @@ if (typeof window !== 'undefined') {
 
     // 図形修飾関数をエクスポート
     window.resetFigureModifier = resetFigureModifier;
+    window.resetFigureTransformState = resetFigureTransformState;
+    window.applyFigureTransform = applyFigureTransform;
+    window.applyFigureTransformToPoints = applyFigureTransformToPoints;
 
     // BPK解凍用関数をエクスポート
     window.tadRawArray = tadRawArray;
@@ -5518,6 +5806,8 @@ if (typeof window !== 'undefined') {
         onDragOver: typeof window.onDragOver,
         parseTADToXML: typeof window.parseTADToXML,
         resetFigureModifier: typeof window.resetFigureModifier,
+        resetFigureTransformState: typeof window.resetFigureTransformState,
+        applyFigureTransform: typeof window.applyFigureTransform,
         tadRawArray: typeof window.tadRawArray,
         initTAD: typeof window.initTAD
     });

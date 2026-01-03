@@ -74,7 +74,8 @@ class BasicFigureEditor extends window.PluginBase {
         this.fillColor = '#ffffff';
         this.fillEnabled = true;
         this.lineWidth = 2;
-        this.linePattern = 'solid'; // 'solid', 'dotted', 'dashed'
+        this.lineType = 0; // 0:実線, 1:破線, 2:点線, 3:一点鎖線, 4:二点鎖線, 5:長破線
+        this.linePattern = 'solid'; // 後方互換用 'solid', 'dotted', 'dashed'
         this.lineConnectionType = 'straight'; // 'straight', 'elbow', 'curve'
         this.cornerRadius = 0; // 角丸半径
         this.arrowPosition = 'none'; // 'none', 'start', 'end', 'both'
@@ -164,13 +165,9 @@ class BasicFigureEditor extends window.PluginBase {
         this.messageBus.on('init', (data) => {
             logger.debug('[FIGURE EDITOR] [MessageBus] init受信');
 
-            // ウィンドウIDを保存（親から渡されたIDを使用）
-            if (data.windowId) {
-                this.windowId = data.windowId;
-                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
-                this.messageBus.setWindowId(data.windowId);
-                logger.debug('[FIGURE EDITOR] [MessageBus] windowId更新:', this.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
+            logger.debug('[FIGURE EDITOR] [MessageBus] windowId更新:', this.windowId);
 
             // fileIdを保存（拡張子を除去）
             if (data.fileData) {
@@ -288,10 +285,21 @@ class BasicFigureEditor extends window.PluginBase {
             this.applyLineWidthToSelected(data.lineWidth);
         });
 
-        // update-line-pattern メッセージ
+        // update-line-pattern メッセージ（後方互換）
         this.messageBus.on('update-line-pattern', (data) => {
             this.linePattern = data.linePattern;
-            this.applyLinePatternToSelected(data.linePattern);
+            // linePatternからlineTypeに変換
+            this.lineType = this.linePatternToLineType(data.linePattern);
+            this.applyLineTypeToSelected(this.lineType);
+        });
+
+        // update-line-type メッセージ
+        this.messageBus.on('update-line-type', (data) => {
+            this.lineType = data.lineType;
+            // lineTypeからlinePatternに変換（後方互換）
+            const patternMapping = { 0: 'solid', 1: 'dashed', 2: 'dotted' };
+            this.linePattern = patternMapping[data.lineType] || 'solid';
+            this.applyLineTypeToSelected(data.lineType);
         });
 
         // update-line-connection-type メッセージ
@@ -1139,7 +1147,7 @@ class BasicFigureEditor extends window.PluginBase {
             let right = 0;
             let bottom = 0;
 
-            if (shape.type === 'rect' || shape.type === 'textbox' || shape.type === 'vobj' || shape.type === 'image' || shape.type === 'pixelmap') {
+            if (shape.type === 'rect' || shape.type === 'document' || shape.type === 'vobj' || shape.type === 'image' || shape.type === 'pixelmap') {
                 // startX, startY, endX, endY を使う図形
                 right = Math.max(shape.startX || 0, shape.endX || 0);
                 bottom = Math.max(shape.startY || 0, shape.endY || 0);
@@ -1257,7 +1265,8 @@ class BasicFigureEditor extends window.PluginBase {
                     fillEnabled: this.fillEnabled,
                     strokeColor: this.strokeColor,
                     lineWidth: this.lineWidth,
-                    linePattern: this.linePattern,
+                    lineType: this.lineType,
+                    linePattern: this.linePattern, // 後方互換
                     lineConnectionType: this.lineConnectionType,
                     cornerRadius: this.cornerRadius
                 }
@@ -1266,27 +1275,27 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     /**
-     * 線種パターンを適用
+     * 線種パターンを適用（後方互換性のため残す）
+     * @param {string} pattern - 'solid', 'dashed', 'dotted'
+     * @deprecated applyLineType()を使用してください
      */
     applyLinePattern(pattern) {
-        switch (pattern) {
-            case 'dotted':
-                this.ctx.setLineDash([2, 3]);
-                break;
-            case 'dashed':
-                this.ctx.setLineDash([8, 5]);
-                break;
-            case 'solid':
-            default:
-                this.ctx.setLineDash([]);
-                break;
-        }
+        // PluginBaseのメソッドを使用（文字列からlineTypeへの変換を自動で行う）
+        this.applyLineTypeToCanvas(this.ctx, pattern);
+    }
+
+    /**
+     * 線種（lineType）をCanvasに適用
+     * @param {number|string} lineType - 線種（0-5 または 'solid'/'dashed'/'dotted'）
+     */
+    applyLineType(lineType) {
+        this.applyLineTypeToCanvas(this.ctx, lineType);
     }
 
     /**
      * 角丸長方形を描画
      */
-    drawRoundedRect(x, y, width, height, radius, fillEnabled) {
+    drawRoundedRect(x, y, width, height, radius, fillEnabled, lineWidth) {
         // 角丸半径を幅と高さの半分に制限（GeometryUtilsを使用）
         const effectiveRadius = window.GeometryUtils
             ? window.GeometryUtils.limitCornerRadius(radius, width, height)
@@ -1307,7 +1316,9 @@ class BasicFigureEditor extends window.PluginBase {
         if (shouldFill) {
             this.ctx.fill();
         }
-        this.ctx.stroke();
+        if (lineWidth === undefined || lineWidth > 0) {
+            this.ctx.stroke();
+        }
     }
 
     /**
@@ -1503,7 +1514,7 @@ class BasicFigureEditor extends window.PluginBase {
         } else if (this.currentTool === 'text') {
             // 文字枠作成モード - 長方形を描くように枠を作成
             this.currentShape = {
-                type: 'textbox',
+                type: 'document',
                 startX: this.startX,
                 startY: this.startY,
                 endX: this.startX,
@@ -1573,6 +1584,7 @@ class BasicFigureEditor extends window.PluginBase {
                 strokeColor: this.strokeColor,
                 fillColor: this.fillColor,
                 lineWidth: this.currentTool === 'brush' ? this.lineWidth * 2 : this.lineWidth,
+                lineType: this.lineType,
                 linePattern: this.linePattern
             };
         } else if (this.currentTool === 'polygon') {
@@ -1585,6 +1597,7 @@ class BasicFigureEditor extends window.PluginBase {
                     strokeColor: this.strokeColor,
                     fillColor: this.fillEnabled ? this.fillColor : 'transparent',
                     lineWidth: this.lineWidth,
+                    lineType: this.lineType,
                     linePattern: this.linePattern,
                     cornerRadius: this.cornerRadius,
                     tempEndX: this.startX,
@@ -1637,6 +1650,7 @@ class BasicFigureEditor extends window.PluginBase {
                 strokeColor: this.strokeColor,
                 fillColor: this.fillEnabled ? this.fillColor : 'transparent',
                 lineWidth: this.lineWidth,
+                lineType: this.lineType,
                 linePattern: this.linePattern,
                 lineConnectionType: this.currentTool === 'line' ? this.lineConnectionType : undefined,
                 cornerRadius: this.currentTool === 'rect' || this.currentTool === 'polygon' ? this.cornerRadius : 0
@@ -1975,8 +1989,8 @@ class BasicFigureEditor extends window.PluginBase {
                 currentY = snapped.y;
             }
 
-            // Shiftキーが押されている場合、長方形と円は縦横比1:1にする
-            if (e.shiftKey && (this.currentTool === 'rect' || this.currentTool === 'ellipse')) {
+            // Shiftキーが押されている場合、長方形と円と三角形は縦横比1:1にする
+            if (e.shiftKey && (this.currentTool === 'rect' || this.currentTool === 'ellipse' || this.currentTool === 'triangle')) {
                 const deltaX = currentX - this.startX;
                 const deltaY = currentY - this.startY;
 
@@ -2031,6 +2045,7 @@ class BasicFigureEditor extends window.PluginBase {
                     this.selectedShapes = shapesInRect;
                 }
 
+                this.syncSelectedShapeToToolPanel();
                 this.selectionRect = null;
                 this.redraw();
             }
@@ -2133,8 +2148,9 @@ class BasicFigureEditor extends window.PluginBase {
             this.shapes.push(this.currentShape);
 
             // 文字枠の場合は自動的に選択状態にする
-            if (this.currentShape.type === 'textbox') {
+            if (this.currentShape.type === 'document') {
                 this.selectedShapes = [this.currentShape];
+                this.syncSelectedShapeToToolPanel();
             }
 
             // ピクセルマップ枠の場合は自動的にピクセルマップモードに入る
@@ -2165,7 +2181,7 @@ class BasicFigureEditor extends window.PluginBase {
         // ダブルクリック位置にある図形を探す
         for (let i = this.shapes.length - 1; i >= 0; i--) {
             const shape = this.shapes[i];
-            if (shape.type === 'textbox' && this.isPointInShape(x, y, shape)) {
+            if (shape.type === 'document' && this.isPointInShape(x, y, shape)) {
                 // 文字枠の編集モードに入る
                 this.enterTextEditMode(shape);
                 return;
@@ -2180,6 +2196,7 @@ class BasicFigureEditor extends window.PluginBase {
                 // 選択状態にしてから開く
                 if (!this.selectedShapes.includes(shape)) {
                     this.selectedShapes = [shape];
+                    this.syncSelectedShapeToToolPanel();
                 }
                 this.openRealObjectWithDefaultApp();
                 return;
@@ -2419,6 +2436,7 @@ class BasicFigureEditor extends window.PluginBase {
                         this.selectedShapes = [shape];
                     }
                 }
+                this.syncSelectedShapeToToolPanel();
                 this.redraw();
                 return;
             }
@@ -2428,6 +2446,7 @@ class BasicFigureEditor extends window.PluginBase {
         // ただし、道具パネルポップアップが開いている場合は選択を維持
         if (!shiftKey && !this.toolPanelPopupOpen) {
             this.selectedShapes = [];
+            this.syncSelectedShapeToToolPanel();
             this.redraw();
         }
     }
@@ -2681,8 +2700,13 @@ class BasicFigureEditor extends window.PluginBase {
         this.ctx.fillStyle = shape.fillColor;
         this.ctx.lineWidth = shape.lineWidth;
 
-        // 線種パターンを設定
-        this.applyLinePattern(shape.linePattern || 'solid');
+        // 線種パターンを設定（lineTypeがあればそれを優先、なければlinePatternから変換）
+        if (shape.lineType !== undefined) {
+            this.applyLineType(shape.lineType);
+        } else {
+            // 後方互換: linePatternから変換
+            this.applyLinePattern(shape.linePattern || 'solid');
+        }
 
         const width = shape.endX - shape.startX;
         const height = shape.endY - shape.startY;
@@ -2741,14 +2765,16 @@ class BasicFigureEditor extends window.PluginBase {
                 const cornerRadius = shape.cornerRadius || 0;
                 if (cornerRadius > 0) {
                     // 角丸長方形
-                    this.drawRoundedRect(shape.startX, shape.startY, width, height, cornerRadius, shape.fillEnabled);
+                    this.drawRoundedRect(shape.startX, shape.startY, width, height, cornerRadius, shape.fillEnabled, shape.lineWidth);
                 } else {
                     // 通常の長方形
                     const fillEnabled = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
                     if (fillEnabled) {
                         this.ctx.fillRect(shape.startX, shape.startY, width, height);
                     }
-                    this.ctx.strokeRect(shape.startX, shape.startY, width, height);
+                    if (shape.lineWidth > 0) {
+                        this.ctx.strokeRect(shape.startX, shape.startY, width, height);
+                    }
                 }
                 break;
 
@@ -2764,7 +2790,39 @@ class BasicFigureEditor extends window.PluginBase {
                 if (fillEnabledEllipse) {
                     this.ctx.fill();
                 }
-                this.ctx.stroke();
+                if (shape.lineWidth > 0) {
+                    this.ctx.stroke();
+                }
+                break;
+
+            case 'triangle':
+                // 三角形描画
+                const triangleWidth = shape.endX - shape.startX;
+
+                this.ctx.beginPath();
+
+                if (triangleWidth >= 0) {
+                    // 右ドラッグ: 直角が左端（startX位置）
+                    // 頂点: 左上(直角), 左下, 右下
+                    this.ctx.moveTo(shape.startX, shape.startY);  // 左上（直角）
+                    this.ctx.lineTo(shape.startX, shape.endY);     // 左下
+                    this.ctx.lineTo(shape.endX, shape.endY);       // 右下
+                } else {
+                    // 左ドラッグ: 直角が右端（startX位置、startXが右側なので）
+                    // 頂点: 右上(直角), 右下, 左下
+                    this.ctx.moveTo(shape.startX, shape.startY);  // 右上（直角）
+                    this.ctx.lineTo(shape.startX, shape.endY);     // 右下
+                    this.ctx.lineTo(shape.endX, shape.endY);       // 左下
+                }
+
+                this.ctx.closePath();
+                const fillEnabledTriangle = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
+                if (fillEnabledTriangle) {
+                    this.ctx.fill();
+                }
+                if (shape.lineWidth > 0) {
+                    this.ctx.stroke();
+                }
                 break;
 
             case 'arc':
@@ -2836,16 +2894,34 @@ class BasicFigureEditor extends window.PluginBase {
                 }
                 break;
 
+            case 'polyline':
+                // 折れ線描画（グラフからのコピーなど）
+                if (shape.points && shape.points.length > 1) {
+                    this.ctx.beginPath();
+                    this.ctx.strokeStyle = shape.strokeColor || '#000000';
+                    this.ctx.lineWidth = shape.lineWidth || 2;
+                    this.ctx.moveTo(shape.points[0].x, shape.points[0].y);
+                    for (let i = 1; i < shape.points.length; i++) {
+                        this.ctx.lineTo(shape.points[i].x, shape.points[i].y);
+                    }
+                    this.ctx.stroke();
+                }
+                break;
+
             case 'text':
                 // テキスト描画（旧形式）
                 if (shape.text) {
                     this.ctx.font = shape.fontSize || '16px sans-serif';
                     this.ctx.fillStyle = shape.strokeColor;
+                    // textAlign プロパティがあれば適用（デフォルトは 'center'）
+                    this.ctx.textAlign = shape.textAlign || 'center';
                     this.ctx.fillText(shape.text, shape.startX, shape.startY);
+                    // 他の描画に影響しないよう元に戻す
+                    this.ctx.textAlign = 'left';
                 }
                 break;
 
-            case 'textbox':
+            case 'document':
                 // 文字枠描画
                 this.drawTextBox(shape);
                 break;
@@ -3258,6 +3334,44 @@ class BasicFigureEditor extends window.PluginBase {
                 });
                 break;
 
+            case 'triangle':
+                // 三角形: 3頂点 + 3辺の中点 = 6点
+                const triWidth = shape.endX - shape.startX;
+                let triPoints;
+
+                if (triWidth >= 0) {
+                    // 右ドラッグ: 直角が左端（startX位置）
+                    triPoints = [
+                        { x: shape.startX, y: shape.startY },  // 左上（直角）
+                        { x: shape.startX, y: shape.endY },    // 左下
+                        { x: shape.endX, y: shape.endY }       // 右下
+                    ];
+                } else {
+                    // 左ドラッグ: 直角が右端（startX位置、startXが右側なので）
+                    triPoints = [
+                        { x: shape.startX, y: shape.startY },  // 右上（直角）
+                        { x: shape.startX, y: shape.endY },    // 右下
+                        { x: shape.endX, y: shape.endY }       // 左下
+                    ];
+                }
+
+                // 頂点
+                triPoints.forEach((p, i) => {
+                    points.push({ x: p.x, y: p.y, index: i });
+                });
+
+                // 辺の中点
+                for (let i = 0; i < triPoints.length; i++) {
+                    const p1 = triPoints[i];
+                    const p2 = triPoints[(i + 1) % triPoints.length];
+                    points.push({
+                        x: (p1.x + p2.x) / 2,
+                        y: (p1.y + p2.y) / 2,
+                        index: triPoints.length + i
+                    });
+                }
+                break;
+
             case 'polygon':
                 // 多角形: 全頂点 + 全辺の中点
                 if (shape.points && shape.points.length > 2) {
@@ -3413,6 +3527,11 @@ class BasicFigureEditor extends window.PluginBase {
         // 格子点を描画（最後部）
         if (this.gridMode === 'show' || this.gridMode === 'snap') {
             this.drawGrid();
+        }
+
+        // 用紙枠を描画
+        if (this.paperFrameVisible) {
+            this.drawPaperFrame();
         }
 
         // すべての図形を再描画
@@ -3755,7 +3874,26 @@ class BasicFigureEditor extends window.PluginBase {
             let currentLineWidth = 0;
 
             const drawLine = (lineSegments, lineY) => {
+                // 行の合計幅を計算
+                let totalLineWidth = 0;
+                for (const seg of lineSegments) {
+                    const style = seg.style;
+                    let fontStyle = '';
+                    if (style.italic) fontStyle += 'italic ';
+                    if (style.bold) fontStyle += 'bold ';
+                    this.ctx.font = `${fontStyle}${style.fontSize}px ${style.fontFamily}`;
+                    totalLineWidth += this.ctx.measureText(seg.text).width;
+                }
+
+                // textAlignに基づいて開始X座標を決定
                 let lineX = minX + padding;
+                const textAlign = shape.textAlign || 'left';
+                if (textAlign === 'center') {
+                    lineX = minX + (width - totalLineWidth) / 2;
+                } else if (textAlign === 'right') {
+                    lineX = minX + width - padding - totalLineWidth;
+                }
+
                 for (const seg of lineSegments) {
                     const style = seg.style;
                     const text = seg.text;
@@ -4636,11 +4774,42 @@ class BasicFigureEditor extends window.PluginBase {
                 return;
             }
 
-            // 用紙サイズを取得
-            const papersize = xmlDoc.querySelector('papersize');
-            if (papersize) {
-                this.paperWidth = parseFloat(papersize.getAttribute('width')) || 210;
-                this.paperHeight = parseFloat(papersize.getAttribute('height')) || 297;
+            // 用紙サイズを取得（<paper>要素を優先、フォールバックで<papersize>も対応）
+            const paperElements = xmlDoc.querySelectorAll('paper');
+            if (paperElements.length > 0) {
+                // <paper>要素があれば解析（PluginBase共通メソッド使用）
+                paperElements.forEach(paper => {
+                    this.parsePaperElement(paper);
+                });
+                // paperSize から paperWidth/paperHeight を同期
+                if (this.paperSize) {
+                    this.paperWidth = this.paperSize.widthMm;
+                    this.paperHeight = this.paperSize.lengthMm;
+                }
+            } else {
+                // 旧形式の<papersize>要素（互換性維持）
+                const papersize = xmlDoc.querySelector('papersize');
+                if (papersize) {
+                    this.paperWidth = parseFloat(papersize.getAttribute('width')) || 210;
+                    this.paperHeight = parseFloat(papersize.getAttribute('height')) || 297;
+                    // PaperSizeインスタンスも初期化
+                    this.initPaperSize();
+                    this.paperSize.widthMm = this.paperWidth;
+                    this.paperSize.lengthMm = this.paperHeight;
+                }
+            }
+
+            // <docmargin>要素をパース（余白設定）
+            const docmarginElements = xmlDoc.querySelectorAll('docmargin');
+            if (docmarginElements.length > 0) {
+                const docmargin = docmarginElements[0];
+                if (!this.paperMargin) {
+                    this.paperMargin = new window.PaperMargin();
+                }
+                this.paperMargin.top = parseFloat(docmargin.getAttribute('top')) || 0;
+                this.paperMargin.bottom = parseFloat(docmargin.getAttribute('bottom')) || 0;
+                this.paperMargin.left = parseFloat(docmargin.getAttribute('left')) || 0;
+                this.paperMargin.right = parseFloat(docmargin.getAttribute('right')) || 0;
             }
 
             // 図形セグメント全体を取得
@@ -4655,59 +4824,120 @@ class BasicFigureEditor extends window.PluginBase {
             // 図形要素を解析
             this.shapes = [];
 
+            // figScaleデフォルト初期化（UNITS型: -72 = 72DPI）
+            this.figScale = { hunit: -72, vunit: -72 };
+
+            // figView/figDraw/figScale要素から設定情報を読み込む
+            const figViewElem = figureElem.querySelector('figView');
+            const figDrawElem = figureElem.querySelector('figDraw');
+            const figScaleElem = figureElem.querySelector('figScale');
+
+            if (figViewElem) {
+                // 表示領域を読み込み（今後のキャンバスサイズ設定に使用可能）
+                this.figView = {
+                    top: parseFloat(figViewElem.getAttribute('top')) || 0,
+                    left: parseFloat(figViewElem.getAttribute('left')) || 0,
+                    right: parseFloat(figViewElem.getAttribute('right')) || this.canvas.width,
+                    bottom: parseFloat(figViewElem.getAttribute('bottom')) || this.canvas.height
+                };
+            }
+            if (figDrawElem) {
+                // 描画領域を読み込み
+                this.figDraw = {
+                    top: parseFloat(figDrawElem.getAttribute('top')) || 0,
+                    left: parseFloat(figDrawElem.getAttribute('left')) || 0,
+                    right: parseFloat(figDrawElem.getAttribute('right')) || this.canvas.width,
+                    bottom: parseFloat(figDrawElem.getAttribute('bottom')) || this.canvas.height
+                };
+            }
+            if (figScaleElem) {
+                // スケール設定を読み込み（PluginBase共通メソッド使用）
+                this.figScale = this.parseDocScaleElement(figScaleElem);
+            }
+
+            // 座標変換状態を保持
+            let pendingTransform = null;
+
             // figure要素の子要素を順番に処理（text+documentの組み合わせを認識するため）
             const children = Array.from(figureElem.children);
             for (let i = 0; i < children.length; i++) {
                 const elem = children[i];
                 const tagName = elem.tagName.toLowerCase();
 
+                // transform要素を検出
+                if (tagName === 'transform') {
+                    pendingTransform = {
+                        dh: parseFloat(elem.getAttribute('dh')) || 0,
+                        dv: parseFloat(elem.getAttribute('dv')) || 0,
+                        hangle: parseFloat(elem.getAttribute('hangle')) || 0,
+                        vangle: parseFloat(elem.getAttribute('vangle')) || 0
+                    };
+                    continue;  // 次の要素へ
+                }
+
+                // figView/figDraw/figScale要素は上で処理済みなのでスキップ
+                if (tagName === 'figview' || tagName === 'figdraw' || tagName === 'figscale') {
+                    continue;
+                }
+
+                // 図形要素をパース
+                let shape = null;
                 if (tagName === 'line') {
-                    this.shapes.push(this.parseLineElement(elem));
+                    shape = this.parseLineElement(elem);
                 } else if (tagName === 'rect') {
-                    this.shapes.push(this.parseRectElement(elem));
+                    shape = this.parseRectElement(elem);
                 } else if (tagName === 'ellipse') {
-                    this.shapes.push(this.parseEllipseElement(elem));
+                    shape = this.parseEllipseElement(elem);
                 } else if (tagName === 'text') {
                     // 次の要素がdocumentか確認（文字枠の場合）
                     const nextElem = i + 1 < children.length ? children[i + 1] : null;
                     if (nextElem && nextElem.tagName.toLowerCase() === 'document') {
                         // 文字枠として解析
-                        this.shapes.push(this.parseTextBoxElement(elem, nextElem));
+                        shape = this.parseDocumentElement(elem, nextElem);
                         i++; // documentもスキップ
                     } else {
                         // 通常のtext要素として解析（互換性のため）
-                        this.shapes.push(this.parseTextElement(elem));
+                        shape = this.parseTextElement(elem);
                     }
                 } else if (tagName === 'polyline') {
-                    this.shapes.push(this.parsePolylineElement(elem));
+                    shape = this.parsePolylineElement(elem);
                 } else if (tagName === 'spline') {
-                    this.shapes.push(this.parseSplineElement(elem));
+                    shape = this.parseSplineElement(elem);
                 } else if (tagName === 'curve') {
-                    this.shapes.push(this.parseCurveElement(elem));
+                    shape = this.parseCurveElement(elem);
                 } else if (tagName === 'polygon') {
-                    this.shapes.push(this.parsePolygonElement(elem));
+                    shape = this.parsePolygonElement(elem);
                 } else if (tagName === 'link') {
-                    this.shapes.push(this.parseLinkElement(elem));
+                    shape = this.parseLinkElement(elem);
                 } else if (tagName === 'arc') {
-                    this.shapes.push(this.parseArcElement(elem));
+                    shape = this.parseArcElement(elem);
                 } else if (tagName === 'chord') {
-                    this.shapes.push(this.parseChordElement(elem));
+                    shape = this.parseChordElement(elem);
                 } else if (tagName === 'elliptical_arc') {
-                    this.shapes.push(this.parseEllipticalArcElement(elem));
+                    shape = this.parseEllipticalArcElement(elem);
                 } else if (tagName === 'image') {
-                    this.shapes.push(this.parseImageElement(elem));
+                    shape = this.parseImageElement(elem);
                 } else if (tagName === 'pixelmap') {
-                    this.shapes.push(this.parsePixelmapElement(elem));
+                    shape = this.parsePixelmapElement(elem);
                 } else if (tagName === 'group') {
-                    this.shapes.push(this.parseGroupElement(elem));
+                    shape = this.parseGroupElement(elem);
                 } else if (tagName === 'document') {
                     // document内にtext要素がある場合は文字枠として処理（新形式）
                     const textElem = elem.querySelector('text');
                     if (textElem) {
-                        this.shapes.push(this.parseTextBoxElement(textElem, elem));
+                        shape = this.parseDocumentElement(textElem, elem);
                     }
                     // textなしのdocumentは無視（既に処理済み、またはスタンドアロン）
-                    continue;
+                }
+
+                // 座標変換を適用
+                if (shape && pendingTransform) {
+                    this.applyTransformToShape(shape, pendingTransform);
+                    pendingTransform = null;  // リセット
+                }
+
+                if (shape) {
+                    this.shapes.push(shape);
                 }
             }
 
@@ -4790,6 +5020,86 @@ class BasicFigureEditor extends window.PluginBase {
         }
     }
 
+    /**
+     * 図形に座標変換を適用
+     * @param {Object} shape 図形オブジェクト
+     * @param {Object} transform 変換パラメータ {dh, dv, hangle, vangle}
+     */
+    applyTransformToShape(shape, transform) {
+        switch (shape.type) {
+            case 'line':
+            case 'rect':
+            case 'ellipse':
+            case 'roundRect':
+                // 開始点・終了点を変換
+                const start = this.applyCoordinateTransform(shape.startX, shape.startY, transform);
+                const end = this.applyCoordinateTransform(shape.endX, shape.endY, transform);
+                shape.startX = start.x;
+                shape.startY = start.y;
+                shape.endX = end.x;
+                shape.endY = end.y;
+                break;
+
+            case 'polygon':
+            case 'polyline':
+            case 'spline':
+            case 'curve':
+                // 頂点配列を変換
+                if (shape.points) {
+                    shape.points = this.applyCoordinateTransformToPoints(shape.points, transform);
+                }
+                break;
+
+            case 'arc':
+            case 'chord':
+            case 'elliptical_arc':
+                // 中心点と境界を変換
+                if (shape.centerX !== undefined && shape.centerY !== undefined) {
+                    const center = this.applyCoordinateTransform(shape.centerX, shape.centerY, transform);
+                    shape.centerX = center.x;
+                    shape.centerY = center.y;
+                }
+                // 境界も変換
+                if (shape.startX !== undefined) {
+                    const s = this.applyCoordinateTransform(shape.startX, shape.startY, transform);
+                    const e = this.applyCoordinateTransform(shape.endX, shape.endY, transform);
+                    shape.startX = s.x;
+                    shape.startY = s.y;
+                    shape.endX = e.x;
+                    shape.endY = e.y;
+                }
+                break;
+
+            case 'text':
+            case 'document':
+            case 'image':
+            case 'pixelmap':
+            case 'vobj':
+                // 矩形領域を変換
+                if (shape.startX !== undefined) {
+                    const topLeft = this.applyCoordinateTransform(shape.startX, shape.startY, transform);
+                    const bottomRight = this.applyCoordinateTransform(shape.endX, shape.endY, transform);
+                    shape.startX = topLeft.x;
+                    shape.startY = topLeft.y;
+                    shape.endX = bottomRight.x;
+                    shape.endY = bottomRight.y;
+                }
+                break;
+
+            case 'group':
+                // グループ内の各図形に再帰適用
+                if (shape.shapes) {
+                    shape.shapes.forEach(s => this.applyTransformToShape(s, transform));
+                }
+                break;
+        }
+
+        // 回転がある場合は角度も更新（既存のangle属性がある場合）
+        if (transform.hangle && transform.hangle !== 0) {
+            shape.angle = (shape.angle || 0) + transform.hangle;
+        }
+    }
+
     parseLineElement(elem) {
         // tad.js形式: <line l_atr="..." points="x1,y1 x2,y2">
         const pointsStr = elem.getAttribute('points');
@@ -4815,6 +5125,21 @@ class BasicFigureEditor extends window.PluginBase {
         // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
 
         // 色情報を取得
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
@@ -4867,7 +5192,8 @@ class BasicFigureEditor extends window.PluginBase {
             endY: endY,
             strokeColor: strokeColor,
             fillColor: 'transparent',
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: false,
             connPat: conn_pat,  // 接続状態パターンを保存
@@ -4901,6 +5227,21 @@ class BasicFigureEditor extends window.PluginBase {
         // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
 
         // 塗りパターンを取得 (0=有効, 1=無効)
         const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
@@ -4990,7 +5331,7 @@ class BasicFigureEditor extends window.PluginBase {
             }
 
             return {
-                type: 'textbox',
+                type: 'document',
                 startX: left,
                 startY: top,
                 endX: right,
@@ -5023,7 +5364,8 @@ class BasicFigureEditor extends window.PluginBase {
             endY: bottom,
             strokeColor: strokeColor,
             fillColor: fillColor,
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
             cornerRadius: cornerRadius,
@@ -5044,6 +5386,21 @@ class BasicFigureEditor extends window.PluginBase {
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
 
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
+
         // 塗りパターンを取得 (0=有効, 1=無効)
         const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
         const fillEnabled = f_pat === 0;
@@ -5063,7 +5420,8 @@ class BasicFigureEditor extends window.PluginBase {
             endY: cy + ry,
             strokeColor: strokeColor,
             fillColor: fillColor,
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
             angle: angle,
@@ -5089,19 +5447,32 @@ class BasicFigureEditor extends window.PluginBase {
         };
     }
 
-    parseTextBoxElement(textElem, documentElem) {
+    parseDocumentElement(textElem, documentElem) {
         // text要素とdocument要素を組み合わせて文字枠を構築
-        // text要素から位置情報を取得
-        const viewLeft = parseFloat(textElem.getAttribute('viewleft')) || 0;
-        const viewTop = parseFloat(textElem.getAttribute('viewtop')) || 0;
-        const viewRight = parseFloat(textElem.getAttribute('viewright')) || 100;
-        const viewBottom = parseFloat(textElem.getAttribute('viewbottom')) || 100;
+        // 位置情報を取得（新形式: docView要素、旧形式: text要素の属性）
+        let viewLeft = 0, viewTop = 0, viewRight = 100, viewBottom = 100;
+
+        // 新形式: document内のdocView要素から位置情報を取得
+        const docViewElem = documentElem ? documentElem.querySelector('docView') : null;
+        if (docViewElem) {
+            viewLeft = parseFloat(docViewElem.getAttribute('viewleft')) || 0;
+            viewTop = parseFloat(docViewElem.getAttribute('viewtop')) || 0;
+            viewRight = parseFloat(docViewElem.getAttribute('viewright')) || 100;
+            viewBottom = parseFloat(docViewElem.getAttribute('viewbottom')) || 100;
+        } else if (textElem) {
+            // 旧形式: text要素の属性から位置情報を取得（後方互換性）
+            viewLeft = parseFloat(textElem.getAttribute('viewleft')) || 0;
+            viewTop = parseFloat(textElem.getAttribute('viewtop')) || 0;
+            viewRight = parseFloat(textElem.getAttribute('viewright')) || 100;
+            viewBottom = parseFloat(textElem.getAttribute('viewbottom')) || 100;
+        }
 
         // document要素から文字情報を取得
         let content = '';
         let fontSize = 16;
         let fontFamily = 'sans-serif';
         let textColor = '#000000';
+        let textAlign = 'left';  // デフォルトは左揃え
         const decorations = {
             bold: false,
             italic: false,
@@ -5122,8 +5493,23 @@ class BasicFigureEditor extends window.PluginBase {
                 } else if (node.nodeType === Node.ELEMENT_NODE) {
                     const tagName = node.tagName.toLowerCase();
 
+                    // docView/docDraw要素は設定情報のためスキップ
+                    if (tagName === 'docview' || tagName === 'docdraw') {
+                        return;
+                    }
+
+                    // docScale要素から設定情報を読み込み
+                    if (tagName === 'docscale') {
+                        this.docScale = this.parseDocScaleElement(node);
+                        return;
+                    }
+
                     if (tagName === 'text') {
-                        // text要素は位置情報のみで内容はないのでスキップ
+                        // text要素にalign属性がある場合は取得
+                        if (node.hasAttribute('align')) {
+                            textAlign = node.getAttribute('align') || 'left';
+                        }
+                        // viewleft等がある場合は位置情報のみなのでスキップ
                         return;
                     } else if (tagName === 'font') {
                         // フォント設定
@@ -5173,7 +5559,7 @@ class BasicFigureEditor extends window.PluginBase {
         const zIndex = textElem.getAttribute('zIndex');
 
         return {
-            type: 'textbox',
+            type: 'document',
             startX: viewLeft,
             startY: viewTop,
             endX: viewRight,
@@ -5182,6 +5568,7 @@ class BasicFigureEditor extends window.PluginBase {
             fontSize: fontSize,
             fontFamily: fontFamily,
             textColor: textColor,
+            textAlign: textAlign,  // テキスト配置
             fillColor: 'transparent',
             strokeColor: 'transparent',
             lineWidth: 0,
@@ -5209,6 +5596,21 @@ class BasicFigureEditor extends window.PluginBase {
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
 
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
+
         // 色情報を取得
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
@@ -5216,11 +5618,12 @@ class BasicFigureEditor extends window.PluginBase {
         const zIndex = elem.getAttribute('zIndex');
 
         return {
-            type: 'pencil',
-            path: points,
+            type: 'polyline',
+            points: points,
             strokeColor: strokeColor,
             fillColor: 'transparent',
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: false,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
@@ -5246,6 +5649,21 @@ class BasicFigureEditor extends window.PluginBase {
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
 
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
+
         // 色情報を取得
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
@@ -5254,7 +5672,8 @@ class BasicFigureEditor extends window.PluginBase {
             path: points,
             strokeColor: strokeColor,
             fillColor: 'transparent',
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: false
         };
@@ -5279,6 +5698,21 @@ class BasicFigureEditor extends window.PluginBase {
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
 
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
+
         // 塗りパターンを取得 (0=有効, 1=無効)
         const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
         const fillEnabled = f_pat === 0;
@@ -5295,7 +5729,8 @@ class BasicFigureEditor extends window.PluginBase {
             path: points,
             strokeColor: strokeColor,
             fillColor: fillEnabled ? fillColor : 'transparent',
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
@@ -5321,6 +5756,21 @@ class BasicFigureEditor extends window.PluginBase {
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
 
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
+
         // 塗りパターンを取得 (0=有効, 1=無効)
         const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
         const fillEnabled = f_pat === 0;
@@ -5342,7 +5792,8 @@ class BasicFigureEditor extends window.PluginBase {
             points: points,
             strokeColor: strokeColor,
             fillColor: fillColor,
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
             cornerRadius: cornerRadius,
@@ -5412,6 +5863,21 @@ class BasicFigureEditor extends window.PluginBase {
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
 
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
+
         // 塗りパターンを取得 (0=有効, 1=無効)
         const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
         const fillEnabled = f_pat === 0;
@@ -5465,7 +5931,8 @@ class BasicFigureEditor extends window.PluginBase {
             imageElement: img,
             fileName: href,
             imgNo: imgNo,
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
             angle: parseFloat(elem.getAttribute('angle')) || 0,
@@ -5590,6 +6057,24 @@ class BasicFigureEditor extends window.PluginBase {
             } else if (tagName === 'group') {
                 // ネストされたグループを再帰的に解析
                 childShapes.push(this.parseGroupElement(child));
+            } else if (tagName === 'text') {
+                // 次の要素がdocumentか確認（文字枠の場合）
+                const nextChild = i + 1 < children.length ? children[i + 1] : null;
+                if (nextChild && nextChild.tagName.toLowerCase() === 'document') {
+                    // 文字枠として解析
+                    childShapes.push(this.parseDocumentElement(child, nextChild));
+                    i++; // documentもスキップ
+                } else {
+                    // 通常のtext要素として解析
+                    childShapes.push(this.parseTextElement(child));
+                }
+            } else if (tagName === 'document') {
+                // document内にtext要素がある場合は文字枠として処理（新形式）
+                const textElem = child.querySelector('text');
+                if (textElem) {
+                    childShapes.push(this.parseDocumentElement(textElem, child));
+                }
+                // textなしのdocumentは無視
             }
         }
 
@@ -5624,6 +6109,21 @@ class BasicFigureEditor extends window.PluginBase {
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
 
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
+
         // 塗りパターンを取得 (0=有効, 1=無効)
         const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
         const fillEnabled = f_pat === 0;
@@ -5650,7 +6150,8 @@ class BasicFigureEditor extends window.PluginBase {
             angle: angle,
             strokeColor: strokeColor,
             fillColor: fillColor,
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
@@ -5674,6 +6175,21 @@ class BasicFigureEditor extends window.PluginBase {
         // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
+
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
 
         // 塗りパターンを取得 (0=有効, 1=無効)
         const f_pat = parseInt(elem.getAttribute('f_pat')) || 0;
@@ -5701,7 +6217,8 @@ class BasicFigureEditor extends window.PluginBase {
             angle: angle,
             strokeColor: strokeColor,
             fillColor: fillColor,
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
@@ -5726,6 +6243,21 @@ class BasicFigureEditor extends window.PluginBase {
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
         const linePattern = l_pat === 1 ? 'dotted' : l_pat === 2 ? 'dashed' : 'solid';
 
+        // 線種・線幅を取得（lineType/lineWidthがあればそれを使用、なければl_atrから抽出）
+        let lineType = 0;
+        let lineWidth = 1;
+        const lineTypeAttr = elem.getAttribute('lineType');
+        const lineWidthAttr = elem.getAttribute('lineWidth');
+        if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            lineType = parseInt(lineTypeAttr) || 0;
+            lineWidth = parseInt(lineWidthAttr) || 1;
+        } else {
+            const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
+            const parsed = this.parseLineAttribute(l_atr);
+            lineType = parsed.lineType;
+            lineWidth = parsed.lineWidth || 1;
+        }
+
         // 色情報を取得
         const strokeColor = elem.getAttribute('strokeColor') || '#000000';
 
@@ -5747,7 +6279,8 @@ class BasicFigureEditor extends window.PluginBase {
             angle: angle,
             strokeColor: strokeColor,
             fillColor: 'transparent',
-            lineWidth: parseFloat(elem.getAttribute('l_atr')) || 1,
+            lineWidth: lineWidth,
+            lineType: lineType,
             linePattern: linePattern,
             fillEnabled: false,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
@@ -5922,15 +6455,29 @@ class BasicFigureEditor extends window.PluginBase {
 
     async convertToXmlTad() {
         // 図形データをTAD XML形式に変換（配列を使用して高速化）
-        const xmlParts = ['<tad version="02.00" encoding="UTF-8">\r\n'];
+        const xmlParts = ['<tad version="1.0" encoding="UTF-8">\r\n'];
         const savePromises = [];
+
+        // 用紙設定が設定されている場合のみ<paper>要素を出力
+        if (this.paperSize) {
+            xmlParts.push(this.paperSize.toXmlString() + '\r\n');
+        }
+
+        // 用紙設定が設定されている場合、または既存のマージン設定がある場合のみ<docmargin>要素を出力
+        if (this.paperMargin || this.paperSize) {
+            const margin = this.paperMargin || new window.PaperMargin();
+            xmlParts.push(`<docmargin top="${margin.top}" bottom="${margin.bottom}" left="${margin.left}" right="${margin.right}" />\r\n`);
+        }
 
         // 図形セグメント開始
         if (this.shapes.length > 0) {
             xmlParts.push('<figure>\r\n');
             xmlParts.push(`<figView top="0" left="0" right="${this.canvas.width}" bottom="${this.canvas.height}"/>\r\n`);
             xmlParts.push(`<figDraw top="0" left="0" right="${this.canvas.width}" bottom="${this.canvas.height}"/>\r\n`);
-            xmlParts.push(`<figScale hunit="0.1" vunit="0.1"/>\r\n`);
+            // figScale出力（UNITS型: デフォルト-72 = 72DPI）
+            const figScaleHunit = this.figScale?.hunit ?? -72;
+            const figScaleVunit = this.figScale?.vunit ?? -72;
+            xmlParts.push(`<figScale hunit="${figScaleHunit}" vunit="${figScaleVunit}"/>\r\n`);
 
             // 各図形を追加
             for (let index = 0; index < this.shapes.length; index++) {
@@ -5951,8 +6498,9 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     async shapeToXML(shape, index, xmlParts, savePromises = null) {
-        // 図形の線属性とパターン (tad.js互換)
-        const l_atr = shape.lineWidth || 1;
+        // 図形の線種・線幅（TAD仕様: 上位8bit=線種、下位8bit=線幅）
+        const lineType = shape.lineType || 0;
+        const lineWidth = shape.lineWidth || 1;
         // 線パターン: solid=0, dotted=1, dashed=2
         const l_pat = shape.linePattern === 'dotted' ? 1 : shape.linePattern === 'dashed' ? 2 : 0;
         // 塗りパターン: 塗りつぶし有効=0, 無効=1
@@ -6000,7 +6548,7 @@ class BasicFigureEditor extends window.PluginBase {
 
                 // z-index属性を追加
                 const zIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                xmlParts.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" strokeColor="${strokeColor}" start_arrow="${start_arrow}" end_arrow="${end_arrow}" arrow_type="${arrow_type}" conn_pat="${conn_pat}" start_conn="${start_conn}" end_conn="${end_conn}" lineConnectionType="${lineConnectionType}" points="${linePoints}"${zIndexAttr} />\r\n`);
+                xmlParts.push(`<line lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="0" strokeColor="${strokeColor}" start_arrow="${start_arrow}" end_arrow="${end_arrow}" arrow_type="${arrow_type}" conn_pat="${conn_pat}" start_conn="${start_conn}" end_conn="${end_conn}" lineConnectionType="${lineConnectionType}" points="${linePoints}"${zIndexAttr} />\r\n`);
                 break;
 
             case 'rect':
@@ -6009,7 +6557,7 @@ class BasicFigureEditor extends window.PluginBase {
                 const round = shape.cornerRadius && shape.cornerRadius > 0 ? 1 : 0;
                 const cornerRadius = shape.cornerRadius || 0;
                 const rectZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                xmlParts.push(`<rect round="${round}" cornerRadius="${cornerRadius}" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}"${rectZIndexAttr} />\r\n`);
+                xmlParts.push(`<rect round="${round}" cornerRadius="${cornerRadius}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}"${rectZIndexAttr} />\r\n`);
                 break;
 
             case 'ellipse':
@@ -6019,13 +6567,33 @@ class BasicFigureEditor extends window.PluginBase {
                 const ry = Math.abs(shape.endY - shape.startY) / 2;
                 // tad.js形式: <ellipse l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." cx="..." cy="..." rx="..." ry="..." />
                 const ellipseZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                xmlParts.push(`<ellipse l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"${ellipseZIndexAttr} />\r\n`);
+                xmlParts.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"${ellipseZIndexAttr} />\r\n`);
                 break;
 
             case 'text':
-                // テキストは文章セグメントとして扱う (簡易実装)
-                const textZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                xmlParts.push(`<text x="${shape.startX}" y="${shape.startY}" color="${shape.strokeColor}" size="${shape.fontSize}"${textZIndexAttr}>${this.escapeXml(shape.text)}</text>\r\n`);
+                // テキストは文章セグメントとして出力（document形式）
+                {
+                    const textContent = this.escapeXml(shape.text);
+                    // フォントサイズを抽出（例: "16px sans-serif" → 16）
+                    const fontSizeMatch = String(shape.fontSize).match(/(\d+)/);
+                    const fontSize = fontSizeMatch ? parseInt(fontSizeMatch[1]) : 16;
+                    // テキスト幅を推定（文字数 × フォントサイズ × 0.6）
+                    const estimatedWidth = Math.max((textContent.length || 1) * fontSize * 0.6, 50);
+                    const estimatedHeight = fontSize * 1.5;
+
+                    const left = Math.round(shape.startX);
+                    const top = Math.round(shape.startY);
+                    const right = Math.round(shape.startX + estimatedWidth);
+                    const bottom = Math.round(shape.startY + estimatedHeight);
+
+                    xmlParts.push('<document>\r\n');
+                    xmlParts.push(this.generateDocViewDrawScale(left, top, right, bottom));
+                    xmlParts.push(this.generateTextElement({ zIndex: shape.zIndex }));
+                    xmlParts.push(`<font size="${fontSize}"/>\r\n`);
+                    xmlParts.push(`<font color="${shape.strokeColor || '#000000'}"/>\r\n`);
+                    xmlParts.push(`${textContent}\r\n`);
+                    xmlParts.push('</document>\r\n');
+                }
                 break;
 
             case 'pencil':
@@ -6034,7 +6602,16 @@ class BasicFigureEditor extends window.PluginBase {
                 if (shape.path && shape.path.length > 0) {
                     const polylinePoints = shape.path.map(p => `${p.x},${p.y}`).join(' ');
                     const polylineZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                    xmlParts.push(`<polyline l_atr="${l_atr}" l_pat="${l_pat}" strokeColor="${strokeColor}" round="0" start_arrow="0" end_arrow="0" points="${polylinePoints}"${polylineZIndexAttr} />\r\n`);
+                    xmlParts.push(`<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" strokeColor="${strokeColor}" round="0" start_arrow="0" end_arrow="0" points="${polylinePoints}"${polylineZIndexAttr} />\r\n`);
+                }
+                break;
+
+            case 'polyline':
+                // 折れ線として出力（グラフからのコピー等）- shape.pointsを使用
+                if (shape.points && shape.points.length > 0) {
+                    const polylinePointsStr = shape.points.map(p => `${p.x},${p.y}`).join(' ');
+                    const polylineZIndexAttr2 = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                    xmlParts.push(`<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" strokeColor="${strokeColor}" round="0" start_arrow="0" end_arrow="0" points="${polylinePointsStr}"${polylineZIndexAttr2} />\r\n`);
                 }
                 break;
 
@@ -6043,7 +6620,7 @@ class BasicFigureEditor extends window.PluginBase {
                 if (shape.path && shape.path.length > 0) {
                     const curvePoints = shape.path.map(p => `${p.x},${p.y}`).join(' ');
                     const curveZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                    xmlParts.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" fillColor="${fillColor}" strokeColor="${strokeColor}" type="0" closed="0" start_arrow="0" end_arrow="0" points="${curvePoints}"${curveZIndexAttr} />\r\n`);
+                    xmlParts.push(`<curve lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" fillColor="${fillColor}" strokeColor="${strokeColor}" type="0" closed="0" start_arrow="0" end_arrow="0" points="${curvePoints}"${curveZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -6053,8 +6630,25 @@ class BasicFigureEditor extends window.PluginBase {
                     const polygonPoints = shape.points.map(p => `${p.x},${p.y}`).join(' ');
                     const polygonCornerRadius = shape.cornerRadius || 0;
                     const polygonZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                    xmlParts.push(`<polygon l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="${polygonCornerRadius}" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${polygonPoints}"${polygonZIndexAttr} />\r\n`);
+                    xmlParts.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="${polygonCornerRadius}" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${polygonPoints}"${polygonZIndexAttr} />\r\n`);
                 }
+                break;
+
+            case 'triangle':
+                // 三角形はpolygonとして保存
+                const triSaveWidth = shape.endX - shape.startX;
+                let triangleSavePoints;
+
+                if (triSaveWidth >= 0) {
+                    // 右ドラッグ: 直角が左端（startX位置）
+                    triangleSavePoints = `${shape.startX},${shape.startY} ${shape.startX},${shape.endY} ${shape.endX},${shape.endY}`;
+                } else {
+                    // 左ドラッグ: 直角が右端（startX位置、startXが右側なので）
+                    triangleSavePoints = `${shape.startX},${shape.startY} ${shape.startX},${shape.endY} ${shape.endX},${shape.endY}`;
+                }
+
+                const triangleZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                xmlParts.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="0" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${triangleSavePoints}"${triangleZIndexAttr} />\r\n`);
                 break;
 
             case 'arc':
@@ -6071,13 +6665,13 @@ class BasicFigureEditor extends window.PluginBase {
 
                 if (shape.type === 'arc') {
                     // 扇形
-                    xmlParts.push(`<arc l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${shape.angle || 0}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0"${arcZIndexAttr} />\r\n`);
+                    xmlParts.push(`<arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${shape.angle || 0}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0"${arcZIndexAttr} />\r\n`);
                 } else if (shape.type === 'chord') {
                     // 弦
-                    xmlParts.push(`<chord l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${shape.angle || 0}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0"${arcZIndexAttr} />\r\n`);
+                    xmlParts.push(`<chord lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${shape.angle || 0}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0"${arcZIndexAttr} />\r\n`);
                 } else {
                     // 楕円弧
-                    xmlParts.push(`<elliptical_arc l_atr="${l_atr}" l_pat="${l_pat}" angle="${shape.angle || 0}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0"${arcZIndexAttr} />\r\n`);
+                    xmlParts.push(`<elliptical_arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" angle="${shape.angle || 0}" strokeColor="${strokeColor}" cx="${acCenterX}" cy="${acCenterY}" rx="${acRadiusX}" ry="${acRadiusY}" startAngle="${acStartAngle}" endAngle="${acEndAngle}" start_arrow="0" end_arrow="0"${arcZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -6103,19 +6697,25 @@ class BasicFigureEditor extends window.PluginBase {
                     const flipV = shape.flipV ? 'true' : 'false';
                     // z-index属性を追加
                     const zIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                    xmlParts.push(`<image l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" href="${this.escapeXml(shape.fileName)}"${zIndexAttr} />\r\n`);
+                    xmlParts.push(`<image lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" href="${this.escapeXml(shape.fileName)}"${zIndexAttr} />\r\n`);
                 }
                 break;
 
-            case 'textbox':
+            case 'document':
                 // 文字枠 - TAD.js形式に準拠
                 // 1. document要素で文章セグメントを開始
                 if (shape.content && shape.content.trim() !== '') {
                     xmlParts.push(`<document>\r\n`);
 
-                    // 2. text要素で位置を定義（図形TADにおける文字枠の位置指定）
+                    // 2. docView/docDraw/docScale/text形式で位置を定義
                     const textboxZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                    xmlParts.push(`<text viewleft="${shape.startX}" viewtop="${shape.startY}" viewright="${shape.endX}" viewbottom="${shape.endY}" drawleft="${shape.startX}" drawtop="${shape.startY}" drawright="${shape.endX}" drawbottom="${shape.endY}"${textboxZIndexAttr}/>\r\n`);
+                    xmlParts.push(`<docView viewleft="${shape.startX}" viewtop="${shape.startY}" viewright="${shape.endX}" viewbottom="${shape.endY}"/>\r\n`);
+                    xmlParts.push(`<docDraw drawleft="${shape.startX}" drawtop="${shape.startY}" drawright="${shape.endX}" drawbottom="${shape.endY}"/>\r\n`);
+                    // 文字枠内docScaleは親figScaleの座標系を継承（UNITS型: デフォルト-72 = 72DPI）
+                    const docScaleHunit = this.figScale?.hunit ?? -72;
+                    const docScaleVunit = this.figScale?.vunit ?? -72;
+                    xmlParts.push(`<docScale hunit="${docScaleHunit}" vunit="${docScaleVunit}"/>\r\n`);
+                    xmlParts.push(`<text lang="0" bpat="0"${textboxZIndexAttr}/>\r\n`);
 
                     // 3. フォント設定
                     const fontSize = shape.fontSize || 16;
@@ -6125,7 +6725,13 @@ class BasicFigureEditor extends window.PluginBase {
                     xmlParts.push(`<font face="${this.escapeXml(fontFamily)}"/>\r\n`);
                     xmlParts.push(`<font color="${this.escapeXml(textColor)}"/>\r\n`);
 
-                    // 4. 文字修飾の開始タグ
+                    // 4. テキスト配置（textAlign）
+                    const textAlign = shape.textAlign || 'left';
+                    if (textAlign !== 'left') {
+                        xmlParts.push(`<text align="${textAlign}"/>\r\n`);
+                    }
+
+                    // 5. 文字修飾の開始タグ
                     const decorations = shape.decorations || {};
                     if (decorations.underline) {
                         xmlParts.push(`<underline>\r\n`);
@@ -6134,7 +6740,7 @@ class BasicFigureEditor extends window.PluginBase {
                         xmlParts.push(`<strikethrough>\r\n`);
                     }
 
-                    // 5. テキスト内容（\r\nは無視し、改行は<br/>、改段落は<p></p>で処理）
+                    // 6. テキスト内容（\r\nは無視し、改行は<br/>、改段落は<p></p>で処理）
                     // \r\nを\nに正規化してから分割
                     const normalizedContent = shape.content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
                     const lines = normalizedContent.split('\n');
@@ -6145,7 +6751,7 @@ class BasicFigureEditor extends window.PluginBase {
                         xmlParts.push(this.escapeXml(lines[i]));
                     }
 
-                    // 6. 文字修飾の終了タグ（開始と逆順）
+                    // 7. 文字修飾の終了タグ（開始と逆順）
                     if (decorations.strikethrough) {
                         xmlParts.push(`</strikethrough>\r\n`);
                     }
@@ -6153,7 +6759,7 @@ class BasicFigureEditor extends window.PluginBase {
                         xmlParts.push(`</underline>\r\n`);
                     }
 
-                    // 7. document終了
+                    // 8. document終了
                     xmlParts.push(`</document>\r\n`);
                 }
                 break;
@@ -6316,13 +6922,8 @@ class BasicFigureEditor extends window.PluginBase {
                 this.dblClickDragState.previewElement = null;
             }
 
-            if (window.parent && window.parent !== window) {
-                const rect = window.frameElement.getBoundingClientRect();
-                    this.messageBus.send('context-menu-request', {
-                    x: rect.left + e.clientX,
-                    y: rect.top + e.clientY
-                });
-            }
+            // コンテキストメニュー要求（共通メソッドを使用）
+            this.showContextMenuAtEvent(e);
         });
     }
 
@@ -6851,9 +7452,32 @@ class BasicFigureEditor extends window.PluginBase {
             // ローカルクリップボードから貼り付け（下のコードで処理）
             logger.debug('[FIGURE EDITOR] ローカルクリップボードから貼り付け');
         } else {
-            // ローカルが空の場合、グローバルクリップボードをチェック（他ウィンドウからの仮身）
+            // ローカルが空の場合、グローバルクリップボードをチェック
             logger.debug('[FIGURE EDITOR] ローカルクリップボードが空、グローバルをチェック');
             const globalClipboard = await this.getGlobalClipboard();
+
+            // グループ構造の場合（表計算グラフ等）
+            if (globalClipboard && globalClipboard.type === 'group' && globalClipboard.group) {
+                logger.debug('[FIGURE EDITOR] グローバルクリップボードにグループがあります');
+                const group = JSON.parse(JSON.stringify(globalClipboard.group));
+
+                // 座標をオフセット（貼り付け位置調整）
+                const offsetX = 20;
+                const offsetY = 20;
+                this.offsetGroupCoordinates(group, offsetX, offsetY);
+
+                // 新しいz-indexを割り当て
+                group.zIndex = this.getNextZIndex();
+
+                this.shapes.push(group);
+                this.selectedShapes = [group];
+                this.redraw();
+                this.isModified = true;
+                this.setStatus('グループを貼り付けました');
+                return;
+            }
+
+            // 仮身の場合
             if (globalClipboard && globalClipboard.link_id) {
                 logger.debug('[FIGURE EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
                 // キャンバス中央に配置
@@ -6960,6 +7584,40 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         logger.debug('[FIGURE EDITOR] pasteShapes完了: clipboard.length=', this.clipboard ? this.clipboard.length : 'null');
+    }
+
+    /**
+     * グループの座標をオフセット
+     * @param {Object} group - グループオブジェクト
+     * @param {number} offsetX - X方向のオフセット
+     * @param {number} offsetY - Y方向のオフセット
+     */
+    offsetGroupCoordinates(group, offsetX, offsetY) {
+        if (group.startX !== undefined) group.startX += offsetX;
+        if (group.startY !== undefined) group.startY += offsetY;
+        if (group.endX !== undefined) group.endX += offsetX;
+        if (group.endY !== undefined) group.endY += offsetY;
+
+        if (group.shapes) {
+            for (const shape of group.shapes) {
+                if (shape.type === 'group') {
+                    // ネストされたグループは再帰的に処理
+                    this.offsetGroupCoordinates(shape, offsetX, offsetY);
+                } else {
+                    if (shape.startX !== undefined) shape.startX += offsetX;
+                    if (shape.startY !== undefined) shape.startY += offsetY;
+                    if (shape.endX !== undefined) shape.endX += offsetX;
+                    if (shape.endY !== undefined) shape.endY += offsetY;
+                    // polylineのpoints配列もオフセット
+                    if (shape.points && Array.isArray(shape.points)) {
+                        for (const point of shape.points) {
+                            if (point.x !== undefined) point.x += offsetX;
+                            if (point.y !== undefined) point.y += offsetY;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     redo() {
@@ -7512,6 +8170,26 @@ class BasicFigureEditor extends window.PluginBase {
         this.setStatus(`線種を変更しました: ${patternName}`);
     }
 
+    /**
+     * 選択図形にlineTypeを適用
+     * @param {number} lineType - 線種タイプ(0-5)
+     */
+    applyLineTypeToSelected(lineType) {
+        if (this.selectedShapes.length === 0) return;
+
+        this.selectedShapes.forEach(shape => {
+            shape.lineType = lineType;
+            // 後方互換: linePatternも設定
+            const patternMapping = { 0: 'solid', 1: 'dashed', 2: 'dotted' };
+            shape.linePattern = patternMapping[lineType] || 'solid';
+        });
+
+        this.redraw();
+        this.isModified = true;
+        const typeName = this.getLineTypeName(lineType);
+        this.setStatus(`線種を変更しました: ${typeName}`);
+    }
+
     applyLineConnectionTypeToSelected(connectionType) {
         if (this.selectedShapes.length === 0) return;
 
@@ -7580,7 +8258,7 @@ class BasicFigureEditor extends window.PluginBase {
         if (this.selectedShapes.length === 0) return;
 
         this.selectedShapes.forEach(shape => {
-            if (shape.type === 'textbox') {
+            if (shape.type === 'document') {
                 shape.fontSize = fontSize;
             }
         });
@@ -7594,7 +8272,7 @@ class BasicFigureEditor extends window.PluginBase {
         if (this.selectedShapes.length === 0) return;
 
         this.selectedShapes.forEach(shape => {
-            if (shape.type === 'textbox') {
+            if (shape.type === 'document') {
                 shape.fontFamily = fontFamily;
             }
         });
@@ -7608,7 +8286,7 @@ class BasicFigureEditor extends window.PluginBase {
         if (this.selectedShapes.length === 0) return;
 
         this.selectedShapes.forEach(shape => {
-            if (shape.type === 'textbox') {
+            if (shape.type === 'document') {
                 shape.textColor = textColor;
             }
         });
@@ -7622,7 +8300,7 @@ class BasicFigureEditor extends window.PluginBase {
         if (this.selectedShapes.length === 0) return;
 
         this.selectedShapes.forEach(shape => {
-            if (shape.type === 'textbox' && shape.decorations) {
+            if (shape.type === 'document' && shape.decorations) {
                 shape.decorations[decoration] = enabled;
             }
         });
@@ -7648,7 +8326,7 @@ class BasicFigureEditor extends window.PluginBase {
         };
 
         // 選択中の文字枠があればその設定を使用
-        const selectedTextbox = this.selectedShapes.find(shape => shape.type === 'textbox');
+        const selectedTextbox = this.selectedShapes.find(shape => shape.type === 'document');
         if (selectedTextbox) {
             settings = {
                 fontSize: selectedTextbox.fontSize,
@@ -7693,16 +8371,258 @@ class BasicFigureEditor extends window.PluginBase {
 
     // === 印刷 ===
     async showPageSetup() {
-        const sizeInput = await this.showInputDialog('用紙サイズを入力してください（幅x高さmm）', '210x297');
-
-        if (sizeInput) {
-            const [width, height] = sizeInput.split('x').map(v => parseFloat(v.trim()));
-            if (width && height) {
-                this.paperWidth = width;
-                this.paperHeight = height;
-                this.setStatus(`用紙サイズを${width}x${height}mmに設定しました`);
-            }
+        // PaperSizeが未初期化なら初期化
+        if (!this.paperSize) {
+            this.initPaperSize();
+            this.paperSize.widthMm = this.paperWidth;
+            this.paperSize.lengthMm = this.paperHeight;
         }
+
+        // 用紙サイズ選択肢を生成
+        const paperOptions = this.getPaperSizeOptions();
+        const currentSizeName = this.paperSize.getSizeName() || 'CUSTOM';
+
+        let paperOptionsHtml = '';
+        let lastGroup = '';
+        paperOptions.forEach(opt => {
+            // グループ分け（A判、B判、その他）
+            const group = opt.key.charAt(0);
+            if (group !== lastGroup && (group === 'A' || group === 'B' || group === 'L')) {
+                if (lastGroup) {
+                    paperOptionsHtml += '<option disabled>──────────</option>';
+                }
+                lastGroup = group;
+            }
+            const selected = opt.key === currentSizeName ? 'selected' : '';
+            paperOptionsHtml += `<option value="${opt.key}" ${selected}>${opt.label}</option>`;
+        });
+        paperOptionsHtml += '<option disabled>──────────</option>';
+        paperOptionsHtml += `<option value="CUSTOM" ${currentSizeName === 'CUSTOM' ? 'selected' : ''}>カスタム</option>`;
+
+        // 現在の値
+        const curWidth = Math.round(this.paperSize.widthMm * 10) / 10;
+        const curHeight = Math.round(this.paperSize.lengthMm * 10) / 10;
+        const curTopMm = Math.round(this.paperSize.topMm * 10) / 10;
+        const curBottomMm = Math.round(this.paperSize.bottomMm * 10) / 10;
+        const curLeftMm = Math.round(this.paperSize.leftMm * 10) / 10;
+        const curRightMm = Math.round(this.paperSize.rightMm * 10) / 10;
+        const curImposition = this.paperSize.imposition;
+
+        const dialogHtml = `
+            <style>
+                /* 親ダイアログの既定入力欄を非表示 */
+                #dialog-input-field {
+                    display: none !important;
+                }
+                /* 親ダイアログのパディング/マージンを上書き */
+                #input-dialog-message:has(.paper-setup-dialog) {
+                    margin-bottom: 2px;
+                    padding: 2px;
+                }
+                #input-dialog:has(.paper-setup-dialog) {
+                    padding: 4px;
+                }
+                #input-dialog:has(.paper-setup-dialog) .dialog-buttons {
+                    padding: 2px;
+                    margin-top: 0px;
+                }
+                .paper-setup-dialog {
+                    font-family: sans-serif;
+                    font-size: 11px;
+                    padding: 0;
+                }
+                .paper-setup-dialog .form-row {
+                    display: flex;
+                    align-items: center;
+                    margin-bottom: 2px;
+                }
+                .paper-setup-dialog .form-row:last-child {
+                    margin-bottom: 0;
+                }
+                .paper-setup-dialog .form-label {
+                    width: 40px;
+                    font-weight: normal;
+                }
+                .paper-setup-dialog .form-input {
+                    width: 70px;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    font-size: 11px;
+                }
+                .paper-setup-dialog .form-select {
+                    width: 200px;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    font-size: 11px;
+                }
+                .paper-setup-dialog .form-unit {
+                    margin-left: 4px;
+                    color: #666;
+                }
+                .paper-setup-dialog .margin-group {
+                    margin-left: 10px;
+                }
+                .paper-setup-dialog .margin-row {
+                    display: flex;
+                    align-items: center;
+                    margin-bottom: 1px;
+                }
+                .paper-setup-dialog .margin-row:last-child {
+                    margin-bottom: 0;
+                }
+                .paper-setup-dialog .margin-label {
+                    width: 20px;
+                }
+                .paper-setup-dialog .margin-input {
+                    width: 50px;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    margin-right: 8px;
+                    font-size: 11px;
+                }
+            </style>
+            <div class="paper-setup-dialog">
+                <div class="form-row">
+                    <span class="form-label">用紙:</span>
+                    <select id="paperSizeSelect" class="form-select">
+                        ${paperOptionsHtml}
+                    </select>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">横:</span>
+                    <input type="number" id="paperWidth" class="form-input" value="${curWidth}" min="10" max="2000" step="0.1">
+                    <span class="form-unit">mm</span>
+                    <span style="margin-left: 12px;" class="form-label">縦:</span>
+                    <input type="number" id="paperHeight" class="form-input" value="${curHeight}" min="10" max="2000" step="0.1">
+                    <span class="form-unit">mm</span>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">余白:</span>
+                    <div class="margin-group">
+                        <div class="margin-row">
+                            <span class="margin-label">上:</span>
+                            <input type="number" id="marginTop" class="margin-input" value="${curTopMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                            <span class="margin-label" style="margin-left: 8px;">左:</span>
+                            <input type="number" id="marginLeft" class="margin-input" value="${curLeftMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                        </div>
+                        <div class="margin-row">
+                            <span class="margin-label">下:</span>
+                            <input type="number" id="marginBottom" class="margin-input" value="${curBottomMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                            <span class="margin-label" style="margin-left: 8px;">右:</span>
+                            <input type="number" id="marginRight" class="margin-input" value="${curRightMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">割付:</span>
+                    <div class="radio-group-inline">
+                        <label class="radio-label">
+                            <input type="radio" name="imposition" value="0" ${curImposition === 0 ? 'checked' : ''}>
+                            <span class="radio-indicator"></span>
+                            <span>片面</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="imposition" value="1" ${curImposition === 1 ? 'checked' : ''}>
+                            <span class="radio-indicator"></span>
+                            <span>見開き</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <script>
+                (function() {
+                    const paperSelect = document.getElementById('paperSizeSelect');
+                    const widthInput = document.getElementById('paperWidth');
+                    const heightInput = document.getElementById('paperHeight');
+                    const sizes = ${JSON.stringify(Object.fromEntries(paperOptions.map(o => [o.key, {w: o.widthMm, h: o.lengthMm}])))};
+
+                    // 用紙サイズ選択時に寸法を更新
+                    paperSelect.addEventListener('change', function() {
+                        const selected = this.value;
+                        if (sizes[selected]) {
+                            widthInput.value = sizes[selected].w;
+                            heightInput.value = sizes[selected].h;
+                        }
+                    });
+
+                    // 寸法変更時にカスタムに切り替え
+                    widthInput.addEventListener('input', function() {
+                        paperSelect.value = 'CUSTOM';
+                    });
+                    heightInput.addEventListener('input', function() {
+                        paperSelect.value = 'CUSTOM';
+                    });
+                })();
+            </script>
+        `;
+
+        return new Promise((resolve) => {
+            this.messageBus.sendWithCallback('show-custom-dialog', {
+                title: '用紙設定',
+                dialogHtml: dialogHtml,
+                buttons: [
+                    { label: '取消', value: 'cancel' },
+                    { label: '標準設定', value: 'default' },
+                    { label: '設定', value: 'ok' }
+                ],
+                defaultButton: 2,
+                width: 400
+            }, (result) => {
+                const dialogResult = result.result || result;
+
+                if (dialogResult.error) {
+                    logger.warn('[FIGURE EDITOR] Paper setup dialog error:', dialogResult.error);
+                    resolve(false);
+                    return;
+                }
+
+                if (dialogResult.button === 'default') {
+                    // 標準設定（A4）にリセット
+                    this.paperSize.resetToDefault();
+                    this.paperWidth = this.paperSize.widthMm;
+                    this.paperHeight = this.paperSize.lengthMm;
+                    this.isModified = true;
+                    this.setStatus('用紙設定を標準（A4）にリセットしました');
+                    this.redraw();
+                    resolve(true);
+                } else if (dialogResult.button === 'ok') {
+                    // 設定を適用
+                    const formData = dialogResult.formData || {};
+
+                    const width = parseFloat(formData.paperWidth) || this.paperWidth;
+                    const height = parseFloat(formData.paperHeight) || this.paperHeight;
+                    const marginTop = parseFloat(formData.marginTop) || 0;
+                    const marginBottom = parseFloat(formData.marginBottom) || 0;
+                    const marginLeft = parseFloat(formData.marginLeft) || 0;
+                    const marginRight = parseFloat(formData.marginRight) || 0;
+                    const imposition = parseInt(formData.imposition) || 0;
+
+                    // PaperSizeに設定
+                    this.paperSize.widthMm = width;
+                    this.paperSize.lengthMm = height;
+                    this.paperSize.topMm = marginTop;
+                    this.paperSize.bottomMm = marginBottom;
+                    this.paperSize.leftMm = marginLeft;
+                    this.paperSize.rightMm = marginRight;
+                    this.paperSize.imposition = imposition;
+
+                    // 互換性のためpaperWidth/paperHeightも更新
+                    this.paperWidth = width;
+                    this.paperHeight = height;
+
+                    this.isModified = true;
+                    this.setStatus(`用紙設定を ${width}×${height}mm に更新しました`);
+                    this.redraw();
+                    resolve(true);
+                } else {
+                    resolve(false);
+                }
+            }, 60000);  // 1分タイムアウト
+        });
     }
 
     showPrintPreview() {
@@ -7892,6 +8812,87 @@ class BasicFigureEditor extends window.PluginBase {
         this.paperFrameVisible = !this.paperFrameVisible;
         this.redraw();
         this.setStatus(`用紙枠: ${this.paperFrameVisible ? '表示' : '非表示'}`);
+    }
+
+    /**
+     * 用紙枠を描画
+     * 用紙境界と余白境界を点線で表示
+     */
+    drawPaperFrame() {
+        const ctx = this.ctx;
+
+        // mm を px に変換（96dpi想定）
+        const mmToPx = (mm) => mm * 96 / 25.4;
+
+        // 用紙サイズ（mm→px）
+        const paperWidthPx = mmToPx(this.paperWidth);
+        const paperHeightPx = mmToPx(this.paperHeight);
+
+        // 余白（mm→px）
+        let marginTopPx = 0;
+        let marginBottomPx = 0;
+        let marginLeftPx = 0;
+        let marginRightPx = 0;
+
+        if (this.paperSize) {
+            marginTopPx = mmToPx(this.paperSize.topMm);
+            marginBottomPx = mmToPx(this.paperSize.bottomMm);
+            marginLeftPx = mmToPx(this.paperSize.leftMm);
+            marginRightPx = mmToPx(this.paperSize.rightMm);
+        }
+
+        // キャンバスサイズに基づいて必要なページ数を計算
+        const canvasWidth = this.canvas.width;
+        const canvasHeight = this.canvas.height;
+        const pagesX = Math.ceil(canvasWidth / paperWidthPx);
+        const pagesY = Math.ceil(canvasHeight / paperHeightPx);
+
+        // 各ページの用紙枠を描画
+        for (let pageY = 0; pageY < pagesY; pageY++) {
+            for (let pageX = 0; pageX < pagesX; pageX++) {
+                const offsetX = pageX * paperWidthPx;
+                const offsetY = pageY * paperHeightPx;
+
+                // 用紙境界（点線）
+                ctx.save();
+                ctx.strokeStyle = '#808080';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                ctx.strokeRect(offsetX, offsetY, paperWidthPx, paperHeightPx);
+                ctx.restore();
+
+                // 余白境界（細い点線）
+                if (marginTopPx > 0 || marginBottomPx > 0 || marginLeftPx > 0 || marginRightPx > 0) {
+                    const marginX = offsetX + marginLeftPx;
+                    const marginY = offsetY + marginTopPx;
+                    const marginW = paperWidthPx - marginLeftPx - marginRightPx;
+                    const marginH = paperHeightPx - marginTopPx - marginBottomPx;
+
+                    if (marginW > 0 && marginH > 0) {
+                        ctx.save();
+                        ctx.strokeStyle = '#c0c0c0';
+                        ctx.lineWidth = 1;
+                        ctx.setLineDash([2, 2]);
+                        ctx.strokeRect(marginX, marginY, marginW, marginH);
+                        ctx.restore();
+                    }
+                }
+
+                // 見開きの場合、中央に綴じ線を描画
+                if (this.paperSize && this.paperSize.imposition === 1) {
+                    const centerX = offsetX + paperWidthPx / 2;
+                    ctx.save();
+                    ctx.strokeStyle = '#a0a0a0';
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([4, 4]);
+                    ctx.beginPath();
+                    ctx.moveTo(centerX, offsetY);
+                    ctx.lineTo(centerX, offsetY + paperHeightPx);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            }
+        }
     }
 
     // === 仮身操作 ===
@@ -8568,6 +9569,63 @@ class BasicFigureEditor extends window.PluginBase {
                 fromEditor: true
             }, '*');
         }
+    }
+
+    /**
+     * 選択図形の属性をツールパネルに同期
+     */
+    syncSelectedShapeToToolPanel() {
+        if (this.selectedShapes.length === 0) {
+            // 選択解除時：エディタの現在設定を送信
+            this.sendToToolPanel({
+                type: 'sync-shape-attributes',
+                attributes: {
+                    fillColor: this.fillColor,
+                    fillEnabled: this.fillEnabled,
+                    strokeColor: this.strokeColor,
+                    lineWidth: this.lineWidth,
+                    lineType: this.lineType,
+                    lineConnectionType: this.lineConnectionType,
+                    cornerRadius: this.cornerRadius,
+                    arrowPosition: this.arrowPosition,
+                    arrowType: this.arrowType
+                },
+                isShapeSelected: false
+            });
+            return;
+        }
+
+        // 最初の選択図形から属性を取得
+        const shape = this.selectedShapes[0];
+
+        // 矢印位置を導出
+        let arrowPosition = 'none';
+        if (shape.start_arrow === 1 && shape.end_arrow === 1) {
+            arrowPosition = 'both';
+        } else if (shape.start_arrow === 1) {
+            arrowPosition = 'start';
+        } else if (shape.end_arrow === 1) {
+            arrowPosition = 'end';
+        }
+
+        // 塗りつぶし有効判定
+        const fillEnabled = shape.fillColor && shape.fillColor !== 'transparent';
+
+        this.sendToToolPanel({
+            type: 'sync-shape-attributes',
+            attributes: {
+                fillColor: shape.fillColor || this.fillColor,
+                fillEnabled: fillEnabled,
+                strokeColor: shape.strokeColor || this.strokeColor,
+                lineWidth: shape.lineWidth || this.lineWidth,
+                lineType: shape.lineType !== undefined ? shape.lineType : this.lineType,
+                lineConnectionType: shape.lineConnectionType || this.lineConnectionType,
+                cornerRadius: shape.cornerRadius || 0,
+                arrowPosition: arrowPosition,
+                arrowType: shape.arrow_type || 'simple'
+            },
+            isShapeSelected: true
+        });
     }
 
     /**
@@ -9826,14 +10884,8 @@ class BasicFigureEditor extends window.PluginBase {
                 };
                 logger.debug('[FIGURE EDITOR] contextMenuVirtualObject設定完了:', this.contextMenuVirtualObject);
 
-                // 親ウィンドウにコンテキストメニュー要求を送信
-                if (this.messageBus) {
-                    const rect = window.frameElement.getBoundingClientRect();
-                    this.messageBus.send('context-menu-request', {
-                        x: rect.left + e.clientX,
-                        y: rect.top + e.clientY
-                    });
-                }
+                // 親ウィンドウにコンテキストメニュー要求を送信（共通メソッドを使用）
+                this.showContextMenuAtEvent(e);
             }
         };
 

@@ -54,10 +54,8 @@ class RealObjectSearchApp extends window.PluginBase {
         this.messageBus.on('init', async (data) => {
             logger.info('[RealObjectSearch] init受信:', data);
 
-            // MessageBusにwindowIdを設定
-            if (data.windowId) {
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
         });
 
         // メニューアクション

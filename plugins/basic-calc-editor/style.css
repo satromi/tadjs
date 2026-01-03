@@ -44,6 +44,7 @@ html, body {
 .spreadsheet-grid {
     display: inline-block;
     min-width: 100%;
+    position: relative;  /* chart-canvasの基準を統一 */
 }
 
 /* ヘッダー行（列番号） */

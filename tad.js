@@ -15,7 +15,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.29
+ * TADjs Ver0.30
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -5928,6 +5928,8 @@ function tsFigRectAngleDraw(segLen, tadSeg) {
         return;
     }
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(tadSeg[4]);
@@ -5940,13 +5942,13 @@ function tsFigRectAngleDraw(segLen, tadSeg) {
 
     logger.debug(`Rectangle attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}, angle=${IntToHex((tadSeg[4]),4).replace('0x','')}`);
     logger.debug(`Rectangle bounds: left=${IntToHex((tadSeg[5]),4).replace('0x','')}, top=${IntToHex((tadSeg[6]),4).replace('0x','')}, right=${IntToHex((tadSeg[7]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[8]),4).replace('0x','')}`);
-    
+
     // 線属性を適用
     const oldLineSettings = applyLineAttribute(l_atr);
     const oldColors = setColorPattern(l_pat, f_pat);
 
     if(isXmlDumpEnabled()) {
-        xmlBuffer.push(`<rect round="0" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${figX}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}">\r\n`);
+        xmlBuffer.push(`<rect round="0" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${figX}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}">\r\n`);
     }
 
     ctx.beginPath();
@@ -5995,6 +5997,8 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
         return;
     }
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(tadSeg[4]);
@@ -6015,7 +6019,7 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
     const oldColors = setColorPattern(l_pat, f_pat);
 
     if(isXmlDumpEnabled()) {
-        xmlBuffer.push(`<rect round="1" l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${figX}" figRH="${figRH}" figRV="${figRV}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}">\r\n`);
+        xmlBuffer.push(`<rect round="1" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${figX}" figRH="${figRH}" figRV="${figRV}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}">\r\n`);
     }
 
     if (angle !== 0) {
@@ -6075,6 +6079,8 @@ function tsFigPolygonDraw(segLen, tadSeg) {
     }
 
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
 
@@ -6099,7 +6105,7 @@ function tsFigPolygonDraw(segLen, tadSeg) {
             const py = Number(tadSeg[offsetLen+1]);
             pointsArray.push(`${px},${py}`);
         }
-        xmlBuffer.push(`<polygon l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" points="${pointsArray.join(' ')}">\r\n`);
+        xmlBuffer.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" points="${pointsArray.join(' ')}">\r\n`);
     }
 
     ctx.strokeStyle = drawLineColor
@@ -6159,15 +6165,17 @@ function tsFigLineDraw(segLen, tadSeg) {
     }
     
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
-    
+
     logger.debug(`Line attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}`);
-    
+
     // 線属性を適用
     const oldLineSettings = applyLineAttribute(l_atr);
     // 線色のみカラーパターンを設定
     const oldLineColor = setLineColorPattern(l_pat);
-    
+
     let x = Number(tadSeg[3]);
     let y = Number(tadSeg[4]);
 
@@ -6180,7 +6188,7 @@ function tsFigLineDraw(segLen, tadSeg) {
         }
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<line l_atr="${l_atr}" l_pat="${l_pat}" f_pat="0" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}">\r\n`);
+        xmlBuffer.push(`<line lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="0" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}">\r\n`);
     }
 
     ctx.strokeStyle = drawLineColor;
@@ -6257,6 +6265,8 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     logger.debug(`Ellipse bounds: left=${IntToHex((tadSeg[5]),4).replace('0x','')}, top=${IntToHex((tadSeg[6]),4).replace('0x','')}, right=${IntToHex((tadSeg[7]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[8]),4).replace('0x','')}`);
 
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
@@ -6284,7 +6294,7 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     const oldColors = setColorPattern(l_pat, f_pat);
 
     if(isXmlDumpEnabled()) {
-        xmlBuffer.push(`<ellipse l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}">\r\n`);
+        xmlBuffer.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}">\r\n`);
     }
 
     ctx.beginPath();
@@ -6333,33 +6343,35 @@ function tsFigArcDraw(segLen, tadSeg) {
     logger.debug(`Arc points: startX=${IntToHex((tadSeg[9]),4).replace('0x','')}, startY=${IntToHex((tadSeg[10]),4).replace('0x','')}, endX=${IntToHex((tadSeg[11]),4).replace('0x','')}, endY=${IntToHex((tadSeg[12]),4).replace('0x','')}`);
 
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
-    
+
     // フレーム座標（half-openなので right と bottom に +1）
     const frameLeft = Number(uh2h(tadSeg[5]));
     const frameTop = Number(uh2h(tadSeg[6]));
     const frameRight = Number(uh2h(tadSeg[7])) + 1;
     const frameBottom = Number(uh2h(tadSeg[8])) + 1;
-    
+
     // 開始・終了点
     const startX = Number(uh2h(tadSeg[9]));
     const startY = Number(uh2h(tadSeg[10]));
     const endX = Number(uh2h(tadSeg[11]));
     const endY = Number(uh2h(tadSeg[12]));
-    
+
     const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
     const centerX = frameLeft + radiusX;
     const centerY = frameTop + radiusY;
-    
+
     // 開始・終了角度を計算（楕円上の点から角度を求める）
     const startAngle = Math.atan2((startY - centerY) / radiusY, (startX - centerX) / radiusX);
     const endAngle = Math.atan2((endY - centerY) / radiusY, (endX - centerX) / radiusX);
-    
+
     const radianAngle = angle * Math.PI / 180;
-    
+
     logger.debug(`Arc center: (${centerX}, ${centerY}), radius: (${radiusX}, ${radiusY})`);
     logger.debug(`Start angle: ${startAngle}, End angle: ${endAngle}`);
 
@@ -6377,7 +6389,7 @@ function tsFigArcDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<arc l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
+        xmlBuffer.push(`<arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
     }
 
     ctx.beginPath();
@@ -6452,46 +6464,48 @@ function tsFigChordDraw(segLen, tadSeg) {
     logger.debug(`Chord points: startX=${IntToHex((tadSeg[9]),4).replace('0x','')}, startY=${IntToHex((tadSeg[10]),4).replace('0x','')}, endX=${IntToHex((tadSeg[11]),4).replace('0x','')}, endY=${IntToHex((tadSeg[12]),4).replace('0x','')}`);
 
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
-    
+
     // フレーム座標（half-openなので right と bottom に +1）
     const frameLeft = Number(uh2h(tadSeg[5]));
     const frameTop = Number(uh2h(tadSeg[6]));
     const frameRight = Number(uh2h(tadSeg[7])) + 1;
     const frameBottom = Number(uh2h(tadSeg[8])) + 1;
-    
+
     // 開始・終了点の指定位置
     const startx = Number(uh2h(tadSeg[9]));
     const starty = Number(uh2h(tadSeg[10]));
     const endx = Number(uh2h(tadSeg[11]));
     const endy = Number(uh2h(tadSeg[12]));
-    
+
     const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
     const frameCenterX = frameLeft + radiusX;
     const frameCenterY = frameTop + radiusY;
-    
+
     // 楕円の中心とstart/endを結ぶ直線が楕円と交わる点を計算
     // 開始点の角度を計算
     const startAngleRaw = Math.atan2(starty - frameCenterY, startx - frameCenterX);
     // 楕円上の実際の開始点を計算
     const startXOnEllipse = frameCenterX + radiusX * Math.cos(startAngleRaw);
     const startYOnEllipse = frameCenterY + radiusY * Math.sin(startAngleRaw);
-    
+
     // 終了点の角度を計算
     const endAngleRaw = Math.atan2(endy - frameCenterY, endx - frameCenterX);
     // 楕円上の実際の終了点を計算
     const endXOnEllipse = frameCenterX + radiusX * Math.cos(endAngleRaw);
     const endYOnEllipse = frameCenterY + radiusY * Math.sin(endAngleRaw);
-    
+
     // 楕円座標系での角度を計算
     const startAngle = Math.atan2((startYOnEllipse - frameCenterY) / radiusY, (startXOnEllipse - frameCenterX) / radiusX);
     const endAngle = Math.atan2((endYOnEllipse - frameCenterY) / radiusY, (endXOnEllipse - frameCenterX) / radiusX);
-    
+
     const radianAngle = angle * Math.PI / 180;
-    
+
     logger.debug(`Chord center: (${frameCenterX}, ${frameCenterY}), radius: (${radiusX}, ${radiusY})`);
     logger.debug(`Start angle: ${startAngle}, End angle: ${endAngle}`);
     logger.debug(`Start point on ellipse: (${startXOnEllipse}, ${startYOnEllipse}), End point: (${endXOnEllipse}, ${endYOnEllipse})`);
@@ -6510,7 +6524,7 @@ function tsFigChordDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<chord l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startXOnEllipse}" startY="${startYOnEllipse}" endX="${endXOnEllipse}" endY="${endYOnEllipse}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
+        xmlBuffer.push(`<chord lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startXOnEllipse}" startY="${startYOnEllipse}" endX="${endXOnEllipse}" endY="${endYOnEllipse}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
     }
 
     ctx.beginPath();
@@ -6559,8 +6573,10 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     }
     
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
-    
+
     logger.debug(`EllipticalArc attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, angle=${IntToHex((tadSeg[3]),4).replace('0x','')}`);
     logger.debug(`EllipticalArc bounds: left=${IntToHex((tadSeg[4]),4).replace('0x','')}, top=${IntToHex((tadSeg[5]),4).replace('0x','')}, right=${IntToHex((tadSeg[6]),4).replace('0x','')}, bottom=${IntToHex((tadSeg[7]),4).replace('0x','')}`);
     logger.debug(`EllipticalArc points: startx=${IntToHex((tadSeg[8]),4).replace('0x','')}, starty=${IntToHex((tadSeg[9]),4).replace('0x','')}, endx=${IntToHex((tadSeg[10]),4).replace('0x','')}, endy=${IntToHex((tadSeg[11]),4).replace('0x','')}`);
@@ -6600,7 +6616,7 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<elliptical_arc l_atr="${l_atr}" l_pat="${l_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${radianStart}" endAngle="${radianEnd}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
+        xmlBuffer.push(`<elliptical_arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${radianStart}" endAngle="${radianEnd}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
     }
 
     ctx.beginPath();
@@ -6632,15 +6648,17 @@ function tsFigPolylineDraw(segLen, tadSeg) {
         return;
     }
     let l_atr = Number(uh2h(tadSeg[1]));
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     let l_pat = Number(uh2h(tadSeg[2]));
     let round = Number(uh2h(tadSeg[3]));
     let np = Number(uh2h(tadSeg[4]));
-    
+
     logger.debug(`Polyline attributes: l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}`);
-    
+
     // 線属性を適用
     const oldLineSettings = applyLineAttribute(l_atr);
-    
+
     // 線色のみカラーパターンを設定
     const oldLineColor = setLineColorPattern(l_pat);
 
@@ -6659,7 +6677,7 @@ function tsFigPolylineDraw(segLen, tadSeg) {
         }
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<polyline l_atr="${l_atr}" l_pat="${l_pat}" round="${round}" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}">\r\n`);
+        xmlBuffer.push(`<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" round="${round}" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}">\r\n`);
     }
 
     // 線幅が0の場合は描画しない
@@ -6721,32 +6739,34 @@ function tsFigCurveDraw(segLen, tadSeg) {
     // パラメータ解析
     const mode = getLastUBinUH(tadSeg[0]);
     const l_atr = Number(tadSeg[1]);
+    const lineType = (l_atr >> 8) & 0xFF;
+    const lineWidth = l_atr & 0xFF;
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const type = Number(tadSeg[4]);
     const np = Number(tadSeg[5]);
-    
+
     logger.debug(`Curve attributes: mode=${mode}, l_atr=${IntToHex((tadSeg[1]),4).replace('0x','')}, l_pat=${IntToHex((tadSeg[2]),4).replace('0x','')}, f_pat=${IntToHex((tadSeg[3]),4).replace('0x','')}, type=${type}, np=${np}`);
-    
+
     // mode 0 のみ処理
     if (mode !== 0) {
         logger.debug(`Unsupported curve mode: ${mode}`);
         return;
     }
-    
+
     // 頂点数のチェック
     if (np < 2) {
         logger.debug("Curve needs at least 2 points");
         return;
     }
-    
+
     // 必要なデータサイズをチェック（各頂点は x,y で 4バイト）
     const expectedSize = 12 + np * 4;
     if (segLen < expectedSize) {
         logger.debug(`Curve segment too short: expected ${expectedSize}, got ${segLen}`);
         return;
     }
-    
+
     // 頂点データを読み取り
     const points = [];
     for (let i = 0; i < np; i++) {
@@ -6754,12 +6774,12 @@ function tsFigCurveDraw(segLen, tadSeg) {
         const y = Number(uh2h(tadSeg[7 + i * 2]));
         points.push({ x: x, y: y });
     }
-    
+
     // 閉じた曲線かどうかを判定
     const isClosed = (points[0].x === points[np - 1].x && points[0].y === points[np - 1].y);
-    
+
     logger.debug(`Curve type: ${type === 0 ? 'polyline' : 'B-spline'}, ${isClosed ? 'closed' : 'open'}, points: ${np}`);
-    
+
     // 線属性を適用
     const oldLineSettings = applyLineAttribute(l_atr);
     const oldColors = setColorPattern(l_pat, f_pat);
@@ -6771,7 +6791,7 @@ function tsFigCurveDraw(segLen, tadSeg) {
         }
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<curve l_atr="${l_atr}" l_pat="${l_pat}" f_pat="${f_pat}" type="${type}" closed="${isClosed ? '1' : '0'}" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}">\r\n`);
+        xmlBuffer.push(`<curve lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" type="${type}" closed="${isClosed ? '1' : '0'}" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}">\r\n`);
     }
 
     ctx.save(); // 状態を保存

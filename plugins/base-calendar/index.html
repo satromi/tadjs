@@ -3,14 +3,64 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>基本図形編集</title>
-    <link rel="stylesheet" href="style.css?v=20251023">
+    <title>予定表</title>
+    <link rel="stylesheet" href="../../tadjs-desktop.css">
+    <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body tabindex="0">
     <div class="plugin-content">
-        <div class="editor-container">
-            <!-- メインキャンバス -->
-            <canvas id="figureCanvas" class="figure-canvas"></canvas>
+        <div class="calendar-container" id="calendarContainer">
+            <!-- ナビゲーションバー -->
+            <div class="calendar-nav" id="calendarNav">
+                <button class="nav-button prev-month" id="prevMonth">&lt; 前月</button>
+                <span class="current-month" id="currentMonth">2026/01</span>
+                <button class="nav-button next-month" id="nextMonth">翌月 &gt;</button>
+            </div>
+            <!-- 曜日ヘッダー -->
+            <div class="weekday-header" id="weekdayHeader">
+                <div class="weekday sunday">日</div>
+                <div class="weekday">月</div>
+                <div class="weekday">火</div>
+                <div class="weekday">水</div>
+                <div class="weekday">木</div>
+                <div class="weekday">金</div>
+                <div class="weekday saturday">土</div>
+            </div>
+            <!-- カレンダーグリッド -->
+            <div class="calendar-grid" id="calendarGrid">
+                <!-- 日セルはJavaScriptで動的に生成 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 年月選択ダイアログ -->
+    <div class="year-month-dialog hidden" id="yearMonthDialog">
+        <div class="dialog-content">
+            <div class="dialog-row">
+                <label>年:</label>
+                <select id="yearSelect"></select>
+            </div>
+            <div class="dialog-row">
+                <label>月:</label>
+                <select id="monthSelect">
+                    <option value="1">01</option>
+                    <option value="2">02</option>
+                    <option value="3">03</option>
+                    <option value="4">04</option>
+                    <option value="5">05</option>
+                    <option value="6">06</option>
+                    <option value="7">07</option>
+                    <option value="8">08</option>
+                    <option value="9">09</option>
+                    <option value="10">10</option>
+                    <option value="11">11</option>
+                    <option value="12">12</option>
+                </select>
+            </div>
+            <div class="dialog-buttons">
+                <button id="dialogMove">移動</button>
+                <button id="dialogCancel">キャンセル</button>
+            </div>
         </div>
     </div>
 
@@ -31,7 +81,7 @@
         import { CONFIG } from '../../js/config.js';
         window.TADjsConfig = CONFIG;
     </script>
-    <script type="module" src="../../tad.js?v=20251023"></script>
+
     <!-- VirtualObjectRendererをグローバル変数として読み込み -->
     <script type="module">
         import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
@@ -41,7 +91,7 @@
     <script type="module">
         import {
             convertPtToPx, rgbToHex, hexToRgb, invertColor,
-            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, ERROR_CHECK_TIMEOUT_MS
         } from '../../js/util.js';
         window.convertPtToPx = convertPtToPx;
         window.rgbToHex = rgbToHex;
@@ -50,21 +100,7 @@
         window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
         window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
         window.ICON_LOAD_TIMEOUT_MS = ICON_LOAD_TIMEOUT_MS;
-    </script>
-    <!-- 図形計算ユーティリティをグローバル変数として読み込み -->
-    <script type="module">
-        import { GeometryUtils } from '../../js/geometry-utils.js';
-        window.GeometryUtils = GeometryUtils;
-    </script>
-    <!-- 用紙サイズ関連をグローバル変数として読み込み -->
-    <script type="module">
-        import { PaperSize, PaperMargin, PAPER_SIZES, getPaperSizeOptions, pointsToMm, mmToPoints } from '../../js/paper-size.js';
-        window.PaperSize = PaperSize;
-        window.PaperMargin = PaperMargin;
-        window.PAPER_SIZES = PAPER_SIZES;
-        window.getPaperSizeOptions = getPaperSizeOptions;
-        window.pointsToMm = pointsToMm;
-        window.mmToPoints = mmToPoints;
+        window.ERROR_CHECK_TIMEOUT_MS = ERROR_CHECK_TIMEOUT_MS;
     </script>
     <!-- パフォーマンス最適化ユーティリティをグローバル変数として読み込み -->
     <script type="module">
@@ -88,6 +124,6 @@
         import { PluginBase } from '../../js/plugin-base.js';
         window.PluginBase = PluginBase;
     </script>
-    <script type="module" src="editor.js?v=20251023"></script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>

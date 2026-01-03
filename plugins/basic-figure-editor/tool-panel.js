@@ -17,7 +17,7 @@ class ToolPanel {
         this.fillEnabled = true;
         this.strokeColor = '#000000';
         this.lineWidth = 2;
-        this.linePattern = 'solid';
+        this.lineType = 0; // 0:実線, 1:破線, 2:点線, 3:一点鎖線, 4:二点鎖線, 5:長破線
         this.lineConnectionType = 'straight'; // 'straight', 'elbow', 'curve'
         this.cornerRadius = 0;
         this.arrowPosition = 'none'; // 'none', 'start', 'end', 'both'
@@ -47,7 +47,15 @@ class ToolPanel {
                     this.fillEnabled = event.data.settings.fillEnabled !== false;
                     this.strokeColor = event.data.settings.strokeColor || '#000000';
                     this.lineWidth = event.data.settings.lineWidth || 2;
-                    this.linePattern = event.data.settings.linePattern || 'solid';
+                    // lineType対応（後方互換: linePatternがあればlineTypeに変換）
+                    if (event.data.settings.lineType !== undefined) {
+                        this.lineType = event.data.settings.lineType;
+                    } else if (event.data.settings.linePattern) {
+                        const patternMapping = { 'solid': 0, 'dashed': 1, 'dotted': 2 };
+                        this.lineType = patternMapping[event.data.settings.linePattern] || 0;
+                    } else {
+                        this.lineType = 0;
+                    }
                     this.lineConnectionType = event.data.settings.lineConnectionType || 'straight';
                     this.cornerRadius = event.data.settings.cornerRadius || 0;
                 }
@@ -128,12 +136,12 @@ class ToolPanel {
                     type: 'update-line-width',
                     lineWidth: this.lineWidth
                 });
-            } else if (event.data && event.data.type === 'popup-line-pattern-change') {
-                // 線種変更
-                this.linePattern = event.data.linePattern;
+            } else if (event.data && event.data.type === 'popup-line-type-change') {
+                // 線種変更（lineType 0-5）
+                this.lineType = event.data.lineType;
                 this.sendToEditor({
-                    type: 'update-line-pattern',
-                    linePattern: this.linePattern
+                    type: 'update-line-type',
+                    lineType: this.lineType
                 });
             } else if (event.data && event.data.type === 'popup-line-connection-type-change') {
                 // 接続形状変更
@@ -177,6 +185,21 @@ class ToolPanel {
                     type: 'update-pixelmap-brush-size',
                     pixelmapBrushSize: this.pixelmapBrushSize
                 });
+            } else if (event.data && event.data.type === 'sync-shape-attributes') {
+                // 選択図形の属性を同期
+                const attrs = event.data.attributes;
+                if (attrs) {
+                    this.fillColor = attrs.fillColor || '#ffffff';
+                    this.fillEnabled = attrs.fillEnabled !== false;
+                    this.strokeColor = attrs.strokeColor || '#000000';
+                    this.lineWidth = attrs.lineWidth || 2;
+                    this.lineType = attrs.lineType !== undefined ? attrs.lineType : 0;
+                    this.lineConnectionType = attrs.lineConnectionType || 'straight';
+                    this.cornerRadius = attrs.cornerRadius || 0;
+                    this.arrowPosition = attrs.arrowPosition || 'none';
+                    this.arrowType = attrs.arrowType || 'simple';
+                }
+                this.updatePaletteIcons();
             }
         });
 
@@ -561,10 +584,13 @@ class ToolPanel {
             </label>
             <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
                 <span>線種:</span>
-                <select id="linePatternSelect" style="padding: 4px;">
-                    <option value="solid" ${this.linePattern === 'solid' ? 'selected' : ''}>実線</option>
-                    <option value="dotted" ${this.linePattern === 'dotted' ? 'selected' : ''}>点線</option>
-                    <option value="dashed" ${this.linePattern === 'dashed' ? 'selected' : ''}>破線</option>
+                <select id="lineTypeSelect" style="padding: 4px;">
+                    <option value="0" ${this.lineType === 0 ? 'selected' : ''}>実線 ─────</option>
+                    <option value="1" ${this.lineType === 1 ? 'selected' : ''}>破線 ── ── ──</option>
+                    <option value="2" ${this.lineType === 2 ? 'selected' : ''}>点線 ･････</option>
+                    <option value="3" ${this.lineType === 3 ? 'selected' : ''}>一点鎖線 ─･─･─</option>
+                    <option value="4" ${this.lineType === 4 ? 'selected' : ''}>二点鎖線 ─･･─･･</option>
+                    <option value="5" ${this.lineType === 5 ? 'selected' : ''}>長破線 ─── ───</option>
                 </select>
             </label>
             <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">

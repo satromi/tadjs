@@ -131,6 +131,17 @@ body {
     border-style: inset;
 }
 
+/* フォーカス状態のボタン - 太い黒枠で強調 */
+.dialog-button:focus {
+    outline: 2px solid #000000;
+    outline-offset: 1px;
+}
+
+/* デフォルトボタン - 太字 */
+.dialog-button.default {
+    font-weight: bold;
+}
+
 /* 付箋指定タブのスタイル */
 .applist-section {
     margin-top: 8px;

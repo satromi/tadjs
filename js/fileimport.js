@@ -317,7 +317,7 @@ class FileImportManager {
         // basic-figure-editor用のXTAD作成（画像シェイプを含む）
         const newRealXtad = `<tad version="1.0" encoding="UTF-8">
 <figure>
-<image l_atr="1" l_pat="0" f_pat="1" angle="0" rotation="0" flipH="false" flipV="false" left="10" top="10" right="${imageWidth + 10}" bottom="${imageHeight + 10}" href="${imageFileName}" />
+<image lineType="0" lineWidth="1" l_pat="0" f_pat="1" angle="0" rotation="0" flipH="false" flipV="false" left="10" top="10" right="${imageWidth + 10}" bottom="${imageHeight + 10}" href="${imageFileName}" />
 </figure>
 </tad>`;
 

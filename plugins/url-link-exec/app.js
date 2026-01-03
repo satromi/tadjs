@@ -63,14 +63,11 @@ class UrlLinkExec extends window.PluginBase {
     async handleInit(data) {
         logger.info('[UrlLinkExec] init受信', data);
 
-        // MessageBusにwindowIdを設定（レスポンスルーティング用）
-        if (data.windowId) {
-            this.messageBus.setWindowId(data.windowId);
-        }
+        // 共通初期化処理（windowId設定、スクロール状態送信）
+        this.onInit(data);
 
         this.fileData = data.fileData || {};
         this.realId = data.fileData.realId || data.fileData.fileId;
-        this.windowId = data.windowId;
 
         logger.info('[UrlLinkExec] realId:', this.realId);
         logger.info('[UrlLinkExec] windowId:', this.windowId);

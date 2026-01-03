@@ -1,8 +1,6 @@
 <tad version="1.0" filename="基本表計算" encoding="UTF-8">
 <document>
 <p>
-<paper type="doc" length="1403" width="992" binding="0" imposition="0" top="94" bottom="94" left="94" right="47" />
-<docmargin top="94" bottom="94" left="94" right="47" />
 <calcPos cell="A1"/>	<calcPos cell="B1"/>	<calcPos cell="C1"/>	<calcPos cell="D1"/></p>
 <calcPos cell="A2"/>	<calcPos cell="B2"/>	<calcPos cell="C2"/>	<calcPos cell="D2"/></p>
 <calcPos cell="A3"/>	<calcPos cell="B3"/>	<calcPos cell="C3"/>	<calcPos cell="D3"/></p>

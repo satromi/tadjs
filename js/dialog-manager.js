@@ -37,6 +37,93 @@ export class DialogManager {
     }
 
     /**
+     * ダイアログボタンを生成（共通処理）
+     * @param {HTMLElement} container - ボタンコンテナ
+     * @param {Array<{label: string, value: any}>} buttons - ボタン定義
+     * @param {number} defaultButton - デフォルトボタンインデックス
+     * @param {Function} onButtonClick - クリック時コールバック (value) => void
+     * @returns {HTMLElement[]} 生成されたボタン要素の配列
+     */
+    createDialogButtons(container, buttons, defaultButton, onButtonClick) {
+        container.innerHTML = '';
+        const buttonElements = [];
+
+        buttons.forEach((buttonDef, index) => {
+            const button = document.createElement('button');
+            button.className = 'dialog-button';
+            button.textContent = buttonDef.label;
+            button.dataset.value = JSON.stringify(buttonDef.value);
+            button.dataset.index = index;
+
+            if (index === defaultButton) {
+                button.classList.add('default');
+            }
+
+            button.addEventListener('click', () => {
+                onButtonClick(buttonDef.value);
+            });
+
+            container.appendChild(button);
+            buttonElements.push(button);
+        });
+
+        return buttonElements;
+    }
+
+    /**
+     * ダイアログ用キーボードハンドラを設定（共通処理）
+     * @param {HTMLElement} container - ボタンコンテナ
+     * @param {number} defaultButton - デフォルトボタンインデックス
+     * @param {Function} onSelect - ボタン選択時コールバック (value) => void
+     * @returns {Function} 削除用のハンドラ関数
+     */
+    setupDialogKeyboardHandler(container, defaultButton, onSelect) {
+        const handleKeyDown = (e) => {
+            const buttons = Array.from(container.querySelectorAll('.dialog-button'));
+            if (buttons.length === 0) return;
+
+            const focusedElement = document.activeElement;
+            const currentIndex = buttons.indexOf(focusedElement);
+
+            switch (e.key) {
+                case 'Tab':
+                    // ボタンにフォーカスがある場合のみTab制御
+                    if (currentIndex >= 0) {
+                        e.preventDefault();
+                        if (buttons.length > 1) {
+                            let nextIndex;
+                            if (e.shiftKey) {
+                                // Shift+Tab: 前へ
+                                nextIndex = currentIndex <= 0 ? buttons.length - 1 : currentIndex - 1;
+                            } else {
+                                // Tab: 次へ
+                                nextIndex = currentIndex >= buttons.length - 1 ? 0 : currentIndex + 1;
+                            }
+                            buttons[nextIndex].focus();
+                        }
+                    }
+                    break;
+
+                case 'Enter':
+                    // フォーカス中のボタンがあればそれを実行、なければデフォルトボタン
+                    if (focusedElement && focusedElement.classList.contains('dialog-button')) {
+                        e.preventDefault();
+                        const value = JSON.parse(focusedElement.dataset.value);
+                        onSelect(value);
+                    } else if (buttons[defaultButton]) {
+                        e.preventDefault();
+                        const value = JSON.parse(buttons[defaultButton].dataset.value);
+                        onSelect(value);
+                    }
+                    break;
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return handleKeyDown;
+    }
+
+    /**
      * メッセージダイアログを表示
      * @param {string} message - 表示するメッセージ
      * @param {Array<{label: string, value: any}>} buttons - ボタン定義の配列
@@ -53,38 +140,32 @@ export class DialogManager {
             // メッセージを設定
             messageText.textContent = message;
 
-            // ボタンをクリア
-            buttonsContainer.innerHTML = '';
+            // キーボードハンドラ参照用
+            let keyboardHandler = null;
 
-            // ボタンを作成
-            buttons.forEach((buttonDef, index) => {
-                const button = document.createElement('button');
-                button.className = 'dialog-button';
-                button.textContent = buttonDef.label;
-
-                // デフォルトボタンにマーク
-                if (index === defaultButton) {
-                    button.classList.add('default');
+            // ダイアログを閉じて結果を返す共通処理
+            const closeAndResolve = (value) => {
+                if (keyboardHandler) {
+                    document.removeEventListener('keydown', keyboardHandler);
                 }
-
-                button.addEventListener('click', () => {
-                    this.hideMessageDialog();
-                    resolve(buttonDef.value);
-                });
-
-                buttonsContainer.appendChild(button);
-            });
-
-            // Enterキーでデフォルトボタンを押す
-            const handleKeyDown = (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    this.hideMessageDialog();
-                    document.removeEventListener('keydown', handleKeyDown);
-                    resolve(buttons[defaultButton].value);
-                }
+                this.hideMessageDialog();
+                resolve(value);
             };
-            document.addEventListener('keydown', handleKeyDown);
+
+            // 共通処理でボタンを作成
+            const buttonElements = this.createDialogButtons(
+                buttonsContainer,
+                buttons,
+                defaultButton,
+                closeAndResolve
+            );
+
+            // 共通処理でキーボードハンドラを設定（Tab/Enter対応）
+            keyboardHandler = this.setupDialogKeyboardHandler(
+                buttonsContainer,
+                defaultButton,
+                closeAndResolve
+            );
 
             // プラグインにダイアログ表示を通知
             this.notifyDialogOpened();
@@ -94,9 +175,8 @@ export class DialogManager {
             dialog.style.display = 'block';
 
             // デフォルトボタンにフォーカス
-            const defaultBtn = buttonsContainer.children[defaultButton];
-            if (defaultBtn) {
-                defaultBtn.focus();
+            if (buttonElements[defaultButton]) {
+                buttonElements[defaultButton].focus();
             }
         });
     }
@@ -223,38 +303,32 @@ export class DialogManager {
                 };
             };
 
-            // ボタンをクリア
-            buttonsContainer.innerHTML = '';
+            // キーボードハンドラ参照用
+            let keyboardHandler = null;
 
-            // ボタンを作成
-            buttons.forEach((buttonDef, index) => {
-                const button = document.createElement('button');
-                button.className = 'dialog-button';
-                button.textContent = buttonDef.label;
-
-                // デフォルトボタンにマーク
-                if (index === defaultButton) {
-                    button.classList.add('default');
+            // ダイアログを閉じて結果を返す共通処理
+            const closeAndResolve = (buttonValue) => {
+                if (keyboardHandler) {
+                    document.removeEventListener('keydown', keyboardHandler);
                 }
-
-                button.addEventListener('click', () => {
-                    this.hideInputDialog();
-                    resolve(getResult(buttonDef.value));
-                });
-
-                buttonsContainer.appendChild(button);
-            });
-
-            // Enterキーでデフォルトボタンを押す
-            const handleKeyDown = (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    this.hideInputDialog();
-                    document.removeEventListener('keydown', handleKeyDown);
-                    resolve(getResult(buttons[defaultButton].value));
-                }
+                this.hideInputDialog();
+                resolve(getResult(buttonValue));
             };
-            document.addEventListener('keydown', handleKeyDown);
+
+            // 共通処理でボタンを作成
+            this.createDialogButtons(
+                buttonsContainer,
+                buttons,
+                defaultButton,
+                closeAndResolve
+            );
+
+            // 共通処理でキーボードハンドラを設定（Tab/Enter対応）
+            keyboardHandler = this.setupDialogKeyboardHandler(
+                buttonsContainer,
+                defaultButton,
+                closeAndResolve
+            );
 
             // プラグインにダイアログ表示を通知
             this.notifyDialogOpened();
@@ -263,7 +337,7 @@ export class DialogManager {
             overlay.style.display = 'block';
             dialog.style.display = 'block';
 
-            // 入力欄にフォーカス
+            // 入力欄にフォーカス（入力ダイアログは入力欄を最初にフォーカス）
             setTimeout(() => {
                 inputField.focus();
                 inputField.select();
@@ -326,117 +400,105 @@ export class DialogManager {
                 }, 0);
             });
 
-            // ボタンをクリア
-            buttonsContainer.innerHTML = '';
+            // フォームデータ収集関数（共通化）
+            const collectFormData = () => {
+                let checkboxValue = false;
+                let textValue = '';
+                let radiosValue = {};
 
-            // ボタンを作成
-            buttons.forEach((buttonDef, index) => {
-                const button = document.createElement('button');
-                button.className = 'dialog-button';
-                button.textContent = buttonDef.label;
-
-                // デフォルトボタンにマーク
-                if (index === defaultButton) {
-                    button.classList.add('default');
+                if (inputs.checkbox) {
+                    const checkboxElement = document.getElementById(inputs.checkbox);
+                    if (checkboxElement) {
+                        checkboxValue = checkboxElement.checked;
+                    }
                 }
 
-                button.addEventListener('click', () => {
-                    // 入力値を取得
-                    let checkboxValue = false;
-                    let textValue = '';
-                    let radiosValue = {};
+                if (inputs.text) {
+                    const textElement = document.getElementById(inputs.text);
+                    if (textElement) {
+                        textValue = textElement.value;
+                    }
+                }
 
-                    if (inputs.checkbox) {
-                        const checkboxElement = document.getElementById(inputs.checkbox);
-                        if (checkboxElement) {
-                            checkboxValue = checkboxElement.checked;
+                // ラジオボタンの値を取得
+                if (inputs.radios) {
+                    for (const [key, radioName] of Object.entries(inputs.radios)) {
+                        const radioElement = messageText.querySelector(`input[name="${radioName}"]:checked`);
+                        if (radioElement) {
+                            radiosValue[key] = radioElement.value;
                         }
                     }
+                }
 
-                    if (inputs.text) {
-                        const textElement = document.getElementById(inputs.text);
-                        if (textElement) {
-                            textValue = textElement.value;
-                        }
+                // ダイアログ内の全入力要素を自動収集 (formData)
+                const formData = {};
+                // テキスト入力、数値入力
+                messageText.querySelectorAll('input[id][type="text"], input[id][type="number"], input[id]:not([type])').forEach(el => {
+                    formData[el.id] = el.value;
+                });
+                // セレクトボックス
+                messageText.querySelectorAll('select[id]').forEach(el => {
+                    formData[el.id] = el.value;
+                });
+                // チェックボックス
+                messageText.querySelectorAll('input[id][type="checkbox"]').forEach(el => {
+                    formData[el.id] = el.checked;
+                });
+                // ラジオボタン (name属性でグループ化)
+                const radioNames = new Set();
+                messageText.querySelectorAll('input[type="radio"][name]').forEach(el => {
+                    radioNames.add(el.name);
+                });
+                radioNames.forEach(name => {
+                    const checked = messageText.querySelector(`input[type="radio"][name="${name}"]:checked`);
+                    if (checked) {
+                        formData[name] = checked.value;
                     }
-
-                    // ラジオボタンの値を取得
-                    if (inputs.radios) {
-                        for (const [key, radioName] of Object.entries(inputs.radios)) {
-                            const radioElement = messageText.querySelector(`input[name="${radioName}"]:checked`);
-                            if (radioElement) {
-                                radiosValue[key] = radioElement.value;
-                            }
-                        }
-                    }
-
-                    // ダイアログ要素への参照を保持
-                    const dialogElement = messageText.cloneNode(true);
-
-                    this.hideInputDialog();
-                    resolve({
-                        button: buttonDef.value,
-                        checkbox: checkboxValue,
-                        input: textValue,
-                        radios: radiosValue,
-                        inputs: { columnCount: textValue },
-                        dialogElement: dialogElement
-                    });
                 });
 
-                buttonsContainer.appendChild(button);
-            });
+                // ダイアログ要素への参照を保持
+                const dialogElement = messageText.cloneNode(true);
 
-            // Enterキーでデフォルトボタンを押す
-            const handleKeyDown = (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-
-                    // 入力値を取得
-                    let checkboxValue = false;
-                    let textValue = '';
-                    let radiosValue = {};
-
-                    if (inputs.checkbox) {
-                        const checkboxElement = document.getElementById(inputs.checkbox);
-                        if (checkboxElement) {
-                            checkboxValue = checkboxElement.checked;
-                        }
-                    }
-
-                    if (inputs.text) {
-                        const textElement = document.getElementById(inputs.text);
-                        if (textElement) {
-                            textValue = textElement.value;
-                        }
-                    }
-
-                    // ラジオボタンの値を取得
-                    if (inputs.radios) {
-                        for (const [key, radioName] of Object.entries(inputs.radios)) {
-                            const radioElement = messageText.querySelector(`input[name="${radioName}"]:checked`);
-                            if (radioElement) {
-                                radiosValue[key] = radioElement.value;
-                            }
-                        }
-                    }
-
-                    // ダイアログ要素への参照を保持
-                    const dialogElement = messageText.cloneNode(true);
-
-                    this.hideInputDialog();
-                    document.removeEventListener('keydown', handleKeyDown);
-                    resolve({
-                        button: buttons[defaultButton].value,
-                        checkbox: checkboxValue,
-                        input: textValue,
-                        radios: radiosValue,
-                        inputs: { columnCount: textValue },
-                        dialogElement: dialogElement
-                    });
-                }
+                return {
+                    checkbox: checkboxValue,
+                    input: textValue,
+                    radios: radiosValue,
+                    inputs: { columnCount: textValue },
+                    formData: formData,
+                    dialogElement: dialogElement
+                };
             };
-            document.addEventListener('keydown', handleKeyDown);
+
+            // キーボードハンドラ参照用
+            let keyboardHandler = null;
+
+            // ダイアログを閉じて結果を返す共通処理
+            const closeAndResolve = (buttonValue) => {
+                if (keyboardHandler) {
+                    document.removeEventListener('keydown', keyboardHandler);
+                }
+                const formData = collectFormData();
+                this.hideInputDialog();
+                resolve({
+                    button: buttonValue,
+                    ...formData
+                });
+            };
+
+            // 共通処理でボタンを作成
+            this.createDialogButtons(
+                buttonsContainer,
+                buttons,
+                defaultButton,
+                closeAndResolve
+            );
+
+            // 共通処理でキーボードハンドラを設定（Tab/Enter対応）
+            keyboardHandler = this.setupDialogKeyboardHandler(
+                buttonsContainer,
+                defaultButton,
+                closeAndResolve
+            );
 
             // プラグインにダイアログ表示を通知
             this.notifyDialogOpened();

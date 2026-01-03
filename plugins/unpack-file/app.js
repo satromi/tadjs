@@ -49,16 +49,15 @@ class UnpackFileManager extends window.PluginBase {
         this.messageBus.on('init', async (data) => {
             logger.info('[UnpackFile] init受信', data);
 
-            // ウィンドウIDを保存
-            this.windowId = data.windowId;
-            // MessageBusにもwindowIdを設定（レスポンスルーティング用）
-            if (data.windowId) {
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
 
             if (data.fileData) {
                 this.rawData = data.fileData.rawData;
-                this.fileName = data.fileData.fileName || data.fileData.displayName || 'archive';
+                // 実身名を取得（displayName優先）
+                this.fileName = data.fileData.displayName ||
+                                data.fileData.name ||
+                                'archive';
 
                 // realIdを保存（拡張子を除去）
                 let rawId = data.fileData.realId || data.fileData.fileId;

@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "type": "accessory",
   "basefile": {
-    "json": "019a0035-7890-7abc-8000-1111aaaabbbb.json",
-    "xmltad": "019a0035-7890-7abc-8000-1111aaaabbbb_0.xtad",
-    "ico": "019a0035-7890-7abc-8000-1111aaaabbbb.ico"
+    "json": "019a0035-7890-7abc-8e4f-b1c2d3e4f5a6.json",
+    "xmltad": "019a0035-7890-7abc-8e4f-b1c2d3e4f5a6_0.xtad",
+    "ico": "019a0035-7890-7abc-8e4f-b1c2d3e4f5a6.ico"
   },
   "description": "ユーザごとの環境設定を行います",
   "icon": "👤",

@@ -53,7 +53,7 @@ export class ToolPanelManager {
         // panelposが指定されていればそれを使用、なければデフォルト位置
         const pos = panelpos || { x: 50, y: 50 };
         // panelsizeが指定されていればそれを使用、なければデフォルトサイズ
-        const size = panelsize || { width: 390, height: 80 };
+        const size = panelsize || { width: 424, height: 80 };
         logger.info('[ToolPanelManager] 道具パネル位置:', pos, 'サイズ:', size);
 
         const windowId = this.createWindow('道具パネル', content, {
@@ -447,9 +447,9 @@ export class ToolPanelManager {
                 this.sendToToolPanelSource(source, 'popup-line-width-change', {
                     lineWidth: parseInt(e.target.value)
                 });
-            } else if (e.target.id === 'linePatternSelect') {
-                this.sendToToolPanelSource(source, 'popup-line-pattern-change', {
-                    linePattern: e.target.value
+            } else if (e.target.id === 'lineTypeSelect') {
+                this.sendToToolPanelSource(source, 'popup-line-type-change', {
+                    lineType: parseInt(e.target.value)
                 });
             } else if (e.target.id === 'lineConnectionTypeSelect') {
                 this.sendToToolPanelSource(source, 'popup-line-connection-type-change', {

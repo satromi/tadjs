@@ -1,0 +1,316 @@
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 11px;
+    background: #dedede;
+    overflow: hidden;
+    height: 100%;
+}
+
+.plugin-content {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: auto;
+    /* 親ウィンドウのカスタムスクロールバー領域を避ける */
+    padding-right: var(--scrollbar-width, 12px);
+    padding-bottom: var(--scrollbar-width, 12px);
+    box-sizing: border-box;
+}
+
+/* カスタムスクロールバー用：ネイティブスクロールバー非表示 */
+.plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+.plugin-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE, Edge */
+}
+
+.calendar-container {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    overflow: visible;
+    background: #dedede;
+}
+
+/* ナビゲーションバー */
+.calendar-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    height: 40px;
+    padding: 0 10px;
+    background: #e0e0e0;
+    border-bottom: 1px solid #808080;
+    flex-shrink: 0;
+}
+
+.nav-button {
+    padding: 4px 12px;
+    background: #c0c0c0;
+    border: 1px solid #808080;
+    border-radius: 2px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.nav-button:hover {
+    background: #d0d0d0;
+}
+
+.nav-button:active {
+    background: #b0b0b0;
+}
+
+.current-month {
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    padding: 4px 12px;
+    border-radius: 2px;
+}
+
+.current-month:hover {
+    background: #d0d0d0;
+}
+
+/* 曜日ヘッダー */
+.weekday-header {
+    display: flex;
+    height: 30px;
+    background: #e0e0e0;
+    border-bottom: 1px solid #808080;
+    flex-shrink: 0;
+}
+
+.weekday {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+    font-size: 12px;
+    border-right: 1px solid #c0c0c0;
+}
+
+.weekday:last-child {
+    border-right: none;
+}
+
+.weekday.sunday {
+    color: #cc0000;
+}
+
+.weekday.saturday {
+    color: #0000cc;
+}
+
+/* カレンダーグリッド */
+.calendar-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    grid-template-rows: repeat(6, 1fr);
+    gap: 1px;
+    background: #808080;
+    padding: 1px;
+    position: relative;
+}
+
+/* 日セル */
+.day-cell {
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    cursor: pointer;
+    min-height: 0;
+}
+
+.day-cell:hover {
+    background: #f8f8f8;
+}
+
+.day-cell.other-month {
+    background: #f0f0f0;
+}
+
+.day-cell.other-month:hover {
+    background: #e8e8e8;
+}
+
+.day-cell.today {
+    background: #ffffd0;
+}
+
+.day-cell.today:hover {
+    background: #ffffc0;
+}
+
+/* 日付番号 */
+.day-number {
+    padding: 2px 4px;
+    font-size: 12px;
+    font-weight: bold;
+    flex-shrink: 0;
+}
+
+.day-number.sunday {
+    color: #cc0000;
+}
+
+.day-number.saturday {
+    color: #0000cc;
+}
+
+.day-number.other-month {
+    color: #808080;
+}
+
+/* 予定エリア */
+.day-events {
+    flex: 1;
+    overflow-y: auto;
+    padding: 2px;
+    min-height: 0;
+}
+
+/* 仮身（予定）アイテム */
+.event-item {
+    display: flex;
+    align-items: center;
+    padding: 2px 4px;
+    margin-bottom: 2px;
+    background: #e8f4ff;
+    border: 1px solid #b0c0d0;
+    border-radius: 2px;
+    font-size: 10px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.event-item:hover {
+    background: #d0e8ff;
+}
+
+.event-item .event-icon {
+    width: 12px;
+    height: 12px;
+    margin-right: 4px;
+    flex-shrink: 0;
+}
+
+.event-item .event-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 選択状態 */
+.event-item.selected {
+    background: #000080;
+    color: #ffffff;
+    border-color: #000040;
+}
+
+/* 年月選択ダイアログ */
+.year-month-dialog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.3);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.year-month-dialog.hidden {
+    display: none;
+}
+
+.dialog-content {
+    background: #dedede;
+    border: 2px solid #808080;
+    padding: 16px;
+    min-width: 200px;
+}
+
+.dialog-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.dialog-row label {
+    width: 40px;
+    font-weight: bold;
+}
+
+.dialog-row select {
+    flex: 1;
+    padding: 4px;
+    font-size: 12px;
+}
+
+.dialog-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.dialog-buttons button {
+    padding: 6px 16px;
+    background: #c0c0c0;
+    border: 1px solid #808080;
+    border-radius: 2px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.dialog-buttons button:hover {
+    background: #d0d0d0;
+}
+
+.dialog-buttons button:active {
+    background: #b0b0b0;
+}
+
+/* スクロールバー（イベントエリア用） */
+.day-events::-webkit-scrollbar {
+    width: 6px;
+}
+
+.day-events::-webkit-scrollbar-track {
+    background: #f0f0f0;
+}
+
+.day-events::-webkit-scrollbar-thumb {
+    background: #c0c0c0;
+    border-radius: 3px;
+}
+
+.day-events::-webkit-scrollbar-thumb:hover {
+    background: #a0a0a0;
+}
+
+/* 仮身アイコン */
+.virtual-object-icon {
+    width: 12px;
+    height: 12px;
+    margin-right: 4px;
+    flex-shrink: 0;
+    object-fit: contain;
+}

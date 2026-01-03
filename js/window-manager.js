@@ -347,14 +347,14 @@ export class WindowManager {
             if (iframe) {
                 try {
                     iframe.focus();
-                    logger.info('iframeにフォーカスを設定:', windowId);
+                    logger.debug('iframeにフォーカスを設定:', windowId);
                 } catch (error) {
                     logger.warn('iframeへのフォーカス設定に失敗:', error);
                 }
             } else {
                 try {
                     window.element.focus();
-                    logger.info('ウィンドウ要素にフォーカスを設定:', windowId);
+                    logger.debug('ウィンドウ要素にフォーカスを設定:', windowId);
                 } catch (error) {
                     logger.warn('ウィンドウへのフォーカス設定に失敗:', error);
                 }
@@ -402,7 +402,7 @@ export class WindowManager {
         }
 
         if (maximizable === false && !windowInfo.isMaximized) {
-            logger.info('maximizable=falseのため全画面化をスキップ');
+            logger.debug('maximizable=falseのため全画面化をスキップ');
             return;
         }
 

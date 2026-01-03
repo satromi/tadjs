@@ -78,12 +78,8 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         this.messageBus.on('init', async (data) => {
             logger.info('[VirtualObjectNetwork] init受信:', data);
 
-            // ウィンドウIDを保存
-            if (data.windowId) {
-                this.windowId = data.windowId;
-                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
 
             // 起点の実身IDを取得（fileData内にネストされている）
             const startRealId = data.fileData?.startRealId || data.startRealId;
@@ -96,19 +92,8 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             }
         });
 
-        // メニューアクション
-        this.messageBus.on('menu-action', (data) => {
-            this.handleMenuAction(data.action);
-        });
-
-        // メニュー定義要求
-        this.messageBus.on('get-menu-definition', (data) => {
-            const menuDefinition = this.getMenuDefinition();
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: menuDefinition
-            });
-        });
+        // menu-action, get-menu-definition は setupCommonMessageBusHandlers() で登録済み
+        // getMenuDefinition() と executeMenuAction() をオーバーライドして処理
 
         // ネットワークデータ応答
         this.messageBus.on('virtual-object-network-response', (data) => {
@@ -519,9 +504,8 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             e.preventDefault();
             e.stopPropagation();
             this.selectNode(node);
-            // コンテキストメニュー要求を送信
-            const rect = window.frameElement?.getBoundingClientRect() || { left: 0, top: 0 };
-            this.requestContextMenu(rect.left + e.clientX, rect.top + e.clientY);
+            // コンテキストメニュー要求を送信（共通メソッドを使用）
+            this.showContextMenuAtEvent(e);
         });
 
         // ドラッグ設定
@@ -696,8 +680,9 @@ class VirtualObjectNetworkApp extends window.PluginBase {
 
     /**
      * メニューアクション処理
+     * setupCommonMessageBusHandlers() の menu-action ハンドラから呼ばれる
      */
-    async handleMenuAction(action) {
+    async executeMenuAction(action) {
         switch (action) {
             case 'toggle-fullscreen':
                 this.toggleFullscreen();

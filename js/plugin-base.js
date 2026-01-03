@@ -8,6 +8,7 @@ import {
 } from './util.js';
 import { getLogger } from './logger.js';
 import { throttle } from './performance-utils.js';
+import { PaperSize, PaperMargin, PAPER_SIZES, getPaperSizeOptions, pointsToMm, mmToPoints } from './paper-size.js';
 
 const logger = getLogger('PluginBase');
 
@@ -62,6 +63,17 @@ export class PluginBase {
             dragThreshold: 5               // ドラッグ判定しきい値(px)
         };
 
+        // 範囲選択（矩形選択）共通状態管理
+        this.rangeSelectionState = {
+            isActive: false,       // 範囲選択中フラグ
+            startX: 0,             // 開始X座標（コンテナ相対）
+            startY: 0,             // 開始Y座標（コンテナ相対）
+            endX: 0,               // 終了X座標（コンテナ相対）
+            endY: 0,               // 終了Y座標（コンテナ相対）
+            element: null,         // 選択枠DOM要素
+            container: null        // 選択枠を配置するコンテナ
+        };
+
         // 親ウィンドウのダイアログ表示状態
         this.dialogVisible = false;
 
@@ -77,8 +89,27 @@ export class PluginBase {
         // window-maximize-toggledで同期される
         this.isFullscreen = false;
 
+        // コンテキストメニュー表示時のマウス位置（貼り付け位置に使用）
+        this.lastContextMenuPosition = { x: 0, y: 0 };
+
         // ファイルデータ（initハンドラで設定）
         this.fileData = null;
+
+        // 用紙サイズ設定
+        this.paperSize = null;    // PaperSizeインスタンス
+        this.paperMargin = null;  // PaperMarginインスタンス
+
+        // ドキュメントスケール設定（<docScale>要素から読み込み）
+        this.docScale = {
+            hunit: -72,  // 水平方向スケール単位（UNITS型、デフォルト: -72 = 72DPI）
+            vunit: -72   // 垂直方向スケール単位（UNITS型、デフォルト: -72 = 72DPI）
+        };
+
+        // ドキュメントテキスト設定（<text>要素から読み込み、将来拡張用）
+        this.docText = {
+            lang: 0,     // 言語コード
+            bpat: 0      // 背景パターン
+        };
 
         // 選択範囲の保存用（ウィンドウ非アクティブ時に保存）
         this.savedSelection = null;
@@ -123,6 +154,26 @@ export class PluginBase {
         if (window.IconCacheManager && this.messageBus && !this.iconManager) {
             this.iconManager = new window.IconCacheManager(this.messageBus, logPrefix);
             logger.debug(`[${this.pluginName}] IconCacheManager initialized`);
+        }
+
+        // スクロールバー幅のCSS変数をiframe内に設定
+        // 親ウィンドウのカスタムスクロールバー領域を避けるために使用
+        this._initScrollbarWidthVariable();
+    }
+
+    /**
+     * スクロールバー幅のCSS変数をiframe内に設定
+     * localStorageから読み取り、--scrollbar-width変数を設定
+     * @private
+     */
+    _initScrollbarWidthVariable() {
+        try {
+            const scrollbarWidth = localStorage.getItem('scrollbar-width') || '12';
+            document.documentElement.style.setProperty('--scrollbar-width', scrollbarWidth + 'px');
+            logger.debug(`[${this.pluginName}] Scrollbar width CSS variable set: ${scrollbarWidth}px`);
+        } catch (error) {
+            // localStorageアクセスエラー時はデフォルト値を使用
+            document.documentElement.style.setProperty('--scrollbar-width', '12px');
         }
     }
 
@@ -289,7 +340,7 @@ export class PluginBase {
                     { label: '保存', value: 'yes' }
                 ]
             }, (response) => {
-                logger.info(`[${this.pluginName}] 保存確認ダイアログコールバック実行:`, response);
+                logger.debug(`[${this.pluginName}] 保存確認ダイアログコールバック実行:`, response);
 
                 // null/undefinedチェック（タイムアウト等の異常時対応）
                 if (response == null) {
@@ -308,7 +359,7 @@ export class PluginBase {
                 }
 
                 // dialogResult は 'yes', 'no', 'cancel' の文字列
-                logger.info(`[${this.pluginName}] ボタンが押されました, value:`, dialogResult);
+                logger.debug(`[${this.pluginName}] ボタンが押されました, value:`, dialogResult);
                 resolve(dialogResult);
             }, DIALOG_TIMEOUT_MS);
         });
@@ -342,7 +393,7 @@ export class PluginBase {
                 ],
                 defaultButton: 1
             }, (result) => {
-                logger.info(`[${this.pluginName}] 入力ダイアログコールバック実行:`, result);
+                logger.debug(`[${this.pluginName}] 入力ダイアログコールバック実行:`, result);
 
                 // null/undefinedチェック（タイムアウト等の異常時対応）
                 if (result == null) {
@@ -362,10 +413,10 @@ export class PluginBase {
 
                 // 「取り消し」ボタンの場合はnullを返す
                 if (dialogResult.button === 'cancel') {
-                    logger.info(`[${this.pluginName}] キャンセルされました`);
+                    logger.debug(`[${this.pluginName}] キャンセルされました`);
                     resolve(null);
                 } else {
-                    logger.info(`[${this.pluginName}] 設定ボタンが押されました, value:`, dialogResult.value);
+                    logger.debug(`[${this.pluginName}] 設定ボタンが押されました, value:`, dialogResult.value);
                     // checkboxオプションが指定されている場合はオブジェクトで返す
                     if (options.checkbox) {
                         resolve({
@@ -401,7 +452,7 @@ export class PluginBase {
                 buttons: buttons,
                 defaultButton: defaultButton
             }, (result) => {
-                logger.info(`[${this.pluginName}] メッセージダイアログコールバック実行:`, result);
+                logger.debug(`[${this.pluginName}] メッセージダイアログコールバック実行:`, result);
 
                 // null/undefinedチェック（タイムアウト等の異常時対応）
                 if (result == null) {
@@ -419,7 +470,7 @@ export class PluginBase {
                     return;
                 }
 
-                logger.info(`[${this.pluginName}] ボタンが押されました:`, dialogResult);
+                logger.debug(`[${this.pluginName}] ボタンが押されました:`, dialogResult);
                 resolve(dialogResult);
             }, DIALOG_TIMEOUT_MS);
         });
@@ -616,6 +667,355 @@ export class PluginBase {
         this.messageBus.send('context-menu-request', { x, y });
     }
 
+    /**
+     * 指定座標にコンテキストメニューを表示
+     * iframe座標を親ウィンドウ座標に変換して送信
+     *
+     * @param {number} x - X座標（iframe内ビューポート座標）
+     * @param {number} y - Y座標（iframe内ビューポート座標）
+     */
+    showContextMenu(x, y) {
+        const rect = window.frameElement?.getBoundingClientRect() || { left: 0, top: 0 };
+        this.requestContextMenu(rect.left + x, rect.top + y);
+    }
+
+    /**
+     * マウスイベントからコンテキストメニューを表示
+     * イベントのclientX/clientYを親ウィンドウ座標に変換して送信
+     *
+     * @param {MouseEvent} e - contextmenuイベント
+     */
+    showContextMenuAtEvent(e) {
+        // 貼り付け位置として使用するためマウス位置を保存
+        this.lastContextMenuPosition = { x: e.clientX, y: e.clientY };
+        this.showContextMenu(e.clientX, e.clientY);
+    }
+
+    /**
+     * 最後のコンテキストメニュー表示位置を取得
+     * 貼り付け操作時に使用
+     *
+     * @returns {{x: number, y: number}} マウス座標
+     */
+    getLastContextMenuPosition() {
+        return this.lastContextMenuPosition;
+    }
+
+    // ========================================
+    // 座標変換（共通）
+    // ========================================
+
+    /**
+     * 座標変換を適用
+     * 変形順序: 傾斜(vangle) → 回転(hangle) → 移動(dh,dv)
+     *
+     * @param {number} x 元のX座標
+     * @param {number} y 元のY座標
+     * @param {Object} transform 変換パラメータ
+     * @param {number} transform.dh 水平移動量
+     * @param {number} transform.dv 垂直移動量
+     * @param {number} transform.hangle 回転角度（度）
+     * @param {number} transform.vangle 傾斜角度（度）
+     * @returns {{x: number, y: number}} 変換後の座標
+     */
+    applyCoordinateTransform(x, y, transform) {
+        let newX = x;
+        let newY = y;
+
+        // 1. 傾斜処理（vangle）
+        if (transform.vangle && transform.vangle !== 0) {
+            const vangleRad = transform.vangle * Math.PI / 180;
+            const shear = Math.tan(vangleRad);
+            newX = newX + newY * shear;
+        }
+
+        // 2. 回転処理（hangle）
+        if (transform.hangle && transform.hangle !== 0) {
+            const hangleRad = transform.hangle * Math.PI / 180;
+            const cos = Math.cos(hangleRad);
+            const sin = Math.sin(hangleRad);
+            const rotatedX = newX * cos - newY * sin;
+            const rotatedY = newX * sin + newY * cos;
+            newX = rotatedX;
+            newY = rotatedY;
+        }
+
+        // 3. 移動処理（dh, dv）
+        newX += transform.dh || 0;
+        newY += transform.dv || 0;
+
+        return { x: Math.round(newX), y: Math.round(newY) };
+    }
+
+    /**
+     * 座標配列に変換を適用
+     * @param {Array} points [[x1,y1], [x2,y2], ...] 形式
+     * @param {Object} transform 変換パラメータ
+     * @returns {Array} 変換後の座標配列
+     */
+    applyCoordinateTransformToPoints(points, transform) {
+        return points.map(point => {
+            const transformed = this.applyCoordinateTransform(point[0], point[1], transform);
+            return [transformed.x, transformed.y];
+        });
+    }
+
+    // ========================================
+    // 範囲選択（矩形選択）
+    // ========================================
+
+    /**
+     * 範囲選択を開始
+     * マウスダウン時に呼び出し、選択枠DOM要素を作成
+     * @param {HTMLElement} container - 選択枠を配置するコンテナ要素
+     * @param {number} x - 開始X座標（コンテナ相対）
+     * @param {number} y - 開始Y座標（コンテナ相対）
+     */
+    startRangeSelection(container, x, y) {
+        // 既存の選択枠があれば削除
+        this.endRangeSelection();
+
+        // 状態を初期化
+        this.rangeSelectionState.isActive = true;
+        this.rangeSelectionState.container = container;
+        this.rangeSelectionState.startX = x;
+        this.rangeSelectionState.startY = y;
+        this.rangeSelectionState.endX = x;
+        this.rangeSelectionState.endY = y;
+
+        // DOM要素を作成
+        const rect = document.createElement('div');
+        rect.className = 'range-selection-rect';
+        rect.style.left = `${x}px`;
+        rect.style.top = `${y}px`;
+        rect.style.width = '0px';
+        rect.style.height = '0px';
+        container.appendChild(rect);
+        this.rangeSelectionState.element = rect;
+    }
+
+    /**
+     * 範囲選択位置を更新
+     * マウスムーブ時に呼び出し、選択枠のサイズと位置を更新
+     * @param {number} x - 現在のX座標（コンテナ相対）
+     * @param {number} y - 現在のY座標（コンテナ相対）
+     */
+    updateRangeSelection(x, y) {
+        if (!this.rangeSelectionState.isActive) return;
+
+        this.rangeSelectionState.endX = x;
+        this.rangeSelectionState.endY = y;
+
+        const bounds = this.getRangeSelectionBounds();
+        const element = this.rangeSelectionState.element;
+        if (element) {
+            element.style.left = `${bounds.left}px`;
+            element.style.top = `${bounds.top}px`;
+            element.style.width = `${bounds.width}px`;
+            element.style.height = `${bounds.height}px`;
+        }
+    }
+
+    /**
+     * 範囲選択を終了
+     * マウスアップ時に呼び出し、選択枠DOM要素を削除
+     */
+    endRangeSelection() {
+        if (this.rangeSelectionState.element) {
+            this.rangeSelectionState.element.remove();
+            this.rangeSelectionState.element = null;
+        }
+        this.rangeSelectionState.isActive = false;
+        this.rangeSelectionState.container = null;
+    }
+
+    /**
+     * 範囲選択の正規化された座標を取得
+     * 開始点と終了点を正規化し、left/top/right/bottom/width/heightを返す
+     * @returns {Object} { left, top, right, bottom, width, height }
+     */
+    getRangeSelectionBounds() {
+        const { startX, startY, endX, endY } = this.rangeSelectionState;
+        return {
+            left: Math.min(startX, endX),
+            top: Math.min(startY, endY),
+            right: Math.max(startX, endX),
+            bottom: Math.max(startY, endY),
+            width: Math.abs(endX - startX),
+            height: Math.abs(endY - startY)
+        };
+    }
+
+    /**
+     * 指定した矩形が範囲選択と交差するか判定
+     * 部分的に含まれていればtrueを返す
+     * @param {number} left - 判定対象の左座標
+     * @param {number} top - 判定対象の上座標
+     * @param {number} right - 判定対象の右座標
+     * @param {number} bottom - 判定対象の下座標
+     * @returns {boolean} 交差している場合true
+     */
+    isRectInRangeSelection(left, top, right, bottom) {
+        if (!this.rangeSelectionState.isActive) return false;
+
+        const bounds = this.getRangeSelectionBounds();
+
+        // 矩形の交差判定（部分的に含まれていればtrue）
+        return !(right < bounds.left ||
+                 left > bounds.right ||
+                 bottom < bounds.top ||
+                 top > bounds.bottom);
+    }
+
+    // ========================================
+    // 用紙サイズ関連
+    // ========================================
+
+    /**
+     * XML<paper>要素を解析してpaperSize/paperMarginを設定
+     * @param {Element} element - paper要素
+     */
+    parsePaperElement(element) {
+        if (!element) return;
+
+        // マージン属性がある場合はPaperMarginとして解析
+        if (element.hasAttribute('margintop')) {
+            if (!this.paperMargin) {
+                this.paperMargin = new PaperMargin();
+            }
+            this.paperMargin.parseFromElement(element);
+        } else {
+            // 用紙サイズ属性がある場合はPaperSizeとして解析
+            if (element.hasAttribute('length') || element.hasAttribute('width')) {
+                if (!this.paperSize) {
+                    this.paperSize = new PaperSize();
+                }
+                this.paperSize.parseFromElement(element);
+            }
+        }
+    }
+
+    /**
+     * 用紙サイズをmm単位で取得
+     * @returns {{width: number, height: number}} mm単位の幅と高さ
+     */
+    getPaperSizeInMm() {
+        if (this.paperSize) {
+            return {
+                width: this.paperSize.widthMm,
+                height: this.paperSize.lengthMm
+            };
+        }
+        // デフォルトはA4
+        return { width: 210, height: 297 };
+    }
+
+    /**
+     * 用紙サイズを初期化（A4デフォルト）
+     */
+    initPaperSize() {
+        this.paperSize = new PaperSize();
+    }
+
+    /**
+     * 用紙サイズ選択肢リストを取得
+     * @returns {Array} [{key, name, widthMm, lengthMm, label}, ...]
+     */
+    getPaperSizeOptions() {
+        return getPaperSizeOptions();
+    }
+
+    /**
+     * ポイントをmmに変換
+     * @param {number} points - ポイント値
+     * @returns {number} mm値
+     */
+    pointsToMm(points) {
+        return pointsToMm(points);
+    }
+
+    /**
+     * mmをポイントに変換
+     * @param {number} mm - mm値
+     * @returns {number} ポイント値
+     */
+    mmToPoints(mm) {
+        return mmToPoints(mm);
+    }
+
+    // ========================================
+    // docScale/docText関連（ドキュメント設定）
+    // ========================================
+
+    /**
+     * <docScale>要素をパース
+     * @param {Element} docScaleElement - docScale要素
+     * @returns {{ hunit: number, vunit: number }}
+     */
+    parseDocScaleElement(docScaleElement) {
+        if (!docScaleElement) return { hunit: -72, vunit: -72 };
+
+        return {
+            hunit: parseInt(docScaleElement.getAttribute('hunit'), 10) || -72,
+            vunit: parseInt(docScaleElement.getAttribute('vunit'), 10) || -72
+        };
+    }
+
+    /**
+     * <text>要素（文書設定用）をパース
+     * lang/bpat属性を持つtext要素のみ対象（位置指定用textは除外）
+     * @param {Element} textElement - text要素（docScale直後のもの）
+     * @returns {{ lang: number, bpat: number }}
+     */
+    parseDocTextElement(textElement) {
+        if (!textElement) return { lang: 0, bpat: 0 };
+
+        // lang属性を持つtext要素のみ対象
+        if (!textElement.hasAttribute('lang')) return { lang: 0, bpat: 0 };
+
+        return {
+            lang: parseInt(textElement.getAttribute('lang'), 10) || 0,
+            bpat: parseInt(textElement.getAttribute('bpat'), 10) || 0
+        };
+    }
+
+    /**
+     * <document>要素からスケール単位を取得
+     * @param {Element} documentElement - document要素
+     * @returns {{ hunit: number, vunit: number }}
+     */
+    parseDocumentUnits(documentElement) {
+        if (!documentElement) return { hunit: -72, vunit: -72 };
+
+        // <docScale>子要素から取得（小文字で検索）
+        const docScale = documentElement.querySelector('docscale');
+        if (docScale) {
+            return this.parseDocScaleElement(docScale);
+        }
+
+        // 見つからない場合はデフォルト値
+        return { hunit: -72, vunit: -72 };
+    }
+
+    /**
+     * <document>要素から文書設定を取得
+     * @param {Element} documentElement - document要素
+     * @returns {{ lang: number, bpat: number }}
+     */
+    parseDocumentText(documentElement) {
+        if (!documentElement) return { lang: 0, bpat: 0 };
+
+        // lang属性を持つ<text>要素を探す（小文字で検索）
+        const textElements = documentElement.querySelectorAll('text');
+        for (const textElem of textElements) {
+            if (textElem.hasAttribute('lang')) {
+                return this.parseDocTextElement(textElem);
+            }
+        }
+
+        return { lang: 0, bpat: 0 };
+    }
+
     // ========================================
     // イベントハンドラ設定（共通）
     // ========================================
@@ -655,7 +1055,7 @@ export class PluginBase {
             return;
         }
 
-        // スクロールコンテナをキャッシュ（notifyScrollChange用）
+        // スクロールコンテナをキャッシュ（onInit()での初期送信用）
         this._scrollContainer = container;
 
         // スクロールイベントをthrottle（16ms ≒ 60fps）
@@ -665,34 +1065,12 @@ export class PluginBase {
 
         container.addEventListener('scroll', throttledHandler);
 
-        // 初期状態を送信（windowIdが設定されるまでリトライ）
-        this._scheduleInitialScrollState(container, 0);
-
         this._scrollNotificationEnabled = true;
-        logger.debug(`[${this.pluginName}] スクロール通知初期化完了: ${this.scrollContainerSelector}`);
-    }
 
-    /**
-     * 初期スクロール状態の送信をスケジュール（windowId設定待ち）
-     * @param {HTMLElement} container - スクロールコンテナ
-     * @param {number} retryCount - リトライ回数
-     * @private
-     */
-    _scheduleInitialScrollState(container, retryCount) {
-        const maxRetries = 20; // 最大20回 × 100ms = 2秒
-        const retryInterval = 100;
-
+        // 既にwindowIdが設定されている場合は即座に送信
+        // （通常はonInit()で送信されるため、ここでは既存windowIdがある場合のみ）
         if (this.windowId) {
-            // windowIdが設定されている場合は即座に送信
             this._sendScrollState(container);
-            logger.debug(`[${this.pluginName}] 初期スクロール状態送信完了`);
-        } else if (retryCount < maxRetries) {
-            // windowIdが未設定の場合はリトライ
-            setTimeout(() => {
-                this._scheduleInitialScrollState(container, retryCount + 1);
-            }, retryInterval);
-        } else {
-            logger.warn(`[${this.pluginName}] 初期スクロール状態送信タイムアウト（windowId未設定）`);
         }
     }
 
@@ -1075,9 +1453,8 @@ export class PluginBase {
             // サブクラスでカスタム処理を行うフック
             this.onContextMenu?.(e);
 
-            // コンテキストメニュー要求を送信
-            const rect = window.frameElement?.getBoundingClientRect() || { left: 0, top: 0 };
-            this.requestContextMenu(rect.left + e.clientX, rect.top + e.clientY);
+            // コンテキストメニュー要求を送信（共通メソッドを使用）
+            this.showContextMenuAtEvent(e);
         });
 
         document.addEventListener('click', () => {
@@ -1243,6 +1620,28 @@ export class PluginBase {
         this.setClipboard({
             type: 'text',
             text: text
+        });
+    }
+
+    /**
+     * 図形グループをグローバルクリップボードに設定
+     * @param {Object} group - 図形グループオブジェクト
+     * @param {string} group.type - 'group'
+     * @param {Array} group.shapes - 子図形配列
+     * @param {number} group.startX - 左座標
+     * @param {number} group.startY - 上座標
+     * @param {number} group.endX - 右座標
+     * @param {number} group.endY - 下座標
+     */
+    setGroupClipboard(group) {
+        if (!group || group.type !== 'group') {
+            logger.error(`[${this.pluginName}] setGroupClipboard: 無効なグループ`);
+            return;
+        }
+
+        this.setClipboard({
+            type: 'group',
+            group: group
         });
     }
 
@@ -1756,6 +2155,27 @@ export class PluginBase {
      * - get-menu-definition: メニュー定義取得要求
      * - window-close-request: クローズ要求
      */
+    /**
+     * init メッセージ受信時の共通処理
+     * 各プラグインのinitハンドラ内で最初に呼び出すこと
+     *
+     * @param {Object} data - initメッセージのデータ
+     */
+    onInit(data) {
+        // windowIdを設定
+        if (data.windowId) {
+            this.windowId = data.windowId;
+            if (this.messageBus) {
+                this.messageBus.setWindowId(data.windowId);
+            }
+        }
+
+        // 初期スクロール状態を送信（スクロール通知が有効な場合）
+        if (this._scrollNotificationEnabled && this._scrollContainer) {
+            this._sendScrollState(this._scrollContainer);
+        }
+    }
+
     setupCommonMessageBusHandlers() {
         if (!this.messageBus) {
             logger.warn(`[${this.pluginName}] messageBusが初期化されていないため、共通ハンドラ登録をスキップ`);
@@ -1765,8 +2185,7 @@ export class PluginBase {
         // NOTE: initハンドラは各プラグインで個別に実装する必要がある
         // （MessageBusのon()は同じタイプのハンドラを上書きするため、共通化不可）
         // 各プラグインのinitハンドラで以下を実行すること:
-        //   1. this.windowId = data.windowId;
-        //   2. this.messageBus.setWindowId(data.windowId);
+        //   this.onInit(data);  // 共通初期化処理
 
         // window-moved メッセージ
         this.messageBus.on('window-moved', (data) => {
@@ -2365,6 +2784,171 @@ export class PluginBase {
     }
 
     // ========================================
+    // xmlTAD要素生成ヘルパー
+    // ========================================
+
+    /**
+     * document内テキスト領域用のdocView/docDraw/docScaleタグを生成
+     * @param {number} left - 左座標
+     * @param {number} top - 上座標
+     * @param {number} right - 右座標
+     * @param {number} bottom - 下座標
+     * @param {number} hunit - 水平スケール単位（デフォルト: -72）
+     * @param {number} vunit - 垂直スケール単位（デフォルト: -72）
+     * @returns {string} xmlTADタグ文字列
+     */
+    generateDocViewDrawScale(left, top, right, bottom, hunit = -72, vunit = -72) {
+        return `<docView viewleft="${left}" viewtop="${top}" viewright="${right}" viewbottom="${bottom}"/>\r\n` +
+               `<docDraw drawleft="${left}" drawtop="${top}" drawright="${right}" drawbottom="${bottom}"/>\r\n` +
+               `<docScale hunit="${hunit}" vunit="${vunit}"/>\r\n`;
+    }
+
+    /**
+     * text要素（document内）を生成
+     * @param {Object} options - オプション
+     * @param {number} options.lang - 言語コード（デフォルト: 0）
+     * @param {number} options.bpat - 背景パターン（デフォルト: 0）
+     * @param {number} options.zIndex - zIndex（省略可）
+     * @returns {string} xmlTADタグ文字列
+     */
+    generateTextElement(options = {}) {
+        const { lang = 0, bpat = 0, zIndex } = options;
+        const zIndexAttr = zIndex !== undefined ? ` zIndex="${zIndex}"` : '';
+        return `<text lang="${lang}" bpat="${bpat}"${zIndexAttr}/>\r\n`;
+    }
+
+    // ========================================
+    // 線属性（l_atr）解析
+    // ========================================
+
+    /**
+     * l_atr値からlineTypeとlineWidthを抽出
+     * l_atrは16ビット値で、上位8ビットが線種、下位8ビットが線幅
+     * @param {number|string} l_atr - 線属性値（16ビット）
+     * @returns {{lineType: number, lineWidth: number}}
+     */
+    parseLineAttribute(l_atr) {
+        const numValue = Number(l_atr) || 0;
+        return {
+            lineType: (numValue >> 8) & 0xFF,
+            lineWidth: numValue & 0xFF
+        };
+    }
+
+    /**
+     * lineTypeからCSSのlineDash配列を取得
+     * @param {number} lineType - 線種（0-5）
+     * @returns {number[]} setLineDash用の配列
+     */
+    getLinePatternForType(lineType) {
+        return PluginBase.LINE_PATTERN_DEFINITIONS[lineType] || [];
+    }
+
+    /**
+     * lineTypeをCanvasに適用
+     * @param {CanvasRenderingContext2D} ctx - Canvasコンテキスト
+     * @param {number|string} lineType - 線種（0-5 または 'solid'/'dashed'/'dotted'）
+     * @returns {number[]} 適用されたパターン配列
+     */
+    applyLineTypeToCanvas(ctx, lineType) {
+        // 文字列の場合は数値に変換（後方互換性）
+        let lineTypeNum = lineType;
+        if (typeof lineType === 'string') {
+            const mapping = { 'solid': 0, 'dashed': 1, 'dotted': 2 };
+            lineTypeNum = mapping[lineType] || 0;
+        }
+        lineTypeNum = Number(lineTypeNum) || 0;
+
+        const pattern = this.getLinePatternForType(lineTypeNum);
+        ctx.setLineDash(pattern);
+        return pattern;
+    }
+
+    /**
+     * lineTypeの表示名を取得
+     * @param {number} lineType - 線種（0-5）
+     * @returns {string} 日本語名
+     */
+    getLineTypeName(lineType) {
+        return PluginBase.LINE_TYPE_NAMES[lineType] || '実線';
+    }
+
+    /**
+     * linePatternをlineTypeに変換（後方互換用）
+     * @param {string} linePattern - 'solid'/'dashed'/'dotted'
+     * @returns {number} lineType (0-5)
+     */
+    linePatternToLineType(linePattern) {
+        const mapping = { 'solid': 0, 'dashed': 1, 'dotted': 2 };
+        return mapping[linePattern] || 0;
+    }
+
+    /**
+     * polyline要素を生成
+     * @param {string} points - 座標文字列 "x1,y1 x2,y2 ..."
+     * @param {Object} options - オプション
+     * @param {number} options.lineType - 線種（デフォルト: 0）
+     * @param {number} options.lineWidth - 線幅（デフォルト: 1）
+     * @param {number} options.l_pat - 線パターン（デフォルト: 0）
+     * @param {number} options.round - 角丸（デフォルト: 0）
+     * @param {number} options.start_arrow - 始点矢印（デフォルト: 0）
+     * @param {number} options.end_arrow - 終点矢印（デフォルト: 0）
+     * @param {string} options.strokeColor - 線色（デフォルト: '#000000'）
+     * @param {number} options.zIndex - zIndex（省略可）
+     * @returns {string} xmlTADタグ文字列
+     */
+    generatePolylineElement(points, options = {}) {
+        const {
+            lineType = 0,
+            lineWidth = 1,
+            l_pat = 0,
+            round = 0,
+            start_arrow = 0,
+            end_arrow = 0,
+            strokeColor = '#000000',
+            zIndex
+        } = options;
+        const zIndexAttr = zIndex !== undefined ? ` zIndex="${zIndex}"` : '';
+        return `<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" round="${round}" ` +
+               `start_arrow="${start_arrow}" end_arrow="${end_arrow}" ` +
+               `strokeColor="${strokeColor}" points="${points}"${zIndexAttr}/>\r\n`;
+    }
+
+    /**
+     * ellipse要素を生成（円の場合はrx=ryで呼び出す）
+     * @param {number} cx - 中心X座標
+     * @param {number} cy - 中心Y座標
+     * @param {number} rx - X方向半径
+     * @param {number} ry - Y方向半径
+     * @param {Object} options - オプション
+     * @param {number} options.lineType - 線種（デフォルト: 0）
+     * @param {number} options.lineWidth - 線幅（デフォルト: 0）
+     * @param {number} options.l_pat - 線パターン（デフォルト: 0）
+     * @param {number} options.f_pat - 塗りパターン（デフォルト: 1）
+     * @param {number} options.angle - 回転角度（デフォルト: 0）
+     * @param {string} options.strokeColor - 線色（デフォルト: '#000000'）
+     * @param {string} options.fillColor - 塗り色（デフォルト: '#000000'）
+     * @param {number} options.zIndex - zIndex（省略可）
+     * @returns {string} xmlTADタグ文字列
+     */
+    generateEllipseElement(cx, cy, rx, ry, options = {}) {
+        const {
+            lineType = 0,
+            lineWidth = 0,
+            l_pat = 0,
+            f_pat = 1,
+            angle = 0,
+            strokeColor = '#000000',
+            fillColor = '#000000',
+            zIndex
+        } = options;
+        const zIndexAttr = zIndex !== undefined ? ` zIndex="${zIndex}"` : '';
+        return `<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" ` +
+               `cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" ` +
+               `strokeColor="${strokeColor}" fillColor="${fillColor}"${zIndexAttr}/>\r\n`;
+    }
+
+    // ========================================
     // アイコン読み込みヘルパー
     // ========================================
 
@@ -2806,7 +3390,7 @@ export class PluginBase {
                 fileName: fileName
             });
 
-            logger.info(`[${this.pluginName}] 画像ファイル削除依頼:`, fileName);
+            logger.debug(`[${this.pluginName}] 画像ファイル削除依頼:`, fileName);
         } catch (error) {
             logger.error(`[${this.pluginName}] 画像ファイル削除依頼エラー:`, error);
         }
@@ -3263,6 +3847,580 @@ export class PluginBase {
     _isVobjAttrChanged(changes, attrName) {
         return attrName in changes;
     }
+
+    // ========================================
+    // 仮身サイズ計算メソッド
+    // ========================================
+
+    /**
+     * 仮身属性がサイズに影響するかを判定
+     * @param {Object} attrs - 変更された属性
+     * @returns {boolean} サイズに影響する場合true
+     */
+    _isVobjSizeAffectingAttrs(attrs) {
+        // サイズに影響する属性: 文字サイズ、表示項目
+        const sizeAffectingAttrs = ['chsz', 'pictdisp', 'namedisp', 'roledisp', 'typedisp', 'updatedisp'];
+        return sizeAffectingAttrs.some(attr => attr in attrs && attrs[attr] !== undefined);
+    }
+
+    /**
+     * 仮身テキスト幅を測定（Canvas API使用）
+     * @param {string} text - 測定するテキスト
+     * @param {number} fontSizePx - フォントサイズ（ピクセル）
+     * @returns {number} 幅（ピクセル、切り上げ）
+     */
+    _measureVobjTextWidth(text, fontSizePx) {
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        // 仮身表示で使用するフォントファミリー
+        context.font = `${fontSizePx}px 'Noto Sans JP', 'Yu Gothic', 'Meiryo', sans-serif`;
+        return Math.ceil(context.measureText(text).width);
+    }
+
+    /**
+     * 閉じた仮身の幅を計算
+     * @param {Object} options - 計算オプション
+     * @param {string} options.linkName - 仮身名（表示テキスト）
+     * @param {number} options.chszPx - 文字サイズ（ピクセル）
+     * @param {boolean} options.showPict - アイコン表示するか
+     * @param {boolean} [options.showName=true] - 名称を表示するか
+     * @param {string} [options.roleText=''] - 続柄テキスト
+     * @param {string} [options.typeText=''] - タイプテキスト
+     * @param {string} [options.updateText=''] - 更新日時テキスト
+     * @returns {number} 幅（ピクセル）
+     */
+    _calculateCollapsedVobjWidth(options) {
+        const {
+            linkName = '',
+            chszPx,
+            showPict = true,
+            showName = true,
+            roleText = '',
+            typeText = '',
+            updateText = ''
+        } = options;
+
+        // テキスト部分の幅を計算
+        let textContent = '';
+        if (showName) {
+            textContent += linkName;
+        }
+        if (roleText) {
+            textContent += ' : ' + roleText;
+        }
+        if (typeText) {
+            textContent += ' (' + typeText + ')';
+        }
+        if (updateText) {
+            textContent += ' ' + updateText;
+        }
+
+        const textWidth = this._measureVobjTextWidth(textContent, chszPx);
+
+        // アイコン関連
+        const iconWidth = showPict ? chszPx : 0;
+        const gap = showPict ? 4 : 0;  // アイコンとテキスト間のgap
+
+        // padding: 4px 8px → 左右で16px
+        // border: 1px solid → 左右で2px
+        const padding = 16;
+        const border = 2;
+
+        return iconWidth + gap + textWidth + padding + border;
+    }
+
+    // ========================================
+    // 図形要素描画メソッド（Phase 2対応）
+    // ========================================
+
+    /**
+     * 矩形要素（<rect>）をDOM要素として描画
+     * @param {Element} rectEl - rect XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderRectElement(rectEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-rect';
+
+        // 座標取得
+        const left = parseFloat(rectEl.getAttribute('left')) || 0;
+        const top = parseFloat(rectEl.getAttribute('top')) || 0;
+        const right = parseFloat(rectEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(rectEl.getAttribute('bottom')) || 0;
+
+        // スタイル属性取得
+        const fillColor = rectEl.getAttribute('fillColor') || '#ffffff';
+        const strokeColor = rectEl.getAttribute('strokeColor') || '#000000';
+        const lineWidth = parseFloat(rectEl.getAttribute('lineWidth')) || 1;
+        const round = parseFloat(rectEl.getAttribute('round')) || 0;
+        const zIndex = parseInt(rectEl.getAttribute('zIndex')) || 0;
+
+        // スタイル設定
+        div.style.position = 'absolute';
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.width = `${right - left}px`;
+        div.style.height = `${bottom - top}px`;
+        div.style.backgroundColor = fillColor;
+        div.style.border = `${lineWidth}px solid ${strokeColor}`;
+        div.style.borderRadius = `${round}px`;
+        div.style.boxSizing = 'border-box';
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * ドキュメント要素（<document>内のテキスト）をDOM要素として描画
+     * @param {Element} docEl - document XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderDocumentTextElement(docEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-document';
+
+        // docView要素から座標取得
+        const docView = docEl.querySelector('docView');
+        let left = 0, top = 0, right = 100, bottom = 30;
+        if (docView) {
+            left = parseFloat(docView.getAttribute('viewleft')) || 0;
+            top = parseFloat(docView.getAttribute('viewtop')) || 0;
+            right = parseFloat(docView.getAttribute('viewright')) || 100;
+            bottom = parseFloat(docView.getAttribute('viewbottom')) || 30;
+        }
+
+        // font要素からスタイル取得
+        let fontSize = 12;
+        let fontColor = '#000000';
+        const fontElements = docEl.querySelectorAll('font');
+        fontElements.forEach(fontEl => {
+            if (fontEl.hasAttribute('size')) {
+                fontSize = parseFloat(fontEl.getAttribute('size')) || 12;
+            }
+            if (fontEl.hasAttribute('color')) {
+                fontColor = fontEl.getAttribute('color') || '#000000';
+            }
+        });
+
+        // text要素から配置取得
+        let textAlign = 'left';
+        let zIndex = 0;
+        const textElements = docEl.querySelectorAll('text');
+        textElements.forEach(textEl => {
+            if (textEl.hasAttribute('align')) {
+                textAlign = textEl.getAttribute('align') || 'left';
+            }
+            if (textEl.hasAttribute('zIndex')) {
+                zIndex = parseInt(textEl.getAttribute('zIndex')) || 0;
+            }
+        });
+
+        // テキスト内容を取得（要素ではない直接のテキストノード）
+        let textContent = '';
+        const childNodes = docEl.childNodes;
+        for (let i = 0; i < childNodes.length; i++) {
+            const node = childNodes[i];
+            if (node.nodeType === Node.TEXT_NODE) {
+                const trimmed = node.textContent.trim();
+                if (trimmed) {
+                    textContent = trimmed;
+                    break;
+                }
+            }
+        }
+
+        // スタイル設定
+        div.style.position = 'absolute';
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.width = `${right - left}px`;
+        div.style.height = `${bottom - top}px`;
+        div.style.fontSize = `${fontSize}px`;
+        div.style.color = fontColor;
+        div.style.textAlign = textAlign;
+        div.style.display = 'flex';
+        div.style.alignItems = 'center';
+        div.style.justifyContent = textAlign === 'center' ? 'center' : (textAlign === 'right' ? 'flex-end' : 'flex-start');
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+        div.style.overflow = 'hidden';
+        div.style.whiteSpace = 'nowrap';
+        div.style.fontFamily = "'Noto Sans JP', sans-serif";
+
+        div.textContent = textContent;
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * 線要素（<line>）をDOM要素として描画
+     * @param {Element} lineEl - line XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderLineElement(lineEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-line';
+
+        // 座標取得
+        const left = parseFloat(lineEl.getAttribute('left')) || 0;
+        const top = parseFloat(lineEl.getAttribute('top')) || 0;
+        const right = parseFloat(lineEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(lineEl.getAttribute('bottom')) || 0;
+
+        // スタイル属性取得
+        const strokeColor = lineEl.getAttribute('strokeColor') || '#000000';
+        const lineWidth = parseFloat(lineEl.getAttribute('lineWidth')) || 1;
+        const zIndex = parseInt(lineEl.getAttribute('zIndex')) || 0;
+
+        // 水平線か垂直線かを判定
+        const isHorizontal = Math.abs(bottom - top) < Math.abs(right - left);
+
+        div.style.position = 'absolute';
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+
+        if (isHorizontal) {
+            // 水平線
+            div.style.left = `${Math.min(left, right)}px`;
+            div.style.top = `${top}px`;
+            div.style.width = `${Math.abs(right - left)}px`;
+            div.style.height = `${lineWidth}px`;
+            div.style.backgroundColor = strokeColor;
+        } else {
+            // 垂直線
+            div.style.left = `${left}px`;
+            div.style.top = `${Math.min(top, bottom)}px`;
+            div.style.width = `${lineWidth}px`;
+            div.style.height = `${Math.abs(bottom - top)}px`;
+            div.style.backgroundColor = strokeColor;
+        }
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * 図形要素全体をDOM要素として描画
+     * xmlTADのfigure要素内のrect、document、lineを描画
+     * @param {Document|Element} xmlDoc - XMLドキュメントまたはfigure要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {Object} 描画結果 { figureContainer, elementCount }
+     */
+    renderFigureElements(xmlDoc, container) {
+        // figure要素を取得
+        const figureEl = xmlDoc.querySelector ? xmlDoc.querySelector('figure') : null;
+        if (!figureEl) {
+            return { figureContainer: null, elementCount: 0 };
+        }
+
+        // 図形コンテナを作成
+        const figureContainer = document.createElement('div');
+        figureContainer.className = 'figure-content';
+        figureContainer.style.position = 'absolute';
+        figureContainer.style.left = '0';
+        figureContainer.style.top = '0';
+
+        // figView要素からサイズ取得
+        const figView = figureEl.querySelector('figView');
+        let figWidth = 800, figHeight = 600;
+        if (figView) {
+            figWidth = parseFloat(figView.getAttribute('right')) || 800;
+            figHeight = parseFloat(figView.getAttribute('bottom')) || 600;
+        }
+        figureContainer.style.width = `${figWidth}px`;
+        figureContainer.style.height = `${figHeight}px`;
+
+        let elementCount = 0;
+
+        // rect要素を描画
+        const rectElements = figureEl.querySelectorAll('rect');
+        rectElements.forEach(rectEl => {
+            this.renderRectElement(rectEl, figureContainer);
+            elementCount++;
+        });
+
+        // line要素を描画
+        const lineElements = figureEl.querySelectorAll('line');
+        lineElements.forEach(lineEl => {
+            this.renderLineElement(lineEl, figureContainer);
+            elementCount++;
+        });
+
+        // document要素（テキストボックス）を描画
+        const docElements = figureEl.querySelectorAll('document');
+        docElements.forEach(docEl => {
+            this.renderDocumentTextElement(docEl, figureContainer);
+            elementCount++;
+        });
+
+        if (container) {
+            container.appendChild(figureContainer);
+        }
+
+        return { figureContainer, elementCount };
+    }
+
+    /**
+     * xmlTADヘッダーを構築
+     * @param {string} version - バージョン（"1.0": 文書, "02.00": 図形）
+     * @param {string} filename - 実身名（省略可能）
+     * @returns {string} xmlTADヘッダー文字列
+     */
+    buildXmlTadHeader(version, filename) {
+        if (filename) {
+            return `<tad version="${version}" filename="${filename}" encoding="UTF-8">`;
+        }
+        return `<tad version="${version}" encoding="UTF-8">`;
+    }
+
+    /**
+     * テキスト文書用のxmlTADを構築
+     * 正しいxmlTAD形式でテキスト文書を生成する
+     * @param {string} textContent - テキスト内容
+     * @param {Object} options - オプション
+     * @param {number} options.fontSize - フォントサイズ（デフォルト: 14）
+     * @param {string} options.align - テキスト配置（'left', 'center', 'right'）
+     * @param {string} options.filename - 実身名（省略可能）
+     * @returns {string} xmlTAD文字列
+     */
+    buildTextDocumentXml(textContent, options = {}) {
+        const fontSize = options.fontSize || 14;
+        const align = options.align || 'left';
+        const filename = options.filename || '';
+
+        let xmlContent = this.buildXmlTadHeader('1.0', filename) + '\n';
+        xmlContent += '<document>\n';
+        xmlContent += '<p>\n';
+
+        // フォントサイズ指定（デフォルト値以外の場合）- <p>内に配置
+        if (fontSize !== 14) {
+            xmlContent += `<font size="${fontSize}"/>\n`;
+        }
+
+        // 配置指定（左寄せ以外の場合）- <p>内に配置
+        if (align !== 'left') {
+            xmlContent += `<text align="${align}"/>\n`;
+        }
+
+        xmlContent += textContent;
+        xmlContent += '\n</p>\n';
+        xmlContent += '</document>\n';
+        xmlContent += '</tad>\n';
+
+        return xmlContent;
+    }
+
+    /**
+     * <link>要素から仮身オブジェクトを解析
+     * XMLのlink要素から仮身属性を読み取り、オブジェクトとして返す
+     * @param {Element} linkElement - DOM link要素
+     * @returns {Object|null} 仮身オブジェクト（エラー時はnull）
+     */
+    parseLinkElement(linkElement) {
+        if (!linkElement) return null;
+
+        try {
+            const vobjleft = parseInt(linkElement.getAttribute('vobjleft')) || 0;
+            const vobjtop = parseInt(linkElement.getAttribute('vobjtop')) || 0;
+            const vobjright = parseInt(linkElement.getAttribute('vobjright')) || 0;
+            const vobjbottom = parseInt(linkElement.getAttribute('vobjbottom')) || 0;
+
+            return {
+                // 識別属性
+                link_id: linkElement.getAttribute('id') || '',
+                link_name: linkElement.textContent?.trim() || '',
+                // 座標属性
+                vobjleft: vobjleft,
+                vobjtop: vobjtop,
+                vobjright: vobjright,
+                vobjbottom: vobjbottom,
+                width: vobjright - vobjleft,
+                heightPx: vobjbottom - vobjtop,
+                height: parseInt(linkElement.getAttribute('height')) || 0,
+                // スタイル属性
+                chsz: parseInt(linkElement.getAttribute('chsz')) || 14,
+                frcol: linkElement.getAttribute('frcol') || '#000000',
+                chcol: linkElement.getAttribute('chcol') || '#000000',
+                tbcol: linkElement.getAttribute('tbcol') || '#ffffff',
+                bgcol: linkElement.getAttribute('bgcol') || '#ffffff',
+                dlen: parseInt(linkElement.getAttribute('dlen')) || 0,
+                // 表示属性
+                pictdisp: linkElement.getAttribute('pictdisp') || 'true',
+                namedisp: linkElement.getAttribute('namedisp') || 'true',
+                roledisp: linkElement.getAttribute('roledisp') || 'false',
+                typedisp: linkElement.getAttribute('typedisp') || 'false',
+                updatedisp: linkElement.getAttribute('updatedisp') || 'false',
+                framedisp: linkElement.getAttribute('framedisp') || 'true',
+                autoopen: linkElement.getAttribute('autoopen') || 'false'
+            };
+        } catch (error) {
+            return null;
+        }
+    }
+
+    /**
+     * 仮身オブジェクトデータを生成（デフォルト値付き）
+     * 仮身の全属性を一元管理し、標準的な仮身オブジェクトを生成する
+     * @param {Object} baseData - 基本データ
+     * @param {string} baseData.link_id - 仮身ID（必須）
+     * @param {string} [baseData.link_name] - 仮身名
+     * @param {number} [baseData.vobjleft] - 左座標
+     * @param {number} [baseData.vobjtop] - 上座標
+     * @param {number} [baseData.vobjright] - 右座標
+     * @param {number} [baseData.vobjbottom] - 下座標
+     * @param {number} [baseData.heightPx] - 高さ（ピクセル）
+     * @param {number} [baseData.chsz] - 文字サイズ
+     * @param {string} [baseData.frcol] - 枠色
+     * @param {string} [baseData.chcol] - 文字色
+     * @param {string} [baseData.tbcol] - タイトルバー背景色
+     * @param {string} [baseData.bgcol] - 背景色
+     * @param {number} [baseData.dlen] - データ長
+     * @param {string} [baseData.pictdisp] - アイコン表示（'true'/'false'）
+     * @param {string} [baseData.namedisp] - 名前表示（'true'/'false'）
+     * @param {string} [baseData.roledisp] - 続柄表示（'true'/'false'）
+     * @param {string} [baseData.typedisp] - 型表示（'true'/'false'）
+     * @param {string} [baseData.updatedisp] - 更新日表示（'true'/'false'）
+     * @param {string} [baseData.framedisp] - 枠表示（'true'/'false'）
+     * @param {string} [baseData.autoopen] - 自動オープン（'true'/'false'）
+     * @returns {Object} 完全な仮身オブジェクト
+     */
+    createVirtualObjectData(baseData) {
+        return {
+            // 必須属性
+            link_id: baseData.link_id,
+            link_name: baseData.link_name || '',
+            // 座標属性
+            vobjleft: baseData.vobjleft !== undefined ? baseData.vobjleft : 10,
+            vobjtop: baseData.vobjtop !== undefined ? baseData.vobjtop : 10,
+            vobjright: baseData.vobjright !== undefined ? baseData.vobjright : 160,
+            vobjbottom: baseData.vobjbottom !== undefined ? baseData.vobjbottom : 40,
+            heightPx: baseData.heightPx !== undefined ? baseData.heightPx : 30,
+            // スタイル属性
+            chsz: baseData.chsz !== undefined ? baseData.chsz : 14,
+            frcol: baseData.frcol || '#000000',
+            chcol: baseData.chcol || '#000000',
+            tbcol: baseData.tbcol || '#ffffff',
+            bgcol: baseData.bgcol || '#ffffff',
+            dlen: baseData.dlen !== undefined ? baseData.dlen : 0,
+            // 表示属性（文字列として）
+            pictdisp: baseData.pictdisp !== undefined ? baseData.pictdisp : 'true',
+            namedisp: baseData.namedisp !== undefined ? baseData.namedisp : 'true',
+            roledisp: baseData.roledisp !== undefined ? baseData.roledisp : 'false',
+            typedisp: baseData.typedisp !== undefined ? baseData.typedisp : 'false',
+            updatedisp: baseData.updatedisp !== undefined ? baseData.updatedisp : 'false',
+            framedisp: baseData.framedisp !== undefined ? baseData.framedisp : 'true',
+            autoopen: baseData.autoopen !== undefined ? baseData.autoopen : 'false'
+        };
+    }
+
+    /**
+     * 仮身用のlink要素に標準属性を設定
+     * virtual-object-listと同じ属性セットを設定する
+     * @param {Element} linkElement - DOM link要素
+     * @param {Object} virtualObj - 仮身オブジェクト
+     */
+    buildLinkElementAttributes(linkElement, virtualObj) {
+        // 必須属性
+        linkElement.setAttribute('id', virtualObj.link_id);
+        linkElement.setAttribute('vobjleft', (virtualObj.vobjleft || 10).toString());
+        linkElement.setAttribute('vobjtop', (virtualObj.vobjtop || 10).toString());
+        linkElement.setAttribute('vobjright', (virtualObj.vobjright || 160).toString());
+        linkElement.setAttribute('vobjbottom', (virtualObj.vobjbottom || 40).toString());
+        linkElement.setAttribute('height', (virtualObj.heightPx || 30).toString());
+        linkElement.setAttribute('chsz', (virtualObj.chsz || 14).toString());
+        linkElement.setAttribute('frcol', virtualObj.frcol || '#000000');
+        linkElement.setAttribute('chcol', virtualObj.chcol || '#000000');
+        linkElement.setAttribute('tbcol', virtualObj.tbcol || '#ffffff');
+        linkElement.setAttribute('bgcol', virtualObj.bgcol || '#ffffff');
+        linkElement.setAttribute('dlen', (virtualObj.dlen || 0).toString());
+
+        // 表示属性（デフォルト値を設定）
+        linkElement.setAttribute('pictdisp', virtualObj.pictdisp !== undefined ? virtualObj.pictdisp.toString() : 'true');
+        linkElement.setAttribute('namedisp', virtualObj.namedisp !== undefined ? virtualObj.namedisp.toString() : 'true');
+        linkElement.setAttribute('roledisp', virtualObj.roledisp !== undefined ? virtualObj.roledisp.toString() : 'false');
+        linkElement.setAttribute('typedisp', virtualObj.typedisp !== undefined ? virtualObj.typedisp.toString() : 'false');
+        linkElement.setAttribute('updatedisp', virtualObj.updatedisp !== undefined ? virtualObj.updatedisp.toString() : 'false');
+        linkElement.setAttribute('framedisp', virtualObj.framedisp !== undefined ? virtualObj.framedisp.toString() : 'true');
+        linkElement.setAttribute('autoopen', virtualObj.autoopen !== undefined ? virtualObj.autoopen.toString() : 'false');
+
+        // テキスト内容
+        if (virtualObj.link_name) {
+            linkElement.textContent = virtualObj.link_name;
+        }
+    }
+
+    /**
+     * 原紙アイコンコピーを要求
+     * @param {string} realId - 実身ID
+     * @param {string} pluginId - プラグインID
+     * @returns {Promise<boolean>} 成功/失敗
+     */
+    async requestCopyTemplateIcon(realId, pluginId) {
+        const messageId = this.generateMessageId('copy-icon');
+        this.messageBus.send('copy-template-icon', {
+            realId: realId,
+            pluginId: pluginId,
+            messageId: messageId
+        });
+
+        try {
+            const result = await this.messageBus.waitFor('template-icon-copied',
+                window.DEFAULT_TIMEOUT_MS,
+                (data) => data.messageId === messageId
+            );
+            return result.success;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    /**
+     * 図形コンテナにスケーリングを適用
+     * アスペクト比を維持してコンテナサイズに合わせる
+     * @param {HTMLElement} outerContainer - 外側のコンテナ（スケーリング適用先）
+     * @param {HTMLElement} figureContainer - 図形コンテナ（.figure-content）
+     * @param {number} baseWidth - 基本幅（デフォルト: 800）
+     * @param {number} baseHeight - 基本高さ（デフォルト: 600）
+     * @returns {number} 適用されたスケール値
+     */
+    applyFigureScaling(outerContainer, figureContainer, baseWidth = 800, baseHeight = 600) {
+        if (!outerContainer || !figureContainer) {
+            return 1;
+        }
+
+        const containerWidth = outerContainer.clientWidth;
+        const containerHeight = outerContainer.clientHeight;
+
+        // アスペクト比を維持したスケール計算
+        const scaleX = containerWidth / baseWidth;
+        const scaleY = containerHeight / baseHeight;
+        const scale = Math.min(scaleX, scaleY);
+
+        // 最小スケール制限（400x300 = 0.5）
+        const minScale = 0.5;
+        const finalScale = Math.max(scale, minScale);
+
+        // トランスフォーム適用
+        figureContainer.style.transformOrigin = 'top left';
+        figureContainer.style.transform = `scale(${finalScale})`;
+
+        return finalScale;
+    }
 }
 
 // ========================================
@@ -3300,3 +4458,34 @@ PluginBase.VOBJ_DISPLAY_BOOL_ATTRS = [
 
 /** カラー属性名一覧 */
 PluginBase.VOBJ_COLOR_ATTRS = ['frcol', 'chcol', 'tbcol', 'bgcol'];
+
+// ========================================
+// 線種パターン定義
+// ========================================
+
+/**
+ * 線種パターン定義（TAD仕様準拠）
+ * Canvas の setLineDash() に渡す配列を定義
+ * @type {Object.<number, number[]>}
+ */
+PluginBase.LINE_PATTERN_DEFINITIONS = {
+    0: [],                    // 実線
+    1: [6, 3],               // 破線
+    2: [2, 2],               // 点線
+    3: [8, 3, 2, 3],         // 一点鎖線
+    4: [8, 3, 2, 3, 2, 3],   // 二点鎖線
+    5: [12, 4]               // 長破線
+};
+
+/**
+ * 線種の日本語名定義
+ * @type {Object.<number, string>}
+ */
+PluginBase.LINE_TYPE_NAMES = {
+    0: '実線',
+    1: '破線',
+    2: '点線',
+    3: '一点鎖線',
+    4: '二点鎖線',
+    5: '長破線'
+};

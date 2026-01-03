@@ -1,0 +1,36 @@
+{
+  "id": "base-calendar",
+  "name": "予定表",
+  "version": "1.0.0",
+  "type": "base",
+  "basefile":{
+    "json": "019d6f00-1a2b-7c3d-8e4f-a1b2c3d4e5f6.json",
+    "xmltad": "019d6f00-1a2b-7c3d-8e4f-a1b2c3d4e5f6_0.xtad",
+    "ico": "019d6f00-1a2b-7c3d-8e4f-a1b2c3d4e5f6.ico"
+  },
+  "description": "月表示カレンダーで予定管理を行います",
+  "icon": "📅",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": true,
+  "contextMenu": [
+    {
+      "label": "予定表",
+      "fileTypes": ["tad", "TAD", "bpk", "BPK", "xtad", "XTAD"],
+      "action": "open-editor"
+    }
+  ],
+  "window": {
+    "width": 800,
+    "height": 600,
+    "minWidth": 400,
+    "minHeight": 300,
+    "resizable": true,
+    "scrollable": true,
+    "openable": true
+  },
+  "permissions": [
+    "file-read",
+    "file-write"
+  ]
+}

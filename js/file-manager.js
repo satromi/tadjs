@@ -73,7 +73,7 @@ export class FileManager {
             const filePath = this.path.join(basePath, fileName);
 
             try {
-                logger.info('[FileManager] ファイルを読み込み:', filePath);
+                logger.debug('[FileManager] ファイルを読み込み:', filePath);
 
                 if (!this.fs.existsSync(filePath)) {
                     return {
@@ -128,7 +128,7 @@ export class FileManager {
             let filePath = this.path.join(basePath, fileName);
 
             if (this.fs.existsSync(filePath)) {
-                logger.info('[FileManager] ファイルを読み込み:', filePath);
+                logger.debug('[FileManager] ファイルを読み込み:', filePath);
                 const buffer = this.fs.readFileSync(filePath);
                 const blob = new Blob([buffer]);
                 return new File([blob], fileName, { type: 'application/octet-stream' });
@@ -138,7 +138,7 @@ export class FileManager {
             if (this.process.resourcesPath) {
                 filePath = this.path.join(this.process.resourcesPath, 'app', fileName);
                 if (this.fs.existsSync(filePath)) {
-                    logger.info('[FileManager] ファイルを読み込み:', filePath);
+                    logger.debug('[FileManager] ファイルを読み込み:', filePath);
                     const buffer = this.fs.readFileSync(filePath);
                     const blob = new Blob([buffer]);
                     return new File([blob], fileName, { type: 'application/octet-stream' });
@@ -183,10 +183,10 @@ export class FileManager {
             const fileName = `${realId}.${extension}`;
             let filePath = this.path.join(basePath, fileName);
 
-            logger.info('[FileManager] 外部ファイルを探します:', fileName);
+            logger.debug('[FileManager] 外部ファイルを探します:', fileName);
 
             if (this.fs.existsSync(filePath)) {
-                logger.info('[FileManager] 外部ファイルを開きます:', filePath);
+                logger.debug('[FileManager] 外部ファイルを開きます:', filePath);
                 try {
                     const result = await shell.openPath(filePath);
                     if (result) {
@@ -194,7 +194,7 @@ export class FileManager {
                         logger.error('[FileManager] ファイルを開けませんでした:', result);
                         return { success: false, error: result };
                     }
-                    logger.info('[FileManager] 外部ファイルを開きました:', filePath);
+                    logger.debug('[FileManager] 外部ファイルを開きました:', filePath);
                     return { success: true };
                 } catch (error) {
                     logger.error('[FileManager] ファイルを開くエラー:', error);
@@ -236,7 +236,7 @@ export class FileManager {
             }
 
             try {
-                logger.info('[FileManager] xtadファイルを読み込みます:', xtadPath);
+                logger.debug('[FileManager] xtadファイルを読み込みます:', xtadPath);
                 const xmlContent = this.fs.readFileSync(xtadPath, 'utf-8');
 
                 // XMLからテキストを抽出
@@ -267,7 +267,7 @@ export class FileManager {
                     }
                 }
 
-                logger.info('[FileManager] xtadテキストを読み取りました:', text.substring(0, 100));
+                logger.debug('[FileManager] xtadテキストを読み取りました:', text.substring(0, 100));
                 return { success: true, text: text };
             } catch (error) {
                 logger.error('[FileManager] xtadファイルを読み込むエラー:', error);
@@ -291,9 +291,9 @@ export class FileManager {
             const { shell } = require('electron');
 
             try {
-                logger.info('[FileManager] URLを開きます:', url);
+                logger.debug('[FileManager] URLを開きます:', url);
                 await shell.openExternal(url);
-                logger.info('[FileManager] URLを開きました:', url);
+                logger.debug('[FileManager] URLを開きました:', url);
                 return { success: true };
             } catch (error) {
                 logger.error('[FileManager] URLを開くエラー:', error);
@@ -318,7 +318,7 @@ export class FileManager {
                 // 存在しない場合は作成を試みる
                 try {
                     this.fs.mkdirSync(folderPath, { recursive: true });
-                    logger.info('[FileManager] データフォルダを作成:', folderPath);
+                    logger.debug('[FileManager] データフォルダを作成:', folderPath);
                 } catch (createError) {
                     return {
                         success: false,
@@ -382,7 +382,7 @@ export class FileManager {
             try {
                 // アイコンファイルが存在するかチェック
                 if (!this.fs.existsSync(iconPath)) {
-                    logger.info('[FileManager] アイコンファイルが見つかりません:', iconPath);
+                    logger.debug('[FileManager] アイコンファイルが見つかりません:', iconPath);
                     return { success: false, error: 'Icon file not found' };
                 }
 
@@ -411,7 +411,7 @@ export class FileManager {
             const filePath = this.path.join(basePath, fileName);
 
             try {
-                logger.info('[FileManager] ファイルを保存:', filePath);
+                logger.debug('[FileManager] ファイルを保存:', filePath);
 
                 // データをBufferに変換
                 let buffer;
@@ -426,7 +426,7 @@ export class FileManager {
                 }
 
                 this.fs.writeFileSync(filePath, buffer);
-                logger.info('[FileManager] ファイル保存成功:', filePath);
+                logger.debug('[FileManager] ファイル保存成功:', filePath);
                 return true;
             } catch (error) {
                 logger.error('[FileManager] ファイル保存エラー:', error);

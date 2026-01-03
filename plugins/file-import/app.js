@@ -51,11 +51,8 @@ class FileImportApp extends window.PluginBase {
         // 初期化メッセージ
         this.messageBus.on('init', (data) => {
             logger.info('[FileImport] init受信', data);
-            this.windowId = data.windowId;
-            // MessageBusにwindowIdを設定（レスポンスルーティング用）
-            if (data.windowId) {
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
         });
 
         // メニュー定義要求（空のメニューを返す）

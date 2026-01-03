@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.29
+ * TADjs Ver 0.30
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -544,7 +544,7 @@ class TADjsDesktop {
         this.parentMessageBus.on('get-drop-target-window', (data, _source) => {
             const targetWindowId = this.getWindowAtPosition(data.clientX, data.clientY);
 
-            logger.info('[TADjs] ドロップ先ウィンドウ判定:', {
+            logger.debug('[TADjs] ドロップ先ウィンドウ判定:', {
                 clientX: data.clientX,
                 clientY: data.clientY,
                 targetWindowId: targetWindowId,
@@ -850,12 +850,12 @@ class TADjsDesktop {
         const defaultJsonFile = `${defaultFileId}.json`;
         const defaultXtadFile = `${defaultFileId}_0.xtad`;
 
-        logger.info('[TADjs] デフォルトウィンドウを仮身一覧プラグインで開きます');
-        logger.info('[TADjs] 実身ファイル:', defaultJsonFile, defaultXtadFile);
+        logger.debug('[TADjs] デフォルトウィンドウを仮身一覧プラグインで開きます');
+        logger.debug('[TADjs] 実身ファイル:', defaultJsonFile, defaultXtadFile);
 
         // データファイルのベースパスを取得
         const dataBasePath = this.getDataBasePath();
-        logger.info('[TADjs] データファイルのベースパス:', dataBasePath);
+        logger.debug('[TADjs] データファイルのベースパス:', dataBasePath);
 
         // 仮身一覧プラグインを起動
         if (window.pluginManager) {
@@ -863,7 +863,7 @@ class TADjsDesktop {
             if (virtualObjectListPlugin) {
                 try {
                     // JSONファイルを読み込む
-                    logger.info('[TADjs] JSONファイルを読み込み中:', defaultJsonFile);
+                    logger.debug('[TADjs] JSONファイルを読み込み中:', defaultJsonFile);
                     const jsonResponse = await this.loadDataFile(dataBasePath, defaultJsonFile);
 
                     let windowConfig = null;
@@ -878,19 +878,19 @@ class TADjsDesktop {
                         backgroundColor = jsonData.backgroundColor || null;
                         isFullscreen = jsonData.isFullscreen || false;
                         fileName = jsonData.name || fileName;
-                        logger.info('[TADjs] JSONファイル読み込み成功:', { name: fileName, window: windowConfig, backgroundColor: backgroundColor, isFullscreen: isFullscreen });
+                        logger.debug('[TADjs] JSONファイル読み込み成功:', { name: fileName, window: windowConfig, backgroundColor: backgroundColor, isFullscreen: isFullscreen });
                     } else {
                         logger.warn('[TADjs] JSONファイル読み込み失敗:', jsonResponse.error);
                     }
 
                     // XTADファイルを読み込む
-                    logger.info('[TADjs] XTADファイルを読み込み中:', defaultXtadFile);
+                    logger.debug('[TADjs] XTADファイルを読み込み中:', defaultXtadFile);
                     const xtadResponse = await this.loadDataFile(dataBasePath, defaultXtadFile);
 
                     let xmlData = null;
                     if (xtadResponse.success) {
                         xmlData = xtadResponse.data;
-                        logger.info('[TADjs] XTADファイル読み込み成功 (length:', xmlData.length, ')');
+                        logger.debug('[TADjs] XTADファイル読み込み成功 (length:', xmlData.length, ')');
                     } else {
                         logger.warn('[TADjs] XTADファイル読み込み失敗:', xtadResponse.error, '- 空のデータで起動します');
                     }
@@ -911,7 +911,7 @@ class TADjsDesktop {
 
                     // プラグインを起動
                     const windowId = await window.pluginManager.launchPlugin('virtual-object-list', fileData);
-                    logger.info('[TADjs] 仮身一覧プラグインで初期ウィンドウを開きました');
+                    logger.debug('[TADjs] 仮身一覧プラグインで初期ウィンドウを開きました');
 
                     // ウィンドウのアイコンを設定
                     if (windowId) {
@@ -1009,6 +1009,8 @@ class TADjsDesktop {
             // 実身/仮身検索用ハンドラ
             'search-real-objects': { handler: 'handleSearchRealObjects', async: true },
             'abort-search': { handler: 'handleAbortSearch', async: false },
+            // 原紙アイコンコピー用ハンドラ
+            'copy-template-icon': { handler: 'handleCopyTemplateIcon', async: true },
         };
     }
 
@@ -1116,7 +1118,7 @@ class TADjsDesktop {
         // ===== 特殊フラグ系 (fromEditor, fromToolPanel) は個別処理を維持 =====
         if (e.data && e.data.fromEditor) {
             // エディタからのメッセージを道具パネルに中継
-            logger.info('[TADjs] エディタメッセージを中継:', e.data.type);
+            logger.debug('[TADjs] エディタメッセージを中継:', e.data.type);
 
             // 送信元のiframeから編集ウィンドウを特定
             if (e.source && e.source.frameElement) {
@@ -1140,7 +1142,7 @@ class TADjsDesktop {
                                     // fromEditorフラグを除去してから道具パネルに中継
                                     const { fromEditor, ...messageData } = e.data;
                                     this.parentMessageBus.sendToWindow(windowId, messageData.type, messageData);
-                                    logger.info('[TADjs] メッセージを道具パネルに送信:', messageData.type);
+                                    logger.debug('[TADjs] メッセージを道具パネルに送信:', messageData.type);
                                 }
                             }
                             break;
@@ -1152,7 +1154,7 @@ class TADjsDesktop {
             // 道具パネルからのメッセージ処理
 
             // 道具パネルからのメッセージを編集ウィンドウに中継（汎用）
-            logger.info('[TADjs] 道具パネルメッセージを中継:', e.data.type);
+            logger.debug('[TADjs] 道具パネルメッセージを中継:', e.data.type);
 
             // 送信元のiframeから道具パネルウィンドウを特定
             if (e.source && e.source.frameElement) {
@@ -1169,7 +1171,7 @@ class TADjsDesktop {
                             // fromToolPanelフラグを除去してから編集ウィンドウに中継
                             const { fromToolPanel, ...messageData } = e.data;
                             this.parentMessageBus.sendToWindow(editorWindowId, messageData.type, messageData);
-                            logger.info('[TADjs] メッセージを編集ウィンドウに送信:', messageData.type);
+                            logger.debug('[TADjs] メッセージを編集ウィンドウに送信:', messageData.type);
                         }
                     } else {
                         logger.warn('[TADjs] 中継失敗: relation or editorIframe not found', {
@@ -1211,7 +1213,7 @@ class TADjsDesktop {
         } else if (e.data && e.data.type && this.messageHandlers && this.messageHandlers[e.data.type]) {
             // 汎用メッセージハンドラー（フォールバック）
             const handlerDef = this.messageHandlers[e.data.type];
-            logger.info('[TADjs] 汎用ハンドラー実行:', e.data.type);
+            logger.debug('[TADjs] 汎用ハンドラー実行:', e.data.type);
 
             try {
                 let result;
@@ -1287,7 +1289,7 @@ class TADjsDesktop {
 
             // デバッグ: 複数のウィンドウが重なっている場合のみログ出力
             if (candidateWindows.length > 1) {
-                logger.info('[TADjs] 複数ウィンドウが重なっています:', candidateWindows.map(w => `${w.windowId}(z:${w.zIndex})`).join(', '), '選択:', candidateWindows[0].windowId);
+                logger.debug('[TADjs] 複数ウィンドウが重なっています:', candidateWindows.map(w => `${w.windowId}(z:${w.zIndex})`).join(', '), '選択:', candidateWindows[0].windowId);
             }
 
             return candidateWindows[0].windowId;
@@ -1341,7 +1343,7 @@ class TADjsDesktop {
 
             // デバッグ: 複数のウィンドウが重なっている場合のみログ出力
             if (candidateWindows.length > 1) {
-                logger.info('[TADjs] 複数ウィンドウが重なっています:', candidateWindows.map(w => `${w.windowId}(z:${w.zIndex})`).join(', '), '選択:', currentMouseOverWindowId);
+                logger.debug('[TADjs] 複数ウィンドウが重なっています:', candidateWindows.map(w => `${w.windowId}(z:${w.zIndex})`).join(', '), '選択:', currentMouseOverWindowId);
             }
         }
 
@@ -1419,7 +1421,7 @@ class TADjsDesktop {
             const desktop = document.getElementById('desktop');
 
             if (!dropZone) {
-                logger.info('[TADjs] Drop zone not found - デフォルトウィンドウは仮身一覧プラグインです');
+                logger.debug('[TADjs] Drop zone not found - デフォルトウィンドウは仮身一覧プラグインです');
                 return;
             }
             
@@ -1461,7 +1463,7 @@ class TADjsDesktop {
                     dropZone.classList.remove('drop-zone-active');
                 }
 
-                logger.info('[TADjs] Drop event on element:', element.id, e.dataTransfer);
+                logger.debug('[TADjs] Drop event on element:', element.id, e.dataTransfer);
 
                 // 原紙箱からのドラッグデータをチェック
                 const textData = e.dataTransfer.getData('text/plain');
@@ -1476,7 +1478,7 @@ class TADjsDesktop {
                         }
 
                         if (dragData.type === 'base-file-copy' || dragData.type === 'user-base-file-copy') {
-                            logger.info('[TADjs] 原紙箱からのドロップ:', dragData);
+                            logger.debug('[TADjs] 原紙箱からのドロップ:', dragData);
                             e.stopPropagation();
                             this.handleBaseFileDrop(dragData, e);
                             return false;
@@ -1509,7 +1511,7 @@ class TADjsDesktop {
             });
             
             document.addEventListener('drop', (e) => {
-                logger.info('[TADjs] Document drop event fired');
+                logger.debug('[TADjs] Document drop event fired');
 
                 // ドロップ位置のウィンドウとiframeを取得
                 const dropX = e.clientX;
@@ -1532,7 +1534,7 @@ class TADjsDesktop {
                 if (targetWindow) {
                     const iframe = targetWindow.querySelector('iframe');
                     if (iframe && iframe.contentWindow) {
-                        logger.info('[TADjs] iframe上でのドロップを検出、iframeにデータを転送:', targetWindow.id);
+                        logger.debug('[TADjs] iframe上でのドロップを検出、iframeにデータを転送:', targetWindow.id);
                         
                         // ドロップデータを取得
                         const textData = e.dataTransfer.getData('text/plain');
@@ -1559,33 +1561,33 @@ class TADjsDesktop {
                                     logger.warn('[TADjs] windowIdが見つかりませんでした。ドロップイベントを転送できません。');
                                 }
 
-                                logger.info('[TADjs] iframeにドロップイベントを転送完了');
+                                logger.debug('[TADjs] iframeにドロップイベントを転送完了');
 
                                 // クロスウィンドウドロップの場合、元のウィンドウに成功メッセージを送信
                                 if (dragData.sourceWindowId && dragData.sourceWindowId !== windowId) {
-                                    logger.info('[TADjs] クロスウィンドウドロップ検出: source=', dragData.sourceWindowId, 'target=', windowId);
+                                    logger.debug('[TADjs] クロスウィンドウドロップ検出: source=', dragData.sourceWindowId, 'target=', windowId);
                                     this.parentMessageBus.sendToWindow(dragData.sourceWindowId, 'cross-window-drop-success', {
                                         targetWindowId: windowId
                                     });
-                                    logger.info('[TADjs] cross-window-drop-successメッセージを送信:', dragData.sourceWindowId);
+                                    logger.debug('[TADjs] cross-window-drop-successメッセージを送信:', dragData.sourceWindowId);
                                 }
 
                                 e.preventDefault();
                                 return false;
                             } catch (err) {
-                                logger.info('[TADjs] ドロップデータのJSON解析失敗、ファイルドロップをチェック');
+                                logger.debug('[TADjs] ドロップデータのJSON解析失敗、ファイルドロップをチェック');
                             }
                         }
 
                         // 外部ファイルドロップをチェック（Windowsからのドラッグなど）
                         const files = Array.from(e.dataTransfer.files);
                         if (files.length > 0) {
-                            logger.info('[TADjs] 外部ファイルドロップ検出:', files.length, '個のファイル');
+                            logger.debug('[TADjs] 外部ファイルドロップ検出:', files.length, '個のファイル');
 
                             // FileImportManagerを使用してファイルを処理
                             if (this.fileImportManager) {
                                 this.fileImportManager.handleFilesImport(files, iframe).then(() => {
-                                    logger.info('[TADjs] 外部ファイルインポート完了');
+                                    logger.debug('[TADjs] 外部ファイルインポート完了');
                                 }).catch(err => {
                                     logger.error('[TADjs] 外部ファイルインポートエラー:', err);
                                 });
@@ -1620,11 +1622,11 @@ class TADjsDesktop {
      * @param {MessageEvent} messageEvent - メッセージイベント（e.sourceとe.dataを含む）
      */
     async handleBaseFileDrop(dragData, messageEvent) {
-        logger.info('[TADjs] handleBaseFileDrop開始:', dragData);
+        logger.debug('[TADjs] handleBaseFileDrop開始:', dragData);
 
         // 原紙箱からのドロップでない場合は処理しない
         if (dragData.type !== 'base-file-copy' && dragData.type !== 'user-base-file-copy') {
-            logger.info('[TADjs] handleBaseFileDrop: 原紙箱からのドロップではないためスキップ');
+            logger.debug('[TADjs] handleBaseFileDrop: 原紙箱からのドロップではないためスキップ');
             return;
         }
 
@@ -1636,7 +1638,7 @@ class TADjsDesktop {
             : null;
         // targetCellがメッセージに含まれている場合はそれを使用（表計算プラグイン用）
         const targetCell = messageEvent && messageEvent.data ? messageEvent.data.targetCell : null;
-        logger.info('[TADjs] ドロップ先ウィンドウ:', dropTargetWindow ? 'あり' : 'なし', 'ドロップ位置:', dropPosition, 'ターゲットセル:', targetCell);
+        logger.debug('[TADjs] ドロップ先ウィンドウ:', dropTargetWindow ? 'あり' : 'なし', 'ドロップ位置:', dropPosition, 'ターゲットセル:', targetCell);
 
         // ユーザ原紙の場合は実身を複製して新規作成（システム原紙と同様）
         if (dragData.type === 'user-base-file-copy') {
@@ -1656,16 +1658,16 @@ class TADjsDesktop {
                 1 // デフォルトは「設定」ボタン
             );
 
-            logger.info('[TADjs] ユーザ原紙ダイアログ結果:', result);
+            logger.debug('[TADjs] ユーザ原紙ダイアログ結果:', result);
 
             // 取消の場合は何もしない
             if (result.button === 'cancel' || !result.value) {
-                logger.info('[TADjs] ユーザ原紙作成キャンセル');
+                logger.debug('[TADjs] ユーザ原紙作成キャンセル');
                 return;
             }
 
             const newName = result.value;
-            logger.info('[TADjs] ユーザ原紙から新しい実身名:', newName);
+            logger.debug('[TADjs] ユーザ原紙から新しい実身名:', newName);
 
             // 元の実身を読み込む
             if (!this.realObjectSystem) {
@@ -1677,7 +1679,7 @@ class TADjsDesktop {
             let sourceRealObject;
             try {
                 sourceRealObject = await this.realObjectSystem.loadRealObject(sourceRealId);
-                logger.info('[TADjs] 元の実身読み込み完了:', sourceRealId);
+                logger.debug('[TADjs] 元の実身読み込み完了:', sourceRealId);
             } catch (error) {
                 logger.error('[TADjs] 元の実身読み込みエラー:', error);
                 this.setStatusMessage('元の実身の読み込みに失敗しました');
@@ -1686,7 +1688,7 @@ class TADjsDesktop {
 
             // 新しい実身IDを生成
             const newRealId = typeof generateUUIDv7 === 'function' ? generateUUIDv7() : this.generateRealFileIdSet(1).fileId;
-            logger.info('[TADjs] ユーザ原紙から新しい実身ID:', newRealId);
+            logger.debug('[TADjs] ユーザ原紙から新しい実身ID:', newRealId);
 
             // 新しいメタデータを作成
             const currentDateTime = new Date().toISOString();
@@ -1716,7 +1718,7 @@ class TADjsDesktop {
                     metadata: newMetadata,
                     records: newRecords
                 });
-                logger.info('[TADjs] 新しい実身をRealObjectSystemに保存:', newRealId);
+                logger.debug('[TADjs] 新しい実身をRealObjectSystemに保存:', newRealId);
             } catch (error) {
                 logger.error('[TADjs] 実身保存エラー:', error);
                 this.setStatusMessage('実身の保存に失敗しました');
@@ -1727,7 +1729,7 @@ class TADjsDesktop {
             const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(newRealId);
             const jsonSaved = await this.saveDataFile(jsonFileName, JSON.stringify(newMetadata, null, 2));
             if (jsonSaved) {
-                logger.info('[TADjs] JSONファイル保存成功:', jsonFileName);
+                logger.debug('[TADjs] JSONファイル保存成功:', jsonFileName);
             } else {
                 logger.warn('[TADjs] JSONファイル保存失敗:', jsonFileName);
             }
@@ -1743,9 +1745,9 @@ class TADjsDesktop {
 
                     if (fs.existsSync(sourceIcoPath)) {
                         fs.copyFileSync(sourceIcoPath, newIcoPath);
-                        logger.info('[TADjs] アイコンファイルコピー成功:', sourceRealId, '->', newRealId);
+                        logger.debug('[TADjs] アイコンファイルコピー成功:', sourceRealId, '->', newRealId);
                     } else {
-                        logger.info('[TADjs] 元のアイコンファイルが存在しません:', sourceIcoPath);
+                        logger.debug('[TADjs] 元のアイコンファイルが存在しません:', sourceIcoPath);
                     }
                 } catch (error) {
                     logger.warn('[TADjs] アイコンファイルコピーエラー:', error.message);
@@ -1767,7 +1769,7 @@ class TADjsDesktop {
 
                             try {
                                 fs.copyFileSync(sourcePngPath, newPngPath);
-                                logger.info('[TADjs] PNGファイルコピー成功:', file, '->', newPngFile);
+                                logger.debug('[TADjs] PNGファイルコピー成功:', file, '->', newPngFile);
                             } catch (error) {
                                 logger.warn('[TADjs] PNGファイルコピーエラー:', file, error.message);
                             }
@@ -1778,7 +1780,7 @@ class TADjsDesktop {
                 }
             }
 
-            logger.info('[TADjs] ユーザ原紙から新しい実身を作成しました:', newRealId, newName);
+            logger.debug('[TADjs] ユーザ原紙から新しい実身を作成しました:', newRealId, newName);
 
             // ドロップ先のウィンドウに仮身を追加
             if (dropTargetWindow) {
@@ -1791,7 +1793,7 @@ class TADjsDesktop {
                         targetCell: targetCell,
                         applist: newMetadata.applist || {}
                     });
-                    logger.info('[TADjs] ユーザ原紙からドロップ先に仮身を追加:', newRealId, newName, dropPosition, 'targetCell:', targetCell);
+                    logger.debug('[TADjs] ユーザ原紙からドロップ先に仮身を追加:', newRealId, newName, dropPosition, 'targetCell:', targetCell);
                 } else {
                     logger.warn('[TADjs] windowIdが見つかりませんでした。仮身を追加できません。');
                 }
@@ -1817,20 +1819,20 @@ class TADjsDesktop {
             1 // デフォルトは「設定」ボタン
         );
 
-        logger.info('[TADjs] ダイアログ結果:', result);
+        logger.debug('[TADjs] ダイアログ結果:', result);
 
         // 取消の場合は何もしない
         if (result.button === 'cancel' || !result.value) {
-            logger.info('[TADjs] キャンセルされました');
+            logger.debug('[TADjs] キャンセルされました');
             return;
         }
 
         const newName = result.value;
-        logger.info('[TADjs] 新しい実身名:', newName);
+        logger.debug('[TADjs] 新しい実身名:', newName);
 
         // 新しい実身IDを生成（tad.jsのgenerateUUIDv7を使用）
         const newRealId = typeof generateUUIDv7 === 'function' ? generateUUIDv7() : this.generateRealFileIdSet(1).fileId;
-        logger.info('[TADjs] 新しい実身ID:', newRealId);
+        logger.debug('[TADjs] 新しい実身ID:', newRealId);
 
         // basefileの情報を取得
         const baseFile = dragData.baseFile;
@@ -1860,14 +1862,14 @@ class TADjsDesktop {
                 const jsonResponse = await fetch(jsonPath);
                 if (jsonResponse.ok) {
                     basefileJson = await jsonResponse.json();
-                    logger.info('[TADjs] basefile JSON読み込み完了:', basefileJson);
+                    logger.debug('[TADjs] basefile JSON読み込み完了:', basefileJson);
                 } else {
                     // JSONがない場合は空のオブジェクトを作成
                     basefileJson = {
                         name: newName,
                         applist: []
                     };
-                    logger.info('[TADjs] basefile JSONがないため、新規作成');
+                    logger.debug('[TADjs] basefile JSONがないため、新規作成');
                 }
             } catch (fetchError) {
                 // ネットワークエラー時のフォールバック
@@ -1888,7 +1890,7 @@ class TADjsDesktop {
             const xtadResponse = await fetch(xtadPath);
             if (xtadResponse.ok) {
                 basefileXtad = await xtadResponse.text();
-                logger.info('[TADjs] basefile XTAD読み込み完了');
+                logger.debug('[TADjs] basefile XTAD読み込み完了');
             } else {
                 logger.error('[TADjs] basefile XTAD読み込み失敗');
                 return;
@@ -1936,7 +1938,7 @@ class TADjsDesktop {
 
                 await this.realObjectSystem.saveRealObject(newRealId, realObject);
 
-                logger.info('[TADjs] 実身をファイルに保存:', newRealId, newName);
+                logger.debug('[TADjs] 実身をファイルに保存:', newRealId, newName);
             } catch (error) {
                 logger.error('[TADjs] 実身保存エラー:', error);
             }
@@ -1950,7 +1952,7 @@ class TADjsDesktop {
         const xtadSaved = await this.saveDataFile(xtadFileName, newRealXtad);
 
         if (jsonSaved && xtadSaved) {
-            logger.info('[TADjs] 新しい実身をファイルシステムに保存しました:', jsonFileName, xtadFileName);
+            logger.debug('[TADjs] 新しい実身をファイルシステムに保存しました:', jsonFileName, xtadFileName);
         } else {
             logger.warn('[TADjs] ファイルシステムへの保存に失敗しました');
         }
@@ -1969,22 +1971,22 @@ class TADjsDesktop {
                         const newIconFileName = `${newRealId}.ico`;
                         const iconSaved = await this.saveDataFile(newIconFileName, iconData);
                         if (iconSaved) {
-                            logger.info('[TADjs] アイコンファイルをコピーしました:', baseIconPath, '->', newIconFileName);
+                            logger.debug('[TADjs] アイコンファイルをコピーしました:', baseIconPath, '->', newIconFileName);
                         } else {
                             logger.warn('[TADjs] アイコンファイルのコピーに失敗しました:', newIconFileName);
                         }
                     } else {
-                        logger.info('[TADjs] basefileにアイコンファイルが存在しません:', baseIconPath);
+                        logger.debug('[TADjs] basefileにアイコンファイルが存在しません:', baseIconPath);
                     }
                 } else {
-                    logger.info('[TADjs] basefileにicoファイルが指定されていません');
+                    logger.debug('[TADjs] basefileにicoファイルが指定されていません');
                 }
             } catch (error) {
                 logger.warn('[TADjs] アイコンファイルコピー中のエラー:', error.message);
             }
         }
 
-        logger.info('[TADjs] 新しい実身を保存しました:', newRealId, newName);
+        logger.debug('[TADjs] 新しい実身を保存しました:', newRealId, newName);
 
         // ドロップ先のウィンドウに仮身を追加
         if (dropTargetWindow) {
@@ -1997,7 +1999,7 @@ class TADjsDesktop {
                     targetCell: targetCell,
                     applist: newRealJson.applist || {}
                 });
-                logger.info('[TADjs] ドロップ先に仮身を追加:', newRealId, newName, dropPosition, 'targetCell:', targetCell, 'applist:', newRealJson.applist);
+                logger.debug('[TADjs] ドロップ先に仮身を追加:', newRealId, newName, dropPosition, 'targetCell:', targetCell, 'applist:', newRealJson.applist);
             } else {
                 logger.warn('[TADjs] windowIdが見つかりませんでした。仮身を追加できません。');
             }
@@ -2014,11 +2016,11 @@ class TADjsDesktop {
      * @param {MessageEvent} messageEvent - メッセージイベント
      */
     async handleTrashRealObjectDrop(dragData, messageEvent) {
-        logger.info('[TADjs] handleTrashRealObjectDrop開始:', dragData);
+        logger.debug('[TADjs] handleTrashRealObjectDrop開始:', dragData);
 
         // 屑実身操作からのドロップでない場合は処理しない
         if (dragData.type !== 'trash-real-object-restore') {
-            logger.info('[TADjs] handleTrashRealObjectDrop: 屑実身操作からのドロップではないためスキップ');
+            logger.debug('[TADjs] handleTrashRealObjectDrop: 屑実身操作からのドロップではないためスキップ');
             return;
         }
 
@@ -2027,13 +2029,13 @@ class TADjsDesktop {
         const dropPosition = messageEvent && messageEvent.data
             ? (messageEvent.data.dropPosition || { x: messageEvent.data.clientX, y: messageEvent.data.clientY })
             : null;
-        logger.info('[TADjs] ドロップ先ウィンドウ:', dropTargetWindow ? 'あり' : 'なし', 'ドロップ位置:', dropPosition);
+        logger.debug('[TADjs] ドロップ先ウィンドウ:', dropTargetWindow ? 'あり' : 'なし', 'ドロップ位置:', dropPosition);
 
         const realObject = dragData.realObject;
         const realId = realObject.realId;
         const name = realObject.name;
 
-        logger.info('[TADjs] 屑実身を復元:', realId, name);
+        logger.debug('[TADjs] 屑実身を復元:', realId, name);
 
         // RealObjectSystemから実身を読み込む
         if (!this.realObjectSystem) {
@@ -2044,7 +2046,7 @@ class TADjsDesktop {
         try {
             // 実身を読み込む
             const loadedRealObject = await this.realObjectSystem.loadRealObject(realId);
-            logger.info('[TADjs] 実身読み込み完了:', realId);
+            logger.debug('[TADjs] 実身読み込み完了:', realId);
 
             // 参照カウントを増やす
             const currentRefCount = loadedRealObject.metadata.refCount || 0;
@@ -2059,7 +2061,7 @@ class TADjsDesktop {
 
             // ファイルに保存
             await this.saveDataFile(jsonFileName, JSON.stringify(metadata, null, 2));
-            logger.info('[TADjs] 参照カウント更新:', realId, currentRefCount, '->', newRefCount);
+            logger.debug('[TADjs] 参照カウント更新:', realId, currentRefCount, '->', newRefCount);
 
             // ドロップ先のウィンドウに仮身を追加
             if (dropTargetWindow) {
@@ -2071,7 +2073,7 @@ class TADjsDesktop {
                         dropPosition: dropPosition,
                         applist: metadata.applist || {}
                     });
-                    logger.info('[TADjs] ドロップ先に仮身を追加:', realId, name, dropPosition);
+                    logger.debug('[TADjs] ドロップ先に仮身を追加:', realId, name, dropPosition);
                 } else {
                     logger.warn('[TADjs] windowIdが見つかりませんでした。仮身を追加できません。');
                 }
@@ -2091,7 +2093,7 @@ class TADjsDesktop {
      * @param {Object} data - ドロップデータ
      */
     notifySourceWindowOfCrossWindowDropInProgress(data) {
-        logger.info('[TADjs] クロスウィンドウドロップ進行中通知:', data.sourceWindowId);
+        logger.debug('[TADjs] クロスウィンドウドロップ進行中通知:', data.sourceWindowId);
 
         // 特定のウィンドウ（sourceWindowId）だけに即座通知
         this.parentMessageBus.sendToWindow(data.sourceWindowId, 'cross-window-drop-in-progress', {
@@ -2104,7 +2106,7 @@ class TADjsDesktop {
      * @param {Object} data - ドロップデータ
      */
     notifySourceWindowOfCrossWindowDrop(data) {
-        logger.info('[TADjs] クロスウィンドウドロップ通知:', data.sourceWindowId);
+        logger.debug('[TADjs] クロスウィンドウドロップ通知:', data.sourceWindowId);
 
         // 特定のウィンドウ（sourceWindowId）だけに通知
         this.parentMessageBus.sendToWindow(data.sourceWindowId, 'cross-window-drop-success', {
@@ -2191,7 +2193,7 @@ class TADjsDesktop {
                 clickTimer = null;
             }
 
-            logger.info('Opening file:', file.name);
+            logger.debug('Opening file:', file.name);
             this.openTADFile(file);
         });
 
@@ -2214,7 +2216,7 @@ class TADjsDesktop {
 
     async openTADFile(file) {
         try {
-            logger.info('Opening TAD file:', file.name, file);
+            logger.debug('Opening TAD file:', file.name, file);
             this.setStatusMessage(`${file.name} を読み込み中...`);
 
             const uint8Array = await this.getFileAsUint8Array(file);
@@ -3764,7 +3766,7 @@ class TADjsDesktop {
      * @param {string} pluginId - 起動するプラグインID
      */
     async openVirtualObjectReal(virtualObj, pluginId, messageId, source) {
-        logger.info('[TADjs] 仮身の実身を開く:', virtualObj.link_id, 'with', pluginId);
+        logger.debug('[TADjs] 仮身の実身を開く:', virtualObj.link_id, 'with', pluginId);
 
         try {
             // link_idから実身ID（UUID）を抽出
@@ -3774,7 +3776,7 @@ class TADjsDesktop {
             // 実身IDを抽出（共通メソッドを使用）
             const realId = window.RealObjectSystem.extractRealId(fullRealId);
 
-            logger.info('[TADjs] 実身ID抽出:', realId, 'フルID:', fullRealId);
+            logger.debug('[TADjs] 実身ID抽出:', realId, 'フルID:', fullRealId);
 
             // 既に開いているウィンドウがあればアクティブにして処理を終了
             if (this.openedRealObjects.has(realId)) {
@@ -3902,11 +3904,11 @@ class TADjsDesktop {
 
                 // ウィンドウをアクティブにする
                 if (windowId) {
-                    logger.info('[TADjs] ウィンドウをアクティブにします:', windowId);
+                    logger.debug('[TADjs] ウィンドウをアクティブにします:', windowId);
                     // DOMが完全に更新されるまで少し待つ
                     setTimeout(() => {
                         this.setActiveWindow(windowId);
-                        logger.info('[TADjs] setActiveWindow呼び出し完了:', windowId);
+                        logger.debug('[TADjs] setActiveWindow呼び出し完了:', windowId);
                      }, window.UI_UPDATE_DELAY_MS);
                 } else {
                     logger.warn('[TADjs] windowIdがnullのためアクティブ化できません');
@@ -3928,7 +3930,7 @@ class TADjsDesktop {
             let jsonFile = this.fileObjects[jsonFileName];
 
             if (!jsonFile) {
-                logger.info('[TADjs] JSONファイルを読み込みます:', jsonFileName);
+                logger.debug('[TADjs] JSONファイルを読み込みます:', jsonFileName);
                 jsonFile = await this.loadDataFileAsFile(jsonFileName);
                 if (jsonFile) {
                     this.addFileToCache(jsonFileName, jsonFile);
@@ -3940,13 +3942,13 @@ class TADjsDesktop {
             // JSONをパース
             const jsonText = await jsonFile.text();
             const jsonData = JSON.parse(jsonText);
-            logger.info('[TADjs] JSON読み込み完了:', jsonData.name);
+            logger.debug('[TADjs] JSON読み込み完了:', jsonData.name);
 
             // accessDateを更新
             jsonData.accessDate = new Date().toISOString();
             const accessDateSaved = await this.saveDataFile(jsonFileName, JSON.stringify(jsonData, null, 2));
             if (accessDateSaved) {
-                logger.info('[TADjs] accessDate更新完了:', realId);
+                logger.debug('[TADjs] accessDate更新完了:', realId);
                 // JSONファイルのキャッシュをクリア
                 delete this.fileObjects[jsonFileName];
             } else {
@@ -3958,7 +3960,7 @@ class TADjsDesktop {
             let xtadFile = this.fileObjects[xtadFileName];
 
             if (!xtadFile) {
-                logger.info('[TADjs] XTADファイルを読み込みます:', xtadFileName);
+                logger.debug('[TADjs] XTADファイルを読み込みます:', xtadFileName);
                 xtadFile = await this.loadDataFileAsFile(xtadFileName);
                 if (xtadFile) {
                     this.addFileToCache(xtadFileName, xtadFile);
@@ -3975,7 +3977,7 @@ class TADjsDesktop {
             let xmlData = '';
             try {
                 xmlData = await xtadFile.text();
-                logger.info(`[TADjs] XTAD読み込み完了: ${xmlData.length}文字`);
+                logger.debug(`[TADjs] XTAD読み込み完了: ${xmlData.length}文字`);
             } catch (error) {
                 logger.error('[TADjs] XTAD読み込みエラー:', error);
                 logger.warn('[TADjs] XMLデータが空のままプラグインを起動します');
@@ -3998,7 +4000,7 @@ class TADjsDesktop {
             let windowId = null;
             if (window.pluginManager) {
                 windowId = await window.pluginManager.launchPlugin(pluginId, fileData);
-                logger.info('[TADjs] プラグインで実身を開きました:', pluginId, 'windowId:', windowId);
+                logger.debug('[TADjs] プラグインで実身を開きました:', pluginId, 'windowId:', windowId);
 
                 // 開いたウィンドウを記録
                 if (windowId) {
@@ -4013,11 +4015,11 @@ class TADjsDesktop {
 
                 // ウィンドウをアクティブにする
                 if (windowId) {
-                    logger.info('[TADjs] ウィンドウをアクティブにします:', windowId);
+                    logger.debug('[TADjs] ウィンドウをアクティブにします:', windowId);
                     // DOMが完全に更新されるまで少し待つ
                     setTimeout(() => {
                         this.setActiveWindow(windowId);
-                        logger.info('[TADjs] setActiveWindow呼び出し完了:', windowId);
+                        logger.debug('[TADjs] setActiveWindow呼び出し完了:', windowId);
                      }, window.UI_UPDATE_DELAY_MS);
                 } else {
                     logger.warn('[TADjs] windowIdがnullのためアクティブ化できません');
@@ -5847,7 +5849,7 @@ class TADjsDesktop {
      * @returns {Promise<void>}
      */
     async handleSetWindowIcon(data, event) {
-        logger.info('[TADjs] ウィンドウアイコン設定要求:', data.windowId, data.iconPath);
+        logger.debug('[TADjs] ウィンドウアイコン設定要求:', data.windowId, data.iconPath);
         this.setWindowIcon(data.windowId, data.iconPath);
     }
 
@@ -6819,7 +6821,7 @@ class TADjsDesktop {
      * @returns {Promise<void>}
      */
     async handleReadIconFile(data, event) {
-        logger.info('[TADjs] read-icon-file受信:', data.realId);
+        logger.debug('[TADjs] read-icon-file受信:', data.realId);
         try {
             const result = await this.readIconFile(data.realId);
 
@@ -7117,7 +7119,7 @@ class TADjsDesktop {
      * @returns {Promise<void>}
      */
     async handleOpenVirtualObjectReal(data, event) {
-        logger.info('[TADjs] 仮身の実身を開く要求:', data);
+        logger.debug('[TADjs] 仮身の実身を開く要求:', data);
         this.openVirtualObjectReal(data.virtualObj, data.pluginId, data.messageId, event.source);
     }
 
@@ -7607,7 +7609,7 @@ class TADjsDesktop {
      * @returns {Promise<void>}
      */
     async handleLoadDataFileRequest(data, event) {
-        logger.info('[TADjs] load-data-file-request受信:', data.fileName);
+        logger.debug('[TADjs] load-data-file-request受信:', data.fileName);
         try {
             const fileData = await this.loadDataFileAsFile(data.fileName);
             if (event.source) {
@@ -8551,8 +8553,8 @@ class TADjsDesktop {
             e,
             '実身作成',
             async (realObjectSystem, data) => {
-                const { realName, initialXtad } = data;
-                const realId = await realObjectSystem.createRealObject(realName, initialXtad);
+                const { realName, initialXtad, applist, windowConfig } = data;
+                const realId = await realObjectSystem.createRealObject(realName, initialXtad, applist, windowConfig);
                 return { realId, realName };
             },
             'real-object-created'
@@ -8766,6 +8768,67 @@ class TADjsDesktop {
             if (e.source) {
                 e.source.postMessage({
                     type: 'delete-real-object-response',
+                    messageId: messageId,
+                    success: false,
+                    error: error.message
+                }, '*');
+            }
+        }
+    }
+
+    /**
+     * 原紙アイコンコピーハンドラー
+     * プラグインの原紙アイコンを指定した実身にコピーする
+     */
+    async handleCopyTemplateIcon(e) {
+        if (!this.realObjectSystem) {
+            logger.error('[TADjs] 実身仮身システムが初期化されていません');
+            return;
+        }
+
+        const { realId, pluginId, messageId } = e.data;
+
+        try {
+            // プラグイン情報を取得
+            const plugin = window.pluginManager && window.pluginManager.plugins.get(pluginId);
+            if (!plugin || !plugin.basefile || !plugin.basefile.ico) {
+                logger.warn('[TADjs] プラグインまたは原紙アイコンが見つかりません:', pluginId);
+                if (e.source) {
+                    e.source.postMessage({
+                        type: 'template-icon-copied',
+                        messageId: messageId,
+                        success: false,
+                        error: 'プラグインまたは原紙アイコンが見つかりません'
+                    }, '*');
+                }
+                return;
+            }
+
+            // 原紙アイコンをコピー
+            const success = await this.realObjectSystem.copyTemplateIcon(
+                realId,
+                pluginId,
+                plugin.basefile.ico
+            );
+
+            if (e.source) {
+                e.source.postMessage({
+                    type: 'template-icon-copied',
+                    messageId: messageId,
+                    success: success,
+                    realId: realId,
+                    pluginId: pluginId
+                }, '*');
+            }
+
+            if (success) {
+                logger.info('[TADjs] 原紙アイコンコピー完了:', realId, '<-', pluginId);
+            }
+        } catch (error) {
+            logger.error('[TADjs] 原紙アイコンコピーエラー:', error);
+            if (e.source) {
+                e.source.postMessage({
+                    type: 'template-icon-copied',
                     messageId: messageId,
                     success: false,
                     error: error.message

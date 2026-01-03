@@ -632,13 +632,9 @@ class VirtualObjectListApp extends window.PluginBase {
         this.messageBus.on('init', async (data) => {
             logger.debug('[VirtualObjectList] [MessageBus] init受信', data);
 
-            // ウィンドウIDを保存
-            if (data.windowId) {
-                this.windowId = data.windowId;
-                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
-                this.messageBus.setWindowId(data.windowId);
-                logger.debug('[VirtualObjectList] [MessageBus] windowId更新:', this.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
+            logger.debug('[VirtualObjectList] [MessageBus] windowId更新:', this.windowId);
 
             this.fileData = data.fileData;
             const realIdValue = this.fileData ? (this.fileData.realId || this.fileData.fileId) : null;
@@ -3529,6 +3525,8 @@ class VirtualObjectListApp extends window.PluginBase {
     setupContextMenu() {
         // 右クリックメニューを開いた直後かどうかのフラグ
         this.justOpenedContextMenu = false;
+        // 範囲選択が完了した直後かどうかのフラグ（クリックイベントによる選択解除を防ぐ）
+        this.justCompletedRangeSelection = false;
 
         document.addEventListener('contextmenu', (e) => {
             e.preventDefault();
@@ -3539,25 +3537,24 @@ class VirtualObjectListApp extends window.PluginBase {
                 return;
             }
 
-            if (window.parent && window.parent !== window) {
-                const rect = window.frameElement.getBoundingClientRect();
+            // 右クリックメニューを開いたことを記録
+            this.justOpenedContextMenu = true;
+            setTimeout(() => {
+                this.justOpenedContextMenu = false;
+            }, 100);
 
-                // 右クリックメニューを開いたことを記録
-                this.justOpenedContextMenu = true;
-                setTimeout(() => {
-                    this.justOpenedContextMenu = false;
-                }, 100);
-
-                    this.messageBus.send('context-menu-request', {
-                    x: rect.left + e.clientX,
-                    y: rect.top + e.clientY
-                });
-            }
+            // コンテキストメニュー要求（共通メソッドを使用）
+            this.showContextMenuAtEvent(e);
         });
 
         document.addEventListener('click', () => {
             // 右クリックメニューを開いた直後は無視
             if (this.justOpenedContextMenu) {
+                return;
+            }
+
+            // 範囲選択終了直後は無視（範囲選択で選択した仮身がクリアされるのを防ぐ）
+            if (this.justCompletedRangeSelection) {
                 return;
             }
 
@@ -3631,6 +3628,19 @@ class VirtualObjectListApp extends window.PluginBase {
     setupGlobalMouseHandlers() {
         // ドラッグ用のmousemoveハンドラ
         const handleDragMouseMove = (e) => {
+            // 範囲選択中の更新処理
+            if (this.rangeSelectionState.isActive) {
+                const canvas = this.rangeSelectionState.container;
+                if (canvas) {
+                    const rect = canvas.getBoundingClientRect();
+                    // getBoundingClientRect()はスクロール位置を考慮済みなのでscroll offsetは不要
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    this.updateRangeSelection(x, y);
+                }
+                return; // 範囲選択中は他の処理をスキップ
+            }
+
             // ダブルクリック+ドラッグ候補の検出
             // 共通メソッドでドラッグ開始判定
             if (this.shouldStartDblClickDrag(e)) {
@@ -3725,6 +3735,17 @@ class VirtualObjectListApp extends window.PluginBase {
                         logger.debug('[VirtualObjectList] タイムアウト: ドラッグなし（iframe再有効化はスキップ）');
                     }
                 }, 200);
+            } else if (e.button === 0 && !this.dblClickDragState.isDblClickDragCandidate) {
+                // 仮身要素以外で左ボタンが押された場合、範囲選択を開始
+                // （ダブルクリック+ドラッグ候補でない場合のみ）
+                const canvas = document.querySelector('.virtual-canvas');
+                if (canvas && canvas.contains(e.target)) {
+                    const rect = canvas.getBoundingClientRect();
+                    // getBoundingClientRect()はスクロール位置を考慮済みなのでscroll offsetは不要
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    this.startRangeSelection(canvas, x, y);
+                }
             }
         }, { capture: true });
 
@@ -3734,6 +3755,53 @@ class VirtualObjectListApp extends window.PluginBase {
         // document全体でのmouseup
         document.addEventListener('mouseup', (e) => {
             logger.debug('[VirtualObjectList] mouseup検知 isDragging:', this.virtualObjectDragState.isDragging, 'hasMoved:', this.virtualObjectDragState.hasMoved, 'button:', e.button);
+
+            // 範囲選択終了処理
+            if (this.rangeSelectionState.isActive) {
+                const bounds = this.getRangeSelectionBounds();
+                // 範囲選択座標はビューポート相対なので、キャンバス座標に変換（スクロールオフセット加算）
+                const canvas = this.rangeSelectionState.container;
+                if (canvas) {
+                    bounds.left += canvas.scrollLeft;
+                    bounds.right += canvas.scrollLeft;
+                    bounds.top += canvas.scrollTop;
+                    bounds.bottom += canvas.scrollTop;
+                }
+                const selectedIndices = this.getVirtualObjectsInRect(bounds);
+                logger.debug('[VirtualObjectList] 範囲選択終了:', selectedIndices.length, '個の仮身を選択');
+
+                // Shiftキーでトグル選択、それ以外は新規選択
+                if (!e.shiftKey) {
+                    // 既存の選択を解除
+                    this.selectedVirtualObjects.clear();
+                    const allVobjElements = document.querySelectorAll('.virtual-object');
+                    allVobjElements.forEach(el => {
+                        el.style.outline = '';
+                    });
+                }
+
+                // 範囲内の仮身を選択
+                selectedIndices.forEach(index => {
+                    if (e.shiftKey && this.selectedVirtualObjects.has(index)) {
+                        this.selectedVirtualObjects.delete(index);
+                    } else {
+                        this.selectedVirtualObjects.add(index);
+                    }
+                });
+
+                // 選択表示を更新
+                this.updateSelectionDisplay();
+
+                this.endRangeSelection();
+
+                // 範囲選択終了フラグを設定（クリックイベントによる選択解除を防ぐ）
+                this.justCompletedRangeSelection = true;
+                setTimeout(() => {
+                    this.justCompletedRangeSelection = false;
+                }, 100);
+
+                return; // 範囲選択終了後は他の処理をスキップ
+            }
 
             // ダブルクリック+ドラッグのプレビュー要素を削除
             const preview = document.querySelector('.dblclick-drag-preview');
@@ -4783,51 +4851,26 @@ class VirtualObjectListApp extends window.PluginBase {
 
     /**
      * <link>要素から仮身情報を解析
+     * PluginBase共通メソッドを使用し、プラグイン固有属性を追加
      */
     parseLinkElement(linkElement) {
-        try {
-            const vobjleft = parseInt(linkElement.getAttribute('vobjleft')) || 0;
-            const vobjtop = parseInt(linkElement.getAttribute('vobjtop')) || 0;
-            const vobjright = parseInt(linkElement.getAttribute('vobjright')) || 0;
-            const vobjbottom = parseInt(linkElement.getAttribute('vobjbottom')) || 0;
+        // PluginBase共通メソッドを呼び出し
+        const baseObj = super.parseLinkElement(linkElement);
+        if (!baseObj) return null;
 
-            const obj = {
-                link_id: linkElement.getAttribute('id') || '',
-                vobjleft: vobjleft,
-                vobjtop: vobjtop,
-                vobjright: vobjright,
-                vobjbottom: vobjbottom,
-                // 元の位置を保存
-                originalLeft: vobjleft,
-                originalTop: vobjtop,
-                originalRight: vobjright,
-                originalBottom: vobjbottom,
-                height: parseInt(linkElement.getAttribute('height')) || 0,
-                chsz: parseInt(linkElement.getAttribute('chsz')) || 14,  // 仮身表示名の文字サイズ
-                frcol: linkElement.getAttribute('frcol') || '#000000',   // 仮身の枠の色
-                chcol: linkElement.getAttribute('chcol') || '#000000',   // 仮身表示名の文字色
-                tbcol: linkElement.getAttribute('tbcol') || '#ffffff',   // 仮身の背景色
-                bgcol: linkElement.getAttribute('bgcol') || '#ffffff',   // 開いた仮身の表示領域の背景色
-                dlen: parseInt(linkElement.getAttribute('dlen')) || 0,
-                link_name: linkElement.textContent.trim() || '無題の仮身',
-                // 表示属性
-                pictdisp: linkElement.getAttribute('pictdisp') || 'true',
-                namedisp: linkElement.getAttribute('namedisp') || 'true',
-                roledisp: linkElement.getAttribute('roledisp') || 'false',
-                typedisp: linkElement.getAttribute('typedisp') || 'false',
-                updatedisp: linkElement.getAttribute('updatedisp') || 'false',
-                framedisp: linkElement.getAttribute('framedisp') || 'true',
-                autoopen: linkElement.getAttribute('autoopen') || 'false',
+        try {
+            // プラグイン固有属性を追加
+            return {
+                ...baseObj,
+                // 元の位置を保存（ドラッグ操作用）
+                originalLeft: baseObj.vobjleft,
+                originalTop: baseObj.vobjtop,
+                originalRight: baseObj.vobjright,
+                originalBottom: baseObj.vobjbottom,
                 // 保護状態（固定化と背景化は独立して設定可能）
                 isFixed: linkElement.getAttribute('fixed') === 'true',
                 isBackground: linkElement.getAttribute('background') === 'true'
             };
-
-            // 位置・サイズを計算
-            obj.width = obj.vobjright - obj.vobjleft;
-            obj.heightPx = obj.vobjbottom - obj.vobjtop;
-
-            return obj;
         } catch (error) {
             logger.error('[VirtualObjectList] リンク要素解析エラー:', error);
             return null;
@@ -4942,6 +4985,21 @@ class VirtualObjectListApp extends window.PluginBase {
         canvas.style.height = finalHeight + 'px'; // 動的に高さを設定
         // 背景色はapplyBackgroundColor()で設定
         canvas.style.border = '1px solid #808080';
+
+        // 図形要素の描画（Phase 2対応）
+        // xmlDataにfigure要素が含まれている場合は描画
+        if (this.xmlData) {
+            try {
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(this.xmlData, 'text/xml');
+                const result = this.renderFigureElements(xmlDoc, canvas);
+                if (result.elementCount > 0) {
+                    logger.debug('[VirtualObjectList] 図形要素を描画:', result.elementCount, '個');
+                }
+            } catch (figureError) {
+                logger.error('[VirtualObjectList] 図形描画エラー:', figureError);
+            }
+        }
 
         // z-index管理：背景化された仮身と通常の仮身を分離
         const backgroundObjects = this.virtualObjects.filter(obj => obj.isBackground);
@@ -5401,6 +5459,56 @@ class VirtualObjectListApp extends window.PluginBase {
         // Setから最初のvobjIndexを取得し、仮身オブジェクトを返す
         const firstVobjIndex = Array.from(this.selectedVirtualObjects)[0];
         return this.virtualObjects[firstVobjIndex] || null;
+    }
+
+    /**
+     * 指定した矩形範囲内にある仮身のインデックスを取得
+     * @param {Object} bounds - 矩形範囲 { left, top, right, bottom }
+     * @returns {Array<number>} 範囲内の仮身インデックス配列
+     */
+    getVirtualObjectsInRect(bounds) {
+        const indices = [];
+        this.virtualObjects.forEach((obj, index) => {
+            const objLeft = obj.vobjleft;
+            const objTop = obj.vobjtop;
+            const objRight = obj.vobjright;
+            const objBottom = obj.vobjbottom;
+
+            // 矩形の交差判定（部分的に含まれていればtrue）
+            const intersects = !(objRight < bounds.left ||
+                                 objLeft > bounds.right ||
+                                 objBottom < bounds.top ||
+                                 objTop > bounds.bottom);
+
+            if (intersects) {
+                indices.push(index);
+            }
+        });
+        return indices;
+    }
+
+    /**
+     * 選択表示を更新
+     * selectedVirtualObjectsの状態に基づいてDOM要素のアウトラインを更新
+     */
+    updateSelectionDisplay() {
+        // 全ての仮身要素のアウトラインをクリア
+        const allVobjElements = document.querySelectorAll('.virtual-object');
+        allVobjElements.forEach(el => {
+            el.style.outline = '';
+        });
+
+        // 選択中の仮身にアウトラインを設定
+        this.selectedVirtualObjects.forEach(vobjIndex => {
+            const obj = this.virtualObjects[vobjIndex];
+            if (obj) {
+                // data-vobj-index属性で要素を検索
+                const element = document.querySelector(`.virtual-object[data-vobj-index="${vobjIndex}"]`);
+                if (element) {
+                    element.style.outline = '2px solid #000080';
+                }
+            }
+        });
     }
 
     /**

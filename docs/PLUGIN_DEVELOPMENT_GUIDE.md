@@ -19,6 +19,7 @@ BTRON Desktopのプラグイン開発に関する総合ガイドです。
 11. [参考実装](#11-参考実装)
 12. [トラブルシューティング](#12-トラブルシューティング)
 13. [CSSスタイルガイド](#13-cssスタイルガイド)
+14. [XTAD形式ガイド](#14-xtad形式ガイド)
 
 ---
 
@@ -95,7 +96,9 @@ class MyPlugin extends window.PluginBase {
 
         // initメッセージでファイルデータを受け取る
         this.messageBus.on('init', (data) => {
-            this.windowId = data.windowId;
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
+
             this.realId = data.realId;
             this.fileData = data.fileData;
             this.onInitialized(data);
@@ -301,7 +304,9 @@ class MyPlugin extends window.PluginBase {
 
         // initメッセージ
         this.messageBus.on('init', (data) => {
-            this.windowId = data.windowId;
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
+
             this.realId = data.realId;
             this.fileData = data.fileData;  // PluginBaseのプロパティに保存
             this.onInitialized(data);
@@ -369,7 +374,8 @@ document.addEventListener('DOMContentLoaded', () => {
            └── plugin-readyシグナル送信
 
 3. 親ウィンドウから 'init' メッセージ受信
-   └── onInitialized() コールバック
+   ├── onInit(data) - 共通初期化処理（windowId設定、スクロール状態送信）
+   └── onInitialized() コールバック（プラグイン固有の初期化）
 ```
 
 ### 4.3 PluginBase共通プロパティ
@@ -403,7 +409,7 @@ PluginBaseが提供する共通メソッドの一覧です。開発者はこれ�
 |---------|------|
 | `initializeCommonComponents(logPrefix)` | VirtualObjectRenderer, IconCacheManager初期化 |
 | `setupWindowActivation()` | mousedownでウィンドウをアクティブ化 |
-| `setupContextMenu()` | 右クリックメニュー設定 |
+| `setupContextMenu()` | 右クリックメニュー設定（座標変換込みでshowContextMenuAtEventを呼び出す） |
 | `setupVirtualObjectRightButtonHandlers()` | 仮身ドラッグ用右ボタン監視 |
 | `setupCommonMessageBusHandlers()` | 共通MessageBusハンドラ登録（**必須**） |
 | `setupCrossWindowDropSuccessHandler()` | クロスウィンドウドロップ成功ハンドラ |
@@ -453,7 +459,17 @@ const result = await this.showInputDialog(
 | `toggleMaximize()` | 最大化/復元を切り替え |
 | `toggleFullscreen()` | 全画面表示切り替え（toggleMaximizeのエイリアス） |
 | `closeContextMenu()` | コンテキストメニューを閉じる |
-| `requestContextMenu(x, y)` | コンテキストメニュー要求を送信 |
+| `requestContextMenu(x, y)` | コンテキストメニュー要求を送信（親ウィンドウ座標） |
+| `showContextMenu(x, y)` | iframe座標を親ウィンドウ座標に変換してコンテキストメニュー要求 |
+| `showContextMenuAtEvent(e)` | MouseEventから座標を取得してshowContextMenuを呼び出す |
+| `applyCoordinateTransform(x, y, transform)` | 座標変換を適用（傾斜→回転→移動）。戻り値: `{x, y}` |
+| `applyCoordinateTransformToPoints(points, transform)` | 座標配列に変換を適用。戻り値: `[[x, y], ...]` |
+| `parsePaperElement(element)` | `<paper>`要素を解析してpaperSize/paperMarginを設定 |
+| `getPaperSizeInMm()` | 用紙サイズをmm単位で取得。戻り値: `{width, height}` |
+| `initPaperSize()` | 用紙サイズを初期化（A4デフォルト） |
+| `getPaperSizeOptions()` | 用紙サイズ選択肢リストを取得 |
+| `pointsToMm(points)` | ポイントをmmに変換（72dpi基準） |
+| `mmToPoints(mm)` | mmをポイントに変換（72dpi基準） |
 | `requestCloseWindow()` | ウィンドウを閉じるリクエスト送信 |
 | `updateWindowConfig(config)` | ウィンドウ設定を保存 |
 | `sendStatusMessage(message)` | ステータスメッセージを送信 |
@@ -1982,3 +1998,352 @@ accessory タイプのプラグイン（設定ダイアログ等）では、以�
     padding-right: 20px;
 }
 ```
+
+---
+
+## 14. XTAD形式ガイド
+
+### 14.1 概要
+
+XTAD（XML TAD）はTAD形式のXML表現です。プラグインがXTADを出力する際は、以下のルールを遵守してください。
+
+### 14.2 tadタグのfilename属性
+
+**重要**: `<tad>` タグの `filename` 属性には**実身名（displayName）**を使用します。
+
+```xml
+<!-- ✅ 正しい例 -->
+<tad version="1.0" encoding="UTF-8" filename="基本表計算">
+
+<!-- ❌ 誤った例（realIdを使用） -->
+<tad version="1.0" encoding="UTF-8" filename="019b15f8-72b8-7151-a57f-149fb1f59a17_0.xtad">
+```
+
+#### 実身名の取得方法
+
+`init` メッセージで受け取る `fileData` から正しい優先順位で取得します：
+
+```javascript
+// ✅ 正しい優先順位
+this.fileName = data.fileData.displayName ||
+                data.fileData.name ||
+                data.fileData.realObject?.name ||
+                'デフォルト名';
+
+// ❌ 誤り（fileNameはXTADファイル名なので使用しない）
+this.fileName = data.fileData.fileName || data.fileData.displayName || 'デフォルト名';
+```
+
+#### fileDataの各フィールドの意味
+
+| フィールド | 内容 | 例 |
+|-----------|------|-----|
+| `realId` | 実身の完全ID | `"019b15f8-72b8-7151-a57f-149fb1f59a17_0.xtad"` |
+| `fileName` | XTADファイル名（使用しない） | `"019b15f8-72b8-7151-a57f-149fb1f59a17_0.xtad"` |
+| `displayName` | 実身の表示名（**推奨**） | `"基本表計算"` |
+| `name` | 実身名 | `"基本表計算"` |
+| `realObject.name` | JSON内の実身名 | `"基本表計算"` |
+
+### 14.3 figureタグ（図形データ）
+
+図形データを含む `<figure>` タグは属性なしで出力します。
+
+```xml
+<!-- ✅ 正しい例 -->
+<figure>
+<figView top="0" left="0" right="400" bottom="200"/>
+<figDraw top="0" left="0" right="400" bottom="200"/>
+<figScale hunit="0.1" vunit="0.1"/>
+<!-- 図形要素 -->
+</figure>
+
+<!-- ❌ 誤った例（不要な属性あり） -->
+<figure x="0" y="0" w="400" h="200">
+```
+
+### 14.4 figView / figDraw タグ
+
+座標は `top`, `left`, `right`, `bottom` 形式を使用します。
+
+```xml
+<!-- ✅ 正しい例 -->
+<figView top="0" left="0" right="400" bottom="200"/>
+<figDraw top="0" left="0" right="400" bottom="200"/>
+
+<!-- ❌ 誤った例（x, y, w, h形式） -->
+<figView x="0" y="0" w="400" h="200"/>
+```
+
+#### 座標変換
+
+```javascript
+// x, y, width, height から変換
+const top = Math.round(y);
+const left = Math.round(x);
+const right = Math.round(x + width);
+const bottom = Math.round(y + height);
+
+xtad += `<figView top="${top}" left="${left}" right="${right}" bottom="${bottom}"/>`;
+```
+
+### 14.5 figScale タグ
+
+スケールは `hunit`, `vunit` 属性を使用し、値は `"0.1"` を標準とします。
+
+```xml
+<!-- ✅ 正しい例 -->
+<figScale hunit="0.1" vunit="0.1"/>
+
+<!-- ❌ 誤った例 -->
+<figScale x="100" y="100"/>
+```
+
+### 14.6 XTAD出力の実装例
+
+```javascript
+generateXtad() {
+    // filename属性には実身名（displayName）を使用
+    let xtad = `<tad version="1.0" encoding="UTF-8" filename="${this.escapeXml(this.fileName)}">`;
+
+    // figureタグ（属性なし）
+    xtad += '<figure>';
+
+    // figView, figDraw（top/left/right/bottom形式）
+    const top = 0;
+    const left = 0;
+    const right = this.width;
+    const bottom = this.height;
+    xtad += `<figView top="${top}" left="${left}" right="${right}" bottom="${bottom}"/>`;
+    xtad += `<figDraw top="${top}" left="${left}" right="${right}" bottom="${bottom}"/>`;
+
+    // figScale（hunit/vunit形式、値は0.1）
+    xtad += '<figScale hunit="0.1" vunit="0.1"/>';
+
+    // コンテンツ
+    xtad += this.generateContent();
+
+    xtad += '</figure>';
+    xtad += '</tad>';
+
+    return xtad;
+}
+```
+
+### 14.7 document要素（文字枠）
+
+文字枠は `<document>` タグ内に各種 `<text>` タグを含める形式で表現します。
+
+#### XTAD形式
+
+```xml
+<document>
+<text viewleft="100" viewtop="50" viewright="300" viewbottom="100"/>
+<text align="center"/>
+<text color="#000000" size="12" face="sans-serif">テキスト内容</text>
+</document>
+```
+
+**重要**:
+
+- `<text viewleft.../>` は `<document>` タグの**内側**に配置
+- `<document>` タグ自体には属性を付けない
+
+#### 内部シェイプ形式 (type: 'document')
+
+```javascript
+{
+    type: 'document',           // XTAD準拠の型名
+    startX: 100,                // 左端座標
+    startY: 50,                 // 上端座標
+    endX: 300,                  // 右端座標
+    endY: 100,                  // 下端座標
+    content: 'テキスト内容',     // テキスト内容
+    fontSize: 12,               // フォントサイズ（数値）
+    fontFamily: 'sans-serif',   // フォントファミリー
+    textColor: '#000000',       // テキスト色
+    textAlign: 'center',        // テキスト配置: 'left', 'center', 'right'
+    fillColor: 'transparent',   // 背景色
+    strokeColor: '#000000',     // 枠線色
+    lineWidth: 1,               // 枠線幅
+    decorations: {              // テキスト装飾
+        bold: false,
+        italic: false,
+        underline: false,
+        strikethrough: false
+    },
+    zIndex: 0                   // 重なり順
+}
+```
+
+#### shapeToXML() での出力例
+
+```javascript
+case 'document':
+    // 1. document要素の開始（属性なし）
+    xmlParts.push(`<document>\r\n`);
+
+    // 2. text要素（位置情報のみ）
+    xmlParts.push(`<text viewleft="${minX}" viewtop="${minY}" viewright="${maxX}" viewbottom="${maxY}"/>\r\n`);
+
+    // 3. テキスト配置（textAlign）
+    const textAlign = shape.textAlign || 'left';
+    if (textAlign !== 'left') {
+        xmlParts.push(`<text align="${textAlign}"/>\r\n`);
+    }
+
+    // 4. テキスト内容
+    xmlParts.push(`<text color="${textColor}" size="${fontSize}" face="${fontFamily}">${content}</text>\r\n`);
+
+    xmlParts.push(`</document>\r\n`);
+    break;
+```
+
+### 14.8 text要素のalign属性
+
+テキストの配置（左揃え、中央揃え、右揃え）は `<text align="..."/>` で指定します。
+
+```xml
+<!-- 左揃え（デフォルト、省略可能） -->
+<text align="left"/>
+
+<!-- 中央揃え -->
+<text align="center"/>
+
+<!-- 右揃え -->
+<text align="right"/>
+```
+
+#### 読み込み時の処理（parseDocumentElement）
+
+```javascript
+parseDocumentElement(textElem, docElem) {
+    let textAlign = 'left';  // デフォルト値
+
+    // document内のtext要素からalign属性を取得
+    const children = docElem.childNodes;
+    for (let i = 0; i < children.length; i++) {
+        const node = children[i];
+        if (node.nodeType === Node.ELEMENT_NODE &&
+            node.tagName.toLowerCase() === 'text' &&
+            node.hasAttribute('align')) {
+            textAlign = node.getAttribute('align') || 'left';
+        }
+    }
+
+    return {
+        type: 'document',
+        // ... 他のプロパティ
+        textAlign: textAlign,
+    };
+}
+```
+
+#### 描画時の処理（drawTextBox / drawDocument）
+
+```javascript
+// textAlignに基づいて開始X座標を決定
+let lineX = minX + padding;
+const textAlign = shape.textAlign || 'left';
+
+if (textAlign === 'center') {
+    lineX = minX + (width - totalLineWidth) / 2;
+} else if (textAlign === 'right') {
+    lineX = minX + width - padding - totalLineWidth;
+}
+
+// テキストを描画
+this.ctx.fillText(line, lineX, lineY);
+```
+
+### 14.9 group要素内のdocument/text要素
+
+グループ内にネストされたdocument/text要素も正しくパースする必要があります。
+
+#### parseGroupElement() での処理
+
+```javascript
+parseGroupElement(elem) {
+    const childShapes = [];
+    const children = elem.children;
+
+    for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        const tagName = child.tagName.toLowerCase();
+
+        if (tagName === 'line') {
+            childShapes.push(this.parseLineElement(child));
+        } else if (tagName === 'rect') {
+            childShapes.push(this.parseRectElement(child));
+        // ... 他の図形タイプ
+
+        } else if (tagName === 'text') {
+            // 次の要素がdocumentか確認（文字枠の場合）
+            const nextChild = i + 1 < children.length ? children[i + 1] : null;
+            if (nextChild && nextChild.tagName.toLowerCase() === 'document') {
+                // 文字枠として解析
+                childShapes.push(this.parseDocumentElement(child, nextChild));
+                i++; // documentもスキップ
+            } else {
+                // 通常のtext要素として解析
+                childShapes.push(this.parseTextElement(child));
+            }
+        } else if (tagName === 'document') {
+            // document内にtext要素がある場合は文字枠として処理（新形式）
+            const textElem = child.querySelector('text');
+            if (textElem) {
+                childShapes.push(this.parseDocumentElement(textElem, child));
+            }
+            // textなしのdocumentは無視
+        } else if (tagName === 'group') {
+            // ネストしたグループを再帰的に処理
+            childShapes.push(this.parseGroupElement(child));
+        }
+    }
+
+    return {
+        type: 'group',
+        shapes: childShapes,
+        // ... 他のプロパティ
+    };
+}
+```
+
+### 14.10 calc-editorからのグラフコピー形式
+
+基本表計算プラグインからグラフをコピーする際、X軸ラベル等はdocument形式で生成されます。
+
+```javascript
+// generateBarShapesForCopy() / generateLineShapesForCopy() でのラベル生成
+shapes.push({
+    type: 'document',
+    startX: labelX - labelWidth / 2,
+    startY: labelY,
+    endX: labelX + labelWidth / 2,
+    endY: labelY + 15,
+    content: data.labels[labelIdx] || '',
+    fontSize: 10,
+    fontFamily: 'sans-serif',
+    textColor: '#000000',
+    textAlign: 'center',       // 中央揃え
+    fillColor: 'transparent',
+    strokeColor: 'transparent',
+    lineWidth: 0,
+    decorations: { bold: false, italic: false, underline: false, strikethrough: false },
+    zIndex: 0
+});
+```
+
+これにより、グラフのラベルが保存後も正しく表示されます。
+
+### 14.11 XTAD形式チェックリスト
+
+プラグインでXTAD出力を実装する際は以下を確認：
+
+- [ ] `<tad filename="...">` に実身名（displayName）を使用しているか
+- [ ] `<figure>` タグに不要な属性がないか
+- [ ] `<figView>` / `<figDraw>` が `top/left/right/bottom` 形式か
+- [ ] `<figScale>` が `hunit/vunit` 形式で値が `"0.1"` か
+- [ ] XML特殊文字（`<`, `>`, `&`, `"`, `'`）がエスケープされているか
+- [ ] 文字枠は `type: 'document'` を使用しているか（XTAD準拠）
+- [ ] `textAlign` プロパティが正しく保存・読み込みされるか
+- [ ] グループ内のdocument/text要素がパースされるか

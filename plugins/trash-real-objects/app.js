@@ -85,12 +85,8 @@ class TrashRealObjectsApp extends window.PluginBase {
         this.messageBus.on('init', async (data) => {
             logger.info('[TrashRealObjects] init受信');
 
-            // ウィンドウIDを保存
-            if (data.windowId) {
-                this.windowId = data.windowId;
-                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
 
             // refCount=0の実身を読み込む
             await this.loadTrashRealObjects();
@@ -99,19 +95,8 @@ class TrashRealObjectsApp extends window.PluginBase {
             this.renderTrashObjects();
         });
 
-        // メニューアクション
-        this.messageBus.on('menu-action', (data) => {
-            this.handleMenuAction(data.action);
-        });
-
-        // メニュー定義要求
-        this.messageBus.on('get-menu-definition', (data) => {
-            const menuDefinition = this.getMenuDefinition();
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: menuDefinition
-            });
-        });
+        // menu-action, get-menu-definition は setupCommonMessageBusHandlers() で登録済み
+        // getMenuDefinition() と executeMenuAction() をオーバーライドして処理
 
         // コピーモード変更
         this.messageBus.on('copy-mode-changed', (data) => {
@@ -171,7 +156,11 @@ class TrashRealObjectsApp extends window.PluginBase {
         return menuDefinition;
     }
 
-    async handleMenuAction(action) {
+    /**
+     * メニューアクション処理
+     * setupCommonMessageBusHandlers() の menu-action ハンドラから呼ばれる
+     */
+    async executeMenuAction(action) {
         switch (action) {
             case 'toggle-fullscreen':
                 this.toggleFullscreen();

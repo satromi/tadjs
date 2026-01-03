@@ -198,6 +198,11 @@ class CalcToolPanel {
             this.insertLineChart();
         });
 
+        // 積上折線グラフボタン
+        document.getElementById('stackedLineChartBtn').addEventListener('click', () => {
+            this.insertStackedLineChart();
+        });
+
         // フォント選択（ポップアップ）
         document.getElementById('fontDropdownBtn').addEventListener('click', (e) => {
             this.showFontPopup(e.currentTarget);
@@ -668,6 +673,16 @@ class CalcToolPanel {
     insertLineChart() {
         this.sendToParent('insert-chart', {
             chartType: 'line'
+        });
+    }
+
+    /**
+     * 積上折線グラフ挿入
+     * 選択範囲のデータから積上折線グラフを生成するようeditorに通知
+     */
+    insertStackedLineChart() {
+        this.sendToParent('insert-chart', {
+            chartType: 'stacked-line'
         });
     }
 

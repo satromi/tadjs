@@ -221,6 +221,11 @@ html, body {
     font-weight: normal;
 }
 
+/* 積上折線グラフアイコン（赤色） */
+.stacked-line-icon {
+    filter: hue-rotate(315deg) saturate(1.5);
+}
+
 /* ドラッグ領域 */
 .drag-handle {
     position: absolute;

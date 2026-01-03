@@ -219,9 +219,9 @@ input[type="text"], input[type="password"], textarea, .config-input {
 .window-frame {
     flex: 1;
     display: grid;
-    grid-template-columns: 1fr 18px;
-    grid-template-rows: 1fr 18px;
-    grid-template-areas: 
+    grid-template-columns: 1fr var(--scrollbar-width, 16px);
+    grid-template-rows: 1fr var(--scrollbar-width, 16px);
+    grid-template-areas:
         "content vscroll"
         "hscroll corner";
 }
@@ -291,8 +291,8 @@ input[type="text"], input[type="password"], textarea, .config-input {
     position: absolute;
     bottom: 0;
     right: 0;
-    width: 18px;
-    height: 18px;
+    width: var(--scrollbar-width, 16px);
+    height: var(--scrollbar-width, 16px);
     background: #c0c0c0;
     border-right: 2px outset #c0c0c0;
     border-bottom: 2px outset #c0c0c0;
@@ -1400,6 +1400,13 @@ input[type="text"], input[type="password"], textarea, .config-input {
     border-style: inset;
 }
 
+/* フォーカス状態のボタン - 太い黒枠で強調 */
+.dialog-button:focus {
+    outline: 2px solid #000000;
+    outline-offset: 1px;
+}
+
+/* デフォルトボタン - 太字のみ（黒枠はフォーカス時のみ） */
 .dialog-button.default {
     font-weight: bold;
 }
@@ -1687,6 +1694,18 @@ input[type="text"], input[type="password"], textarea, .config-input {
 
 .radio-label.disabled:hover .radio-indicator {
     border-color: #808080;
+}
+
+/* ========================================
+   範囲選択（矩形選択）枠
+   ======================================== */
+.range-selection-rect {
+    position: absolute;
+    border: 1px dashed rgba(0, 123, 255, 0.8);
+    background: rgba(0, 123, 255, 0.1);
+    pointer-events: none;
+    z-index: 9999;
+    box-sizing: border-box;
 }
 
 /* レスポンシブ対応 */

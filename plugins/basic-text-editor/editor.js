@@ -56,8 +56,29 @@ class BasicTextEditor extends window.PluginBase {
         // this.windowId はPluginBaseで定義済み
         // imagePathCallbacks, imagePathMessageId は PluginBase.getImageFilePath() に移行済み
 
+        // 用紙設定関連プロパティ
+        this.paperFrameVisible = false;  // 用紙枠表示オン/オフ
+        this.paperWidth = 595;           // 用紙幅（ポイント）デフォルトA4
+        this.paperHeight = 842;          // 用紙高さ（ポイント）デフォルトA4
+        this.paperSize = null;           // PaperSizeオブジェクト（後で初期化）
+
+        // 座標単位設定（UNITS型）
+        this.docUnits = {
+            h_unit: -72,  // 水平方向の座標単位（デフォルト: -72 = 72DPI）
+            v_unit: -72   // 垂直方向の座標単位（デフォルト: -72 = 72DPI）
+        };
+
+        // ページ追跡（条件付き改ページ用）
+        this.pageTracker = {
+            currentPage: 1,           // 現在のページ番号（1始まり）
+            remainingHeight: 0,       // 現在のページの残り高さ（ポイント）
+            pageHeight: 0,            // 1ページの本文領域高さ（ポイント）
+            textDirection: 'horizontal' // 文字方向
+        };
+
         // パフォーマンス最適化用のデバウンス/スロットル関数
         this.debouncedUpdateContentHeight = null;  // init()で初期化
+        this.debouncedUpdatePageBreaks = null;     // init()で初期化（ページ区切り再計算用）
 
         // MessageBusはPluginBaseで初期化済み
 
@@ -71,6 +92,15 @@ class BasicTextEditor extends window.PluginBase {
         // パフォーマンス最適化関数の初期化
         if (window.throttle) {
             logger.debug('[EDITOR] Performance optimization initialized');
+        }
+
+        // ページ区切り再計算用のdebounced関数を初期化（300ms遅延）
+        if (window.debounce) {
+            this.debouncedUpdatePageBreaks = debounce(() => {
+                if (this.paperFrameVisible) {
+                    this.updatePageBreakVisibility();
+                }
+            }, 300);
         }
 
         // デフォルトの折り返しスタイルを設定
@@ -102,12 +132,8 @@ class BasicTextEditor extends window.PluginBase {
     setupMessageBusHandlers() {
         // init メッセージ
         this.messageBus.on('init', (data) => {
-            // ウィンドウIDを保存（親から渡されたIDを使用）
-            if (data.windowId) {
-                this.windowId = data.windowId;
-                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
 
             // realIdを保存（拡張子を除去）
             if (data.fileData) {
@@ -476,6 +502,10 @@ class BasicTextEditor extends window.PluginBase {
             this.updateContentHeight();
             // 編集状態を記録
             this.isModified = true;
+            // 用紙枠表示中はページ区切りを再計算（debounce適用）
+            if (this.debouncedUpdatePageBreaks) {
+                this.debouncedUpdatePageBreaks();
+            }
         });
 
         // DOMの変更も監視（delete、backspaceなど）
@@ -737,7 +767,7 @@ class BasicTextEditor extends window.PluginBase {
                         return;
                     } else if (dragData.type === 'virtual-object-drag') {
                         // 任意のプラグインからの仮身ドロップ
-                        logger.info(`[EDITOR] 仮身ドロップを検出: source=${dragData.source}, isDuplicateDrag=${dragData.isDuplicateDrag}`);
+                        logger.debug(`[EDITOR] 仮身ドロップを検出: source=${dragData.source}, isDuplicateDrag=${dragData.isDuplicateDrag}`);
                         const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
 
                         // ドロップ位置にカーソルを設定
@@ -750,10 +780,10 @@ class BasicTextEditor extends window.PluginBase {
 
                             // ダブルクリックドラッグ（実身複製）の場合
                             if (dragData.isDuplicateDrag) {
-                                logger.info('[EDITOR] 実身複製ドラッグを検出');
+                                logger.debug('[EDITOR] 実身複製ドラッグを検出');
                                 try {
                                     targetVirtualObject = await this.duplicateRealObjectForDrag(virtualObject);
-                                    logger.info(`[EDITOR] 実身複製成功: ${virtualObject.link_id} -> ${targetVirtualObject.link_id}`);
+                                    logger.debug(`[EDITOR] 実身複製成功: ${virtualObject.link_id} -> ${targetVirtualObject.link_id}`);
                                 } catch (error) {
                                     logger.error('[EDITOR] 実身複製エラー:', error);
                                     continue;
@@ -1125,12 +1155,8 @@ class BasicTextEditor extends window.PluginBase {
                 realId: realId
             };
 
-            // 親ウィンドウにコンテキストメニューを要求
-            const rect = window.frameElement.getBoundingClientRect();
-            this.messageBus.send('context-menu-request', {
-                x: rect.left + e.clientX,
-                y: rect.top + e.clientY
-            });
+            // 親ウィンドウにコンテキストメニューを要求（共通メソッドを使用）
+            this.showContextMenuAtEvent(e);
         });
 
         // カーソル位置に挿入
@@ -2416,7 +2442,20 @@ class BasicTextEditor extends window.PluginBase {
         // <italic>タグ -> <i>タグ
         html = html.replace(/<italic>(.*?)<\/italic>/gi, '<i>$1</i>');
 
-        // <superscript>タグ -> <sup>タグ
+        // <attend>タグ -> <sup>/<sub>タグ（data属性で属性を保持）
+        // type: 0=下付き(sub), 1=上付き(sup)
+        // position: 0=前置, 1=後置
+        // unit: 0=文字列単位, 1=文字単位
+        // targetPosition: 0=右, 1=左
+        // baseline: 0-4
+        html = html.replace(/<attend\s+type="([01])"\s+position="(\d+)"\s+unit="(\d+)"\s+targetPosition="(\d+)"\s+baseline="(\d+)"\s*>(.*?)<\/attend>/gi,
+            (match, type, position, unit, targetPosition, baseline, content) => {
+                const tag = type === '1' ? 'sup' : 'sub';
+                return `<${tag} data-attend-type="${type}" data-attend-position="${position}" data-attend-unit="${unit}" data-attend-target-position="${targetPosition}" data-attend-baseline="${baseline}">${content}</${tag}>`;
+            }
+        );
+
+        // <superscript>タグ -> <sup>タグ（後方互換性）
         html = html.replace(/<superscript>(.*?)<\/superscript>/gi, '<sup>$1</sup>');
 
         // <subscript>タグ -> <sub>タグ
@@ -2564,7 +2603,7 @@ class BasicTextEditor extends window.PluginBase {
 
         try {
             // <document>...</document>を抽出
-            const docMatch = /<document>([\s\S]*?)<\/document>/i.exec(tadXML);
+            const docMatch = /<document[^>]*>([\s\S]*?)<\/document>/i.exec(tadXML);
             if (!docMatch) {
                 logger.warn('[EDITOR] <document>タグが見つかりません');
                 this.editor.innerHTML = '<p>Document要素が見つかりません</p>';
@@ -2573,17 +2612,94 @@ class BasicTextEditor extends window.PluginBase {
 
             const docContent = docMatch[1];
 
-            // <p>タグで段落に分割（閉じタグがあるもの）
-            const paragraphRegex = /<p>([\s\S]*?)<\/p>/gi;
+            // XMLをパース
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(tadXML, 'text/xml');
+
+            // <document>要素からh_unit/v_unitをパース
+            const documentElement = xmlDoc.querySelector('document');
+            if (documentElement) {
+                this.parseDocumentElement(documentElement);
+            }
+
+            // <paper>要素をパース（用紙設定）
+            const paperElements = xmlDoc.querySelectorAll('paper');
+            if (paperElements.length > 0) {
+                paperElements.forEach(paper => {
+                    this.parsePaperElement(paper);
+                });
+                // paperSizeからpaperWidth/paperHeightを同期
+                if (this.paperSize) {
+                    this.paperWidth = this.paperSize.width;
+                    this.paperHeight = this.paperSize.length;
+                }
+                logger.debug(`[EDITOR] 用紙設定をロード: ${this.paperSize ? window.pointsToMm(this.paperWidth).toFixed(0) : 210}×${this.paperSize ? window.pointsToMm(this.paperHeight).toFixed(0) : 297}mm`);
+            }
+            // 注意: <paper>要素がない場合はpaperSizeをnullのままにする
+            // （条件付き保存で<paper>/<docmargin>を出力しないため）
+
+            // <docmargin>要素をパース（余白設定）
+            const docmarginElements = xmlDoc.querySelectorAll('docmargin');
+            if (docmarginElements.length > 0) {
+                const docmargin = docmarginElements[0];
+                if (!this.paperMargin) {
+                    this.paperMargin = new window.PaperMargin();
+                }
+                this.paperMargin.top = parseFloat(docmargin.getAttribute('top')) || 0;
+                this.paperMargin.bottom = parseFloat(docmargin.getAttribute('bottom')) || 0;
+                this.paperMargin.left = parseFloat(docmargin.getAttribute('left')) || 0;
+                this.paperMargin.right = parseFloat(docmargin.getAttribute('right')) || 0;
+                logger.debug(`[EDITOR] 余白設定をロード: top=${this.paperMargin.top}, bottom=${this.paperMargin.bottom}, left=${this.paperMargin.left}, right=${this.paperMargin.right}`);
+            }
+
+            // ページ追跡を初期化（条件付き改ページ用）
+            this.initPageTracker();
+
+            // <p>タグと<pagebreak>タグを順番に処理
+            // 正規表現で<p>...</p>と<pagebreak .../>を取得
+            const elementRegex = /<p>([\s\S]*?)<\/p>|<pagebreak\s+([^>]*)\/>/gi;
             let htmlContent = '';
-            let pMatch;
+            let elementMatch;
             let paragraphCount = 0;
             let lastIndex = 0;
 
-            while ((pMatch = paragraphRegex.exec(docContent)) !== null) {
+            while ((elementMatch = elementRegex.exec(docContent)) !== null) {
+                // <pagebreak>要素の処理
+                if (elementMatch[2] !== undefined) {
+                    // <pagebreak>要素を処理
+                    const attrString = elementMatch[2];
+                    const condMatch = /cond="(\d+)"/.exec(attrString);
+                    const remainMatch = /remain="(\d+)"/.exec(attrString);
+
+                    const cond = condMatch ? parseInt(condMatch[1], 10) : 0;
+                    const remain = remainMatch ? parseInt(remainMatch[1], 10) : 0;
+
+                    // 条件を評価
+                    const triggered = this.evaluatePageBreakCondition(cond, remain);
+
+                    // 条件付き改ページ要素を作成
+                    let pageBreakClasses = 'conditional-page-break';
+                    let pageBreakAttrs = `data-cond="${cond}" data-remain="${remain}" data-triggered="${triggered ? 'true' : 'false'}"`;
+
+                    if (triggered) {
+                        pageBreakClasses += ' triggered';
+                        if (this.paperFrameVisible) {
+                            pageBreakClasses += ' page-break-visible';
+                        }
+                        // ページ追跡を更新
+                        this.pageTracker.currentPage++;
+                        this.pageTracker.remainingHeight = this.pageTracker.pageHeight;
+                    }
+
+                    htmlContent += `<div class="${pageBreakClasses}" ${pageBreakAttrs}></div>`;
+                    lastIndex = elementRegex.lastIndex;
+                    continue;
+                }
+
+                // <p>要素の処理
                 paragraphCount++;
-                let paragraphContent = pMatch[1];
-                lastIndex = paragraphRegex.lastIndex;  // 最後に処理した位置を記録
+                let paragraphContent = elementMatch[1];
+                lastIndex = elementRegex.lastIndex;  // 最後に処理した位置を記録
 
                 // 段落の前後の空白文字（改行、スペースのみ）をトリム（タブは保持）
                 paragraphContent = paragraphContent.replace(/^[\r\n ]+|[\r\n ]+$/g, '');
@@ -3498,6 +3614,23 @@ class BasicTextEditor extends window.PluginBase {
         const xmlParts = ['<tad version="1.0" encoding="UTF-8">\r\n'];
         xmlParts.push('<document>\r\n');
 
+        // <docScale>要素を出力（スケール単位）
+        xmlParts.push(`<docScale hunit="${this.docScale.hunit}" vunit="${this.docScale.vunit}"/>\r\n`);
+
+        // <text>要素を出力（言語・背景パターン）
+        xmlParts.push(`<text lang="${this.docText.lang}" bpat="${this.docText.bpat}"/>\r\n`);
+
+        // 用紙設定が設定されている場合のみ<paper>要素を出力
+        if (this.paperSize) {
+            xmlParts.push(this.paperSize.toXmlString() + '\r\n');
+        }
+
+        // 用紙設定が設定されている場合、または既存のマージン設定がある場合のみ<docmargin>要素を出力
+        if (this.paperMargin || this.paperSize) {
+            const margin = this.paperMargin || new window.PaperMargin();
+            xmlParts.push(`<docmargin top="${margin.top}" bottom="${margin.bottom}" left="${margin.left}" right="${margin.right}" />\r\n`);
+        }
+
         // エディタの各段落（<p>タグ）を処理
         const paragraphs = this.editor.querySelectorAll('p');
         logger.debug('[EDITOR] 段落数:', paragraphs.length);
@@ -3595,6 +3728,21 @@ class BasicTextEditor extends window.PluginBase {
                     tempWrapper.appendChild(child.cloneNode(true));
                     this.extractTADXMLFromElement(tempWrapper, xmlParts, defaultFontState);
                     xmlParts.push('\r\n</p>\r\n');
+                }
+                // 条件付き改ページ要素を処理
+                else if (child.nodeType === Node.ELEMENT_NODE &&
+                         child.classList &&
+                         child.classList.contains('conditional-page-break')) {
+                    xmlParts.push(this.serializePageBreakElement(child));
+                    xmlParts.push('\r\n');
+                }
+                // 通常の改ページ要素を処理
+                else if (child.nodeType === Node.ELEMENT_NODE &&
+                         child.classList &&
+                         child.classList.contains('page-break') &&
+                         !child.classList.contains('conditional-page-break')) {
+                    // 通常の改ページは無条件改ページとして出力
+                    xmlParts.push('<pagebreak cond="0" remain="0" />\r\n');
                 }
                 // その他の要素ノード（div等）も段落として処理
                 else if (child.nodeType === Node.ELEMENT_NODE &&
@@ -3744,14 +3892,28 @@ class BasicTextEditor extends window.PluginBase {
                     xml += '</underline>';
                 }
                 else if (nodeName === 'sup') {
-                    xml += '<superscript>';
+                    // data-attend属性がある場合は元の属性を復元、なければデフォルト値
+                    const type = node.getAttribute('data-attend-type') || '1';
+                    const position = node.getAttribute('data-attend-position') || '0';
+                    const unit = node.getAttribute('data-attend-unit') || '0';
+                    const targetPosition = node.getAttribute('data-attend-target-position') || '0';
+                    const baseline = node.getAttribute('data-attend-baseline') || '0';
+
+                    xml += `<attend type="${type}" position="${position}" unit="${unit}" targetPosition="${targetPosition}" baseline="${baseline}">`;
                     xml += this.extractTADXMLFromElement(node, fontState);
-                    xml += '</superscript>';
+                    xml += '</attend>';
                 }
                 else if (nodeName === 'sub') {
-                    xml += '<subscript>';
+                    // data-attend属性がある場合は元の属性を復元、なければデフォルト値
+                    const type = node.getAttribute('data-attend-type') || '0';
+                    const position = node.getAttribute('data-attend-position') || '0';
+                    const unit = node.getAttribute('data-attend-unit') || '0';
+                    const targetPosition = node.getAttribute('data-attend-target-position') || '0';
+                    const baseline = node.getAttribute('data-attend-baseline') || '0';
+
+                    xml += `<attend type="${type}" position="${position}" unit="${unit}" targetPosition="${targetPosition}" baseline="${baseline}">`;
                     xml += this.extractTADXMLFromElement(node, fontState);
-                    xml += '</subscript>';
+                    xml += '</attend>';
                 }
                 else if (nodeName === 'span') {
                     // タブマーカー（表示用）はタブ文字として出力
@@ -4637,16 +4799,8 @@ class BasicTextEditor extends window.PluginBase {
                 return;
             }
 
-            // 親ウィンドウに右クリック位置を通知
-            if (window.parent && window.parent !== window) {
-                // iframeの位置を取得
-                const rect = window.frameElement.getBoundingClientRect();
-
-                    this.messageBus.send('context-menu-request', {
-                    x: rect.left + e.clientX,
-                    y: rect.top + e.clientY
-                });
-            }
+            // 親ウィンドウに右クリック位置を通知（共通メソッドを使用）
+            this.showContextMenuAtEvent(e);
         });
     }
 
@@ -4786,7 +4940,10 @@ class BasicTextEditor extends window.PluginBase {
                         ]
                     },
                     { separator: true },
-                    { label: '改ページ', action: 'format-pagebreak' }
+                    { label: '改ページ', action: 'format-pagebreak' },
+                    { separator: true },
+                    { label: '用紙枠表示オンオフ', action: 'toggle-paper-frame' },
+                    { label: '用紙設定...', action: 'page-setup' }
                 ]
             }
         ];
@@ -4865,63 +5022,7 @@ class BasicTextEditor extends window.PluginBase {
         return menuDef;
     }
 
-    /**
-     * コンテキストメニューを表示
-     */
-    async showContextMenu(x, y) {
-        const contextMenu = document.getElementById('context-menu');
-        const menuDef = await this.getMenuDefinition();
-
-        contextMenu.innerHTML = this.renderMenu(menuDef);
-        contextMenu.style.left = x + 'px';
-        contextMenu.style.top = y + 'px';
-        contextMenu.classList.add('show');
-
-        // メニュー項目のクリックイベント
-        contextMenu.querySelectorAll('.context-menu-item[data-action]').forEach(item => {
-            item.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const action = item.dataset.action;
-                this.executeMenuAction(action);
-                this.hideContextMenu();
-            });
-        });
-    }
-
-    /**
-     * メニューをHTML化
-     */
-    renderMenu(menuItems) {
-        let html = '';
-        menuItems.forEach(item => {
-            if (item.separator) {
-                html += '<div class="context-menu-separator"></div>';
-            } else if (item.submenu) {
-                html += `<div class="context-menu-item">
-                    <span>${item.label}</span>
-                    <span class="arrow">▶</span>
-                    <div class="context-submenu">
-                        ${this.renderMenu(item.submenu)}
-                    </div>
-                </div>`;
-            } else {
-                const shortcut = item.shortcut ? `<span class="shortcut">${item.shortcut}</span>` : '';
-                html += `<div class="context-menu-item" data-action="${item.action}">
-                    <span>${item.label}</span>
-                    ${shortcut}
-                </div>`;
-            }
-        });
-        return html;
-    }
-
-    /**
-     * コンテキストメニューを非表示
-     */
-    hideContextMenu() {
-        const contextMenu = document.getElementById('context-menu');
-        contextMenu.classList.remove('show');
-    }
+    // showContextMenu() / renderMenu() / hideContextMenu() は PluginBase 共通メソッドを使用
 
     /**
      * メニューアクションを実行
@@ -5218,6 +5319,14 @@ class BasicTextEditor extends window.PluginBase {
                 break;
             case 'format-pagebreak':
                 this.insertPageBreak();
+                break;
+
+            // 用紙設定
+            case 'toggle-paper-frame':
+                this.togglePaperFrame();
+                break;
+            case 'page-setup':
+                this.showPageSetup();
                 break;
 
             // 仮身操作
@@ -7119,10 +7228,11 @@ class BasicTextEditor extends window.PluginBase {
      */
     insertPageBreak() {
         const pageBreak = document.createElement('div');
-        pageBreak.style.pageBreakAfter = 'always';
-        pageBreak.style.borderBottom = '2px dashed #ccc';
-        pageBreak.style.margin = '20px 0';
-        pageBreak.style.padding = '10px 0';
+        pageBreak.className = 'page-break';
+        // 用紙枠表示がオンの場合はpage-break-visibleクラスも追加
+        if (this.paperFrameVisible) {
+            pageBreak.classList.add('page-break-visible');
+        }
         pageBreak.textContent = '--- 改ページ ---';
 
         const selection = window.getSelection();
@@ -7464,12 +7574,8 @@ class BasicTextEditor extends window.PluginBase {
             this.contextMenuSelectedImage = img;
             logger.debug('[EDITOR] 画像右クリック:', img.getAttribute('data-saved-filename'));
 
-            // 親ウィンドウに右クリック位置を通知してメニューを表示
-            const rect = window.frameElement.getBoundingClientRect();
-            this.messageBus.send('context-menu-request', {
-                x: rect.left + e.clientX,
-                y: rect.top + e.clientY
-            });
+            // 親ウィンドウに右クリック位置を通知してメニューを表示（共通メソッドを使用）
+            this.showContextMenuAtEvent(e);
         });
 
         // リサイズハンドルを作成
@@ -9021,11 +9127,11 @@ class BasicTextEditor extends window.PluginBase {
         // これにより一貫した表示が保証される（roledispがtrueなら続柄が表示される）
         if (!element.classList.contains('expanded')) {
             // 閉じた仮身の場合、collapseVirtualObjectで再描画
-            const originalWidth = parseFloat(element.style.width) || element.offsetWidth;
+            // 続柄が変更されるため、幅は再計算された値をそのまま使用
             element.classList.add('expanded');
             await this.collapseVirtualObject(element);
-            element.style.width = originalWidth + 'px';
-            element.style.minWidth = originalWidth + 'px';
+            // collapseVirtualObjectで計算された幅をそのまま使用
+            // （続柄表示の有無に応じた正しい幅が適用される）
         }
 
         this.isModified = true;
@@ -9043,11 +9149,11 @@ class BasicTextEditor extends window.PluginBase {
         // dataset.linkNameはRealObjectSystemで更新済み
         // 閉じた仮身の場合、collapseVirtualObjectで再描画
         if (!element.classList.contains('expanded')) {
-            const originalWidth = parseFloat(element.style.width) || element.offsetWidth;
+            // 実身名が変更されるため、幅は再計算された値をそのまま使用
             element.classList.add('expanded');
             await this.collapseVirtualObject(element);
-            element.style.width = originalWidth + 'px';
-            element.style.minWidth = originalWidth + 'px';
+            // collapseVirtualObjectで計算された幅をそのまま使用
+            // （新しい実身名の長さに応じた正しい幅が適用される）
         }
         // 開いた仮身の場合はRealObjectSystemでのtextContent/dataset更新で十分
         // （タイトルバー等への反映が必要な場合は追加処理を実装）
@@ -9131,9 +9237,14 @@ class BasicTextEditor extends window.PluginBase {
                     element.dataset.originalHeight = newHeight.toString();
                     logger.debug('[EDITOR] chsz変更により originalHeight を再計算:', element.dataset.linkName, newHeight);
 
-                    // 文字サイズに合わせて仮身の幅を再計算
-                    const textWidth = this.measureTextWidth(element.dataset.linkName || '', chszPx);
-                    const newWidth = textWidth + 16 + 2; // テキスト幅 + padding(16px) + border(2px)
+                    // 文字サイズに合わせて仮身の幅を再計算（アイコンとgapを含む）
+                    const showPict = vobj.pictdisp !== 'false';
+                    const newWidth = this._calculateCollapsedVobjWidth({
+                        linkName: element.dataset.linkName || '',
+                        chszPx: chszPx,
+                        showPict: showPict,
+                        showName: vobj.namedisp !== 'false'
+                    });
                     element.style.width = newWidth + 'px';
                     element.style.minWidth = newWidth + 'px';
                     logger.debug('[EDITOR] chsz変更により仮身幅を再計算:', element.dataset.linkName, newWidth);
@@ -9234,38 +9345,27 @@ class BasicTextEditor extends window.PluginBase {
                 }, 50);
             }
         } else if (element && !element.classList.contains('expanded')) {
-            // 閉じた仮身の場合、collapseVirtualObjectで再描画
-            // （pictdisp, namedispなどの表示属性を正しく反映させるため）
-            // 元の幅を保存
-            const originalWidth = parseFloat(element.style.width) || element.offsetWidth;
+            // 閉じた仮身の場合
+            // サイズに影響する属性が変更されたかを判定
+            const sizeAffecting = this._isVobjSizeAffectingAttrs(attrs);
 
-            // 一度expandedクラスを追加してからcollapseすることで、collapseVirtualObjectの処理を実行
-            element.classList.add('expanded');
-            await this.collapseVirtualObject(element);
+            if (sizeAffecting) {
+                // サイズ影響あり: collapseVirtualObjectで再描画
+                // （pictdisp, namedispなどの表示属性を正しく反映させるため）
 
-            // 元の幅を復元（属性変更時は幅を変更しない）
-            element.style.width = originalWidth + 'px';
-            element.style.minWidth = originalWidth + 'px';
+                // 一度expandedクラスを追加してからcollapseすることで、collapseVirtualObjectの処理を実行
+                element.classList.add('expanded');
+                await this.collapseVirtualObject(element);
+
+                // サイズ影響属性変更時は collapseVirtualObject で計算された幅をそのまま使用
+                // （アイコン有無、表示項目の変化に応じた正しい幅が適用される）
+            }
+            // サイズに影響しない属性（色など）の場合は、_applyVobjStyles で既にスタイル適用済み
+            // collapseVirtualObject を呼ばないことで、幅の変動を防ぐ
         }
 
         this.setStatus('仮身属性を変更しました');
         this.isModified = true;
-    }
-
-    /**
-     * テキストの幅を測定
-     * @param {string} text - 測定するテキスト
-     * @param {number} fontSize - フォントサイズ（px）
-     * @returns {number} テキストの幅（px）
-     */
-    measureTextWidth(text, fontSize) {
-        // Canvas APIを使用してテキスト幅を測定
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        // エディタと同じフォントファミリーを使用
-        context.font = `${fontSize}px 'Noto Sans JP', 'Yu Gothic', 'Meiryo', sans-serif`;
-        const metrics = context.measureText(text);
-        return Math.ceil(metrics.width);
     }
 
     /**
@@ -9654,8 +9754,551 @@ class BasicTextEditor extends window.PluginBase {
         }
     }
 
+    /**
+     * 用紙枠表示オンオフ
+     */
+    togglePaperFrame() {
+        this.paperFrameVisible = !this.paperFrameVisible;
+        this.updatePageBreakVisibility();
+        this.setStatus(`用紙枠: ${this.paperFrameVisible ? '表示' : '非表示'}`);
+    }
+
+    /**
+     * ページ区切り線の表示/非表示を更新
+     * 用紙枠表示がオンの場合、用紙サイズに基づいて自動的にページ区切り線を表示
+     */
+    updatePageBreakVisibility() {
+        // 既存の自動ページ区切りを削除
+        const existingAutoBreaks = this.editor.querySelectorAll('.auto-page-break');
+        existingAutoBreaks.forEach(pb => pb.remove());
+
+        // 手動で挿入した改ページの表示更新
+        const manualPageBreaks = this.editor.querySelectorAll('.page-break');
+        manualPageBreaks.forEach(pb => {
+            if (this.paperFrameVisible) {
+                pb.classList.add('page-break-visible');
+            } else {
+                pb.classList.remove('page-break-visible');
+            }
+        });
+
+        // 用紙枠表示がオフなら終了
+        if (!this.paperFrameVisible) {
+            return;
+        }
+
+        // PaperSizeが未初期化なら初期化
+        if (!this.paperSize) {
+            this.initPaperSize();
+        }
+
+        // 本文領域の高さを計算（用紙高さ - 上余白 - 下余白）mm単位
+        const contentHeightMm = this.paperSize.lengthMm - this.paperSize.topMm - this.paperSize.bottomMm;
+
+        // mm から px に変換（96dpi基準: 1mm ≈ 3.78px）
+        const mmToPx = 3.78;
+        const pageHeightPx = contentHeightMm * mmToPx;
+
+        if (pageHeightPx <= 0) {
+            return;
+        }
+
+        // エディタ内のコンテンツ高さを取得
+        const editorRect = this.editor.getBoundingClientRect();
+        const editorScrollHeight = this.editor.scrollHeight;
+
+        // ページ数を計算
+        const totalPages = Math.ceil(editorScrollHeight / pageHeightPx);
+
+        if (totalPages <= 1) {
+            return; // 1ページ以下なら区切り線不要
+        }
+
+        // 各段落の位置を取得してページ区切り位置を決定
+        const paragraphs = this.editor.querySelectorAll('p');
+        let lastInsertedPosition = 0;
+
+        for (let pageNum = 1; pageNum < totalPages; pageNum++) {
+            const targetPosition = pageHeightPx * pageNum;
+
+            // targetPositionに最も近い段落の後にページ区切りを挿入
+            let insertAfterElement = null;
+            let closestDistance = Infinity;
+
+            paragraphs.forEach(p => {
+                const pRect = p.getBoundingClientRect();
+                const pBottom = pRect.bottom - editorRect.top + this.editor.scrollTop;
+
+                // targetPositionより前で、最も近い段落を探す
+                if (pBottom <= targetPosition && pBottom > lastInsertedPosition) {
+                    const distance = targetPosition - pBottom;
+                    if (distance < closestDistance) {
+                        closestDistance = distance;
+                        insertAfterElement = p;
+                    }
+                }
+            });
+
+            if (insertAfterElement) {
+                // 自動ページ区切り要素を作成
+                const autoPageBreak = document.createElement('div');
+                autoPageBreak.className = 'auto-page-break';
+                autoPageBreak.setAttribute('data-page', pageNum);
+
+                // 段落の後に挿入
+                insertAfterElement.parentNode.insertBefore(autoPageBreak, insertAfterElement.nextSibling);
+
+                lastInsertedPosition = insertAfterElement.getBoundingClientRect().bottom - editorRect.top + this.editor.scrollTop;
+            }
+        }
+
+        logger.debug(`[EDITOR] 自動ページ区切り: ${totalPages - 1}箇所に挿入 (ページ高さ: ${pageHeightPx.toFixed(0)}px)`);
+    }
+
+    /**
+     * 用紙設定ダイアログを表示
+     */
+    async showPageSetup() {
+        // PaperSizeが未初期化なら初期化
+        if (!this.paperSize) {
+            this.initPaperSize();
+            this.paperSize.widthMm = window.pointsToMm(this.paperWidth);
+            this.paperSize.lengthMm = window.pointsToMm(this.paperHeight);
+        }
+
+        // 用紙サイズ選択肢を生成
+        const paperOptions = this.getPaperSizeOptions();
+        const currentSizeName = this.paperSize.getSizeName() || 'CUSTOM';
+
+        let paperOptionsHtml = '';
+        let lastGroup = '';
+        paperOptions.forEach(opt => {
+            // グループ分け（A判、B判、その他）
+            const group = opt.key.charAt(0);
+            if (group !== lastGroup && (group === 'A' || group === 'B' || group === 'L')) {
+                if (lastGroup) {
+                    paperOptionsHtml += '<option disabled>──────────</option>';
+                }
+                lastGroup = group;
+            }
+            const selected = opt.key === currentSizeName ? 'selected' : '';
+            paperOptionsHtml += `<option value="${opt.key}" ${selected}>${opt.label}</option>`;
+        });
+        paperOptionsHtml += '<option disabled>──────────</option>';
+        paperOptionsHtml += `<option value="CUSTOM" ${currentSizeName === 'CUSTOM' ? 'selected' : ''}>カスタム</option>`;
+
+        // 現在の値
+        const curWidth = Math.round(this.paperSize.widthMm * 10) / 10;
+        const curHeight = Math.round(this.paperSize.lengthMm * 10) / 10;
+        const curTopMm = Math.round(this.paperSize.topMm * 10) / 10;
+        const curBottomMm = Math.round(this.paperSize.bottomMm * 10) / 10;
+        const curLeftMm = Math.round(this.paperSize.leftMm * 10) / 10;
+        const curRightMm = Math.round(this.paperSize.rightMm * 10) / 10;
+        const curImposition = this.paperSize.imposition;
+
+        const dialogHtml = `
+            <style>
+                /* 親ダイアログの既定入力欄を非表示 */
+                #dialog-input-field {
+                    display: none !important;
+                }
+                /* 親ダイアログのパディング/マージンを上書き */
+                #input-dialog-message:has(.paper-setup-dialog) {
+                    margin-bottom: 2px;
+                    padding: 2px;
+                }
+                #input-dialog:has(.paper-setup-dialog) {
+                    padding: 4px;
+                }
+                #input-dialog:has(.paper-setup-dialog) .dialog-buttons {
+                    padding: 2px;
+                    margin-top: 0px;
+                }
+                .paper-setup-dialog {
+                    font-family: sans-serif;
+                    font-size: 11px;
+                    padding: 0;
+                }
+                .paper-setup-dialog .form-row {
+                    display: flex;
+                    align-items: center;
+                    margin-bottom: 2px;
+                }
+                .paper-setup-dialog .form-row:last-child {
+                    margin-bottom: 0;
+                }
+                .paper-setup-dialog .form-label {
+                    width: 40px;
+                    font-weight: normal;
+                }
+                .paper-setup-dialog .form-input {
+                    width: 70px;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    font-size: 11px;
+                }
+                .paper-setup-dialog .form-select {
+                    width: 200px;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    font-size: 11px;
+                }
+                .paper-setup-dialog .form-unit {
+                    margin-left: 4px;
+                    color: #666;
+                }
+                .paper-setup-dialog .margin-group {
+                    margin-left: 10px;
+                }
+                .paper-setup-dialog .margin-row {
+                    display: flex;
+                    align-items: center;
+                    margin-bottom: 1px;
+                }
+                .paper-setup-dialog .margin-row:last-child {
+                    margin-bottom: 0;
+                }
+                .paper-setup-dialog .margin-label {
+                    width: 20px;
+                }
+                .paper-setup-dialog .margin-input {
+                    width: 50px;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    margin-right: 8px;
+                    font-size: 11px;
+                }
+            </style>
+            <div class="paper-setup-dialog">
+                <div class="form-row">
+                    <span class="form-label">用紙:</span>
+                    <select id="paperSizeSelect" class="form-select">
+                        ${paperOptionsHtml}
+                    </select>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">横:</span>
+                    <input type="number" id="paperWidth" class="form-input" value="${curWidth}" min="10" max="2000" step="0.1">
+                    <span class="form-unit">mm</span>
+                    <span style="margin-left: 12px;" class="form-label">縦:</span>
+                    <input type="number" id="paperHeight" class="form-input" value="${curHeight}" min="10" max="2000" step="0.1">
+                    <span class="form-unit">mm</span>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">余白:</span>
+                    <div class="margin-group">
+                        <div class="margin-row">
+                            <span class="margin-label">上:</span>
+                            <input type="number" id="marginTop" class="margin-input" value="${curTopMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                            <span class="margin-label" style="margin-left: 8px;">左:</span>
+                            <input type="number" id="marginLeft" class="margin-input" value="${curLeftMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                        </div>
+                        <div class="margin-row">
+                            <span class="margin-label">下:</span>
+                            <input type="number" id="marginBottom" class="margin-input" value="${curBottomMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                            <span class="margin-label" style="margin-left: 8px;">右:</span>
+                            <input type="number" id="marginRight" class="margin-input" value="${curRightMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">割付:</span>
+                    <div class="radio-group-inline">
+                        <label class="radio-label">
+                            <input type="radio" name="imposition" value="0" ${curImposition === 0 ? 'checked' : ''}>
+                            <span class="radio-indicator"></span>
+                            <span>片面</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="imposition" value="1" ${curImposition === 1 ? 'checked' : ''}>
+                            <span class="radio-indicator"></span>
+                            <span>見開き</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <script>
+                (function() {
+                    const paperSelect = document.getElementById('paperSizeSelect');
+                    const widthInput = document.getElementById('paperWidth');
+                    const heightInput = document.getElementById('paperHeight');
+                    const sizes = ${JSON.stringify(Object.fromEntries(paperOptions.map(o => [o.key, {w: o.widthMm, h: o.lengthMm}])))};
+
+                    // 用紙サイズ選択時に寸法を更新
+                    paperSelect.addEventListener('change', function() {
+                        const selected = this.value;
+                        if (sizes[selected]) {
+                            widthInput.value = sizes[selected].w;
+                            heightInput.value = sizes[selected].h;
+                        }
+                    });
+
+                    // 寸法変更時にカスタムに切り替え
+                    widthInput.addEventListener('input', function() {
+                        paperSelect.value = 'CUSTOM';
+                    });
+                    heightInput.addEventListener('input', function() {
+                        paperSelect.value = 'CUSTOM';
+                    });
+                })();
+            </script>
+        `;
+
+        return new Promise((resolve) => {
+            this.messageBus.sendWithCallback('show-custom-dialog', {
+                title: '用紙設定',
+                dialogHtml: dialogHtml,
+                buttons: [
+                    { label: '取消', value: 'cancel' },
+                    { label: '標準設定', value: 'default' },
+                    { label: '設定', value: 'ok' }
+                ],
+                defaultButton: 2,
+                width: 400
+            }, (result) => {
+                const dialogResult = result.result || result;
+
+                if (dialogResult.error) {
+                    logger.warn('[EDITOR] Paper setup dialog error:', dialogResult.error);
+                    resolve(false);
+                    return;
+                }
+
+                if (dialogResult.button === 'default') {
+                    // 標準設定（A4）にリセット
+                    this.paperSize.resetToDefault();
+                    this.paperWidth = this.paperSize.width;
+                    this.paperHeight = this.paperSize.length;
+                    this.isModified = true;
+                    this.setStatus('用紙設定を標準（A4）にリセットしました');
+                    resolve(true);
+                } else if (dialogResult.button === 'ok') {
+                    // 設定を適用
+                    const formData = dialogResult.formData || {};
+
+                    const width = parseFloat(formData.paperWidth) || window.pointsToMm(this.paperWidth);
+                    const height = parseFloat(formData.paperHeight) || window.pointsToMm(this.paperHeight);
+                    const marginTop = parseFloat(formData.marginTop) || 0;
+                    const marginBottom = parseFloat(formData.marginBottom) || 0;
+                    const marginLeft = parseFloat(formData.marginLeft) || 0;
+                    const marginRight = parseFloat(formData.marginRight) || 0;
+                    const imposition = parseInt(formData.imposition) || 0;
+
+                    // PaperSizeに設定
+                    this.paperSize.widthMm = width;
+                    this.paperSize.lengthMm = height;
+                    this.paperSize.topMm = marginTop;
+                    this.paperSize.bottomMm = marginBottom;
+                    this.paperSize.leftMm = marginLeft;
+                    this.paperSize.rightMm = marginRight;
+                    this.paperSize.imposition = imposition;
+
+                    // ポイント単位でも更新
+                    this.paperWidth = this.paperSize.width;
+                    this.paperHeight = this.paperSize.length;
+
+                    this.isModified = true;
+                    this.setStatus(`用紙設定を ${width}×${height}mm に更新しました`);
+                    resolve(true);
+                } else {
+                    resolve(false);
+                }
+            }, 60000);  // 1分タイムアウト
+        });
+    }
+
     // loadDataFileFromParent() および loadVirtualObjectMetadata() は
     // PluginBase から継承（js/plugin-base.js）
+
+    // ========================================
+    // 条件付き改ページ関連メソッド
+    // ========================================
+
+    /**
+     * <document>要素からdocScale/text設定をパース
+     * @param {Element} documentElement - document要素
+     */
+    parseDocumentElement(documentElement) {
+        if (!documentElement) return;
+
+        // <docScale>子要素からスケール単位を取得（PluginBase共通メソッド使用）
+        this.docScale = this.parseDocumentUnits(documentElement);
+
+        // <text>子要素から言語・背景パターンを取得（PluginBase共通メソッド使用）
+        this.docText = this.parseDocumentText(documentElement);
+
+        // 後方互換: this.docUnitsを同期（pagebreak等で使用）
+        this.docUnits = {
+            h_unit: this.docScale.hunit,
+            v_unit: this.docScale.vunit
+        };
+
+        logger.debug(`[EDITOR] 座標単位: hunit=${this.docScale.hunit}, vunit=${this.docScale.vunit}`);
+        logger.debug(`[EDITOR] テキスト設定: lang=${this.docText.lang}, bpat=${this.docText.bpat}`);
+    }
+
+    /**
+     * ページ追跡を初期化
+     */
+    initPageTracker() {
+        if (!this.paperSize) {
+            this.pageTracker = {
+                currentPage: 1,
+                remainingHeight: 0,
+                pageHeight: 0,
+                textDirection: 'horizontal'
+            };
+            return;
+        }
+
+        // 本文領域の高さを計算（ポイント単位）
+        const marginTop = this.paperMargin?.top || 0;
+        const marginBottom = this.paperMargin?.bottom || 0;
+        const pageHeight = this.paperSize.length - marginTop - marginBottom;
+
+        this.pageTracker = {
+            currentPage: 1,
+            remainingHeight: pageHeight,
+            pageHeight: pageHeight,
+            textDirection: 'horizontal'
+        };
+
+        logger.debug(`[EDITOR] ページ追跡初期化: pageHeight=${pageHeight}pt`);
+    }
+
+    /**
+     * UNITS単位の値をポイントに変換
+     * @param {number} value - UNITS単位での値
+     * @param {number} unit - UNITS型の値
+     * @returns {number} ポイント単位の値
+     */
+    unitsToPoints(value, unit) {
+        if (unit === 0) {
+            // 継承 - デフォルト72DPI（1unit = 1point）
+            return value;
+        } else if (unit < 0) {
+            // 負: DPIベース
+            const dpi = -unit;
+            return value * 72 / dpi;
+        } else {
+            // 正: dots per cm
+            return value * 720 / (unit * 25.4);
+        }
+    }
+
+    /**
+     * SCALE型の値を解釈してポイント単位で返す
+     * @param {number} scaleValue - SCALE型の16ビット値
+     * @returns {number} ポイント単位の値
+     */
+    parseScaleValue(scaleValue) {
+        // 用紙設定がない場合は0を返す
+        if (!this.paperSize) {
+            return 0;
+        }
+
+        const msb = (scaleValue >> 15) & 1;
+
+        if (msb === 1) {
+            // 絶対指定: v_unit単位での値
+            const value = scaleValue & 0x7FFF;
+            return this.unitsToPoints(value, this.docUnits.v_unit);
+        } else {
+            // 比率指定: A/B
+            const a = (scaleValue >> 8) & 0x7F;
+            const b = scaleValue & 0xFF;
+            const ratio = b === 0 ? 1 : a / b;
+
+            // 基準値は用紙の長さ（横書き前提）
+            const baseValue = this.paperSize.length;
+            return baseValue * ratio;
+        }
+    }
+
+    /**
+     * 条件付き改ページの条件を評価
+     * @param {number} cond - 改ページ条件（0, 1, 2）
+     * @param {number} remain - 残り領域の閾値（SCALE型）
+     * @returns {boolean} 改ページを実行すべきかどうか
+     */
+    evaluatePageBreakCondition(cond, remain) {
+        // 用紙設定がない場合は常にfalse
+        if (!this.paperSize) {
+            return false;
+        }
+
+        switch (cond) {
+            case 0:
+                // 現在のページが偶数の場合、改ページ
+                return this.pageTracker.currentPage % 2 === 0;
+
+            case 1:
+                // 現在のページが奇数の場合、改ページ
+                return this.pageTracker.currentPage % 2 === 1;
+
+            case 2:
+                // 残り領域がremain以下の場合、改ページ
+                const threshold = this.parseScaleValue(remain);
+                return this.pageTracker.remainingHeight <= threshold;
+
+            default:
+                // 不明な条件は無視
+                return false;
+        }
+    }
+
+    /**
+     * <pagebreak>要素を処理してDOM要素を生成
+     * @param {Element} pagebreakElement - pagebreak要素
+     * @returns {HTMLElement|null} 生成されたDOM要素、または条件不成立時はnull
+     */
+    parsePageBreakElement(pagebreakElement) {
+        // 用紙設定がない場合は無視
+        if (!this.paperSize) {
+            return null;
+        }
+
+        const cond = parseInt(pagebreakElement.getAttribute('cond'), 10) || 0;
+        const remain = parseInt(pagebreakElement.getAttribute('remain'), 10) || 0;
+
+        // 条件を評価
+        const triggered = this.evaluatePageBreakCondition(cond, remain);
+
+        // 条件付き改ページ要素を作成
+        const pageBreakDiv = document.createElement('div');
+        pageBreakDiv.className = 'conditional-page-break';
+        pageBreakDiv.setAttribute('data-cond', cond);
+        pageBreakDiv.setAttribute('data-remain', remain);
+        pageBreakDiv.setAttribute('data-triggered', triggered ? 'true' : 'false');
+
+        if (triggered) {
+            // 条件が成立した場合、ページ区切り表示
+            pageBreakDiv.classList.add('triggered');
+            if (this.paperFrameVisible) {
+                pageBreakDiv.classList.add('page-break-visible');
+            }
+            // ページ追跡を更新
+            this.pageTracker.currentPage++;
+            this.pageTracker.remainingHeight = this.pageTracker.pageHeight;
+        }
+
+        return pageBreakDiv;
+    }
+
+    /**
+     * 条件付き改ページ要素からXMLを生成
+     * @param {HTMLElement} element - 条件付き改ページ要素
+     * @returns {string} XML文字列
+     */
+    serializePageBreakElement(element) {
+        const cond = element.getAttribute('data-cond') || '0';
+        const remain = element.getAttribute('data-remain') || '0';
+        return `<pagebreak cond="${cond}" remain="${remain}" />`;
+    }
 
 }
 

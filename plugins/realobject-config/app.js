@@ -29,6 +29,9 @@ class RealObjectConfigApp extends PluginBase {
         // ボタンイベントを設定
         this.setupButtons();
 
+        // ダイアログボタンのキーボードハンドラを設定
+        this.setupButtonKeyboardHandler();
+
         // 右クリックメニュー
         this.setupContextMenu();
 
@@ -50,9 +53,8 @@ class RealObjectConfigApp extends PluginBase {
 
         // initメッセージ
         this.messageBus.on('init', async (data) => {
-            if (data.windowId) {
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
 
             // 引数からrealIdを取得（fileData内にネストされている）
             const realId = data.fileData?.realId || data.realId;
@@ -116,6 +118,38 @@ class RealObjectConfigApp extends PluginBase {
         // デフォルト起動ボタン
         document.getElementById('set-default-button').addEventListener('click', () => {
             this.setDefaultOpen();
+        });
+    }
+
+    /**
+     * ダイアログボタンのキーボードハンドラを設定
+     * Tab: ボタン間をトグル移動
+     * Enter: フォーカス中のボタンを実行
+     */
+    setupButtonKeyboardHandler() {
+        const applyButton = document.getElementById('apply-button');
+        const cancelButton = document.getElementById('cancel-button');
+        const buttons = [applyButton, cancelButton];
+
+        // デフォルトボタン（適用）にクラス追加
+        applyButton.classList.add('default');
+
+        // キーボードイベント
+        document.addEventListener('keydown', (e) => {
+            // ボタンにフォーカスがある時のみTab制御
+            const focusedElement = document.activeElement;
+            const currentIndex = buttons.indexOf(focusedElement);
+
+            if (e.key === 'Tab' && currentIndex >= 0) {
+                e.preventDefault();
+                const nextIndex = e.shiftKey
+                    ? (currentIndex <= 0 ? buttons.length - 1 : currentIndex - 1)
+                    : (currentIndex >= buttons.length - 1 ? 0 : currentIndex + 1);
+                buttons[nextIndex].focus();
+            } else if (e.key === 'Enter' && buttons.includes(focusedElement)) {
+                e.preventDefault();
+                focusedElement.click();
+            }
         });
     }
 

@@ -162,3 +162,31 @@ body.readonly-mode .virtual-object-title:hover {
 }
 
 /* カスタムラジオボタンはtadjs-desktop.cssで定義 */
+
+/* ========================================
+   図形要素スタイル（Phase 2対応）
+   ======================================== */
+
+/* 図形コンテナ */
+.figure-content {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+}
+
+/* 矩形要素 */
+.figure-rect {
+    box-sizing: border-box;
+}
+
+/* テキスト要素 */
+.figure-document {
+    font-family: 'Noto Sans JP', sans-serif;
+    line-height: 1.2;
+}
+
+/* 線要素 */
+.figure-line {
+    /* 線はbackground-colorで描画 */
+}

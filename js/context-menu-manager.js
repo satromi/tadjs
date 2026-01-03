@@ -99,7 +99,7 @@ export class ContextMenuManager {
 
         // context-menu-request: コンテキストメニュー表示
         this.parentMessageBus.on('context-menu-request', (data, event) => {
-            logger.info('[ContextMenuManager] context-menu-request受信:', data);
+            logger.debug('[ContextMenuManager] context-menu-request受信:', data);
             const target = event.source.frameElement;
             if (!target) {
                 logger.warn('[ContextMenuManager] target frameElementが見つかりません');
@@ -125,9 +125,9 @@ export class ContextMenuManager {
      * @param {HTMLElement} target - ターゲット要素
      */
     async showContextMenu(x, y, target) {
-        logger.info('[ContextMenuManager] showContextMenu呼び出し, target:', target);
+        logger.debug('[ContextMenuManager] showContextMenu呼び出し, target:', target);
         const menuItems = await this.generateContextMenuItems(target);
-        logger.info('[ContextMenuManager] 生成されたメニュー項目:', menuItems);
+        logger.debug('[ContextMenuManager] 生成されたメニュー項目:', menuItems);
         this.createContextMenu(menuItems, x, y);
     }
 
@@ -266,7 +266,7 @@ export class ContextMenuManager {
             // 「小物」タイプのプラグインをサブメニューとして追加
             if (window.pluginManager) {
                 const accessoryPlugins = window.pluginManager.getAccessoryPlugins();
-                logger.info('[ContextMenuManager] 小物プラグイン取得:', accessoryPlugins.length, '個');
+                logger.debug('[ContextMenuManager] 小物プラグイン取得:', accessoryPlugins.length, '個');
                 if (accessoryPlugins.length > 0) {
                     const accessorySubmenu = accessoryPlugins.map(plugin => ({
                         text: plugin.name,
@@ -313,7 +313,7 @@ export class ContextMenuManager {
      * @param {number} y - メニューのY座標
      */
     createContextMenu(items, x, y) {
-        logger.info('[ContextMenuManager] createContextMenu呼び出し, items:', items, 'x:', x, 'y:', y);
+        logger.debug('[ContextMenuManager] createContextMenu呼び出し, items:', items, 'x:', x, 'y:', y);
         // 既存のメニューを削除
         this.hideContextMenu();
 
@@ -455,16 +455,16 @@ export class ContextMenuManager {
      * コンテキストメニューを非表示にする
      */
     hideContextMenu() {
-        logger.info('[ContextMenuManager] hideContextMenu呼び出し');
+        logger.debug('[ContextMenuManager] hideContextMenu呼び出し');
         const staticMenu = document.getElementById('context-menu');
         const dynamicMenu = document.getElementById('dynamic-context-menu');
 
         if (staticMenu) {
-            logger.info('[ContextMenuManager] 静的メニューを非表示');
+            logger.debug('[ContextMenuManager] 静的メニューを非表示');
             staticMenu.style.display = 'none';
         }
         if (dynamicMenu) {
-            logger.info('[ContextMenuManager] 動的メニューを削除');
+            logger.debug('[ContextMenuManager] 動的メニューを削除');
             dynamicMenu.remove();
         }
     }
@@ -610,7 +610,7 @@ export class ContextMenuManager {
             action: pluginAction
         });
 
-        logger.info('[ContextMenuManager] プラグインアクション送信:', pluginAction);
+        logger.debug('[ContextMenuManager] プラグインアクション送信:', pluginAction);
     }
 
     /**
@@ -622,7 +622,7 @@ export class ContextMenuManager {
     getPluginMenuDefinition(iframe, windowId) {
         return new Promise((resolve, reject) => {
             const messageId = `menu-request-${Date.now()}`;
-            logger.info('[ContextMenuManager] プラグインメニュー定義を要求:', messageId);
+            logger.debug('[ContextMenuManager] プラグインメニュー定義を要求:', messageId);
             const timeout = setTimeout(() => {
                 logger.error('[ContextMenuManager] プラグインメニュー取得タイムアウト:', messageId);
                 window.removeEventListener('message', handler);
@@ -631,13 +631,13 @@ export class ContextMenuManager {
 
             const handler = (event) => {
                 if (event.data && event.data.type === 'menu-definition-response' && event.data.messageId === messageId) {
-                    logger.info('[ContextMenuManager] menu-definition-response受信:', event.data);
+                    logger.debug('[ContextMenuManager] menu-definition-response受信:', event.data);
                     clearTimeout(timeout);
                     window.removeEventListener('message', handler);
 
                     // プラグインのメニュー定義をパースして、windowIdをdataに追加
                     const menuItems = this.parsePluginMenuDefinition(event.data.menuDefinition, windowId);
-                    logger.info('[ContextMenuManager] パース後のメニュー項目:', menuItems);
+                    logger.debug('[ContextMenuManager] パース後のメニュー項目:', menuItems);
                     resolve(menuItems);
                 }
             };

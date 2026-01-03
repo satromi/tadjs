@@ -8,9 +8,9 @@
   "author": "BTRON Desktop",
   "main": "index.html",
   "basefile": {
-    "json": "019a4a5c-7e2f-4b8a-9d3c-1f6e8a9b2c4d.json",
-    "xmltad": "019a4a5c-7e2f-4b8a-9d3c-1f6e8a9b2c4d_0.xtad",
-    "ico": "019a4a5c-7e2f-4b8a-9d3c-1f6e8a9b2c4d.ico"
+    "json": "019a4a5c-7e2f-7b8a-9d3c-1f6e8a9b2c4d.json",
+    "xmltad": "019a4a5c-7e2f-7b8a-9d3c-1f6e8a9b2c4d_0.xtad",
+    "ico": "019a4a5c-7e2f-7b8a-9d3c-1f6e8a9b2c4d.ico"
   },
   "needsCloseConfirmation": false,
   "window": {

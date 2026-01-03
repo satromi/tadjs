@@ -112,6 +112,13 @@ class CalcEditor extends window.PluginBase {
             '#87ceeb'   // 系列6
         ];
 
+        // 用紙設定関連
+        this.paperFrameVisible = false;  // 用紙枠表示状態
+        this.paperWidth = null;          // 用紙幅（mm）
+        this.paperHeight = null;         // 用紙高さ（mm）
+        this.paperSize = null;           // PaperSizeオブジェクト
+        this.paperSettingsModified = false;  // 用紙設定が変更されたか
+
         // VirtualObjectRenderer初期化
         if (window.VirtualObjectRenderer) {
             this.virtualObjectRenderer = new window.VirtualObjectRenderer();
@@ -185,18 +192,19 @@ class CalcEditor extends window.PluginBase {
         // 初期化メッセージ
         this.messageBus.on('init', async (data) => {
             logger.info('[CalcEditor] init受信', data);
-            this.windowId = data.windowId;
-            // MessageBusにもwindowIdを設定（レスポンスルーティング用）
-            if (data.windowId) {
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
 
             if (data.fileData) {
                 // realIdから_数字.xtadを除去（basic-figure-editorと同じ形式）
                 let rawId = data.fileData.realId;
                 this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
                 logger.debug('[CalcEditor] realId設定:', this.realId, '(元:', rawId, ')');
-                this.fileName = data.fileData.fileName || data.fileData.displayName || '新規表計算';
+                // 実身名を取得（displayName/name優先、fileNameはXTADファイル名なので使用しない）
+                this.fileName = data.fileData.displayName ||
+                                data.fileData.name ||
+                                data.fileData.realObject?.name ||
+                                '新規表計算';
 
                 // XMLデータがあれば読み込み（親はxmlDataフィールドを使用）
                 if (data.fileData.xmlData) {
@@ -586,20 +594,34 @@ class CalcEditor extends window.PluginBase {
     setupChartCanvasEvents() {
         if (!this.chartCanvas) return;
 
-        // マウスダウン: グラフ選択・ドラッグ開始
+        // マウスダウン: グラフ選択・ドラッグ開始（左クリックのみ）
         this.chartCanvas.addEventListener('mousedown', (e) => {
-            const rect = this.chartCanvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            this.handleChartMouseDown(x, y, e);
+            // 右クリックは無視（contextmenuイベントで処理）
+            if (e.button !== 0) return;
+            // grid-body基準の座標に統一（スクロール考慮）
+            const coords = this.getChartCoordinates(e);
+            this.handleChartMouseDown(coords.x, coords.y, e);
+        });
+
+        // 右クリック: コンテキストメニュー表示
+        this.chartCanvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            // grid-body基準の座標に統一（スクロール考慮）
+            const coords = this.getChartCoordinates(e);
+            // クリック位置のグラフを選択（セル選択を解除）
+            const chart = this.getChartAt(coords.x, coords.y);
+            if (chart) {
+                this.selectChart(chart);
+            }
+            // 親にコンテキストメニューを要求（座標変換あり）
+            this.showContextMenu(e.clientX, e.clientY);
         });
 
         // マウス移動: グラフドラッグ・リサイズ
         this.chartCanvas.addEventListener('mousemove', (e) => {
-            const rect = this.chartCanvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            this.handleChartMouseMove(x, y, e);
+            // grid-body基準の座標に統一（スクロール考慮）
+            const coords = this.getChartCoordinates(e);
+            this.handleChartMouseMove(coords.x, coords.y, e);
         });
 
         // マウスアップ: ドラッグ・リサイズ終了
@@ -679,19 +701,18 @@ class CalcEditor extends window.PluginBase {
         // クリック位置のグラフを検索
         const chart = this.getChartAt(x, y);
         if (chart) {
-            this.selectedChart = chart;
+            // グラフを選択（セル選択を解除）
+            this.selectChart(chart);
             this.isDraggingChart = true;
             this.chartDragOffset = {
                 x: x - chart.x,
                 y: y - chart.y
             };
-            this.drawCharts();
             e.preventDefault();
         } else {
             // グラフ外クリックで選択解除
             if (this.selectedChart) {
-                this.selectedChart = null;
-                this.drawCharts();
+                this.deselectChart();
             }
         }
     }
@@ -729,6 +750,23 @@ class CalcEditor extends window.PluginBase {
         this.isResizingChart = false;
         this.chartDragOffset = null;
         this.resizeHandle = null;
+    }
+
+    /**
+     * マウスイベントからグラフ座標（grid-body基準、スクロール考慮）を取得
+     * @param {MouseEvent} e - マウスイベント
+     * @returns {{x: number, y: number}} グラフ座標
+     */
+    getChartCoordinates(e) {
+        const gridBody = document.getElementById('grid-body');
+        const gridRect = gridBody.getBoundingClientRect();
+        const scrollContainer = document.querySelector('.plugin-content');
+        const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
+        const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+        return {
+            x: e.clientX - gridRect.left + scrollLeft,
+            y: e.clientY - gridRect.top + scrollTop
+        };
     }
 
     /**
@@ -800,6 +838,42 @@ class CalcEditor extends window.PluginBase {
     }
 
     /**
+     * グラフ選択を解除
+     */
+    deselectChart() {
+        if (!this.selectedChart) {
+            return;
+        }
+
+        this.selectedChart = null;
+        this.drawCharts();
+    }
+
+    /**
+     * グラフを選択し、セル選択を解除
+     * @param {Object} chart - 選択するグラフ
+     */
+    selectChart(chart) {
+        if (!chart) return;
+
+        // セル選択を解除
+        this.clearSelection();
+        this.selectedCell = null;
+        this.selectionRange = null;
+
+        // グラフを選択
+        this.selectedChart = chart;
+        this.drawCharts();
+    }
+
+    /**
+     * 再描画（用紙枠とグラフを再描画）
+     */
+    redraw() {
+        this.drawCharts();
+    }
+
+    /**
      * 全グラフを描画
      */
     drawCharts() {
@@ -807,6 +881,9 @@ class CalcEditor extends window.PluginBase {
 
         // キャンバスをクリア
         this.chartCtx.clearRect(0, 0, this.chartCanvas.width, this.chartCanvas.height);
+
+        // 用紙枠を描画（グラフの下に描画）
+        this.drawPaperFrame();
 
         // 各グラフを描画
         for (const chart of this.charts) {
@@ -820,6 +897,93 @@ class CalcEditor extends window.PluginBase {
     }
 
     /**
+     * 用紙枠（ページ境界線）を描画
+     */
+    drawPaperFrame() {
+        if (!this.paperFrameVisible) return;
+        if (!this.chartCtx || !this.chartCanvas) return;
+
+        // PaperSizeが未初期化なら初期化
+        if (!this.paperSize) {
+            this.initPaperSize();
+        }
+
+        const ctx = this.chartCtx;
+
+        // mm → px 変換（96dpi）
+        const mmToPx = (mm) => mm * 96 / 25.4;
+
+        // 用紙サイズ（px）- 余白を除いた印刷可能領域
+        const paperWidthPx = mmToPx(this.paperSize.widthMm - this.paperSize.leftMm - this.paperSize.rightMm);
+        const paperHeightPx = mmToPx(this.paperSize.lengthMm - this.paperSize.topMm - this.paperSize.bottomMm);
+
+        // グリッド全体のサイズを計算
+        const totalWidth = this.getTotalColumnWidth();
+        const totalHeight = this.getTotalRowHeight();
+
+        // スクロールオフセット
+        const grid = document.getElementById('spreadsheet-grid');
+        const scrollX = grid ? grid.scrollLeft : 0;
+        const scrollY = grid ? grid.scrollTop : 0;
+
+        // ページ数計算
+        const numPagesX = Math.ceil(totalWidth / paperWidthPx) + 1;
+        const numPagesY = Math.ceil(totalHeight / paperHeightPx) + 1;
+
+        // 描画設定
+        ctx.save();
+        ctx.strokeStyle = '#808080';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 4]);
+
+        // 垂直ページ境界線
+        for (let i = 1; i < numPagesX; i++) {
+            const x = this.rowHeaderWidth + paperWidthPx * i - scrollX;
+            if (x > 0 && x < this.chartCanvas.width) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, this.chartCanvas.height);
+                ctx.stroke();
+            }
+        }
+
+        // 水平ページ境界線
+        for (let i = 1; i < numPagesY; i++) {
+            const y = this.colHeaderHeight + paperHeightPx * i - scrollY;
+            if (y > 0 && y < this.chartCanvas.height) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(this.chartCanvas.width, y);
+                ctx.stroke();
+            }
+        }
+
+        ctx.restore();
+    }
+
+    /**
+     * グリッド全体の列幅合計を取得
+     */
+    getTotalColumnWidth() {
+        let total = 0;
+        for (let col = 1; col <= this.currentMaxCol; col++) {
+            total += this.getColumnWidth(col);
+        }
+        return total;
+    }
+
+    /**
+     * グリッド全体の行高合計を取得
+     */
+    getTotalRowHeight() {
+        let total = 0;
+        for (let row = 1; row <= this.currentMaxRow; row++) {
+            total += this.getRowHeight(row);
+        }
+        return total;
+    }
+
+    /**
      * 個別のグラフを描画
      */
     drawChart(chart) {
@@ -829,6 +993,8 @@ class CalcEditor extends window.PluginBase {
             this.drawStackedBarChart(chart);
         } else if (chart.chartType === 'line') {
             this.drawLineChart(chart);
+        } else if (chart.chartType === 'stacked-line') {
+            this.drawStackedLineChart(chart);
         }
     }
 
@@ -1095,6 +1261,113 @@ class CalcEditor extends window.PluginBase {
     }
 
     /**
+     * 積上折線グラフを描画
+     * 各系列の値を累積して折れ線を描画
+     */
+    drawStackedLineChart(chart) {
+        const ctx = this.chartCtx;
+        const { x, y, width, height, data, elements } = chart;
+
+        // 背景を白で塗りつぶし
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x, y, width, height);
+
+        // 枠線
+        ctx.strokeStyle = '#808080';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, width, height);
+
+        // XTADから読み込んだ要素がある場合はそれを使用
+        if (elements && elements.length > 0) {
+            this.drawChartElements(chart);
+            return;
+        }
+
+        // 以下は新規グラフ作成時（elementsがない場合）の処理
+        if (!data || !data.labels || data.labels.length === 0) {
+            ctx.fillStyle = '#808080';
+            ctx.font = '12px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('データなし', x + width / 2, y + height / 2);
+            return;
+        }
+
+        const padding = 30;
+        const chartArea = {
+            x: x + padding,
+            y: y + padding,
+            width: width - padding * 2,
+            height: height - padding * 2
+        };
+
+        const numLabels = data.labels.length;
+        const numSeries = data.series.length;
+
+        // 各ラベルでの累積最大値を計算
+        let maxTotal = 0;
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            let total = 0;
+            for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+                total += data.series[seriesIdx].values[labelIdx] || 0;
+            }
+            if (total > maxTotal) maxTotal = total;
+        }
+        if (maxTotal === 0) maxTotal = 1;
+
+        const pointSpacing = chartArea.width / (numLabels > 1 ? numLabels - 1 : 1);
+
+        // 各系列の累積値を追跡
+        const cumulativeValues = new Array(numLabels).fill(0);
+
+        // 各系列の折れ線を描画（累積）
+        for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+            const color = this.chartColors[seriesIdx % this.chartColors.length];
+            const points = [];
+
+            // ポイントを計算（累積値で計算）
+            for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+                const value = data.series[seriesIdx].values[labelIdx] || 0;
+                cumulativeValues[labelIdx] += value;
+                const currentCumulative = cumulativeValues[labelIdx];
+
+                const pointX = chartArea.x + (numLabels > 1 ? pointSpacing * labelIdx : chartArea.width / 2);
+                const pointY = chartArea.y + chartArea.height - (currentCumulative / maxTotal) * chartArea.height;
+                points.push({ x: pointX, y: pointY });
+            }
+
+            // 線を描画
+            if (points.length > 1) {
+                ctx.beginPath();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.moveTo(points[0].x, points[0].y);
+                for (let i = 1; i < points.length; i++) {
+                    ctx.lineTo(points[i].x, points[i].y);
+                }
+                ctx.stroke();
+            }
+
+            // データ点を描画
+            ctx.fillStyle = color;
+            for (const point of points) {
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // X軸ラベル
+        ctx.fillStyle = '#000000';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        for (let i = 0; i < numLabels; i++) {
+            const labelX = chartArea.x + (numLabels > 1 ? pointSpacing * i : chartArea.width / 2);
+            const labelY = chartArea.y + chartArea.height + 15;
+            ctx.fillText(data.labels[i], labelX, labelY);
+        }
+    }
+
+    /**
      * XTADから読み込んだ要素を描画（rect, text, polyline, circle）
      */
     drawChartElements(chart) {
@@ -1225,11 +1498,8 @@ class CalcEditor extends window.PluginBase {
         // グラフ配列に追加
         this.charts.push(chart);
 
-        // 選択状態にする
-        this.selectedChart = chart;
-
-        // 再描画
-        this.drawCharts();
+        // 選択状態にする（セル選択を解除）
+        this.selectChart(chart);
 
         // 変更フラグを立てる
         this.isModified = true;
@@ -1416,6 +1686,16 @@ class CalcEditor extends window.PluginBase {
     setupEventListeners() {
         const gridBody = document.getElementById('grid-body');
 
+        // スクロール時に用紙枠を再描画
+        const pluginContent = document.querySelector('.plugin-content');
+        if (pluginContent) {
+            pluginContent.addEventListener('scroll', () => {
+                if (this.paperFrameVisible) {
+                    this.drawCharts();
+                }
+            });
+        }
+
         // セルマウスダウン（選択開始）
         gridBody.addEventListener('mousedown', (e) => {
             const cell = e.target.closest('.cell');
@@ -1506,6 +1786,17 @@ class CalcEditor extends window.PluginBase {
         // コンテキストメニュー
         gridBody.addEventListener('contextmenu', (e) => {
             e.preventDefault();
+            // グラフ上で右クリックした場合、グラフを選択（セル選択を解除）
+            const scrollContainer = document.querySelector('.plugin-content');
+            const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
+            const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+            const gridRect = gridBody.getBoundingClientRect();
+            const x = e.clientX - gridRect.left + scrollLeft;
+            const y = e.clientY - gridRect.top + scrollTop;
+            const chart = this.getChartAt(x, y);
+            if (chart) {
+                this.selectChart(chart);
+            }
             this.showContextMenu(e.clientX, e.clientY);
         });
 
@@ -2012,7 +2303,18 @@ class CalcEditor extends window.PluginBase {
                 return;
             }
 
-            // 非編集中のキー操作
+            // グラフ選択時のショートカットを先に処理
+            if (this.selectedChart) {
+                if (e.ctrlKey && e.key === 'c') {
+                    e.preventDefault();
+                    this.copyChart();
+                    return;
+                }
+                // Delete キーはsetupChartCanvasEvents()で処理済み
+                return;
+            }
+
+            // 非編集中のキー操作（セル操作）
             if (!this.selectedCell) return;
 
             const { col, row } = this.selectedCell;
@@ -2091,7 +2393,10 @@ class CalcEditor extends window.PluginBase {
                 case 'v':
                     if (e.ctrlKey) {
                         e.preventDefault();
-                        this.pasteCell();
+                        // グラフがクリップボードにある場合はグラフをペースト
+                        if (!this.pasteChart()) {
+                            this.pasteCell();
+                        }
                     }
                     break;
                 case 'x':
@@ -2433,6 +2738,11 @@ class CalcEditor extends window.PluginBase {
             }
         }
 
+        // グラフ選択を解除
+        if (this.selectedChart) {
+            this.deselectChart();
+        }
+
         // 新しいセルを選択
         this.selectedCell = { col, row };
         this.anchorCell = { col, row }; // Shift選択の基点を更新
@@ -2507,6 +2817,11 @@ class CalcEditor extends window.PluginBase {
 
         // 以前の選択を解除
         this.clearSelection();
+
+        // グラフ選択を解除
+        if (this.selectedChart) {
+            this.deselectChart();
+        }
 
         // 範囲を設定
         this.selectionRange = {
@@ -2785,6 +3100,9 @@ class CalcEditor extends window.PluginBase {
 
         // このセルに依存する他のセルを再計算
         this.recalculateDependentCells(col, row);
+
+        // このセルを参照しているグラフを更新
+        this.updateChartsForCell(col, row);
     }
 
     /**
@@ -3900,14 +4218,7 @@ class CalcEditor extends window.PluginBase {
         }
     }
 
-    /**
-     * コンテキストメニュー表示（TADjs標準コンテキストメニューを使用）
-     */
-    showContextMenu(x, y) {
-        // iframe内の座標を親ウィンドウの座標に変換してPluginBase共通メソッドを使用
-        const rect = window.frameElement ? window.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
-        this.requestContextMenu(rect.left + x, rect.top + y);
-    }
+    // showContextMenu(x, y) は PluginBase 共通メソッドを使用
 
     /**
      * 内部クリップボード（数式情報を保持）
@@ -4015,6 +4326,505 @@ class CalcEditor extends window.PluginBase {
 
             logger.debug(`[CalcEditor] セルコピー: ${this.colToLetter(col)}${row}`);
         }
+    }
+
+    /**
+     * 選択中のグラフをクリップボードにコピー
+     * グラフをCanvas領域から画像として取得し、システムクリップボードとTADjs内部クリップボードに設定
+     */
+    async copyChart() {
+        if (!this.selectedChart) {
+            this.setStatus('グラフが選択されていません');
+            return;
+        }
+
+        const chart = this.selectedChart;
+
+        // 1. グラフ領域を一時Canvasに描画
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = chart.width;
+        tempCanvas.height = chart.height;
+        const tempCtx = tempCanvas.getContext('2d');
+
+        // 2. 現在のchartCanvasからグラフ領域を切り出し
+        tempCtx.drawImage(
+            this.chartCanvas,
+            chart.x, chart.y, chart.width, chart.height,  // ソース
+            0, 0, chart.width, chart.height               // 出力先
+        );
+
+        // 3. DataURLに変換
+        const dataUrl = tempCanvas.toDataURL('image/png');
+
+        // 4. システムクリップボードに画像として書き込み（外部アプリへの貼り付け用）
+        try {
+            const blob = await new Promise((resolve) => {
+                tempCanvas.toBlob(resolve, 'image/png');
+            });
+            if (blob) {
+                await navigator.clipboard.write([
+                    new ClipboardItem({ 'image/png': blob })
+                ]);
+            }
+        } catch (e) {
+            // システムクリップボードへの書き込み失敗は無視（セキュリティ制限等）
+        }
+
+        // 5. グラフを図形グループ構造に変換してグローバルクリップボードに設定
+        const group = this.convertChartToGroup(chart);
+        this.setGroupClipboard(group);
+
+        // 6. ローカルクリップボードにもグラフデータを保存（同一ウィンドウ内貼り付け用）
+        this.clipboard = {
+            type: 'chart',
+            data: JSON.parse(JSON.stringify(chart))
+        };
+
+        this.setStatus('グラフをコピーしました');
+    }
+
+    /**
+     * クリップボードからグラフを貼り付け
+     * @returns {boolean} 貼り付けに成功したかどうか
+     */
+    pasteChart() {
+        if (!this.clipboard || this.clipboard.type !== 'chart') {
+            return false;
+        }
+
+        const chartData = JSON.parse(JSON.stringify(this.clipboard.data));
+
+        // 座標をオフセット（20ピクセルずらして重ならないようにする）
+        chartData.x += 20;
+        chartData.y += 20;
+
+        // 新しいグラフとして追加
+        this.charts.push(chartData);
+
+        // グラフを再描画
+        this.drawCharts();
+
+        // 選択状態に設定
+        this.selectedChart = chartData;
+        this.clearCellSelection();
+
+        // クリップボードの座標も更新（連続ペースト用）
+        this.clipboard.data.x += 20;
+        this.clipboard.data.y += 20;
+
+        this.isModified = true;
+        this.setStatus('グラフを貼り付けました');
+        return true;
+    }
+
+    /**
+     * グラフを図形グループ構造に変換（コピー用）
+     * @param {Object} chart - グラフオブジェクト
+     * @returns {Object} 図形グループオブジェクト
+     */
+    convertChartToGroup(chart) {
+        const shapes = [];
+
+        // グラフ種別に応じて描画要素を生成
+        if (chart.elements && chart.elements.length > 0) {
+            // XTADから読み込んだ要素を使用
+            for (const elem of chart.elements) {
+                const shape = this.convertElementToShape(elem, chart.x, chart.y);
+                if (shape) shapes.push(shape);
+            }
+        } else if (chart.data && chart.data.labels && chart.data.labels.length > 0) {
+            // データから描画要素を生成
+            shapes.push(...this.generateChartShapesForCopy(chart));
+        }
+
+        // グループオブジェクトを作成
+        return {
+            type: 'group',
+            shapes: shapes,
+            startX: chart.x,
+            startY: chart.y,
+            endX: chart.x + chart.width,
+            endY: chart.y + chart.height,
+            // グラフメタデータも保持
+            chartMeta: {
+                chartType: chart.chartType,
+                dataRange: chart.dataRange
+            }
+        };
+    }
+
+    /**
+     * グラフ要素を図形オブジェクトに変換
+     * @param {Object} elem - グラフ要素
+     * @param {number} offsetX - X座標オフセット
+     * @param {number} offsetY - Y座標オフセット
+     * @returns {Object|null} 図形オブジェクト
+     */
+    convertElementToShape(elem, offsetX, offsetY) {
+        if (elem.type === 'rect') {
+            const fillColor = elem.fillC || 'transparent';
+            const hasBorder = !!elem.bdC;
+            return {
+                type: 'rect',
+                startX: offsetX + elem.x,
+                startY: offsetY + elem.y,
+                endX: offsetX + elem.x + elem.w,
+                endY: offsetY + elem.y + elem.h,
+                fillColor: fillColor,
+                strokeColor: elem.bdC || fillColor,
+                lineWidth: hasBorder ? 1 : 0,
+                zIndex: elem.zIndex || 0
+            };
+        } else if (elem.type === 'text') {
+            const fontSize = elem.fontSize || 10;
+            const fontFace = elem.fontFace || 'sans-serif';
+            return {
+                type: 'document',
+                startX: offsetX + elem.x,
+                startY: offsetY + elem.y,
+                endX: offsetX + elem.x + (elem.w || 100),
+                endY: offsetY + elem.y + (elem.h || 20),
+                content: elem.text || '',
+                fontSize: fontSize,
+                fontFamily: fontFace,
+                textColor: elem.color || '#000000',
+                textAlign: elem.align || 'center',  // 元の align を引き継ぐ（デフォルトは center）
+                fillColor: 'transparent',
+                strokeColor: 'transparent',
+                lineWidth: 0,
+                decorations: { bold: false, italic: false, underline: false, strikethrough: false },
+                zIndex: elem.zIndex || 0
+            };
+        } else if (elem.type === 'polyline') {
+            // 折れ線 - polylineタイプのまま変換
+            if (!elem.points || elem.points.length < 2) return null;
+            const offsetPoints = elem.points.map(p => ({
+                x: offsetX + p.x,
+                y: offsetY + p.y
+            }));
+            return {
+                type: 'polyline',
+                points: offsetPoints,
+                strokeColor: elem.stroke || '#000000',
+                lineWidth: elem.strokeWidth || 2,
+                zIndex: elem.zIndex || 0
+            };
+        } else if (elem.type === 'circle') {
+            // 円（データポイント） - ellipseタイプに変換
+            const r = elem.r || 4;
+            const color = elem.fillC || elem.fill || '#000000';
+            return {
+                type: 'ellipse',
+                startX: offsetX + elem.cx - r,
+                startY: offsetY + elem.cy - r,
+                endX: offsetX + elem.cx + r,
+                endY: offsetY + elem.cy + r,
+                fillColor: color,
+                strokeColor: color,
+                lineWidth: 0,
+                zIndex: elem.zIndex || 0
+            };
+        }
+        return null;
+    }
+
+    /**
+     * グラフデータから図形配列を生成（コピー用）
+     * @param {Object} chart - グラフオブジェクト
+     * @returns {Array} 図形配列
+     */
+    generateChartShapesForCopy(chart) {
+        const shapes = [];
+        const { x, y, width, height, chartType } = chart;
+
+        // 背景
+        shapes.push({
+            type: 'rect',
+            startX: x,
+            startY: y,
+            endX: x + width,
+            endY: y + height,
+            fillColor: '#ffffff',
+            strokeColor: '#808080',
+            strokeWidth: 1,
+            zIndex: 0
+        });
+
+        // グラフ種別に応じた描画要素を生成
+        if (chartType === 'clustered-bar' || chartType === 'stacked-bar') {
+            shapes.push(...this.generateBarShapesForCopy(chart));
+        } else if (chartType === 'line' || chartType === 'stacked-line') {
+            shapes.push(...this.generateLineShapesForCopy(chart));
+        }
+
+        return shapes;
+    }
+
+    /**
+     * 棒グラフの図形配列を生成（コピー用）
+     * @param {Object} chart - グラフオブジェクト
+     * @returns {Array} 図形配列
+     */
+    generateBarShapesForCopy(chart) {
+        const shapes = [];
+        const { x, y, width, height, chartType, data } = chart;
+        const padding = 30;
+
+        if (!data || !data.labels || !data.series) return shapes;
+
+        const chartArea = {
+            x: padding,
+            y: padding,
+            width: width - padding * 2,
+            height: height - padding * 2
+        };
+
+        // 最大値を計算
+        let maxValue = 0;
+        if (chartType === 'stacked-bar') {
+            for (let i = 0; i < data.labels.length; i++) {
+                let sum = 0;
+                for (const series of data.series) {
+                    sum += series.values[i] || 0;
+                }
+                if (sum > maxValue) maxValue = sum;
+            }
+        } else {
+            for (const series of data.series) {
+                for (const value of series.values) {
+                    if (value > maxValue) maxValue = value;
+                }
+            }
+        }
+        if (maxValue === 0) maxValue = 1;
+
+        const numLabels = data.labels.length;
+        const numSeries = data.series.length;
+        const groupWidth = chartArea.width / numLabels;
+
+        let zIndex = 100;
+
+        if (chartType === 'stacked-bar') {
+            // 積み上げ棒グラフ
+            const barWidth = groupWidth * 0.6;
+            for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+                let yOffset = 0;
+                for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+                    const value = data.series[seriesIdx].values[labelIdx] || 0;
+                    const barHeight = (value / maxValue) * chartArea.height;
+                    const barX = x + chartArea.x + groupWidth * labelIdx + (groupWidth - barWidth) / 2;
+                    const barY = y + chartArea.y + chartArea.height - yOffset - barHeight;
+                    const fillColor = this.chartColors[seriesIdx % this.chartColors.length];
+
+                    shapes.push({
+                        type: 'rect',
+                        startX: barX,
+                        startY: barY,
+                        endX: barX + barWidth,
+                        endY: barY + barHeight,
+                        fillColor: fillColor,
+                        strokeColor: fillColor,
+                        lineWidth: 0,
+                        zIndex: zIndex--
+                    });
+
+                    yOffset += barHeight;
+                }
+            }
+        } else {
+            // 集合縦棒グラフ
+            const barWidth = (groupWidth * 0.8) / numSeries;
+            const barGap = groupWidth * 0.1;
+            for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+                for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+                    const value = data.series[seriesIdx].values[labelIdx] || 0;
+                    const barHeight = (value / maxValue) * chartArea.height;
+                    const barX = x + chartArea.x + groupWidth * labelIdx + barGap + barWidth * seriesIdx;
+                    const barY = y + chartArea.y + chartArea.height - barHeight;
+                    const fillColor = this.chartColors[seriesIdx % this.chartColors.length];
+
+                    shapes.push({
+                        type: 'rect',
+                        startX: barX,
+                        startY: barY,
+                        endX: barX + barWidth,
+                        endY: barY + barHeight,
+                        fillColor: fillColor,
+                        strokeColor: fillColor,
+                        lineWidth: 0,
+                        zIndex: zIndex--
+                    });
+                }
+            }
+        }
+
+        // X軸ラベル（document形式で生成）
+        const labelY = y + chartArea.y + chartArea.height + 5;
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            const labelX = x + chartArea.x + groupWidth * labelIdx + groupWidth / 2;  // 中央座標
+            const labelWidth = groupWidth;
+            shapes.push({
+                type: 'document',
+                startX: labelX - labelWidth / 2,
+                startY: labelY,
+                endX: labelX + labelWidth / 2,
+                endY: labelY + 15,
+                content: data.labels[labelIdx] || '',
+                fontSize: 10,
+                fontFamily: 'sans-serif',
+                textColor: '#000000',
+                textAlign: 'center',  // 中央揃えを指定
+                fillColor: 'transparent',
+                strokeColor: 'transparent',
+                lineWidth: 0,
+                decorations: { bold: false, italic: false, underline: false, strikethrough: false },
+                zIndex: 0
+            });
+        }
+
+        return shapes;
+    }
+
+    /**
+     * 折れ線グラフの図形配列を生成（コピー用）
+     * @param {Object} chart - グラフオブジェクト
+     * @returns {Array} 図形配列
+     */
+    generateLineShapesForCopy(chart) {
+        const shapes = [];
+        const { x, y, width, height, chartType, data } = chart;
+        const padding = 30;
+
+        if (!data || !data.labels || !data.series) return shapes;
+
+        const chartArea = {
+            x: padding,
+            y: padding,
+            width: width - padding * 2,
+            height: height - padding * 2
+        };
+
+        // 最大値を計算
+        let maxValue = 0;
+        if (chartType === 'stacked-line') {
+            for (let i = 0; i < data.labels.length; i++) {
+                let sum = 0;
+                for (const series of data.series) {
+                    sum += series.values[i] || 0;
+                }
+                if (sum > maxValue) maxValue = sum;
+            }
+        } else {
+            for (const series of data.series) {
+                for (const value of series.values) {
+                    if (value > maxValue) maxValue = value;
+                }
+            }
+        }
+        if (maxValue === 0) maxValue = 1;
+
+        const numLabels = data.labels.length;
+        const numSeries = data.series.length;
+        const stepX = chartArea.width / (numLabels - 1 || 1);
+
+        let zIndex = 200;  // 折れ線用の開始zIndex
+
+        // 折れ線（polyline）を生成
+        for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+            const strokeColor = this.chartColors[seriesIdx % this.chartColors.length];
+            let cumulativeValues = new Array(numLabels).fill(0);
+
+            if (chartType === 'stacked-line' && seriesIdx > 0) {
+                for (let i = 0; i < seriesIdx; i++) {
+                    for (let j = 0; j < numLabels; j++) {
+                        cumulativeValues[j] += data.series[i].values[j] || 0;
+                    }
+                }
+            }
+
+            // ポイント座標を計算
+            const points = [];
+            for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+                const value = data.series[seriesIdx].values[labelIdx] || 0;
+                const totalValue = chartType === 'stacked-line' ? cumulativeValues[labelIdx] + value : value;
+                const pointX = x + chartArea.x + stepX * labelIdx;
+                const pointY = y + chartArea.y + chartArea.height - (totalValue / maxValue) * chartArea.height;
+                points.push({ x: pointX, y: pointY });
+            }
+
+            // polylineとして1つのシェイプを生成
+            if (points.length >= 2) {
+                shapes.push({
+                    type: 'polyline',
+                    points: points,
+                    strokeColor: strokeColor,
+                    lineWidth: 2,
+                    zIndex: zIndex--
+                });
+            }
+        }
+
+        zIndex = 100;  // データポイント用のzIndex
+
+        // データポイント（小さな円）
+        for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+            const fillColor = this.chartColors[seriesIdx % this.chartColors.length];
+            let cumulativeValues = new Array(numLabels).fill(0);
+
+            if (chartType === 'stacked-line' && seriesIdx > 0) {
+                for (let i = 0; i < seriesIdx; i++) {
+                    for (let j = 0; j < numLabels; j++) {
+                        cumulativeValues[j] += data.series[i].values[j] || 0;
+                    }
+                }
+            }
+
+            for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+                const value = data.series[seriesIdx].values[labelIdx] || 0;
+                const totalValue = chartType === 'stacked-line' ? cumulativeValues[labelIdx] + value : value;
+                const pointX = x + chartArea.x + stepX * labelIdx;
+                const pointY = y + chartArea.y + chartArea.height - (totalValue / maxValue) * chartArea.height;
+                const pointSize = 4;
+
+                shapes.push({
+                    type: 'ellipse',
+                    startX: pointX - pointSize / 2,
+                    startY: pointY - pointSize / 2,
+                    endX: pointX + pointSize / 2,
+                    endY: pointY + pointSize / 2,
+                    fillColor: fillColor,
+                    strokeColor: fillColor,
+                    lineWidth: 0,
+                    zIndex: zIndex--
+                });
+            }
+        }
+
+        // X軸ラベル（document形式で生成）
+        const labelY = y + chartArea.y + chartArea.height + 5;
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            const labelX = x + chartArea.x + stepX * labelIdx;  // 中央座標
+            const labelWidth = stepX;
+            shapes.push({
+                type: 'document',
+                startX: labelX - labelWidth / 2,
+                startY: labelY,
+                endX: labelX + labelWidth / 2,
+                endY: labelY + 15,
+                content: data.labels[labelIdx] || '',
+                fontSize: 10,
+                fontFamily: 'sans-serif',
+                textColor: '#000000',
+                textAlign: 'center',  // 中央揃えを指定
+                fillColor: 'transparent',
+                strokeColor: 'transparent',
+                lineWidth: 0,
+                decorations: { bold: false, italic: false, underline: false, strikethrough: false },
+                zIndex: 0
+            });
+        }
+
+        return shapes;
     }
 
     /**
@@ -4751,6 +5561,40 @@ class CalcEditor extends window.PluginBase {
             // 仮身のアイコンを事前にキャッシュに読み込む（基本文章編集と同じ方式）
             await this.preloadVirtualObjectIcons(xtadData);
 
+            // <paper>要素をパースして用紙サイズを設定
+            const paperMatch = xtadData.match(/<paper\s+[^>]+>/);
+            if (paperMatch) {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(`<root>${paperMatch[0]}</root>`, 'text/xml');
+                const paperElement = doc.querySelector('paper');
+                if (paperElement) {
+                    this.parsePaperElement(paperElement);
+                    // 用紙サイズをmm単位で保存
+                    if (this.paperSize) {
+                        this.paperWidth = this.paperSize.widthMm;
+                        this.paperHeight = this.paperSize.lengthMm;
+                    }
+                }
+            }
+
+            // <docmargin>要素をパースしてマージン設定を保存
+            const docmarginMatch = xtadData.match(/<docmargin\s+[^>]+>/);
+            if (docmarginMatch) {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(`<root>${docmarginMatch[0]}</root>`, 'text/xml');
+                const docmarginElement = doc.querySelector('docmargin');
+                if (docmarginElement) {
+                    if (!this.paperMargin) {
+                        this.paperMargin = new window.PaperMargin();
+                    }
+                    // <docmargin>はtop/bottom/left/right属性を持つ
+                    this.paperMargin.top = parseFloat(docmarginElement.getAttribute('top')) || 0;
+                    this.paperMargin.bottom = parseFloat(docmarginElement.getAttribute('bottom')) || 0;
+                    this.paperMargin.left = parseFloat(docmarginElement.getAttribute('left')) || 0;
+                    this.paperMargin.right = parseFloat(docmarginElement.getAttribute('right')) || 0;
+                }
+            }
+
             // <calcSize>タグをパースして列幅・行高を設定
             const calcSizePattern = /<calcSize cell="([^"]+)" (width|height)="(\d+)"\/?\s*>/g;
             let sizeMatch;
@@ -4903,6 +5747,17 @@ class CalcEditor extends window.PluginBase {
                         }
 
                         // 画像情報を作成
+                        // lineType/lineWidth形式を優先、l_atr形式もサポート（後方互換性）
+                        let lineType = 0;
+                        let lineWidth = 1;
+                        if (imageAttrMap.lineType !== undefined || imageAttrMap.lineWidth !== undefined) {
+                            lineType = parseInt(imageAttrMap.lineType) || 0;
+                            lineWidth = parseInt(imageAttrMap.lineWidth) || 1;
+                        } else if (imageAttrMap.l_atr !== undefined) {
+                            const l_atr = parseInt(imageAttrMap.l_atr) || 1;
+                            lineType = (l_atr >> 8) & 0xFF;
+                            lineWidth = l_atr & 0xFF;
+                        }
                         const imageInfo = {
                             href: imageAttrMap.href || '',
                             name: imageAttrMap.href?.split('/').pop() || '画像',
@@ -4910,7 +5765,8 @@ class CalcEditor extends window.PluginBase {
                             top: parseFloat(imageAttrMap.top) || 0,
                             right: parseFloat(imageAttrMap.right) || 100,
                             bottom: parseFloat(imageAttrMap.bottom) || 100,
-                            l_atr: imageAttrMap.l_atr || '1',
+                            lineType: lineType,
+                            lineWidth: lineWidth,
                             l_pat: imageAttrMap.l_pat || '0',
                             f_pat: imageAttrMap.f_pat || '1',
                             angle: parseFloat(imageAttrMap.angle) || 0,
@@ -5194,15 +6050,6 @@ class CalcEditor extends window.PluginBase {
             value = value.replace(/<font face="[^"]+"\/>/g, '');
         }
 
-        // 自己終了タグ (<bold/>, <italic/>, etc.) を開始/終了タグ形式に変換
-        // 例: <bold/>A2 → <bold>A2</bold>
-        const selfClosingTags = ['bold', 'italic', 'underline', 'mesh', 'invert', 'strikethrough', 'superscript', 'subscript'];
-        for (const tag of selfClosingTags) {
-            // <tag/>の後に続くテキストを<tag>...</tag>で囲む
-            const selfClosingRegex = new RegExp(`<${tag}/>([^<]*)`, 'g');
-            value = value.replace(selfClosingRegex, `<${tag}>$1</${tag}>`);
-        }
-
         // <bold>タグ
         if (value.includes('<bold>')) {
             style.fontWeight = 'bold';
@@ -5321,8 +6168,15 @@ class CalcEditor extends window.PluginBase {
         }
 
         xtad += '<p>\n';
-        xtad += '<paper type="doc" length="1403" width="992" binding="0" imposition="0" top="94" bottom="94" left="94" right="47" />\n';
-        xtad += '<docmargin top="94" bottom="94" left="94" right="47" />\n';
+        // 用紙設定が設定されている場合のみ<paper>要素を出力
+        if (this.paperSize) {
+            xtad += this.paperSize.toXmlString() + '\n';
+        }
+        // 用紙設定が設定されている場合、または既存のマージン設定がある場合のみ<docmargin>要素を出力
+        if (this.paperMargin || this.paperSize) {
+            const margin = this.paperMargin || new window.PaperMargin();
+            xtad += `<docmargin top="${margin.top}" bottom="${margin.bottom}" left="${margin.left}" right="${margin.right}" />\n`;
+        }
 
         // 行ごとにセルを出力
         let maxRow = 1;
@@ -5516,27 +6370,38 @@ class CalcEditor extends window.PluginBase {
     /**
      * グラフのXTADデータを生成
      * @param {Object} chart - グラフオブジェクト
-     * @returns {string} <figure>タグ
+     * @returns {string} <group><calc><figure>...</figure></calc></group>タグ
      */
     generateChartXtad(chart) {
         const { x, y, width, height, chartType, dataRange, data } = chart;
 
-        let xtad = `<figure x="${Math.round(x)}" y="${Math.round(y)}" w="${Math.round(width)}" h="${Math.round(height)}">\n`;
+        // 1. groupタグ（絶対座標）
+        const left = Math.round(x);
+        const top = Math.round(y);
+        const right = Math.round(x + width);
+        const bottom = Math.round(y + height);
 
-        // <calc>タグ（グラフメタデータ）
+        let xtad = `<group left="${left}" top="${top}" right="${right}" bottom="${bottom}">\n`;
+
+        // 2. calcタグ（グラフメタデータ）
         xtad += `<calc chartType="${chartType}"`;
         if (dataRange) {
             xtad += ` dataRange="${dataRange}"`;
         }
-        xtad += `/>\n`;
+        xtad += `>\n`;
 
-        // figView, figDraw, figScale
-        xtad += `<figView x="0" y="0" w="${Math.round(width)}" h="${Math.round(height)}" />\n`;
-        xtad += `<figDraw x="0" y="0" w="${Math.round(width)}" h="${Math.round(height)}"/>\n`;
-        xtad += '<figScale x="100" y="100"/>\n';
+        // 3. figureタグ（描画要素のコンテナ）
+        xtad += '<figure>\n';
 
-        // 背景rect
-        xtad += `<rect x="0" y="0" w="${Math.round(width)}" h="${Math.round(height)}" bdC="#808080" fillC="#ffffff"/>\n`;
+        // figView, figDraw（グループ内相対座標: 0,0からwidth,height）
+        xtad += `<figView top="0" left="0" right="${Math.round(width)}" bottom="${Math.round(height)}"/>\n`;
+        xtad += `<figDraw top="0" left="0" right="${Math.round(width)}" bottom="${Math.round(height)}"/>\n`;
+        xtad += '<figScale hunit="-72" vunit="-72"/>\n';
+
+        // 背景rect（正式形式）
+        xtad += `<rect round="0" lineType="0" lineWidth="1" l_pat="0" f_pat="1" angle="0" `;
+        xtad += `left="0" top="0" right="${Math.round(width)}" bottom="${Math.round(height)}" `;
+        xtad += `strokeColor="#808080" fillColor="#ffffff" zIndex="0"/>\n`;
 
         // グラフ種別に応じた描画要素を生成
         if (data && data.labels && data.labels.length > 0) {
@@ -5546,10 +6411,14 @@ class CalcEditor extends window.PluginBase {
                 xtad += this.generateStackedBarChartElements(width, height, data);
             } else if (chartType === 'line') {
                 xtad += this.generateLineChartElements(width, height, data);
+            } else if (chartType === 'stacked-line') {
+                xtad += this.generateStackedLineChartElements(width, height, data);
             }
         }
 
         xtad += '</figure>\n';
+        xtad += '</calc>\n';
+        xtad += '</group>\n';
 
         return xtad;
     }
@@ -5596,9 +6465,12 @@ class CalcEditor extends window.PluginBase {
                 const barY = chartArea.y + chartArea.height - barHeight;
                 const fillColor = this.chartColors[seriesIdx % this.chartColors.length];
 
-                xtad += `<rect x="${Math.round(barX)}" y="${Math.round(barY)}" `;
-                xtad += `w="${Math.round(barWidth)}" h="${Math.round(barHeight)}" `;
-                xtad += `fillC="${fillColor}" zIndex="${zIndex--}"/>\n`;
+                const rectRight = Math.round(barX + barWidth);
+                const rectBottom = Math.round(barY + barHeight);
+                xtad += `<rect round="0" lineType="0" lineWidth="0" l_pat="0" f_pat="1" angle="0" `;
+                xtad += `left="${Math.round(barX)}" top="${Math.round(barY)}" `;
+                xtad += `right="${rectRight}" bottom="${rectBottom}" `;
+                xtad += `fillColor="${fillColor}" zIndex="${zIndex--}"/>\n`;
             }
         }
 
@@ -5609,10 +6481,18 @@ class CalcEditor extends window.PluginBase {
             const labelText = this.escapeXml(data.labels[labelIdx] || '');
             const labelWidth = groupWidth;
 
+            const left = Math.round(labelX - labelWidth / 2);
+            const top = Math.round(labelY);
+            const right = left + Math.round(labelWidth);
+            const bottom = top + 15;
+            const currentZIndex = zIndex--;
             xtad += '<document>\n';
-            xtad += `<text x="${Math.round(labelX - labelWidth / 2)}" y="${Math.round(labelY)}" `;
-            xtad += `w="${Math.round(labelWidth)}" h="15" align="center" zIndex="${zIndex--}"/>\n`;
-            xtad += '<font size="10" face="sans-serif" color="#000000"/>\n';
+            xtad += this.generateDocViewDrawScale(left, top, right, bottom);
+            xtad += this.generateTextElement({ zIndex: currentZIndex });
+            xtad += '<font size="10"/>\n';
+            xtad += '<font face="sans-serif"/>\n';
+            xtad += '<font color="#000000"/>\n';
+            xtad += '<text align="center"/>\n';
             xtad += `${labelText}\n`;
             xtad += '</document>\n';
         }
@@ -5667,9 +6547,12 @@ class CalcEditor extends window.PluginBase {
                 currentY -= segmentHeight;
                 const fillColor = this.chartColors[seriesIdx % this.chartColors.length];
 
-                xtad += `<rect x="${Math.round(barX)}" y="${Math.round(currentY)}" `;
-                xtad += `w="${Math.round(barWidth)}" h="${Math.round(segmentHeight)}" `;
-                xtad += `fillC="${fillColor}" zIndex="${zIndex--}"/>\n`;
+                const rectRight = Math.round(barX + barWidth);
+                const rectBottom = Math.round(currentY + segmentHeight);
+                xtad += `<rect round="0" lineType="0" lineWidth="0" l_pat="0" f_pat="1" angle="0" `;
+                xtad += `left="${Math.round(barX)}" top="${Math.round(currentY)}" `;
+                xtad += `right="${rectRight}" bottom="${rectBottom}" `;
+                xtad += `fillColor="${fillColor}" zIndex="${zIndex--}"/>\n`;
             }
         }
 
@@ -5680,10 +6563,18 @@ class CalcEditor extends window.PluginBase {
             const labelText = this.escapeXml(data.labels[labelIdx] || '');
             const labelWidth = groupWidth;
 
+            const left = Math.round(labelX - labelWidth / 2);
+            const top = Math.round(labelY);
+            const right = left + Math.round(labelWidth);
+            const bottom = top + 15;
+            const currentZIndex = zIndex--;
             xtad += '<document>\n';
-            xtad += `<text x="${Math.round(labelX - labelWidth / 2)}" y="${Math.round(labelY)}" `;
-            xtad += `w="${Math.round(labelWidth)}" h="15" align="center" zIndex="${zIndex--}"/>\n`;
-            xtad += '<font size="10" face="sans-serif" color="#000000"/>\n';
+            xtad += this.generateDocViewDrawScale(left, top, right, bottom);
+            xtad += this.generateTextElement({ zIndex: currentZIndex });
+            xtad += '<font size="10"/>\n';
+            xtad += '<font face="sans-serif"/>\n';
+            xtad += '<font color="#000000"/>\n';
+            xtad += '<text align="center"/>\n';
             xtad += `${labelText}\n`;
             xtad += '</document>\n';
         }
@@ -5736,12 +6627,12 @@ class CalcEditor extends window.PluginBase {
             // polyline要素を生成
             if (points.length > 1) {
                 const pointsStr = points.map(p => `${p.x},${p.y}`).join(' ');
-                xtad += `<polyline points="${pointsStr}" stroke="${color}" strokeWidth="2" zIndex="${zIndex--}"/>\n`;
+                xtad += this.generatePolylineElement(pointsStr, { strokeColor: color, zIndex: zIndex-- });
             }
 
-            // circle要素を生成（各データ点）
+            // ellipse要素を生成（各データ点）
             for (const point of points) {
-                xtad += `<circle cx="${point.x}" cy="${point.y}" r="4" fillC="${color}" zIndex="${zIndex--}"/>\n`;
+                xtad += this.generateEllipseElement(point.x, point.y, 4, 4, { fillColor: color, zIndex: zIndex-- });
             }
         }
 
@@ -5752,10 +6643,108 @@ class CalcEditor extends window.PluginBase {
             const labelText = this.escapeXml(data.labels[labelIdx] || '');
             const labelWidth = pointSpacing > 0 ? pointSpacing : chartArea.width;
 
+            const left = Math.round(labelX - labelWidth / 2);
+            const top = Math.round(labelY);
+            const right = left + Math.round(labelWidth);
+            const bottom = top + 15;
+            const currentZIndex = zIndex--;
             xtad += '<document>\n';
-            xtad += `<text x="${Math.round(labelX - labelWidth / 2)}" y="${Math.round(labelY)}" `;
-            xtad += `w="${Math.round(labelWidth)}" h="15" align="center" zIndex="${zIndex--}"/>\n`;
-            xtad += '<font size="10" face="sans-serif" color="#000000"/>\n';
+            xtad += this.generateDocViewDrawScale(left, top, right, bottom);
+            xtad += this.generateTextElement({ zIndex: currentZIndex });
+            xtad += '<font size="10"/>\n';
+            xtad += '<font face="sans-serif"/>\n';
+            xtad += '<font color="#000000"/>\n';
+            xtad += '<text align="center"/>\n';
+            xtad += `${labelText}\n`;
+            xtad += '</document>\n';
+        }
+
+        return xtad;
+    }
+
+    /**
+     * 積上折線グラフの描画要素（polyline, circle, text）をXTAD形式で生成
+     * 各系列の値を累積して折れ線を描画
+     */
+    generateStackedLineChartElements(width, height, data) {
+        let xtad = '';
+        const padding = 30;
+
+        const chartArea = {
+            x: padding,
+            y: padding,
+            width: width - padding * 2,
+            height: height - padding * 2
+        };
+
+        const numLabels = data.labels.length;
+        const numSeries = data.series.length;
+
+        // 各ラベルでの累積最大値を計算
+        let maxTotal = 0;
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            let total = 0;
+            for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+                total += data.series[seriesIdx].values[labelIdx] || 0;
+            }
+            if (total > maxTotal) maxTotal = total;
+        }
+        if (maxTotal === 0) maxTotal = 1;
+
+        const pointSpacing = chartArea.width / (numLabels > 1 ? numLabels - 1 : 1);
+
+        let zIndex = 100;
+
+        // 各系列の累積値を追跡
+        const cumulativeValues = new Array(numLabels).fill(0);
+
+        // 各系列の折れ線とデータ点を生成（累積）
+        for (let seriesIdx = 0; seriesIdx < numSeries; seriesIdx++) {
+            const color = this.chartColors[seriesIdx % this.chartColors.length];
+            const points = [];
+
+            // ポイントを計算（累積値で計算）
+            for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+                const value = data.series[seriesIdx].values[labelIdx] || 0;
+                cumulativeValues[labelIdx] += value;
+                const currentCumulative = cumulativeValues[labelIdx];
+
+                const pointX = chartArea.x + (numLabels > 1 ? pointSpacing * labelIdx : chartArea.width / 2);
+                const pointY = chartArea.y + chartArea.height - (currentCumulative / maxTotal) * chartArea.height;
+                points.push({ x: Math.round(pointX), y: Math.round(pointY) });
+            }
+
+            // polyline要素を生成
+            if (points.length > 1) {
+                const pointsStr = points.map(p => `${p.x},${p.y}`).join(' ');
+                xtad += this.generatePolylineElement(pointsStr, { strokeColor: color, zIndex: zIndex-- });
+            }
+
+            // ellipse要素を生成（各データ点）
+            for (const point of points) {
+                xtad += this.generateEllipseElement(point.x, point.y, 4, 4, { fillColor: color, zIndex: zIndex-- });
+            }
+        }
+
+        // X軸ラベル
+        const labelY = chartArea.y + chartArea.height + 5;
+        for (let labelIdx = 0; labelIdx < numLabels; labelIdx++) {
+            const labelX = chartArea.x + (numLabels > 1 ? pointSpacing * labelIdx : chartArea.width / 2);
+            const labelText = this.escapeXml(data.labels[labelIdx] || '');
+            const labelWidth = pointSpacing > 0 ? pointSpacing : chartArea.width;
+
+            const left = Math.round(labelX - labelWidth / 2);
+            const top = Math.round(labelY);
+            const right = left + Math.round(labelWidth);
+            const bottom = top + 15;
+            const currentZIndex = zIndex--;
+            xtad += '<document>\n';
+            xtad += this.generateDocViewDrawScale(left, top, right, bottom);
+            xtad += this.generateTextElement({ zIndex: currentZIndex });
+            xtad += '<font size="10"/>\n';
+            xtad += '<font face="sans-serif"/>\n';
+            xtad += '<font color="#000000"/>\n';
+            xtad += '<text align="center"/>\n';
             xtad += `${labelText}\n`;
             xtad += '</document>\n';
         }
@@ -5768,50 +6757,65 @@ class CalcEditor extends window.PluginBase {
      * @param {string} xtadData - XTADデータ
      */
     loadChartsFromXtad(xtadData) {
-        // <figure>タグを検索（<calc>タグを含むもののみグラフとして扱う）
-        const figurePattern = /<figure\s+x="([^"]+)"\s+y="([^"]+)"\s+w="([^"]+)"\s+h="([^"]+)"[^>]*>([\s\S]*?)<\/figure>/g;
-        let figureMatch;
+        // <group><calc><figure>...</figure></calc></group> 形式
+        const groupPattern = /<group\s+([^>]*)>([\s\S]*?)<\/group>/g;
+        let groupMatch;
 
-        while ((figureMatch = figurePattern.exec(xtadData)) !== null) {
-            const x = parseFloat(figureMatch[1]);
-            const y = parseFloat(figureMatch[2]);
-            const width = parseFloat(figureMatch[3]);
-            const height = parseFloat(figureMatch[4]);
-            const innerContent = figureMatch[5];
+        while ((groupMatch = groupPattern.exec(xtadData)) !== null) {
+            const groupAttrs = groupMatch[1];
+            const groupContent = groupMatch[2];
 
-            // <calc>タグを検索
-            const calcMatch = /<calc\s+chartType="([^"]+)"(?:\s+dataRange="([^"]+)")?[^>]*\/>/i.exec(innerContent);
-            if (calcMatch) {
-                const chartType = calcMatch[1];
-                const dataRange = calcMatch[2] || null;
-
-                // dataRangeからデータを取得
-                let chartData = { labels: [], series: [] };
-                if (dataRange) {
-                    const range = this.parseDataRange(dataRange);
-                    if (range) {
-                        chartData = this.getChartDataFromRange(range);
-                    }
-                }
-
-                // 図形要素をパース
-                const elements = this.parseChartElements(innerContent);
-
-                // グラフオブジェクトを作成
-                const chart = {
-                    id: `chart_${Date.now()}_${this.charts.length}`,
-                    chartType: chartType,
-                    x: x,
-                    y: y,
-                    width: width,
-                    height: height,
-                    dataRange: dataRange,
-                    data: chartData,
-                    elements: elements  // XTADから読み込んだ描画要素
-                };
-
-                this.charts.push(chart);
+            // <calc>タグを検索（囲みタグ形式）
+            const calcMatch = /<calc\s+chartType="([^"]+)"(?:\s+dataRange="([^"]+)")?[^>]*>([\s\S]*?)<\/calc>/i.exec(groupContent);
+            if (!calcMatch) {
+                // <calc>がない場合は通常のグループ（グラフではない）
+                continue;
             }
+
+            // groupの位置属性を取得
+            const leftMatch = /left="([^"]+)"/.exec(groupAttrs);
+            const topMatch = /top="([^"]+)"/.exec(groupAttrs);
+            const rightMatch = /right="([^"]+)"/.exec(groupAttrs);
+            const bottomMatch = /bottom="([^"]+)"/.exec(groupAttrs);
+
+            if (!leftMatch || !topMatch || !rightMatch || !bottomMatch) continue;
+
+            const x = parseFloat(leftMatch[1]);
+            const y = parseFloat(topMatch[1]);
+            const width = parseFloat(rightMatch[1]) - x;
+            const height = parseFloat(bottomMatch[1]) - y;
+
+            const chartType = calcMatch[1];
+            const dataRange = calcMatch[2] || null;
+            const calcContent = calcMatch[3];
+
+            // dataRangeからデータを取得
+            let chartData = { labels: [], series: [] };
+            if (dataRange) {
+                const range = this.parseDataRange(dataRange);
+                if (range) {
+                    chartData = this.getChartDataFromRange(range);
+                }
+            }
+
+            // <figure>内の図形要素をパース
+            const figureMatch = /<figure>([\s\S]*?)<\/figure>/i.exec(calcContent);
+            const elements = figureMatch ? this.parseChartElements(figureMatch[1]) : [];
+
+            // グラフオブジェクトを作成
+            const chart = {
+                id: `chart_${Date.now()}_${this.charts.length}`,
+                chartType: chartType,
+                x: x,
+                y: y,
+                width: width,
+                height: height,
+                dataRange: dataRange,
+                data: chartData,
+                elements: elements
+            };
+
+            this.charts.push(chart);
         }
 
         // グラフを描画
@@ -5834,76 +6838,110 @@ class CalcEditor extends window.PluginBase {
             return match ? match[1] : null;
         };
 
-        // <rect> 要素をパース（属性の順序に依存しない）
+        // <rect> 要素をパース（正式形式のみ対応）
         const rectPattern = /<rect\s+[^>]+\/>/g;
         let rectMatch;
         while ((rectMatch = rectPattern.exec(innerContent)) !== null) {
             const tag = rectMatch[0];
-            const x = getAttr(tag, 'x');
-            const y = getAttr(tag, 'y');
-            const w = getAttr(tag, 'w');
-            const h = getAttr(tag, 'h');
 
-            // x, y, w, h が必須
-            if (x !== null && y !== null && w !== null && h !== null) {
+            // 正式形式（left/top/right/bottom）
+            const left = getAttr(tag, 'left');
+            const top = getAttr(tag, 'top');
+            const right = getAttr(tag, 'right');
+            const bottom = getAttr(tag, 'bottom');
+
+            if (left !== null && top !== null && right !== null && bottom !== null) {
                 elements.push({
                     type: 'rect',
-                    x: parseFloat(x),
-                    y: parseFloat(y),
-                    w: parseFloat(w),
-                    h: parseFloat(h),
-                    bdC: getAttr(tag, 'bdC'),
-                    fillC: getAttr(tag, 'fillC') || '#808080',
+                    x: parseFloat(left),
+                    y: parseFloat(top),
+                    w: parseFloat(right) - parseFloat(left),
+                    h: parseFloat(bottom) - parseFloat(top),
+                    bdC: getAttr(tag, 'strokeColor'),
+                    fillC: getAttr(tag, 'fillColor') || '#808080',
                     zIndex: parseInt(getAttr(tag, 'zIndex')) || 0
                 });
             }
         }
 
-        // <document><text>...</document> 要素をパース
+        // <document><docView>...</document> 要素をパース（標準形式）
         const docPattern = /<document>([\s\S]*?)<\/document>/g;
         let docMatch;
         while ((docMatch = docPattern.exec(innerContent)) !== null) {
             const docContent = docMatch[1];
 
-            // <text> タグを抽出
+            // <docView> タグを抽出（標準形式）
+            const docViewMatch = /<docView\s+[^>]+\/>/.exec(docContent);
+            let tx, ty, tw, th;
+
+            if (docViewMatch) {
+                // 標準形式: docViewから座標を取得
+                const docViewTag = docViewMatch[0];
+                const viewleft = getAttr(docViewTag, 'viewleft');
+                const viewtop = getAttr(docViewTag, 'viewtop');
+                const viewright = getAttr(docViewTag, 'viewright');
+                const viewbottom = getAttr(docViewTag, 'viewbottom');
+
+                if (viewleft === null || viewtop === null) continue;
+
+                tx = parseFloat(viewleft);
+                ty = parseFloat(viewtop);
+                tw = viewright !== null ? parseFloat(viewright) - tx : 100;
+                th = viewbottom !== null ? parseFloat(viewbottom) - ty : 15;
+            } else {
+                // docViewがない場合はスキップ
+                continue;
+            }
+
+            // <text> タグからzIndexを取得
             const textTagMatch = /<text\s+[^>]+\/>/.exec(docContent);
-            if (!textTagMatch) continue;
+            let zIndex = 0;
+            if (textTagMatch) {
+                zIndex = parseInt(getAttr(textTagMatch[0], 'zIndex')) || 0;
+            }
 
-            const textTag = textTagMatch[0];
-            const tx = getAttr(textTag, 'x');
-            const ty = getAttr(textTag, 'y');
-            const tw = getAttr(textTag, 'w');
-            const th = getAttr(textTag, 'h');
-
-            if (tx === null || ty === null) continue;
-
-            // <font> タグを抽出
-            const fontTagMatch = /<font\s+[^>]+\/>/.exec(docContent);
+            // 複数の<font>タグを解析
+            const fontPattern = /<font\s+[^>]+\/>/g;
+            let fontMatch;
             let fontSize = 10;
             let fontFace = 'sans-serif';
             let color = '#000000';
-            if (fontTagMatch) {
-                const fontTag = fontTagMatch[0];
-                fontSize = parseInt(getAttr(fontTag, 'size')) || 10;
-                fontFace = getAttr(fontTag, 'face') || 'sans-serif';
-                color = getAttr(fontTag, 'color') || '#000000';
+            while ((fontMatch = fontPattern.exec(docContent)) !== null) {
+                const fontTag = fontMatch[0];
+                const sizeAttr = getAttr(fontTag, 'size');
+                const faceAttr = getAttr(fontTag, 'face');
+                const colorAttr = getAttr(fontTag, 'color');
+                if (sizeAttr !== null) fontSize = parseInt(sizeAttr) || 10;
+                if (faceAttr !== null) fontFace = faceAttr;
+                if (colorAttr !== null) color = colorAttr;
             }
 
-            // テキスト内容を抽出（font、textタグ以外）
+            // <text align="..."/>を解析
+            let textAlign = 'center';  // デフォルト
+            const textAlignPattern = /<text\s+align="([^"]+)"[^>]*\/>/;
+            const textAlignMatch = textAlignPattern.exec(docContent);
+            if (textAlignMatch) {
+                textAlign = textAlignMatch[1];
+            }
+
+            // テキスト内容を抽出（docView、docDraw、docScale、text、fontタグ以外）
             let textContent = docContent
-                .replace(/<text[^>]*\/>/, '')
-                .replace(/<font[^>]*\/>/, '')
+                .replace(/<docView[^>]*\/>/g, '')
+                .replace(/<docDraw[^>]*\/>/g, '')
+                .replace(/<docScale[^>]*\/>/g, '')
+                .replace(/<text[^>]*\/>/g, '')
+                .replace(/<font[^>]*\/>/g, '')
                 .trim();
             textContent = this.unescapeXml(textContent);
 
             elements.push({
                 type: 'text',
-                x: parseFloat(tx),
-                y: parseFloat(ty),
-                w: parseFloat(tw) || 100,
-                h: parseFloat(th) || 15,
-                align: getAttr(textTag, 'align') || 'left',
-                zIndex: parseInt(getAttr(textTag, 'zIndex')) || 0,
+                x: tx,
+                y: ty,
+                w: tw,
+                h: th,
+                align: textAlign,
+                zIndex: zIndex,
                 fontSize: fontSize,
                 fontFace: fontFace,
                 color: color,
@@ -5926,33 +6964,48 @@ class CalcEditor extends window.PluginBase {
                 }).filter(p => !isNaN(p.x) && !isNaN(p.y));
 
                 if (points.length > 0) {
+                    // strokeColor属性を使用（標準形式）
+                    const strokeColor = getAttr(tag, 'strokeColor') || '#000000';
+                    // lineWidth形式を優先、l_atr形式もサポート（後方互換性）
+                    let strokeWidth = 1;
+                    if (getAttr(tag, 'lineWidth') !== null) {
+                        strokeWidth = parseInt(getAttr(tag, 'lineWidth')) || 1;
+                    } else {
+                        const l_atr = parseInt(getAttr(tag, 'l_atr')) || 1;
+                        strokeWidth = l_atr & 0xFF;  // 下位8ビットが線幅
+                    }
+
                     elements.push({
                         type: 'polyline',
                         points: points,
-                        stroke: getAttr(tag, 'stroke') || '#000000',
-                        strokeWidth: parseFloat(getAttr(tag, 'strokeWidth')) || 2,
+                        stroke: strokeColor,
+                        strokeWidth: strokeWidth,
                         zIndex: parseInt(getAttr(tag, 'zIndex')) || 0
                     });
                 }
             }
         }
 
-        // <circle> 要素をパース（折れ線グラフのデータ点用）
-        const circlePattern = /<circle\s+[^>]+\/>/g;
-        let circleMatch;
-        while ((circleMatch = circlePattern.exec(innerContent)) !== null) {
-            const tag = circleMatch[0];
+        // <ellipse> 要素をパース（折れ線グラフのデータ点用、円はrx=ryで表現）
+        const ellipsePattern = /<ellipse\s+[^>]+\/>/g;
+        let ellipseMatch;
+        while ((ellipseMatch = ellipsePattern.exec(innerContent)) !== null) {
+            const tag = ellipseMatch[0];
             const cx = getAttr(tag, 'cx');
             const cy = getAttr(tag, 'cy');
-            const r = getAttr(tag, 'r');
+            const rx = getAttr(tag, 'rx');
+            const ry = getAttr(tag, 'ry');
 
-            if (cx !== null && cy !== null && r !== null) {
+            if (cx !== null && cy !== null && rx !== null) {
+                // fillColor属性を使用（標準形式）
+                const fillColor = getAttr(tag, 'fillColor') || '#000000';
+
                 elements.push({
                     type: 'circle',
                     cx: parseFloat(cx),
                     cy: parseFloat(cy),
-                    r: parseFloat(r),
-                    fillC: getAttr(tag, 'fillC') || '#000000',
+                    r: parseFloat(rx),  // rx=ryの円としてrxを半径に使用
+                    fillC: fillColor,
                     zIndex: parseInt(getAttr(tag, 'zIndex')) || 0
                 });
             }
@@ -5979,6 +7032,79 @@ class CalcEditor extends window.PluginBase {
             endCol: this.letterToCol(match[3]),
             endRow: parseInt(match[4])
         };
+    }
+
+    /**
+     * 指定セルを参照しているグラフを更新
+     * @param {number} col - 列番号
+     * @param {number} row - 行番号
+     */
+    updateChartsForCell(col, row) {
+        if (this.charts.length === 0) return;
+
+        let needsRedraw = false;
+
+        for (const chart of this.charts) {
+            if (!chart.dataRange) continue;
+
+            const range = this.parseDataRange(chart.dataRange);
+            if (!range) continue;
+
+            // セルがグラフの参照範囲内かチェック
+            if (col >= range.startCol && col <= range.endCol &&
+                row >= range.startRow && row <= range.endRow) {
+                // データを再計算
+                chart.data = this.getChartDataFromRange(range);
+                // キャッシュされた描画要素をクリア（再計算を強制）
+                chart.elements = [];
+                needsRedraw = true;
+            }
+        }
+
+        if (needsRedraw) {
+            this.drawCharts();
+        }
+    }
+
+    /**
+     * 指定範囲を参照しているグラフを更新
+     * @param {Object} range - { startCol, startRow, endCol, endRow }
+     */
+    updateChartsForRange(range) {
+        if (this.charts.length === 0) return;
+
+        let needsRedraw = false;
+
+        for (const chart of this.charts) {
+            if (!chart.dataRange) continue;
+
+            const chartRange = this.parseDataRange(chart.dataRange);
+            if (!chartRange) continue;
+
+            // 範囲が重なっているかチェック
+            if (this.rangesOverlap(range, chartRange)) {
+                chart.data = this.getChartDataFromRange(chartRange);
+                chart.elements = [];
+                needsRedraw = true;
+            }
+        }
+
+        if (needsRedraw) {
+            this.drawCharts();
+        }
+    }
+
+    /**
+     * 2つの範囲が重なっているかチェック
+     * @param {Object} range1 - { startCol, startRow, endCol, endRow }
+     * @param {Object} range2 - { startCol, startRow, endCol, endRow }
+     * @returns {boolean} 重なっている場合true
+     */
+    rangesOverlap(range1, range2) {
+        return !(range1.endCol < range2.startCol ||
+                 range1.startCol > range2.endCol ||
+                 range1.endRow < range2.startRow ||
+                 range1.startRow > range2.endRow);
     }
 
     // escapeXml / unescapeXml は PluginBase に移動済み
@@ -6049,8 +7175,9 @@ class CalcEditor extends window.PluginBase {
         // 基本図形編集プラグインと同じ形式でタグを生成
         let attrs = '';
 
-        // 線属性
-        attrs += ` l_atr="${imageInfo.l_atr || '1'}"`;
+        // 線属性（lineType/lineWidth形式で出力）
+        attrs += ` lineType="${imageInfo.lineType || 0}"`;
+        attrs += ` lineWidth="${imageInfo.lineWidth || 1}"`;
         attrs += ` l_pat="${imageInfo.l_pat || '0'}"`;
         attrs += ` f_pat="${imageInfo.f_pat || '1'}"`;
 
@@ -6393,10 +7520,18 @@ class CalcEditor extends window.PluginBase {
                 this.cutCell();
                 break;
             case 'copy':
-                this.copyCell();
+                // グラフ選択時はグラフコピー、それ以外はセルコピー
+                if (this.selectedChart) {
+                    this.copyChart();
+                } else {
+                    this.copyCell();
+                }
                 break;
             case 'paste':
-                this.pasteCell();
+                // グラフがクリップボードにある場合はグラフをペースト
+                if (!this.pasteChart()) {
+                    this.pasteCell();
+                }
                 break;
             case 'clear':
                 if (this.selectedCell) {
@@ -6514,6 +7649,14 @@ class CalcEditor extends window.PluginBase {
             case 'open-real-object-search':
                 this.openRealObjectSearch();
                 break;
+
+            // 用紙設定
+            case 'toggle-paper-frame':
+                this.togglePaperFrame();
+                break;
+            case 'page-setup':
+                this.showPageSetup();
+                break;
         }
     }
 
@@ -6568,7 +7711,15 @@ class CalcEditor extends window.PluginBase {
             // 文字修飾、文字サイズ、文字色を先に追加
             { label: '文字修飾', action: 'show-text-decoration-menu', hasSubmenu: true },
             { label: '文字サイズ', action: 'show-font-size-menu', hasSubmenu: true },
-            { label: '文字色', action: 'show-text-color-menu', hasSubmenu: true }
+            { label: '文字色', action: 'show-text-color-menu', hasSubmenu: true },
+            // 書式メニュー（用紙設定）
+            {
+                label: '書式',
+                submenu: [
+                    { label: '用紙枠表示オンオフ', action: 'toggle-paper-frame', checked: this.paperFrameVisible },
+                    { label: '用紙設定...', action: 'page-setup' }
+                ]
+            }
         ];
 
         // 仮身が選択されている場合は仮身操作・実身操作メニューを追加（文字色の下に表示）
@@ -7467,7 +8618,8 @@ class CalcEditor extends window.PluginBase {
                     bottom: imageSize.height,
                     originalWidth: imageSize.width,
                     originalHeight: imageSize.height,
-                    l_atr: '1',
+                    lineType: 0,
+                    lineWidth: 1,
                     l_pat: '0',
                     f_pat: '1',
                     angle: 0,
@@ -8487,6 +9639,278 @@ class CalcEditor extends window.PluginBase {
         if (data.mode === 'copy') {
             logger.debug('[CalcEditor] copyモード: 元のセルを保持');
         }
+    }
+
+    // === 用紙設定 ===
+
+    /**
+     * 用紙枠表示を切り替え
+     */
+    togglePaperFrame() {
+        this.paperFrameVisible = !this.paperFrameVisible;
+        this.redraw();
+    }
+
+    /**
+     * 用紙設定ダイアログを表示
+     */
+    async showPageSetup() {
+        // PaperSizeが未初期化なら初期化
+        if (!this.paperSize) {
+            this.initPaperSize();
+            if (this.paperWidth) {
+                this.paperSize.widthMm = this.paperWidth;
+            }
+            if (this.paperHeight) {
+                this.paperSize.lengthMm = this.paperHeight;
+            }
+        }
+
+        // 用紙サイズ選択肢を生成
+        const paperOptions = this.getPaperSizeOptions();
+        const currentSizeName = this.paperSize.getSizeName() || 'CUSTOM';
+
+        let paperOptionsHtml = '';
+        let lastGroup = '';
+        paperOptions.forEach(opt => {
+            // グループ分け（A判、B判、その他）
+            const group = opt.key.charAt(0);
+            if (group !== lastGroup && (group === 'A' || group === 'B' || group === 'L')) {
+                if (lastGroup) {
+                    paperOptionsHtml += '<option disabled>──────────</option>';
+                }
+                lastGroup = group;
+            }
+            const selected = opt.key === currentSizeName ? 'selected' : '';
+            paperOptionsHtml += `<option value="${opt.key}" ${selected}>${opt.label}</option>`;
+        });
+        paperOptionsHtml += '<option disabled>──────────</option>';
+        paperOptionsHtml += `<option value="CUSTOM" ${currentSizeName === 'CUSTOM' ? 'selected' : ''}>カスタム</option>`;
+
+        // 現在の値
+        const curWidth = Math.round(this.paperSize.widthMm * 10) / 10;
+        const curHeight = Math.round(this.paperSize.lengthMm * 10) / 10;
+        const curTopMm = Math.round(this.paperSize.topMm * 10) / 10;
+        const curBottomMm = Math.round(this.paperSize.bottomMm * 10) / 10;
+        const curLeftMm = Math.round(this.paperSize.leftMm * 10) / 10;
+        const curRightMm = Math.round(this.paperSize.rightMm * 10) / 10;
+        const curImposition = this.paperSize.imposition;
+
+        const dialogHtml = `
+            <style>
+                /* 親ダイアログの既定入力欄を非表示 */
+                #dialog-input-field {
+                    display: none !important;
+                }
+                /* 親ダイアログのパディング/マージンを上書き */
+                #input-dialog-message:has(.paper-setup-dialog) {
+                    margin-bottom: 2px;
+                    padding: 2px;
+                }
+                #input-dialog:has(.paper-setup-dialog) {
+                    padding: 4px;
+                }
+                #input-dialog:has(.paper-setup-dialog) .dialog-buttons {
+                    padding: 2px;
+                    margin-top: 0px;
+                }
+                .paper-setup-dialog {
+                    font-family: sans-serif;
+                    font-size: 11px;
+                    padding: 0;
+                }
+                .paper-setup-dialog .form-row {
+                    display: flex;
+                    align-items: center;
+                    margin-bottom: 2px;
+                }
+                .paper-setup-dialog .form-row:last-child {
+                    margin-bottom: 0;
+                }
+                .paper-setup-dialog .form-label {
+                    width: 40px;
+                    font-weight: normal;
+                }
+                .paper-setup-dialog .form-input {
+                    width: 70px;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    font-size: 11px;
+                }
+                .paper-setup-dialog .form-select {
+                    width: 200px;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    font-size: 11px;
+                }
+                .paper-setup-dialog .form-unit {
+                    margin-left: 4px;
+                    color: #666;
+                }
+                .paper-setup-dialog .margin-group {
+                    margin-left: 10px;
+                }
+                .paper-setup-dialog .margin-row {
+                    display: flex;
+                    align-items: center;
+                    margin-bottom: 1px;
+                }
+                .paper-setup-dialog .margin-row:last-child {
+                    margin-bottom: 0;
+                }
+                .paper-setup-dialog .margin-label {
+                    width: 20px;
+                }
+                .paper-setup-dialog .margin-input {
+                    width: 50px;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    margin-right: 8px;
+                    font-size: 11px;
+                }
+            </style>
+            <div class="paper-setup-dialog">
+                <div class="form-row">
+                    <span class="form-label">用紙:</span>
+                    <select id="paperSizeSelect" class="form-select">
+                        ${paperOptionsHtml}
+                    </select>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">横:</span>
+                    <input type="number" id="paperWidth" class="form-input" value="${curWidth}" min="10" max="2000" step="0.1">
+                    <span class="form-unit">mm</span>
+                    <span style="margin-left: 12px;" class="form-label">縦:</span>
+                    <input type="number" id="paperHeight" class="form-input" value="${curHeight}" min="10" max="2000" step="0.1">
+                    <span class="form-unit">mm</span>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">余白:</span>
+                    <div class="margin-group">
+                        <div class="margin-row">
+                            <span class="margin-label">上:</span>
+                            <input type="number" id="marginTop" class="margin-input" value="${curTopMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                            <span class="margin-label" style="margin-left: 8px;">左:</span>
+                            <input type="number" id="marginLeft" class="margin-input" value="${curLeftMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                        </div>
+                        <div class="margin-row">
+                            <span class="margin-label">下:</span>
+                            <input type="number" id="marginBottom" class="margin-input" value="${curBottomMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                            <span class="margin-label" style="margin-left: 8px;">右:</span>
+                            <input type="number" id="marginRight" class="margin-input" value="${curRightMm}" min="0" max="500" step="0.1">
+                            <span class="form-unit">mm</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">割付:</span>
+                    <div class="radio-group-inline">
+                        <label class="radio-label">
+                            <input type="radio" name="imposition" value="0" ${curImposition === 0 ? 'checked' : ''}>
+                            <span class="radio-indicator"></span>
+                            <span>片面</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="imposition" value="1" ${curImposition === 1 ? 'checked' : ''}>
+                            <span class="radio-indicator"></span>
+                            <span>見開き</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <script>
+                (function() {
+                    const paperSelect = document.getElementById('paperSizeSelect');
+                    const widthInput = document.getElementById('paperWidth');
+                    const heightInput = document.getElementById('paperHeight');
+                    const sizes = ${JSON.stringify(Object.fromEntries(paperOptions.map(o => [o.key, {w: o.widthMm, h: o.lengthMm}])))};
+
+                    // 用紙サイズ選択時に寸法を更新
+                    paperSelect.addEventListener('change', function() {
+                        const selected = this.value;
+                        if (sizes[selected]) {
+                            widthInput.value = sizes[selected].w;
+                            heightInput.value = sizes[selected].h;
+                        }
+                    });
+
+                    // 寸法変更時にカスタムに切り替え
+                    widthInput.addEventListener('input', function() {
+                        paperSelect.value = 'CUSTOM';
+                    });
+                    heightInput.addEventListener('input', function() {
+                        paperSelect.value = 'CUSTOM';
+                    });
+                })();
+            </script>
+        `;
+
+        return new Promise((resolve) => {
+            this.messageBus.sendWithCallback('show-custom-dialog', {
+                title: '用紙設定',
+                dialogHtml: dialogHtml,
+                buttons: [
+                    { label: '取消', value: 'cancel' },
+                    { label: '標準設定', value: 'default' },
+                    { label: '設定', value: 'ok' }
+                ],
+                defaultButton: 2,
+                width: 400
+            }, (result) => {
+                const dialogResult = result.result || result;
+
+                if (dialogResult.error) {
+                    resolve(false);
+                    return;
+                }
+
+                if (dialogResult.button === 'default') {
+                    // 標準設定（A4）にリセット
+                    this.paperSize.resetToDefault();
+                    this.paperWidth = this.paperSize.widthMm;
+                    this.paperHeight = this.paperSize.lengthMm;
+                    this.paperSettingsModified = true;
+                    this.isModified = true;
+                    this.redraw();
+                    resolve(true);
+                } else if (dialogResult.button === 'ok') {
+                    // 設定を適用
+                    const formData = dialogResult.formData || {};
+
+                    const width = parseFloat(formData.paperWidth) || this.paperWidth;
+                    const height = parseFloat(formData.paperHeight) || this.paperHeight;
+                    const marginTop = parseFloat(formData.marginTop) || 0;
+                    const marginBottom = parseFloat(formData.marginBottom) || 0;
+                    const marginLeft = parseFloat(formData.marginLeft) || 0;
+                    const marginRight = parseFloat(formData.marginRight) || 0;
+                    const imposition = parseInt(formData.imposition) || 0;
+
+                    // PaperSizeに設定
+                    this.paperSize.widthMm = width;
+                    this.paperSize.lengthMm = height;
+                    this.paperSize.topMm = marginTop;
+                    this.paperSize.bottomMm = marginBottom;
+                    this.paperSize.leftMm = marginLeft;
+                    this.paperSize.rightMm = marginRight;
+                    this.paperSize.imposition = imposition;
+
+                    // 互換性のためpaperWidth/paperHeightも更新
+                    this.paperWidth = width;
+                    this.paperHeight = height;
+
+                    // 用紙設定変更フラグを立てる
+                    this.paperSettingsModified = true;
+                    this.isModified = true;
+                    this.redraw();
+                    resolve(true);
+                } else {
+                    resolve(false);
+                }
+            }, 60000);  // 1分タイムアウト
+        });
     }
 }
 

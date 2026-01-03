@@ -77,6 +77,17 @@
         import { PluginBase } from '../../js/plugin-base.js';
         window.PluginBase = PluginBase;
     </script>
+    <!-- 用紙サイズ定義をグローバル変数として読み込み -->
+    <script type="module">
+        import { PaperSize, PaperMargin, PAPER_SIZES, pointsToMm, mmToPoints, getPaperSizeByName, getPaperSizeOptions } from '../../js/paper-size.js';
+        window.PaperSize = PaperSize;
+        window.PaperMargin = PaperMargin;
+        window.PAPER_SIZES = PAPER_SIZES;
+        window.pointsToMm = pointsToMm;
+        window.mmToPoints = mmToPoints;
+        window.getPaperSizeByName = getPaperSizeByName;
+        window.getPaperSizeOptions = getPaperSizeOptions;
+    </script>
     <script type="module" src="editor.js?v=202511130203"></script>
 </body>
 </html>

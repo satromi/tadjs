@@ -81,7 +81,7 @@ export class RealObjectSystem {
 
         const basePath = this._basePath;
 
-        logger.info(`実身読み込み: ${realId}`);
+        logger.debug(`実身読み込み: ${realId}`);
 
         // メタデータ読み込み
         const jsonPath = this.path.join(basePath, `${realId}.json`);
@@ -115,7 +115,7 @@ export class RealObjectSystem {
             logger.debug(`検出されたレコード数: ${count}`);
         }
 
-        logger.info(`メタデータ読み込み: name=${metadata.name}, recordCount=${metadata.recordCount}`);
+        logger.debug(`メタデータ読み込み: name=${metadata.name}, recordCount=${metadata.recordCount}`);
 
         // レコード読み込み
         const records = [];
@@ -141,7 +141,7 @@ export class RealObjectSystem {
             }
         }
 
-        logger.info(`実身読み込み完了: ${realId} (${records.length}レコード)`);
+        logger.debug(`実身読み込み完了: ${realId} (${records.length}レコード)`);
         return { metadata, records };
     }
 
@@ -157,7 +157,7 @@ export class RealObjectSystem {
 
         const basePath = this._basePath;
 
-        logger.info(`実身保存: ${realId}`);
+        logger.debug(`実身保存: ${realId}`);
 
         // メタデータ保存
         const jsonPath = this.path.join(basePath, `${realId}.json`);
@@ -177,7 +177,69 @@ export class RealObjectSystem {
             }
         });
 
-        logger.info(`実身保存完了: ${realId}`);
+        logger.debug(`実身保存完了: ${realId}`);
+    }
+
+    /**
+     * 実身の新規作成
+     * @param {string} realName 実身名
+     * @param {string} initialXtad 初期XTADデータ
+     * @param {Object} applist アプリケーションリスト（オプション）
+     * @param {Object} windowConfig ウィンドウ設定（オプション）
+     * @returns {Promise<string>} 新しい実身ID
+     */
+    async createRealObject(realName, initialXtad, applist = null, windowConfig = null) {
+        if (!this.isElectronEnv) {
+            throw new Error('ファイルシステムアクセスにはElectron環境が必要です');
+        }
+
+        logger.debug(`実身新規作成: ${realName}`);
+
+        // 新しいUUIDを生成
+        const newRealId = this.generateUUIDv7();
+        logger.debug(`新しい実身ID: ${newRealId}`);
+
+        // メタデータを作成
+        const now = new Date().toISOString();
+        const metadata = {
+            realId: newRealId,
+            name: realName,
+            refCount: 1,
+            recordCount: 1,
+            makeDate: now,
+            updateDate: now,
+            accessDate: now
+        };
+
+        // applistが指定されている場合は追加
+        if (applist) {
+            metadata.applist = applist;
+        }
+
+        // windowConfigが指定されている場合は追加
+        if (windowConfig) {
+            metadata.window = windowConfig;
+        }
+
+        // レコードを作成
+        const records = [{
+            xtad: initialXtad,
+            images: []
+        }];
+
+        // 実身として保存
+        const newRealObject = {
+            metadata: metadata,
+            records: records
+        };
+
+        await this.saveRealObject(newRealId, newRealObject);
+
+        // デフォルトアイコンを生成
+        this.generateDefaultIcon(newRealId);
+
+        logger.debug(`実身新規作成完了: ${newRealId}`);
+        return newRealId;
     }
 
     /**
@@ -203,7 +265,7 @@ export class RealObjectSystem {
             return idMap.get(sourceRealId);
         }
 
-        logger.info(`実身コピー: ${sourceRealId}`);
+        logger.debug(`実身コピー: ${sourceRealId}`);
 
         // 元の実身を読み込む
         const sourceRealObject = await this.loadRealObject(sourceRealId);
@@ -330,7 +392,7 @@ export class RealObjectSystem {
             logger.debug(`PNGファイルの検索中にエラー:`, error);
         }
 
-        logger.info(`実身コピー完了: ${sourceRealId} -> ${newRealId}`);
+        logger.debug(`実身コピー完了: ${sourceRealId} -> ${newRealId}`);
         return newRealId;
     }
 
@@ -345,7 +407,7 @@ export class RealObjectSystem {
             throw new Error('ファイルシステムアクセスにはElectron環境が必要です');
         }
 
-        logger.info(`実身非再帰的コピー: ${sourceRealId}, 新しい名前: ${newName}`);
+        logger.debug(`実身非再帰的コピー: ${sourceRealId}, 新しい名前: ${newName}`);
 
         // 元の実身を読み込む
         const sourceRealObject = await this.loadRealObject(sourceRealId);
@@ -409,7 +471,7 @@ export class RealObjectSystem {
             logger.warn(`非再帰的コピー: 元のicoファイルが存在しません: ${sourceIcoPath}`);
         }
 
-        logger.info(`実身非再帰的コピー完了: ${sourceRealId} -> ${newRealId}`);
+        logger.debug(`実身非再帰的コピー完了: ${sourceRealId} -> ${newRealId}`);
         return newRealId;
     }
 
@@ -445,7 +507,7 @@ export class RealObjectSystem {
 
         const basePath = this._basePath;
 
-        logger.info(`仮身削除（refCount-1）: ${realId}`);
+        logger.debug(`仮身削除（refCount-1）: ${realId}`);
 
         // メタデータ読み込み
         const jsonPath = this.path.join(basePath, `${realId}.json`);
@@ -476,7 +538,7 @@ export class RealObjectSystem {
 
         const basePath = this._basePath;
 
-        logger.info(`実身削除: ${realId}`);
+        logger.debug(`実身削除: ${realId}`);
 
         // メタデータ削除
         const jsonPath = this.path.join(basePath, `${realId}.json`);
@@ -524,13 +586,13 @@ export class RealObjectSystem {
                 }
             }
             if (pngDeleteCount > 0) {
-                logger.info(`PNG画像ファイル ${pngDeleteCount} 個を削除`);
+                logger.debug(`PNG画像ファイル ${pngDeleteCount} 個を削除`);
             }
         } catch (error) {
             logger.debug(`PNG画像ファイルの検索中にエラー:`, error);
         }
 
-        logger.info(`実身削除完了: ${realId} (${recordNo}レコード)`);
+        logger.debug(`実身削除完了: ${realId} (${recordNo}レコード)`);
     }
 
     /**
@@ -623,7 +685,7 @@ export class RealObjectSystem {
             }
         }
 
-        logger.info(`メタデータ一覧取得: ${metadataList.length}件`);
+        logger.debug(`メタデータ一覧取得: ${metadataList.length}件`);
         return metadataList;
     }
 
@@ -632,7 +694,7 @@ export class RealObjectSystem {
      * @returns {Promise<Array>} 参照カウント0の実身のメタデータ配列
      */
     async getUnreferencedRealObjects() {
-        logger.info('参照カウント0の実身一覧取得開始');
+        logger.debug('参照カウント0の実身一覧取得開始');
 
         const allMetadata = await this.getAllMetadata();
         const unreferencedObjects = allMetadata.filter(metadata => {
@@ -640,7 +702,7 @@ export class RealObjectSystem {
             return refCount === 0;
         });
 
-        logger.info(`参照カウント0の実身: ${unreferencedObjects.length}件 / 全${allMetadata.length}件`);
+        logger.debug(`参照カウント0の実身: ${unreferencedObjects.length}件 / 全${allMetadata.length}件`);
         return unreferencedObjects;
     }
 
@@ -917,7 +979,7 @@ export class RealObjectSystem {
                     element.textContent = result.newName;
                     element.dataset.linkName = result.newName;
                 }
-                logger.info('実身名変更成功:', realId, result.newName);
+                logger.debug('実身名変更成功:', realId, result.newName);
                 plugin.setStatus(`実身名を「${result.newName}」に変更しました`);
                 plugin.isModified = true;
 
@@ -1006,7 +1068,7 @@ export class RealObjectSystem {
             });
 
             if (result.success) {
-                logger.info('実身複製成功:', realId, '->', result.newRealId);
+                logger.debug('実身複製成功:', realId, '->', result.newRealId);
                 plugin.setStatus(`実身を複製しました: ${result.newName}`);
             }
         } catch (error) {
@@ -1023,7 +1085,7 @@ export class RealObjectSystem {
         if (window.parent && window.parent !== window && window.parent.pluginManager) {
             try {
                 window.parent.pluginManager.launchPlugin('trash-real-objects', null);
-                logger.info('屑実身操作ウィンドウ起動');
+                logger.debug('屑実身操作ウィンドウ起動');
                 plugin.setStatus('屑実身操作ウィンドウを起動しました');
             } catch (error) {
                 logger.error('屑実身操作ウィンドウ起動エラー:', error);
@@ -1044,7 +1106,7 @@ export class RealObjectSystem {
                     startRealId: startRealId
                 };
                 window.parent.pluginManager.launchPlugin('virtual-object-network', fileData);
-                logger.info('仮身ネットワークウィンドウ起動:', startRealId);
+                logger.debug('仮身ネットワークウィンドウ起動:', startRealId);
                 plugin.setStatus('仮身ネットワークウィンドウを起動しました');
             } catch (error) {
                 logger.error('仮身ネットワークウィンドウ起動エラー:', error);
@@ -1061,7 +1123,7 @@ export class RealObjectSystem {
         if (window.parent && window.parent !== window && window.parent.pluginManager) {
             try {
                 window.parent.pluginManager.launchPlugin('real-object-search', null);
-                logger.info('実身/仮身検索ウィンドウ起動');
+                logger.debug('実身/仮身検索ウィンドウ起動');
                 plugin.setStatus('実身/仮身検索ウィンドウを起動しました');
             } catch (error) {
                 logger.error('実身/仮身検索ウィンドウ起動エラー:', error);
@@ -1082,7 +1144,7 @@ export class RealObjectSystem {
                     realId: realId
                 };
                 window.parent.pluginManager.launchPlugin('realobject-config', fileData);
-                logger.info('管理情報ウィンドウ起動:', realId);
+                logger.debug('管理情報ウィンドウ起動:', realId);
                 plugin.setStatus('管理情報ウィンドウを起動しました');
             } catch (error) {
                 logger.error('管理情報ウィンドウ起動エラー:', error);
@@ -1092,11 +1154,165 @@ export class RealObjectSystem {
     }
 
     /**
+     * デフォルトアイコンファイルを生成
+     * @param {string} realId 実身ID
+     * @returns {boolean} 成功/失敗
+     */
+    generateDefaultIcon(realId) {
+        if (!this.isElectronEnv) {
+            logger.warn('デフォルトアイコン生成: Electron環境が必要です');
+            return false;
+        }
+
+        try {
+            const basePath = this._basePath;
+            const icoPath = this.path.join(basePath, `${realId}.ico`);
+
+            // 16x16 32bit ICOファイル（文書アイコン風）
+            const icoData = this._createMinimalIcon();
+
+            this.fs.writeFileSync(icoPath, Buffer.from(icoData));
+            logger.debug(`デフォルトアイコン生成: ${icoPath}`);
+            return true;
+        } catch (error) {
+            logger.error('デフォルトアイコン生成エラー:', error);
+            return false;
+        }
+    }
+
+    /**
+     * 最小構成のICOデータを作成（16x16 32bit）
+     * 文書アイコン風のデザイン
+     * @returns {Array} ICOバイナリデータ
+     * @private
+     */
+    _createMinimalIcon() {
+        const width = 16;
+        const height = 16;
+        const bitsPerPixel = 32;
+        const pixelDataSize = width * height * 4;
+        const bmpHeaderSize = 40;
+        const imageDataSize = bmpHeaderSize + pixelDataSize;
+        const imageOffset = 6 + 16; // ICOヘッダー(6) + ディレクトリ(16)
+
+        // ICOヘッダー (6バイト)
+        const header = [
+            0x00, 0x00,  // Reserved
+            0x01, 0x00,  // Type (1 = ICO)
+            0x01, 0x00   // Number of images
+        ];
+
+        // ディレクトリエントリ (16バイト)
+        const directory = [
+            width,                    // Width
+            height,                   // Height
+            0,                        // Color palette
+            0,                        // Reserved
+            0x01, 0x00,               // Color planes
+            bitsPerPixel, 0x00,       // Bits per pixel
+            imageDataSize & 0xFF,
+            (imageDataSize >> 8) & 0xFF,
+            (imageDataSize >> 16) & 0xFF,
+            (imageDataSize >> 24) & 0xFF,
+            imageOffset & 0xFF,
+            (imageOffset >> 8) & 0xFF,
+            (imageOffset >> 16) & 0xFF,
+            (imageOffset >> 24) & 0xFF
+        ];
+
+        // BITMAPINFOHEADER (40バイト)
+        const bmpHeader = [
+            bmpHeaderSize, 0, 0, 0,   // Header size
+            width, 0, 0, 0,           // Width
+            height * 2, 0, 0, 0,      // Height (x2 for ICO)
+            0x01, 0x00,               // Planes
+            bitsPerPixel, 0x00,       // Bit count
+            0, 0, 0, 0,               // Compression
+            0, 0, 0, 0,               // Image size
+            0, 0, 0, 0,               // X pixels/meter
+            0, 0, 0, 0,               // Y pixels/meter
+            0, 0, 0, 0,               // Colors used
+            0, 0, 0, 0                // Important colors
+        ];
+
+        // ピクセルデータ (16x16 BGRA, bottom-up)
+        const pixels = [];
+        for (let y = height - 1; y >= 0; y--) {
+            for (let x = 0; x < width; x++) {
+                let b = 0xF0, g = 0xF0, r = 0xF0, a = 0xFF;
+
+                // 外枠（濃いグレー）
+                if (x === 0 || x === 15 || y === 0 || y === 15) {
+                    b = 0x60; g = 0x60; r = 0x60;
+                }
+                // 内部の罫線（文書の行を表現、青色）
+                else if (y >= 3 && y <= 12 && x >= 2 && x <= 13) {
+                    if (y === 4 || y === 7 || y === 10) {
+                        b = 0x80; g = 0x00; r = 0x00;
+                    }
+                }
+
+                pixels.push(b, g, r, a);
+            }
+        }
+
+        return [...header, ...directory, ...bmpHeader, ...pixels];
+    }
+
+    /**
+     * プラグインの原紙アイコンをコピー
+     * @param {string} realId 実身ID
+     * @param {string} pluginId プラグインID
+     * @param {string} templateIcoName 原紙アイコンファイル名
+     * @returns {boolean} 成功/失敗
+     */
+    copyTemplateIcon(realId, pluginId, templateIcoName) {
+        if (!this.isElectronEnv) {
+            logger.warn('原紙アイコンコピー: Electron環境が必要です');
+            return false;
+        }
+
+        try {
+            // プラグインディレクトリからアイコンファイルのパスを構築
+            const basePath = this._basePath;
+
+            // pluginsディレクトリを取得
+            // 開発時: basePath = project/data, plugins = project/plugins
+            // パッケージ時: plugins = resources/app/plugins
+            let pluginsPath;
+            if (this.process.resourcesPath) {
+                // パッケージ化されている場合（resources/app/plugins）
+                pluginsPath = this.path.join(this.process.resourcesPath, 'app', 'plugins');
+            } else {
+                // 開発時（basePathの親ディレクトリにplugins）
+                pluginsPath = this.path.join(this.path.dirname(basePath), 'plugins');
+            }
+
+            const sourceIcoPath = this.path.join(pluginsPath, pluginId, templateIcoName);
+            const destIcoPath = this.path.join(basePath, `${realId}.ico`);
+
+            // ソースファイルが存在するか確認
+            if (!this.fs.existsSync(sourceIcoPath)) {
+                logger.warn(`原紙アイコンが見つかりません: ${sourceIcoPath}`);
+                return false;
+            }
+
+            // コピー実行
+            this.fs.copyFileSync(sourceIcoPath, destIcoPath);
+            logger.debug(`原紙アイコンコピー: ${sourceIcoPath} -> ${destIcoPath}`);
+            return true;
+        } catch (error) {
+            logger.error('原紙アイコンコピーエラー:', error);
+            return false;
+        }
+    }
+
+    /**
      * 画像ファイルを保存
      * @param {string} fileName ファイル名
      * @param {Array|Uint8Array} imageDataArray 画像データ
      * @returns {boolean} 成功/失敗
-     * 
+     *
      */
     saveImageFile(fileName, imageDataArray) {
         if (!this.isElectronEnv) {
@@ -1113,7 +1329,7 @@ export class RealObjectSystem {
             const buffer = Buffer.from(imageDataArray);
             this.fs.writeFileSync(filePath, buffer);
 
-            logger.info('画像ファイル保存成功:', filePath);
+            logger.debug('画像ファイル保存成功:', filePath);
             return true;
         } catch (error) {
             logger.error('画像ファイル保存エラー:', error);
@@ -1181,7 +1397,7 @@ export class RealObjectSystem {
             const basePath = this.getDataBasePath();
             const filePath = this.path.join(basePath, fileName);
 
-            logger.info('画像ファイル読み込み:', filePath);
+            logger.debug('画像ファイル読み込み:', filePath);
 
             // ファイルが存在するかチェック
             if (!this.fs.existsSync(filePath)) {
@@ -1218,7 +1434,7 @@ export class RealObjectSystem {
                 mimeType: mimeType
             }, '*');
 
-            logger.info('画像ファイル読み込み成功:', filePath, '(', buffer.length, 'bytes)');
+            logger.debug('画像ファイル読み込み成功:', filePath, '(', buffer.length, 'bytes)');
         } catch (error) {
             logger.error('画像ファイル読み込みエラー:', error);
             source.postMessage({

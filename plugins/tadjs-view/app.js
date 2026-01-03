@@ -86,12 +86,8 @@ class TADjsViewPlugin extends window.PluginBase {
         // init メッセージ
         this.messageBus.on('init', (data) => {
             logger.debug('[TADjsView] [MessageBus] init受信:', data);
-            // windowIdを保存（スクロール通知等で必要）
-            if (data.windowId) {
-                this.windowId = data.windowId;
-                // MessageBusにもwindowIdを設定（レスポンスルーティング用）
-                this.messageBus.setWindowId(data.windowId);
-            }
+            // 共通初期化処理（windowId設定、スクロール状態送信）
+            this.onInit(data);
             this.fileData = data.fileData;
 
             // realIdを保存（拡張子を除去）
@@ -366,17 +362,8 @@ class TADjsViewPlugin extends window.PluginBase {
             e.preventDefault();
             logger.debug('[TADjsView] Context menu requested at canvas:', e.clientX, e.clientY);
 
-            // iframe内の座標を親ウィンドウの座標に変換
-            const iframeRect = window.frameElement.getBoundingClientRect();
-            const parentX = e.clientX + iframeRect.left;
-            const parentY = e.clientY + iframeRect.top;
-
-            logger.debug('[TADjsView] Sending context menu request to parent at:', parentX, parentY);
-
-            this.messageBus.send('context-menu-request', {
-                x: parentX,
-                y: parentY
-            });
+            // コンテキストメニュー要求（共通メソッドを使用）
+            this.showContextMenuAtEvent(e);
         };
 
         // 右クリックメニューのイベントリスナーを追加
