@@ -1034,6 +1034,23 @@ class TADjsDesktop {
 
         this._dragoverHandler = (e) => {
             e.preventDefault();
+
+            // ドラッグ位置にあるウィンドウを検出してdropEffectを設定
+            const x = e.clientX;
+            const y = e.clientY;
+            const windows = Array.from(document.querySelectorAll('.window')).reverse(); // z-indexの高い順
+
+            for (const win of windows) {
+                const rect = win.getBoundingClientRect();
+                if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                    // ウィンドウ上にあればドロップを許可
+                    e.dataTransfer.dropEffect = e.dataTransfer.effectAllowed === 'move' ? 'move' : 'copy';
+                    return;
+                }
+            }
+
+            // デスクトップ上もドロップを許可（ファイル取り込み用）
+            e.dataTransfer.dropEffect = 'copy';
         };
 
         this._dragendHandler = () => {
@@ -1511,7 +1528,7 @@ class TADjsDesktop {
             });
             
             document.addEventListener('drop', (e) => {
-                logger.debug('[TADjs] Document drop event fired');
+                console.log('[TADjs] Document drop event fired at:', e.clientX, e.clientY);
 
                 // ドロップ位置のウィンドウとiframeを取得
                 const dropX = e.clientX;
@@ -1520,37 +1537,59 @@ class TADjsDesktop {
                 // ドロップ位置にあるウィンドウを見つける
                 const windows = Array.from(document.querySelectorAll('.window')).reverse(); // z-indexの高い順
                 let targetWindow = null;
-                
+
                 for (const win of windows) {
                     const rect = win.getBoundingClientRect();
-                    if (dropX >= rect.left && dropX <= rect.right && 
+                    if (dropX >= rect.left && dropX <= rect.right &&
                         dropY >= rect.top && dropY <= rect.bottom) {
                         targetWindow = win;
                         break;
                     }
                 }
-                
+                console.log('[TADjs] targetWindow:', targetWindow ? targetWindow.id : 'なし');
+
                 // ターゲットウィンドウ内のiframeを取得
                 if (targetWindow) {
                     const iframe = targetWindow.querySelector('iframe');
+                    console.log('[TADjs] iframe:', iframe ? '存在' : 'なし');
                     if (iframe && iframe.contentWindow) {
                         logger.debug('[TADjs] iframe上でのドロップを検出、iframeにデータを転送:', targetWindow.id);
-                        
+
                         // ドロップデータを取得
                         const textData = e.dataTransfer.getData('text/plain');
+                        console.log('[TADjs] textData:', textData ? textData.substring(0, 100) : 'なし');
                         
                         // iframeにpostMessageでドロップイベントを転送
                         if (textData) {
                             try {
                                 const dragData = JSON.parse(textData);
-                                
+                                console.log('[TADjs] dragData.type:', dragData.type);
+
                                 // iframeの座標系に変換
                                 const iframeRect = iframe.getBoundingClientRect();
                                 const iframeX = dropX - iframeRect.left;
                                 const iframeY = dropY - iframeRect.top;
 
-                                // iframe内のドロップイベントとして転送
                                 const windowId = this.parentMessageBus.getWindowIdFromIframe(iframe);
+
+                                // 原紙箱からのドロップの場合は handleBaseFileDrop() で処理
+                                if (dragData.type === 'base-file-copy' || dragData.type === 'user-base-file-copy') {
+                                    console.log('[TADjs] iframe上への原紙ドロップ検出:', dragData.type);
+                                    // 擬似メッセージイベントを作成（handleBaseFileDropが期待する形式）
+                                    const pseudoMessageEvent = {
+                                        source: iframe.contentWindow,
+                                        data: {
+                                            dropPosition: { x: iframeX, y: iframeY },
+                                            clientX: iframeX,
+                                            clientY: iframeY
+                                        }
+                                    };
+                                    this.handleBaseFileDrop(dragData, pseudoMessageEvent);
+                                    e.preventDefault();
+                                    return false;
+                                }
+
+                                // iframe内のドロップイベントとして転送
                                 if (windowId) {
                                     this.parentMessageBus.sendToWindow(windowId, 'parent-drop-event', {
                                         dragData: dragData,
@@ -5553,6 +5592,12 @@ class TADjsDesktop {
         );
 
         this.messageRouter.register(
+            'base-file-drop-request',
+            this.handleBaseFileDropRequest.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
             'insert-root-virtual-object',
             this.handleInsertRootVirtualObject.bind(this),
             { autoResponse: false }
@@ -7266,6 +7311,27 @@ class TADjsDesktop {
                 mode: 'copy' // アーカイブドロップはコピー扱い
             });
         }
+    }
+
+    /**
+     * base-file-drop-request ハンドラー
+     * プラグインからの原紙ドロップ要求を処理
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleBaseFileDropRequest(data, event) {
+        console.log('[TADjs] base-file-drop-request受信:', data.dragData?.type);
+        // 擬似メッセージイベントを作成（handleBaseFileDropが期待する形式）
+        const pseudoMessageEvent = {
+            source: event.source,
+            data: {
+                dropPosition: data.dropPosition,
+                clientX: data.clientX,
+                clientY: data.clientY
+            }
+        };
+        await this.handleBaseFileDrop(data.dragData, pseudoMessageEvent);
     }
 
     /**

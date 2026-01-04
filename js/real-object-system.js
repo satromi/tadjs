@@ -1042,11 +1042,12 @@ export class RealObjectSystem {
     /**
      * 実身を複製（プラグイン共通）
      * @param {Object} plugin プラグインインスタンス（messageBus、contextMenuVirtualObject、setStatusを持つ）
+     * @returns {Promise<Object>} 複製結果 { success: boolean, newRealId?: string, newName?: string, error?: string }
      */
     static async duplicateRealObject(plugin) {
         if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
             logger.warn('選択中の仮身がありません');
-            return;
+            return { success: false, error: '選択中の仮身がありません' };
         }
 
         const realId = plugin.contextMenuVirtualObject.realId;
@@ -1070,10 +1071,13 @@ export class RealObjectSystem {
             if (result.success) {
                 logger.debug('実身複製成功:', realId, '->', result.newRealId);
                 plugin.setStatus(`実身を複製しました: ${result.newName}`);
+                return result;
             }
+            return { success: false, cancelled: result.cancelled };
         } catch (error) {
             logger.error('実身複製エラー:', error);
             plugin.setStatus('実身の複製に失敗しました');
+            return { success: false, error: error.message };
         }
     }
 

@@ -2,20 +2,20 @@
   "name": "仮身サンプル",
   "relationship": [],
   "makeDate": "2025-10-13T00:00:00Z",
-  "updateDate": "2025-11-23T08:55:58.261Z",
-  "accessDate": "2025-11-23T08:56:04.012Z",
+  "updateDate": "2026-01-02T00:39:59.535Z",
+  "accessDate": "2026-01-02T00:39:44.081Z",
   "periodDate": null,
   "refCount": 1,
   "editable": true,
   "readable": true,
-  "maker": "TRON User",
+  "maker": "TADjs User",
   "window": {
     "pos": {
-      "x": -2,
-      "y": 225
+      "x": 0,
+      "y": 227
     },
-    "width": 762,
-    "height": 505,
+    "width": 734,
+    "height": 448,
     "minWidth": 200,
     "minHeight": 200,
     "resizable": true,
@@ -28,7 +28,11 @@
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
-    "backgroundColor": "#f3ffff"
+    "backgroundColor": "#f3ffff",
+    "scrollPos": {
+      "x": 0,
+      "y": 0
+    }
   },
   "applist": {
     "virtual-object-list": {

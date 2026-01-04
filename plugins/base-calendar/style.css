@@ -38,6 +38,7 @@ body {
     min-height: 100%;
     overflow: visible;
     background: #dedede;
+    position: relative;
 }
 
 /* ナビゲーションバー */
@@ -154,6 +155,15 @@ body {
     background: #ffffc0;
 }
 
+/* 日付ヘッダー（日付番号と休日名を含む） */
+.day-header {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    min-height: 18px;
+    overflow: hidden;
+}
+
 /* 日付番号 */
 .day-number {
     padding: 2px 4px;
@@ -172,6 +182,18 @@ body {
 
 .day-number.other-month {
     color: #808080;
+}
+
+/* 休日名 */
+.holiday-name {
+    font-size: 10px;
+    color: #cc0000;
+    margin-left: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
 }
 
 /* 予定エリア */
@@ -313,4 +335,57 @@ body {
     margin-right: 4px;
     flex-shrink: 0;
     object-fit: contain;
+}
+
+/* 自由仮身キャンバス */
+.free-vobj-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 100;
+}
+
+/* 自由仮身（閉じた状態） */
+.free-vobj-canvas .virtual-object-closed {
+    pointer-events: auto;
+    cursor: pointer;
+    border-radius: 2px;
+}
+
+.free-vobj-canvas .virtual-object-closed:hover {
+    filter: brightness(0.95);
+}
+
+/* 自由仮身の選択状態 */
+.free-vobj-canvas .virtual-object-closed.selected {
+    outline: 2px solid #000080;
+}
+
+/* 自由仮身（開いた状態） */
+.free-vobj-canvas .virtual-object-opened {
+    pointer-events: auto;
+    cursor: pointer;
+    border-radius: 2px;
+}
+
+.free-vobj-canvas .virtual-object-opened:hover {
+    box-shadow: 0 0 6px rgba(0, 0, 128, 0.7);
+}
+
+.free-vobj-canvas .virtual-object-opened.selected {
+    outline: 2px solid #000080;
+}
+
+/* 開いた仮身のタイトルバー */
+.free-vobj-canvas .virtual-object-titlebar {
+    cursor: pointer;
+}
+
+/* 開いた仮身のコンテンツエリア */
+.free-vobj-canvas .virtual-object-content-area {
+    background: #ffffff;
+    overflow: auto;
 }

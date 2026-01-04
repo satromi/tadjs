@@ -1,41 +1,39 @@
 {
-  "name": "原紙箱",
+  "name": "休日",
   "linktype": false,
-  "makeDate": "2025-10-13T00:00:00Z",
-  "updateDate": "2025-12-21T00:36:00.699Z",
-  "accessDate": "2026-01-02T00:39:41.837Z",
+  "makeDate": "2026-01-03T00:00:00Z",
+  "updateDate": "2026-01-03T00:00:00Z",
+  "accessDate": "2026-01-03T00:00:00Z",
   "periodDate": null,
-  "refCount": 3,
+  "refCount": 1,
   "editable": true,
   "readable": true,
-  "maker": "TADjs User",
+  "maker": "TRON User",
   "window": {
     "pos": {
-      "x": 814,
-      "y": 68
+      "x": 100,
+      "y": 100
     },
-    "width": 200,
-    "height": 600,
+    "width": 600,
+    "height": 400,
     "minWidth": 200,
     "minHeight": 200,
     "resizable": true,
+    "scrollable": true,
     "maximize": false,
     "maximizable": true,
     "minimizable": true,
     "closable": true,
     "alwaysOnTop": false,
+    "wordWrap": true,
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
-    "backgroundColor": "#f3ffff",
-    "scrollPos": {
-      "x": 0,
-      "y": 0
-    }
+    "backgroundColor": "#ffffff"
   },
   "applist": {
-    "base-file-manager": {
-      "name": "原紙箱",
+    "basic-text-editor": {
+      "name": "基本文章編集",
       "defaultOpen": true
     },
     "virtual-object-list": {

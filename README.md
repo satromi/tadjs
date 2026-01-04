@@ -1,6 +1,6 @@
 # TADjs
 
-[TADjs Desktop Ver0.30](https://github.com/satromi/tadjs/releases/tag/Ver0.30 "TADjs Desktop Ver0.30 Release")
+[TADjs Desktop Ver0.31](https://github.com/satromi/tadjs/releases/tag/Ver0.31 "TADjs Desktop Ver0.31 Release")
 
 satromi@gmai.com
 
@@ -304,6 +304,12 @@ tadjs-desktop.jsと基本文章編集プラグイン、基本図形編集プラ�
   - 既存の図形を選択した際に操作パネルに反映されない不具合を修正
 - 基本図形編集プラグインの下記の不具合を修正しました。
   - 線種タイプがTAD定義と違っていたのを修正
+
+### Ver0.31
+
+- 予定表プラグインの機能を追加しました。
+  - 仮身を自由に配置、開いた仮身表示する機能を追加
+  - 予定表実身に"休日"実身がある場合、カレンダーで休日表示する機能を追加
 
 ## 【既知のバグ】TADjs（TADjs Desktopではなく）
 

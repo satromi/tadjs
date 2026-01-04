@@ -323,6 +323,127 @@ export class PluginBase {
     }
 
     // ========================================
+    // 開いた仮身のコンテンツ展開
+    // ========================================
+
+    /**
+     * 仮身のdefaultOpenプラグインを取得
+     * @param {Object} virtualObject - 仮身オブジェクト
+     * @returns {string|null} プラグインID or null
+     */
+    getDefaultOpenPlugin(virtualObject) {
+        const applist = virtualObject.applist || {};
+        for (const [pluginId, config] of Object.entries(applist)) {
+            if (config && config.defaultOpen === true) {
+                return pluginId;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 開いた仮身のコンテンツ領域にプラグインを展開
+     * VirtualObjectRenderer.createOpenedBlockElement()で作成された
+     * コンテンツ領域にiframeを作成してプラグインをロードする
+     *
+     * @param {HTMLElement} vobjElement - 仮身のDOM要素（virtual-object-openedクラスを持つ）
+     * @param {Object} virtualObject - 仮身オブジェクト
+     * @param {Object} options - オプション
+     * @param {boolean} [options.readonly=true] - 読み取り専用モード
+     * @param {boolean} [options.noScrollbar=true] - スクロールバー非表示
+     * @param {string} [options.bgcol] - 背景色（指定しない場合はvirtualObject.bgcolを使用）
+     * @returns {Promise<HTMLIFrameElement|null>} 作成したiframe or null
+     */
+    async expandVirtualObject(vobjElement, virtualObject, options = {}) {
+        logger.debug(`[${this.pluginName}] 開いた仮身の展開開始:`, virtualObject.link_name);
+
+        try {
+            // 実身IDを抽出
+            const realId = window.RealObjectSystem.extractRealId(virtualObject.link_id);
+            logger.debug(`[${this.pluginName}] 実身ID:`, realId);
+
+            // applistがない場合はメタデータを読み込む
+            if (!virtualObject.applist || Object.keys(virtualObject.applist).length === 0) {
+                logger.debug(`[${this.pluginName}] applistがないためメタデータを読み込み:`, virtualObject.link_name);
+                await this.loadVirtualObjectMetadata(virtualObject);
+            }
+
+            // defaultOpenプラグインを取得
+            const defaultOpenPlugin = this.getDefaultOpenPlugin(virtualObject);
+            if (!defaultOpenPlugin) {
+                logger.warn(`[${this.pluginName}] defaultOpenプラグインが見つかりません:`, virtualObject.link_name);
+                return null;
+            }
+            logger.debug(`[${this.pluginName}] defaultOpenプラグイン:`, defaultOpenPlugin);
+
+            // 実身データを読み込む
+            const realObjectData = await this.loadRealObjectData(realId);
+            if (!realObjectData) {
+                logger.warn(`[${this.pluginName}] 実身データの読み込みに失敗:`, realId);
+                return null;
+            }
+            logger.debug(`[${this.pluginName}] 実身データ読み込み完了`);
+
+            // await後にvobjElementがまだDOMに接続されているか確認
+            if (!vobjElement.isConnected) {
+                logger.warn(`[${this.pluginName}] 展開処理中に仮身要素がDOMから削除されました:`, virtualObject.link_name);
+                return null;
+            }
+
+            // コンテンツ領域を取得
+            const contentArea = vobjElement.querySelector('.virtual-object-content-area');
+            if (!contentArea) {
+                logger.error(`[${this.pluginName}] コンテンツ領域が見つかりません`);
+                return null;
+            }
+
+            // コンテンツ領域のスクロールバーを非表示（noScrollbarオプション対応）
+            if (options.noScrollbar !== false) {
+                contentArea.style.overflow = 'hidden';
+            }
+
+            // 仮身の色属性を取得
+            const bgcol = options.bgcol || virtualObject.bgcol || '#ffffff';
+
+            // iframeを作成
+            const iframe = document.createElement('iframe');
+            iframe.className = 'virtual-object-content';
+            iframe.style.width = '100%';
+            iframe.style.height = '100%';
+            iframe.style.border = 'none';
+            iframe.style.overflow = 'hidden';
+            iframe.style.padding = '0';
+            iframe.style.backgroundColor = bgcol;
+            iframe.style.userSelect = 'none';
+            iframe.style.pointerEvents = 'none'; // 開いた仮身内の操作を無効化（表示のみ）
+
+            // プラグインをロード
+            iframe.src = `../../plugins/${defaultOpenPlugin}/index.html`;
+
+            // iframeロード後にデータを送信
+            iframe.addEventListener('load', () => {
+                logger.debug(`[${this.pluginName}] iframe読み込み完了、load-virtual-objectメッセージ送信`);
+                iframe.contentWindow.postMessage({
+                    type: 'load-virtual-object',
+                    virtualObj: virtualObject,
+                    realObject: realObjectData,
+                    bgcol: bgcol,
+                    readonly: options.readonly !== false,
+                    noScrollbar: options.noScrollbar !== false
+                }, '*');
+            });
+
+            contentArea.appendChild(iframe);
+            logger.debug(`[${this.pluginName}] iframe追加完了`);
+
+            return iframe;
+        } catch (error) {
+            logger.error(`[${this.pluginName}] expandVirtualObject エラー:`, error);
+            return null;
+        }
+    }
+
+    // ========================================
     // ダイアログ表示
     // ========================================
 
@@ -508,10 +629,18 @@ export class PluginBase {
 
     /**
      * 選択中の仮身が指し示す実身を複製
-     * @returns {Promise<Object>} 複製結果
+     * @returns {Promise<Object>} 複製結果 { success: boolean, newRealId?: string, newName?: string }
      */
     async duplicateRealObject() {
-        return await window.RealObjectSystem.duplicateRealObject(this);
+        const result = await window.RealObjectSystem.duplicateRealObject(this);
+
+        // 成功した場合、フックを呼び出す
+        if (result && result.success && this.contextMenuVirtualObject?.virtualObj) {
+            const originalVirtualObj = this.contextMenuVirtualObject.virtualObj;
+            await this.onRealObjectDuplicated(originalVirtualObj, result);
+        }
+
+        return result;
     }
 
     /**
@@ -581,6 +710,18 @@ export class PluginBase {
     async onRealObjectRenamed(virtualObj, result) {
         // デフォルト実装: 何もしない
         // サブクラスで再描画処理をオーバーライド
+    }
+
+    /**
+     * 実身複製後のフック（サブクラスでオーバーライド可能）
+     * duplicateRealObject()成功後に呼ばれる。複製した仮身の追加などに使用
+     *
+     * @param {Object} originalVirtualObj - 元の仮身オブジェクト
+     * @param {Object} result - duplicateRealObjectの結果 { success: true, newRealId: string, newName: string }
+     */
+    async onRealObjectDuplicated(originalVirtualObj, result) {
+        // デフォルト実装: 何もしない
+        // サブクラスで複製した仮身の追加処理をオーバーライド
     }
 
     /**
@@ -1861,9 +2002,11 @@ export class PluginBase {
             this.virtualObjectDragState.dragMode = 'copy';
         }
 
-        // effectAllowedを設定
-        e.dataTransfer.effectAllowed =
-            this.virtualObjectDragState.dragMode === 'copy' ? 'copy' : 'move';
+        // effectAllowedを設定（DragEventの場合のみ）
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed =
+                this.virtualObjectDragState.dragMode === 'copy' ? 'copy' : 'move';
+        }
 
         return {
             dragMode: this.virtualObjectDragState.dragMode,
@@ -3364,13 +3507,6 @@ export class PluginBase {
      */
     async renameRealObject() {
         return await window.RealObjectSystem.renameRealObject(this);
-    }
-
-    /**
-     * 選択中の仮身が指し示す実身を複製
-     */
-    async duplicateRealObject() {
-        await window.RealObjectSystem.duplicateRealObject(this);
     }
 
     // ========================================

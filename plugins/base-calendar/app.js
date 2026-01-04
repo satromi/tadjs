@@ -24,6 +24,21 @@ class BaseCalendarApp extends window.PluginBase {
         this.virtualObjects = [];
         this.selectedVirtualObjects = new Set();
 
+        // 自由仮身のドラッグ状態
+        this.vobjDragState = {
+            currentObject: null,         // ドラッグ中の仮身オブジェクト
+            currentElement: null,        // ドラッグ中のDOM要素
+            vobjIndex: null,             // ドラッグ中の仮身のインデックス
+            initialLeft: 0,              // ドラッグ開始時の要素left位置
+            initialTop: 0,               // ドラッグ開始時の要素top位置
+            selectedObjects: null,       // 複数選択時の仮身配列
+            selectedObjectsInitialPositions: null  // 複数選択時の初期位置配列
+        };
+
+        // リサイズ状態
+        this.isResizing = false;
+        this.recreateVirtualObjectTimer = null;
+
         // 親カレンダー実身の仮身リスト（年月実身への参照）
         this.monthVirtualObjects = [];
 
@@ -38,6 +53,9 @@ class BaseCalendarApp extends window.PluginBase {
             startY: 0,
             day: null
         };
+
+        // 休日マップ（キー: YYYY/MM/DD, 値: 休日名）
+        this.holidayMap = {};
 
         this.init();
     }
@@ -65,6 +83,12 @@ class BaseCalendarApp extends window.PluginBase {
 
         // スクロール状態通知の初期化
         this.initScrollNotification();
+
+        // ドラッグアンドドロップを設定
+        this.setupDragAndDrop();
+
+        // クロスウィンドウドロップハンドラを設定
+        this.setupCrossWindowDropSuccessHandler();
     }
 
     /**
@@ -223,6 +247,55 @@ class BaseCalendarApp extends window.PluginBase {
                 this.endRangeSelection();
             }
         });
+
+        // 自由仮身のドラッグ処理（documentレベル）
+        document.addEventListener('mousemove', (e) => {
+            if (!this.virtualObjectDragState.isDragging) return;
+            if (!this.vobjDragState.currentElement) return;
+
+            // ドラッグ移動を検出
+            if (this.detectVirtualObjectDragMove(e)) {
+                // 移動量を計算
+                const dx = e.clientX - this.virtualObjectDragState.startX;
+                const dy = e.clientY - this.virtualObjectDragState.startY;
+
+                // 要素を移動
+                const element = this.vobjDragState.currentElement;
+                element.style.left = `${this.vobjDragState.initialLeft + dx}px`;
+                element.style.top = `${this.vobjDragState.initialTop + dy}px`;
+            }
+        });
+
+        // 自由仮身のドラッグ終了処理（documentレベル）
+        document.addEventListener('mouseup', () => {
+            if (!this.virtualObjectDragState.isDragging) return;
+            if (!this.vobjDragState.currentElement) return;
+
+            if (this.virtualObjectDragState.hasMoved) {
+                // 座標を更新
+                const vobj = this.vobjDragState.currentObject;
+                const element = this.vobjDragState.currentElement;
+                const newLeft = parseFloat(element.style.left) || 0;
+                const newTop = parseFloat(element.style.top) || 0;
+                const width = (vobj.vobjright - vobj.vobjleft) || 150;
+                const height = (vobj.vobjbottom - vobj.vobjtop) || 30;
+
+                vobj.vobjleft = newLeft;
+                vobj.vobjtop = newTop;
+                vobj.vobjright = newLeft + width;
+                vobj.vobjbottom = newTop + height;
+
+                // 保存
+                this.saveMonthToFile();
+                this.isModified = true;
+            }
+
+            // ドラッグ状態をクリア
+            this.cleanupVirtualObjectDragState();
+            this.vobjDragState.currentObject = null;
+            this.vobjDragState.currentElement = null;
+            this.vobjDragState.vobjIndex = null;
+        });
     }
 
     /**
@@ -267,6 +340,8 @@ class BaseCalendarApp extends window.PluginBase {
                 this.xmlData = this.fileData.xmlData;
                 // 親実身のXMLを解析して年月仮身リストを取得
                 await this.parseMonthVirtualObjects();
+                // 休日データを読み込み
+                await this.loadHolidayData();
             }
 
             // 今月のカレンダーを表示
@@ -295,43 +370,82 @@ class BaseCalendarApp extends window.PluginBase {
         this.messageBus.on('parent-drop-event', (data) => {
             this.handleParentDropEvent(data);
         });
+
+        // add-virtual-object-from-base メッセージ（原紙箱からのドロップ）
+        this.messageBus.on('add-virtual-object-from-base', async (data) => {
+            await this.handleBaseFileDropped(data);
+        });
+
+        // add-virtual-object-from-trash メッセージ（屑実身操作からの復元）
+        this.messageBus.on('add-virtual-object-from-trash', async (data) => {
+            await this.handleBaseFileDropped(data);
+        });
     }
 
     /**
      * 親ウィンドウからのドロップイベントを処理
+     * dropイベントをエミュレートしてhandleDropEvent()で統一処理
      * @param {Object} data - ドロップデータ
      */
     async handleParentDropEvent(data) {
-        const dragData = data.dragData;
-        const clientX = data.clientX;
-        const clientY = data.clientY;
-
-        // 仮身ドラッグの場合のみ処理
-        if (dragData.type !== 'virtual-object-drag') return;
-
-        // ドロップ座標から日セルを特定
-        const day = this.getDayFromCoordinates(clientX, clientY);
-        if (!day) return;
-
-        // 仮身を取得
-        const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
-        if (!virtualObjects || virtualObjects.length === 0) return;
-
-        // 年月実身が読み込まれていない場合は処理しない
-        if (!this.currentMonthXmlData) return;
-
-        // 各仮身を年月実身に追加
-        for (const virtualObj of virtualObjects) {
-            await this.addExternalVirtualObjectToMonth(virtualObj);
+        // dragDataがない場合は処理しない
+        if (!data.dragData) {
+            console.warn('[BaseCalendar] parent-drop-event: dragDataがありません');
+            return;
         }
 
-        // カレンダーを再描画
+        console.log('[BaseCalendar] parent-drop-event受信:', data.dragData.type);
+
+        // dropイベントをエミュレート（virtual-object-listと同様のパターン）
+        const dropEvent = new CustomEvent('drop', { bubbles: true, cancelable: true });
+        Object.defineProperty(dropEvent, 'clientX', { value: data.clientX, writable: false });
+        Object.defineProperty(dropEvent, 'clientY', { value: data.clientY, writable: false });
+        Object.defineProperty(dropEvent, 'dataTransfer', {
+            value: {
+                getData: (type) => {
+                    if (type === 'text/plain') {
+                        return JSON.stringify(data.dragData);
+                    }
+                    return '';
+                }
+            },
+            writable: false
+        });
+
+        await this.handleDropEvent(dropEvent);
+    }
+
+    /**
+     * 原紙箱/屑実身操作からドロップされた実身を処理
+     * @param {Object} data - { realId, name, dropPosition, applist }
+     */
+    async handleBaseFileDropped(data) {
+        const { realId, name, dropPosition } = data;
+
+        // 仮身データを構築（PluginBase共通メソッド使用）
+        const virtualObj = this.createVirtualObjectData({
+            link_id: `${realId}_0.xtad`,
+            link_name: name,
+            vobjleft: 0,
+            vobjtop: 0,
+            vobjright: 150,
+            vobjbottom: 30,
+            heightPx: 30,
+            chsz: 14,
+            pictdisp: 'true',
+            namedisp: 'true',
+            framedisp: 'true'
+        });
+
+        // ドロップ座標を取得（なければデフォルト値）
+        const coords = dropPosition || { x: 100, y: 100 };
+
+        // 自由仮身として追加
+        await this.addFreeVirtualObjectToMonth(virtualObj, coords.x, coords.y);
+
+        // 再描画
         this.renderCalendarGrid();
-
-        // ドラッグ元に成功を通知
-        if (dragData.sourceWindowId) {
-            this.notifyCrossWindowDropSuccess(dragData, virtualObjects);
-        }
+        this.renderFreeVirtualObjects();
     }
 
     /**
@@ -472,6 +586,228 @@ class BaseCalendarApp extends window.PluginBase {
     }
 
     // parseLinkElement はPluginBase共通メソッドを使用
+
+    /**
+     * 「休日」という名前の仮身を検索
+     * @returns {Object|null} 休日仮身オブジェクト
+     */
+    findHolidayVirtualObject() {
+        return this.monthVirtualObjects.find(vobj => vobj.link_name === '休日') || null;
+    }
+
+    /**
+     * 休日データを読み込み
+     * 優先1: 年月xtadの休日名document要素から読み込み
+     * 優先2: 「休日」仮身から読み込み
+     */
+    async loadHolidayData() {
+        this.holidayMap = {};
+        this.holidayLoadedFromXtad = false;
+
+        // 優先1: 年月xtadから休日名documentを検索
+        if (this.currentMonthXmlData) {
+            try {
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(this.currentMonthXmlData, 'text/xml');
+                const holidayDocs = this.findHolidayDocumentsInXml(xmlDoc);
+
+                if (holidayDocs.length > 0) {
+                    // 休日名documentから休日マップを構築
+                    for (const doc of holidayDocs) {
+                        const holidayName = this.parseHolidayNameDocument(doc);
+                        const position = this.getHolidayDocumentPosition(doc);
+                        if (holidayName && position) {
+                            const dateInfo = this.getDateFromPosition(position);
+                            if (dateInfo) {
+                                const dateKey = `${dateInfo.year}/${String(dateInfo.month).padStart(2, '0')}/${String(dateInfo.day).padStart(2, '0')}`;
+                                this.holidayMap[dateKey] = holidayName;
+                            }
+                        }
+                    }
+
+                    if (Object.keys(this.holidayMap).length > 0) {
+                        this.holidayLoadedFromXtad = true;
+                        return;
+                    }
+                }
+            } catch (error) {
+                // パースエラー時はフォールバック
+            }
+        }
+
+        // 優先2: 「休日」仮身から読み込み
+        const holidayVobj = this.findHolidayVirtualObject();
+        if (!holidayVobj) {
+            return;
+        }
+
+        try {
+            // link_idからXTADファイルを読み込み
+            const xtadFile = await this.loadDataFileFromParent(holidayVobj.link_id);
+            if (!xtadFile) {
+                return;
+            }
+
+            const xtadContent = typeof xtadFile === 'string' ? xtadFile : await xtadFile.text();
+            this.holidayMap = this.parseHolidayXtad(xtadContent);
+        } catch (error) {
+            // 読み込み失敗時は空のマップのまま
+            this.holidayMap = {};
+        }
+    }
+
+    /**
+     * 休日XTADをパースして休日マップを生成
+     * @param {string} xtadContent - XTADファイルの内容
+     * @returns {Object} 休日マップ（キー: YYYY/MM/DD, 値: 休日名）
+     */
+    parseHolidayXtad(xtadContent) {
+        const holidayMap = {};
+
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xtadContent, 'text/xml');
+
+            // <document><p>内のテキストを取得
+            const pElement = xmlDoc.querySelector('document > p');
+            if (!pElement) {
+                return holidayMap;
+            }
+
+            const text = pElement.textContent;
+            const lines = text.split('\n').filter(line => line.trim());
+
+            for (const line of lines) {
+                // タブ区切り: YYYY/MM/DD\t休日名
+                const parts = line.split('\t');
+                if (parts.length >= 2) {
+                    const date = parts[0].trim();
+                    const name = parts[1].trim();
+                    if (date && name) {
+                        holidayMap[date] = name;
+                    }
+                }
+            }
+        } catch (error) {
+            // パース失敗時は空のマップを返す
+        }
+
+        return holidayMap;
+    }
+
+    /**
+     * 指定日の休日名を取得
+     * @param {number} year - 年
+     * @param {number} month - 月（1-12）
+     * @param {number} day - 日
+     * @returns {string|null} 休日名またはnull
+     */
+    getHolidayName(year, month, day) {
+        const dateKey = `${year}/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`;
+        return this.holidayMap[dateKey] || null;
+    }
+
+    /**
+     * xtadから休日名document要素を検索
+     * @param {Document} xmlDoc - XMLドキュメント
+     * @returns {Element[]} 休日名document要素の配列
+     */
+    findHolidayDocumentsInXml(xmlDoc) {
+        const result = [];
+        const figure = xmlDoc.querySelector('figure');
+        if (!figure) return result;
+        const documents = figure.querySelectorAll('document');
+        for (const doc of documents) {
+            const docmemo = doc.querySelector('docmemo[text="holiday"]');
+            if (docmemo) {
+                result.push(doc);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 休日名document要素から休日名を取得
+     * @param {Element} documentElement - 休日名document要素
+     * @returns {string|null} 休日名
+     */
+    parseHolidayNameDocument(documentElement) {
+        const docmemo = documentElement.querySelector('docmemo[text="holiday"]');
+        if (!docmemo) return null;
+
+        // docmemoの後のテキストノードから休日名を取得
+        let nextNode = docmemo.nextSibling;
+        if (nextNode && nextNode.nodeType === Node.TEXT_NODE) {
+            return nextNode.textContent.trim();
+        }
+        return null;
+    }
+
+    /**
+     * 休日名document要素から座標を取得
+     * @param {Element} documentElement - 休日名document要素
+     * @returns {Object|null} {left, top, right, bottom}
+     */
+    getHolidayDocumentPosition(documentElement) {
+        const docView = documentElement.querySelector('docView');
+        if (!docView) return null;
+        return {
+            left: parseInt(docView.getAttribute('viewleft'), 10),
+            top: parseInt(docView.getAttribute('viewtop'), 10),
+            right: parseInt(docView.getAttribute('viewright'), 10),
+            bottom: parseInt(docView.getAttribute('viewbottom'), 10)
+        };
+    }
+
+    /**
+     * 休日名用のdocument要素XMLを生成
+     * @param {string} holidayName - 休日名
+     * @param {Object} position - 配置座標 {left, top, right, bottom}
+     * @param {number} zIndex - zIndex値
+     * @returns {string} XML文字列
+     */
+    buildHolidayNameDocument(holidayName, position, zIndex) {
+        return `<document>
+  <docView viewleft="${position.left}" viewtop="${position.top}" viewright="${position.right}" viewbottom="${position.bottom}"/>
+  <docDraw drawleft="${position.left}" drawtop="${position.top}" drawright="${position.right}" drawbottom="${position.bottom}"/>
+  <docScale hunit="-72" vunit="-72"/>
+  <text zIndex="${zIndex}"/>
+  <font size="10"/>
+  <font color="#ff0000"/>
+  <text align="left"/>
+  <docmemo text="holiday"/>${holidayName}
+</document>
+`;
+    }
+
+    /**
+     * 座標から該当する日付を特定
+     * @param {Object} position - {left, top}
+     * @returns {Object|null} {year, month, day}
+     */
+    getDateFromPosition(position) {
+        const layout = this.getCalendarLayoutConstants();
+        const col = Math.floor(position.left / layout.CELL_WIDTH);
+        const row = Math.floor((position.top - layout.GRID_TOP) / layout.CELL_HEIGHT);
+
+        if (col < 0 || col >= 7 || row < 0 || row >= 6) return null;
+
+        const firstDay = new Date(this.currentYear, this.currentMonth - 1, 1);
+        const lastDay = new Date(this.currentYear, this.currentMonth, 0);
+        const daysInMonth = lastDay.getDate();
+        const startDayOfWeek = firstDay.getDay();
+
+        const cellIndex = row * 7 + col;
+        const dayOffset = cellIndex - startDayOfWeek + 1;
+
+        if (dayOffset < 1 || dayOffset > daysInMonth) return null;
+
+        return {
+            year: this.currentYear,
+            month: this.currentMonth,
+            day: dayOffset
+        };
+    }
 
     /**
      * 前月へ移動
@@ -630,9 +966,7 @@ class BaseCalendarApp extends window.PluginBase {
 <figScale hunit="-72" vunit="-72"/>
 
 <!-- ナビゲーションバー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0"
-      fillColor="#e0e0e0" strokeColor="#808080"
-      left="0" top="0" right="${BASE_WIDTH}" bottom="${NAV_HEIGHT}" zIndex="1"/>
+<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="#e0e0e0" strokeColor="#808080" left="0" top="0" right="${BASE_WIDTH}" bottom="${NAV_HEIGHT}" zIndex="1"/>
 
 <!-- 年月表示テキスト -->
 <document>
@@ -647,9 +981,7 @@ class BaseCalendarApp extends window.PluginBase {
 </document>
 
 <!-- 曜日ヘッダー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0"
-      fillColor="#e0e0e0" strokeColor="#808080"
-      left="0" top="${NAV_HEIGHT}" right="${BASE_WIDTH}" bottom="${GRID_TOP}" zIndex="3"/>
+<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="#e0e0e0" strokeColor="#808080" left="0" top="${NAV_HEIGHT}" right="${BASE_WIDTH}" bottom="${GRID_TOP}" zIndex="3"/>
 
 `;
 
@@ -691,6 +1023,7 @@ class BaseCalendarApp extends window.PluginBase {
                 let dayColor = '#000000';
                 let cellColor = '#ffffff';
                 let isOtherMonth = false;
+                let currentDay = null;  // 休日チェック用
 
                 if (cellIndex < startDayOfWeek) {
                     // 前月
@@ -701,11 +1034,17 @@ class BaseCalendarApp extends window.PluginBase {
                     isOtherMonth = true;
                 } else if (dayCounter <= daysInMonth) {
                     // 当月
+                    currentDay = dayCounter;  // 休日チェック用に保持
                     dayText = String(dayCounter);
                     if (col === 0) {
                         dayColor = '#cc0000'; // 日曜
                     } else if (col === 6) {
                         dayColor = '#0000cc'; // 土曜
+                    }
+                    // 休日の場合は色を赤に変更
+                    const holidayName = this.getHolidayName(year, month, dayCounter);
+                    if (holidayName) {
+                        dayColor = '#ff0000';
                     }
                     if (isCurrentMonth && dayCounter === todayDate) {
                         cellColor = '#ffffd0'; // 今日
@@ -721,10 +1060,7 @@ class BaseCalendarApp extends window.PluginBase {
                 }
 
                 // セル背景
-                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="0"
-      fillColor="${cellColor}" strokeColor="#c0c0c0"
-      left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>
-`;
+                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${cellColor}" strokeColor="#c0c0c0" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`;
                 zIndex++;
 
                 // 日付テキスト（左上に配置）
@@ -744,6 +1080,21 @@ class BaseCalendarApp extends window.PluginBase {
 </document>
 `;
                 zIndex++;
+
+                // 当月の休日の場合、休日名documentを追加
+                if (!isOtherMonth && currentDay) {
+                    const holidayName = this.getHolidayName(year, month, currentDay);
+                    if (holidayName) {
+                        const holidayPosition = {
+                            left: left + 30,
+                            top: top + 2,
+                            right: right - 4,
+                            bottom: top + 18
+                        };
+                        xmlTAD += this.buildHolidayNameDocument(holidayName, holidayPosition, zIndex);
+                        zIndex++;
+                    }
+                }
             }
         }
 
@@ -859,9 +1210,7 @@ class BaseCalendarApp extends window.PluginBase {
 <figScale hunit="-72" vunit="-72"/>
 
 <!-- ナビゲーションバー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0"
-      fillColor="#e0e0e0" strokeColor="#808080"
-      left="0" top="0" right="${layout.BASE_WIDTH}" bottom="${layout.NAV_HEIGHT}" zIndex="1"/>
+<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="#e0e0e0" strokeColor="#808080" left="0" top="0" right="${layout.BASE_WIDTH}" bottom="${layout.NAV_HEIGHT}" zIndex="1"/>
 
 <!-- 年月表示テキスト -->
 <document>
@@ -876,9 +1225,7 @@ class BaseCalendarApp extends window.PluginBase {
 </document>
 
 <!-- 曜日ヘッダー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0"
-      fillColor="#e0e0e0" strokeColor="#808080"
-      left="0" top="${layout.NAV_HEIGHT}" right="${layout.BASE_WIDTH}" bottom="${layout.GRID_TOP}" zIndex="3"/>
+<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="#e0e0e0" strokeColor="#808080" left="0" top="${layout.NAV_HEIGHT}" right="${layout.BASE_WIDTH}" bottom="${layout.GRID_TOP}" zIndex="3"/>
 
 `;
 
@@ -919,18 +1266,27 @@ class BaseCalendarApp extends window.PluginBase {
                 let dayText = '';
                 let dayColor = '#000000';
                 let cellColor = '#ffffff';
+                let isOtherMonth = false;
+                let currentDay = null;  // 休日チェック用
 
                 if (cellIndex < startDayOfWeek) {
                     const day = daysInPrevMonth - startDayOfWeek + cellIndex + 1;
                     dayText = String(day);
                     dayColor = '#808080';
                     cellColor = '#f0f0f0';
+                    isOtherMonth = true;
                 } else if (dayCounter <= daysInMonth) {
+                    currentDay = dayCounter;  // 休日チェック用に保持
                     dayText = String(dayCounter);
                     if (col === 0) {
                         dayColor = '#cc0000';
                     } else if (col === 6) {
                         dayColor = '#0000cc';
+                    }
+                    // 休日の場合は色を赤に変更
+                    const holidayName = this.getHolidayName(this.currentYear, this.currentMonth, dayCounter);
+                    if (holidayName) {
+                        dayColor = '#ff0000';
                     }
                     if (isCurrentMonth && dayCounter === todayDate) {
                         cellColor = '#ffffd0';
@@ -940,14 +1296,12 @@ class BaseCalendarApp extends window.PluginBase {
                     dayText = String(nextMonthDay);
                     dayColor = '#808080';
                     cellColor = '#f0f0f0';
+                    isOtherMonth = true;
                     nextMonthDay++;
                 }
 
                 // セル背景
-                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="0"
-      fillColor="${cellColor}" strokeColor="#c0c0c0"
-      left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>
-`;
+                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${cellColor}" strokeColor="#c0c0c0" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`;
                 zIndex++;
 
                 // 日付テキスト
@@ -967,56 +1321,69 @@ class BaseCalendarApp extends window.PluginBase {
 </document>
 `;
                 zIndex++;
+
+                // 当月の休日の場合、休日名documentを追加
+                if (!isOtherMonth && currentDay) {
+                    const holidayName = this.getHolidayName(this.currentYear, this.currentMonth, currentDay);
+                    if (holidayName) {
+                        const holidayPosition = {
+                            left: left + 30,
+                            top: top + 2,
+                            right: right - 4,
+                            bottom: top + 18
+                        };
+                        xmlTAD += this.buildHolidayNameDocument(holidayName, holidayPosition, zIndex);
+                        zIndex++;
+                    }
+                }
             }
         }
 
-        // 仮身（link要素）を追加 - 日ごとにグループ化して座標を計算
+        // 仮身（link要素）を追加
+        // 1. 日付仮身（YYYY/MM/DD形式）- 日セル内座標を計算
+        // 2. 自由仮身（それ以外）- 既存の座標をそのまま使用
         const dayIndexMap = {}; // 各日の仮身インデックスを追跡
         zIndex = 200; // 仮身用の高いzIndex
 
         for (const vobj of this.virtualObjects) {
-            const dayName = vobj.link_name;
-            if (!dayName) continue;
+            const linkName = vobj.link_name;
+            if (!linkName) continue;
 
-            // 日ごとのインデックスを取得・更新
-            if (dayIndexMap[dayName] === undefined) {
-                dayIndexMap[dayName] = 0;
+            let left, top, right, bottom;
+
+            if (this.isDateFormatLinkName(linkName)) {
+                // 日付仮身：日セル内の座標を計算
+                if (dayIndexMap[linkName] === undefined) {
+                    dayIndexMap[linkName] = 0;
+                }
+                const indexInCell = dayIndexMap[linkName]++;
+
+                const pos = this.calculateVirtualObjectCellPosition(linkName, indexInCell);
+                if (!pos) continue;
+
+                left = pos.left;
+                top = pos.top;
+                right = pos.right;
+                bottom = pos.bottom;
+
+                // 仮身オブジェクトの座標も更新
+                vobj.vobjleft = left;
+                vobj.vobjtop = top;
+                vobj.vobjright = right;
+                vobj.vobjbottom = bottom;
+                vobj.width = right - left;
+                vobj.heightPx = bottom - top;
+            } else {
+                // 自由仮身：既存の座標をそのまま使用
+                left = vobj.vobjleft || 0;
+                top = vobj.vobjtop || 0;
+                right = vobj.vobjright || (left + 150);
+                bottom = vobj.vobjbottom || (top + 30);
             }
-            const indexInCell = dayIndexMap[dayName]++;
-
-            // 座標を計算
-            const pos = this.calculateVirtualObjectCellPosition(dayName, indexInCell);
-            if (!pos) continue;
 
             // link要素を生成
-            xmlTAD += `<link id="${vobj.link_id}"
-      vobjleft="${pos.left}" vobjtop="${pos.top}"
-      vobjright="${pos.right}" vobjbottom="${pos.bottom}"
-      height="${pos.bottom - pos.top}"
-      chsz="${vobj.chsz || 10}"
-      frcol="${vobj.frcol || '#b0c0d0'}"
-      chcol="${vobj.chcol || '#000000'}"
-      tbcol="${vobj.tbcol || '#e8f4ff'}"
-      bgcol="${vobj.bgcol || '#e8f4ff'}"
-      dlen="${vobj.dlen || 0}"
-      pictdisp="${vobj.pictdisp !== undefined ? vobj.pictdisp : 'true'}"
-      namedisp="${vobj.namedisp !== undefined ? vobj.namedisp : 'true'}"
-      roledisp="${vobj.roledisp !== undefined ? vobj.roledisp : 'false'}"
-      typedisp="${vobj.typedisp !== undefined ? vobj.typedisp : 'false'}"
-      updatedisp="${vobj.updatedisp !== undefined ? vobj.updatedisp : 'false'}"
-      framedisp="${vobj.framedisp !== undefined ? vobj.framedisp : 'true'}"
-      autoopen="${vobj.autoopen !== undefined ? vobj.autoopen : 'false'}"
-      zIndex="${zIndex}">${dayName}</link>
-`;
+            xmlTAD += `<link id="${vobj.link_id}" vobjleft="${left}" vobjtop="${top}" vobjright="${right}" vobjbottom="${bottom}" height="${bottom - top}" chsz="${vobj.chsz || 10}" frcol="${vobj.frcol || '#b0c0d0'}" chcol="${vobj.chcol || '#000000'}" tbcol="${vobj.tbcol || '#e8f4ff'}" bgcol="${vobj.bgcol || '#e8f4ff'}" dlen="${vobj.dlen || 0}" pictdisp="${vobj.pictdisp !== undefined ? vobj.pictdisp : 'true'}" namedisp="${vobj.namedisp !== undefined ? vobj.namedisp : 'true'}" roledisp="${vobj.roledisp !== undefined ? vobj.roledisp : 'false'}" typedisp="${vobj.typedisp !== undefined ? vobj.typedisp : 'false'}" updatedisp="${vobj.updatedisp !== undefined ? vobj.updatedisp : 'false'}" framedisp="${vobj.framedisp !== undefined ? vobj.framedisp : 'true'}" autoopen="${vobj.autoopen !== undefined ? vobj.autoopen : 'false'}" zIndex="${zIndex}">${linkName}</link>\r\n`;
             zIndex++;
-
-            // 仮身オブジェクトの座標も更新
-            vobj.vobjleft = pos.left;
-            vobj.vobjtop = pos.top;
-            vobj.vobjright = pos.right;
-            vobj.vobjbottom = pos.bottom;
-            vobj.width = pos.right - pos.left;
-            vobj.heightPx = pos.bottom - pos.top;
         }
 
         xmlTAD += `
@@ -1224,6 +1591,10 @@ class BaseCalendarApp extends window.PluginBase {
             const cell = document.createElement('div');
             cell.className = 'day-cell';
 
+            // 日付ヘッダー（日付番号と休日名を含む）
+            const dayHeader = document.createElement('div');
+            dayHeader.className = 'day-header';
+
             const dayNumber = document.createElement('div');
             dayNumber.className = 'day-number';
 
@@ -1231,6 +1602,7 @@ class BaseCalendarApp extends window.PluginBase {
             dayEvents.className = 'day-events';
 
             const dayOfWeek = i % 7;
+            let holidayName = null;
 
             if (i < startDayOfWeek) {
                 // 前月の日
@@ -1243,8 +1615,11 @@ class BaseCalendarApp extends window.PluginBase {
                 const day = dayCounter;
                 dayNumber.textContent = String(day);
 
-                // 曜日の色
-                if (dayOfWeek === 0) {
+                // 休日を取得
+                holidayName = this.getHolidayName(this.currentYear, this.currentMonth, day);
+
+                // 曜日の色（休日の場合も日曜色にする）
+                if (dayOfWeek === 0 || holidayName) {
                     dayNumber.classList.add('sunday');
                 } else if (dayOfWeek === 6) {
                     dayNumber.classList.add('saturday');
@@ -1279,10 +1654,24 @@ class BaseCalendarApp extends window.PluginBase {
                 nextMonthDay++;
             }
 
-            cell.appendChild(dayNumber);
+            // 日付ヘッダーを構築
+            dayHeader.appendChild(dayNumber);
+
+            // 休日名があれば表示
+            if (holidayName) {
+                const holidayLabel = document.createElement('div');
+                holidayLabel.className = 'holiday-name';
+                holidayLabel.textContent = holidayName;
+                dayHeader.appendChild(holidayLabel);
+            }
+
+            cell.appendChild(dayHeader);
             cell.appendChild(dayEvents);
             grid.appendChild(cell);
         }
+
+        // 自由仮身を描画
+        this.renderFreeVirtualObjects();
     }
 
     /**
@@ -1377,6 +1766,711 @@ class BaseCalendarApp extends window.PluginBase {
 
         // 選択状態をクリア
         this.selectedVirtualObjects.clear();
+    }
+
+    // ===== 自由仮身関連メソッド =====
+
+    /**
+     * 仮身名が日付形式（YYYY/MM/DD）かどうかを判定
+     * @param {string} linkName - 仮身名
+     * @returns {boolean}
+     */
+    isDateFormatLinkName(linkName) {
+        if (!linkName) return false;
+        return /^\d{4}\/\d{2}\/\d{2}$/.test(linkName);
+    }
+
+    /**
+     * 選択中の仮身を1つ取得
+     * @returns {Object|null} 選択中の仮身オブジェクト
+     */
+    getSelectedVirtualObject() {
+        if (!this.virtualObjects || this.selectedVirtualObjects.size === 0) {
+            return null;
+        }
+        const selectedIndex = Array.from(this.selectedVirtualObjects)[0];
+        return this.virtualObjects[selectedIndex] || null;
+    }
+
+    /**
+     * 仮身の選択をクリア（日付仮身・自由仮身両方）
+     */
+    clearVirtualObjectSelection() {
+        this.selectedVirtualObjects.clear();
+        // 日付仮身の選択解除
+        const eventItems = document.querySelectorAll('.event-item.selected');
+        eventItems.forEach(el => el.classList.remove('selected'));
+        // 自由仮身の選択解除
+        const freeVobjs = document.querySelectorAll('.free-vobj-canvas .virtual-object-closed.selected');
+        freeVobjs.forEach(el => {
+            el.classList.remove('selected');
+            el.style.outline = '';
+        });
+    }
+
+    /**
+     * 仮身を選択
+     * @param {number} vobjIndex - 仮身のインデックス
+     * @param {boolean} addToSelection - 既存選択に追加するか（Shift/Ctrl）
+     */
+    selectVirtualObject(vobjIndex, addToSelection = false) {
+        if (!addToSelection) {
+            this.clearVirtualObjectSelection();
+        }
+        this.selectedVirtualObjects.add(vobjIndex);
+        this.updateVirtualObjectSelectionDisplay();
+    }
+
+    /**
+     * 仮身選択表示を更新
+     */
+    updateVirtualObjectSelectionDisplay() {
+        // 日付仮身
+        const eventItems = document.querySelectorAll('.event-item');
+        eventItems.forEach(el => {
+            const index = parseInt(el.dataset.vobjIndex);
+            if (this.selectedVirtualObjects.has(index)) {
+                el.classList.add('selected');
+            } else {
+                el.classList.remove('selected');
+            }
+        });
+        // 自由仮身
+        const freeVobjs = document.querySelectorAll('.free-vobj-canvas .virtual-object-closed');
+        freeVobjs.forEach(el => {
+            const index = parseInt(el.dataset.vobjIndex);
+            if (this.selectedVirtualObjects.has(index)) {
+                el.classList.add('selected');
+                el.style.outline = '2px solid #000080';
+            } else {
+                el.classList.remove('selected');
+                el.style.outline = '';
+            }
+        });
+    }
+
+    /**
+     * 自由仮身（非日付形式）をキャンバスに描画
+     */
+    renderFreeVirtualObjects() {
+        let canvas = document.querySelector('.free-vobj-canvas');
+        if (!canvas) {
+            canvas = document.createElement('div');
+            canvas.className = 'free-vobj-canvas';
+            const container = document.querySelector('.calendar-container');
+            if (container) {
+                container.appendChild(canvas);
+            }
+        }
+        canvas.innerHTML = '';
+
+        // 非日付仮身をフィルタ
+        const freeVobjs = this.virtualObjects.filter(vobj =>
+            !this.isDateFormatLinkName(vobj.link_name)
+        );
+
+        freeVobjs.forEach((vobj) => {
+            const vobjIndex = this.virtualObjects.indexOf(vobj);
+            const element = this.createFreeVirtualObjectElement(vobj, vobjIndex);
+            canvas.appendChild(element);
+
+            // 開いた仮身の場合はコンテンツを展開
+            if (element.classList.contains('virtual-object-opened')) {
+                // DOM追加後に非同期で展開（仮身一覧と同じパターン）
+                setTimeout(() => {
+                    this.expandVirtualObject(element, vobj, {
+                        readonly: true,
+                        noScrollbar: true,
+                        bgcol: vobj.bgcol
+                    }).catch(err => {
+                        console.error('[BaseCalendar] 開いた仮身の展開エラー:', err);
+                    });
+                }, 0);
+            }
+        });
+    }
+
+    /**
+     * 自由仮身のDOM要素を作成
+     * 仮身一覧プラグインと同様のパターン：createBlockElementの戻り値を直接使用
+     * @param {Object} vobj - 仮身オブジェクト
+     * @param {number} vobjIndex - 仮身インデックス
+     * @returns {HTMLElement}
+     */
+    createFreeVirtualObjectElement(vobj, vobjIndex) {
+        let element;
+
+        // VirtualObjectRendererで描画（仮身一覧と同じパターン）
+        if (this.virtualObjectRenderer) {
+            // createBlockElementは位置・サイズ設定済みの要素を返す
+            element = this.virtualObjectRenderer.createBlockElement(vobj, {
+                loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIcon(realId) : null,
+                vobjIndex: vobjIndex
+            });
+        }
+
+        // VirtualObjectRendererがない場合のフォールバック
+        if (!element) {
+            element = document.createElement('div');
+            element.className = 'virtual-object virtual-object-closed';
+            element.style.position = 'absolute';
+            element.style.left = `${vobj.vobjleft || 0}px`;
+            element.style.top = `${vobj.vobjtop || 0}px`;
+            element.style.width = `${(vobj.vobjright - vobj.vobjleft) || 150}px`;
+            element.textContent = vobj.link_name || '(名前なし)';
+            element.style.background = vobj.bgcol || '#e8f4ff';
+            element.style.border = `1px solid ${vobj.frcol || '#b0c0d0'}`;
+            element.style.padding = '2px 4px';
+            element.style.fontSize = '10px';
+            element.style.overflow = 'hidden';
+            element.style.textOverflow = 'ellipsis';
+            element.style.whiteSpace = 'nowrap';
+        }
+
+        // データ属性を設定
+        element.dataset.vobjIndex = vobjIndex;
+        element.dataset.linkId = vobj.link_id;
+
+        // 選択状態を反映
+        if (this.selectedVirtualObjects.has(vobjIndex)) {
+            element.classList.add('selected');
+            element.style.outline = '2px solid #000080';
+        }
+
+        // マウスハンドラを設定
+        this.setupFreeVobjMouseHandlers(element, vobj, vobjIndex);
+
+        return element;
+    }
+
+    /**
+     * 自由仮身のマウスハンドラを設定
+     * @param {HTMLElement} element - 仮身要素
+     * @param {Object} vobj - 仮身オブジェクト
+     * @param {number} vobjIndex - 仮身インデックス
+     */
+    setupFreeVobjMouseHandlers(element, vobj, vobjIndex) {
+        // クリックで選択
+        element.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.handleFreeVobjClick(e, vobj, vobjIndex);
+        });
+
+        // ダブルクリックで開く
+        element.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            this.handleFreeVobjDblClick(e, vobj, vobjIndex);
+        });
+
+        // 右クリックでコンテキストメニュー
+        element.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.selectVirtualObject(vobjIndex, false);
+            this.contextMenuVirtualObject = {
+                element: element,
+                virtualObj: vobj,
+                realId: this.extractRealId(vobj.link_id)
+            };
+            this.showContextMenuAtEvent(e);
+        });
+
+        // ドラッグ開始（captureモードで登録することで、開いた仮身のコンテンツエリア上でも確実にキャプチャ）
+        element.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return; // 左クリックのみ
+
+            // リサイズエリアの場合はドラッグを開始しない
+            const rect = element.getBoundingClientRect();
+            const isRightEdge = e.clientX > rect.right - 10 && e.clientX <= rect.right + 10;
+            const isBottomEdge = e.clientY > rect.bottom - 10 && e.clientY <= rect.bottom + 10;
+            if (isRightEdge || isBottomEdge) {
+                return; // リサイズ処理に任せる
+            }
+
+            e.stopPropagation();
+
+            // 選択されていない場合は選択
+            if (!this.selectedVirtualObjects.has(vobjIndex)) {
+                this.selectVirtualObject(vobjIndex, e.ctrlKey || e.shiftKey);
+            }
+
+            // ドラッグ状態を初期化
+            this.vobjDragState.currentObject = vobj;
+            this.vobjDragState.currentElement = element;
+            this.vobjDragState.vobjIndex = vobjIndex;
+            this.vobjDragState.initialLeft = vobj.vobjleft || 0;
+            this.vobjDragState.initialTop = vobj.vobjtop || 0;
+
+            // PluginBaseのドラッグ開始処理を利用
+            this.initializeVirtualObjectDragStart(e);
+        }, { capture: true });
+
+        // リサイズ機能を追加
+        this.makeVirtualObjectResizable(element, vobj);
+
+        // 注: ドラッグ中・ドラッグ終了の処理はdocumentレベルで行う
+        // （マウスが要素外に出てもドラッグを継続するため）
+    }
+
+    /**
+     * 自由仮身のクリック処理
+     * @param {MouseEvent} e - マウスイベント
+     * @param {Object} vobj - 仮身オブジェクト
+     * @param {number} vobjIndex - 仮身インデックス
+     */
+    handleFreeVobjClick(e, vobj, vobjIndex) {
+        // Ctrl/Shiftで複数選択
+        this.selectVirtualObject(vobjIndex, e.ctrlKey || e.shiftKey);
+    }
+
+    /**
+     * 自由仮身のダブルクリック処理
+     * @param {MouseEvent} e - マウスイベント
+     * @param {Object} vobj - 仮身オブジェクト
+     * @param {number} vobjIndex - 仮身インデックス
+     */
+    handleFreeVobjDblClick(e, vobj, vobjIndex) {
+        this.openVirtualObject(vobj);
+    }
+
+    /**
+     * 全てのiframeのpointer-eventsを制御
+     * @param {boolean} enabled - trueで有効化、falseで無効化
+     */
+    setIframesPointerEvents(enabled) {
+        const iframes = document.querySelectorAll('.virtual-object-content-iframe, .virtual-object-content');
+        iframes.forEach(iframe => {
+            iframe.style.pointerEvents = enabled ? 'auto' : 'none';
+        });
+        console.log('[BaseCalendar] iframeのpointer-events:', enabled ? '有効化' : '無効化', 'iframe数:', iframes.length);
+    }
+
+    /**
+     * 仮身要素をリサイズ可能にする
+     * @param {HTMLElement} vobjElement - 仮身のDOM要素
+     * @param {Object} obj - 仮身オブジェクト
+     */
+    makeVirtualObjectResizable(vobjElement, obj) {
+        // マウス移動でカーソルを変更（リサイズエリアの表示）
+        vobjElement.addEventListener('mousemove', (e) => {
+            // リサイズ中またはドラッグ中はカーソル変更しない
+            if (this.isResizing || this.virtualObjectDragState.isDragging) return;
+
+            const rect = vobjElement.getBoundingClientRect();
+            // リサイズエリア：枠の内側10pxから外側10pxまで
+            const isRightEdge = e.clientX > rect.right - 10 && e.clientX <= rect.right + 10;
+            const isBottomEdge = e.clientY > rect.bottom - 10 && e.clientY <= rect.bottom + 10;
+
+            // カーソルの形状を変更
+            if (isRightEdge && isBottomEdge) {
+                vobjElement.style.cursor = 'nwse-resize'; // 右下: 斜めリサイズ
+            } else if (isRightEdge) {
+                vobjElement.style.cursor = 'ew-resize'; // 右: 横リサイズ
+            } else if (isBottomEdge) {
+                vobjElement.style.cursor = 'ns-resize'; // 下: 縦リサイズ
+            } else {
+                vobjElement.style.cursor = 'pointer'; // 通常: ポインタ
+            }
+        });
+
+        // マウスが仮身から離れたらカーソルを元に戻す
+        vobjElement.addEventListener('mouseleave', () => {
+            if (!this.isResizing) {
+                vobjElement.style.cursor = 'pointer';
+            }
+        });
+
+        // マウスダウンでリサイズ開始
+        vobjElement.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return; // 左クリックのみ
+
+            const rect = vobjElement.getBoundingClientRect();
+            // リサイズエリア：枠の内側10pxから外側10pxまで
+            const isRightEdge = e.clientX > rect.right - 10 && e.clientX <= rect.right + 10;
+            const isBottomEdge = e.clientY > rect.bottom - 10 && e.clientY <= rect.bottom + 10;
+
+            // リサイズエリア（枠の内側10pxから外側10pxまで）のクリックのみ処理
+            if (!isRightEdge && !isBottomEdge) {
+                return;
+            }
+
+            // リサイズ中は新しいリサイズを開始しない
+            if (this.isResizing) {
+                console.log('[BaseCalendar] リサイズ中のため、新しいリサイズを無視');
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            // リサイズ開始フラグを設定
+            this.isResizing = true;
+
+            // iframeのpointer-eventsを無効化してリサイズをスムーズに
+            this.setIframesPointerEvents(false);
+
+            // ウィンドウのリサイズハンドルを一時的に無効化
+            this.messageBus.send('disable-window-resize');
+
+            // リサイズモード開始
+            const startX = e.clientX;
+            const startY = e.clientY;
+            const startWidth = rect.width;
+            const startHeight = rect.height;
+            const minWidth = 50;
+
+            // chszベースの最小高さを計算
+            const chsz = Math.round(obj.chsz || 14);
+            const lineHeight = 1.2;
+            const chszPx = window.convertPtToPx(chsz);
+            const textHeight = Math.ceil(chszPx * lineHeight);
+            const minClosedHeight = textHeight + 8; // 閉じた仮身の最小高さ
+            const minOpenHeight = textHeight + 30; // 開いた仮身の最小高さ（閾値）
+
+            // DOMから実際のコンテンツエリアの有無で開閉状態を判定
+            const hasContentArea = vobjElement.querySelector('.virtual-object-content-area') !== null ||
+                                  vobjElement.querySelector('.virtual-object-content-iframe') !== null;
+
+            // リサイズ中は閉じた仮身の最小高さまで小さくできるようにする
+            const minHeight = minClosedHeight;
+
+            // 初期高さを閾値に基づいて設定
+            let currentWidth = startWidth;
+            let currentHeight;
+            if (startHeight < minOpenHeight) {
+                currentHeight = minClosedHeight;
+            } else {
+                currentHeight = startHeight;
+            }
+
+            console.log('[BaseCalendar] 仮身リサイズ開始:', obj.link_name, 'startWidth:', startWidth, 'startHeight:', startHeight);
+
+            // リサイズプレビュー枠を作成
+            const previewBox = document.createElement('div');
+            previewBox.style.position = 'fixed';
+            previewBox.style.left = `${rect.left}px`;
+            previewBox.style.top = `${rect.top}px`;
+            previewBox.style.width = `${currentWidth}px`;
+            previewBox.style.height = `${currentHeight}px`;
+            previewBox.style.border = '2px dashed rgba(0, 123, 255, 0.8)';
+            previewBox.style.backgroundColor = 'rgba(0, 123, 255, 0.1)';
+            previewBox.style.pointerEvents = 'none';
+            previewBox.style.zIndex = '999999';
+            previewBox.style.boxSizing = 'border-box';
+            document.body.appendChild(previewBox);
+
+            // 開いた仮身内のiframeのpointer-eventsを無効化
+            const iframe = vobjElement.querySelector('iframe');
+            if (iframe) {
+                iframe.style.pointerEvents = 'none';
+            }
+
+            const onMouseMove = (moveEvent) => {
+                if (isRightEdge) {
+                    const deltaX = moveEvent.clientX - startX;
+                    currentWidth = Math.max(minWidth, startWidth + deltaX);
+                    previewBox.style.width = `${currentWidth}px`;
+                }
+
+                if (isBottomEdge) {
+                    const deltaY = moveEvent.clientY - startY;
+                    let newHeight = Math.max(minHeight, startHeight + deltaY);
+
+                    // 閾値に基づいて高さをスナップ
+                    if (newHeight < minOpenHeight) {
+                        currentHeight = minClosedHeight;
+                    } else {
+                        currentHeight = newHeight;
+                    }
+
+                    previewBox.style.height = `${currentHeight}px`;
+                }
+            };
+
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+
+                // プレビュー枠を削除
+                if (previewBox && previewBox.parentNode) {
+                    previewBox.parentNode.removeChild(previewBox);
+                }
+
+                // iframeのpointer-eventsを元に戻す
+                if (iframe) {
+                    iframe.style.pointerEvents = 'auto';
+                }
+
+                // カーソルを元に戻す
+                vobjElement.style.cursor = 'pointer';
+
+                // 最終的なサイズを取得
+                const finalWidth = Math.round(currentWidth);
+                const finalHeight = Math.round(currentHeight);
+
+                // 実際の要素のサイズを更新
+                vobjElement.style.width = `${finalWidth}px`;
+                vobjElement.style.height = `${finalHeight}px`;
+
+                // 仮身オブジェクトのサイズを更新
+                obj.width = finalWidth;
+                obj.heightPx = finalHeight;
+                obj.vobjright = obj.vobjleft + finalWidth;
+                obj.vobjbottom = obj.vobjtop + finalHeight;
+
+                console.log('[BaseCalendar] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
+
+                // 年月実身を保存
+                this.saveMonthToFile();
+                this.isModified = true;
+
+                // 開いた仮身と閉じた仮身の判定が変わったかチェック
+                const chsz_resize = Math.round(obj.chsz || 14);
+                const lineHeight_resize = 1.2;
+                const chszPx_resize = window.convertPtToPx(chsz_resize);
+                const textHeight_resize = Math.ceil(chszPx_resize * lineHeight_resize);
+                const minClosedHeight_resize = textHeight_resize + 8;
+                const minOpenHeight_resize = textHeight_resize + 30;
+                const wasOpen = hasContentArea;
+                const isNowOpen = finalHeight >= minOpenHeight_resize;
+
+                if (wasOpen !== isNowOpen) {
+                    console.log('[BaseCalendar] 開いた仮身/閉じた仮身の判定が変わりました。再描画します。');
+
+                    // 既存のタイマーをクリア
+                    if (this.recreateVirtualObjectTimer) {
+                        clearTimeout(this.recreateVirtualObjectTimer);
+                    }
+
+                    // 開閉状態を更新
+                    if (isNowOpen) {
+                        obj.opened = true;
+                    } else {
+                        obj.opened = false;
+                        obj.heightPx = minClosedHeight_resize;
+                        obj.vobjbottom = obj.vobjtop + minClosedHeight_resize;
+                        vobjElement.style.height = `${minClosedHeight_resize}px`;
+                        // 保存を再実行
+                        this.saveMonthToFile();
+                    }
+
+                    // 遅延して再描画
+                    this.recreateVirtualObjectTimer = setTimeout(() => {
+                        this.renderFreeVirtualObjects();
+                        this.recreateVirtualObjectTimer = null;
+                    }, 150);
+                }
+
+                // ウィンドウのリサイズハンドルを再有効化
+                this.messageBus.send('enable-window-resize');
+
+                // リサイズ終了フラグをリセット
+                this.isResizing = false;
+
+                // iframesのpointer-eventsを元に戻す
+                this.setIframesPointerEvents(true);
+            };
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        }, { capture: true }); // captureモードで先にイベントをキャッチ
+    }
+
+    /**
+     * ドラッグアンドドロップを設定
+     */
+    setupDragAndDrop() {
+        const container = document.querySelector('.plugin-content');
+        if (!container) return;
+
+        // グローバルなdragoverイベントリスナー（仮身一覧と同様のパターン）
+        // 親ウィンドウからiframeへのドラッグ時にdropEffectを設定
+        document.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            // effectAllowedに基づいてdropEffectを設定
+            const effectAllowed = e.dataTransfer.effectAllowed;
+            if (effectAllowed === 'move') {
+                e.dataTransfer.dropEffect = 'move';
+            } else if (effectAllowed === 'copyMove') {
+                e.dataTransfer.dropEffect = 'copy';
+            } else {
+                e.dataTransfer.dropEffect = 'copy';
+            }
+        });
+
+        container.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            // effectAllowedに基づいてdropEffectを設定
+            const effectAllowed = e.dataTransfer.effectAllowed;
+            if (effectAllowed === 'move') {
+                e.dataTransfer.dropEffect = 'move';
+            } else {
+                e.dataTransfer.dropEffect = 'copy';
+            }
+        });
+
+        container.addEventListener('drop', (e) => {
+            e.preventDefault();
+            this.handleDropEvent(e);
+        });
+    }
+
+    /**
+     * ドロップイベントを処理
+     * @param {Event} e - ドロップイベント
+     */
+    async handleDropEvent(e) {
+        const dragData = this.parseDragData(e.dataTransfer);
+        if (!dragData) {
+            console.warn('[BaseCalendar] handleDropEvent: dragDataをパースできません');
+            return;
+        }
+
+        console.log('[BaseCalendar] handleDropEvent:', dragData.type);
+
+        if (dragData.type === 'virtual-object-drag') {
+            const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
+            console.log('[BaseCalendar] 仮身ドロップ:', virtualObjects.length, '個');
+
+            for (const vobj of virtualObjects) {
+                // 自由仮身として追加（名前は変更しない）
+                const result = await this.addFreeVirtualObjectToMonth(vobj, e.clientX, e.clientY);
+                console.log('[BaseCalendar] addFreeVirtualObjectToMonth結果:', result ? '成功' : '失敗');
+            }
+
+            // クロスウィンドウドロップ成功を通知
+            if (dragData.sourceWindowId && dragData.sourceWindowId !== this.windowId) {
+                console.log('[BaseCalendar] クロスウィンドウドロップ成功通知送信');
+                this.notifyCrossWindowDropSuccess(dragData, virtualObjects);
+            }
+
+            this.renderCalendarGrid();
+            this.renderFreeVirtualObjects();
+        } else if (dragData.type === 'archive-file-extract') {
+            // 書庫一覧からのドロップ
+            // 親ウィンドウに書庫ドロップ処理を委譲（unpack-fileプラグインに通知される）
+            this.messageBus.send('archive-drop-detected', {
+                dropPosition: { x: e.clientX, y: e.clientY },
+                dragData: dragData,
+                targetWindowId: dragData.windowId,
+                sourceWindowId: this.windowId
+            });
+        } else if (dragData.type === 'base-file-copy' || dragData.type === 'user-base-file-copy') {
+            // 原紙箱からのドロップ
+            // 親ウィンドウに原紙ドロップ処理を委譲
+            this.messageBus.send('base-file-drop-request', {
+                dropPosition: { x: e.clientX, y: e.clientY },
+                clientX: e.clientX,
+                clientY: e.clientY,
+                dragData: dragData
+            });
+        }
+    }
+
+    /**
+     * 自由仮身を年月実身に追加
+     * @param {Object} virtualObj - 仮身オブジェクト
+     * @param {number} clientX - ドロップX座標
+     * @param {number} clientY - ドロップY座標
+     */
+    async addFreeVirtualObjectToMonth(virtualObj, clientX, clientY) {
+        if (!this.currentMonthXmlData) {
+            return null;
+        }
+
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(this.currentMonthXmlData, 'text/xml');
+            const figureElement = xmlDoc.querySelector('figure');
+            if (!figureElement) {
+                return null;
+            }
+
+            // ドロップ座標をカレンダーコンテナ座標に変換
+            const calendarContainer = document.querySelector('.calendar-container');
+            const rect = calendarContainer ? calendarContainer.getBoundingClientRect() : { left: 0, top: 0, width: 600, height: 400 };
+
+            let dropX = clientX - rect.left;
+            let dropY = clientY - rect.top;
+
+            // 座標をコンテナ内に収める
+            dropX = Math.max(10, Math.min(dropX, rect.width - 160));
+            dropY = Math.max(10, Math.min(dropY, rect.height - 40));
+
+            // 仮身のサイズ
+            const width = (virtualObj.vobjright - virtualObj.vobjleft) || 150;
+            const height = (virtualObj.vobjbottom - virtualObj.vobjtop) || 30;
+
+            // 元の仮身から属性を引き継ぐ（共通メソッドを使用）
+            const newVirtualObj = this.createVirtualObjectData({
+                link_id: virtualObj.link_id,
+                link_name: virtualObj.link_name,
+                vobjleft: dropX,
+                vobjtop: dropY,
+                vobjright: dropX + width,
+                vobjbottom: dropY + height,
+                heightPx: height,
+                chsz: virtualObj.chsz,
+                frcol: virtualObj.frcol,
+                chcol: virtualObj.chcol,
+                tbcol: virtualObj.tbcol,
+                bgcol: virtualObj.bgcol,
+                dlen: virtualObj.dlen,
+                pictdisp: virtualObj.pictdisp,
+                namedisp: virtualObj.namedisp,
+                roledisp: virtualObj.roledisp,
+                typedisp: virtualObj.typedisp,
+                updatedisp: virtualObj.updatedisp,
+                framedisp: virtualObj.framedisp,
+                autoopen: virtualObj.autoopen
+            });
+
+            // 新しいlink要素を作成（共通メソッドを使用）
+            const linkElement = xmlDoc.createElement('link');
+            this.buildLinkElementAttributes(linkElement, newVirtualObj);
+
+            // 改行を追加してからlink要素を追加
+            figureElement.appendChild(xmlDoc.createTextNode('\n'));
+            figureElement.appendChild(linkElement);
+
+            // XMLを文字列に変換
+            const serializer = new XMLSerializer();
+            this.currentMonthXmlData = serializer.serializeToString(xmlDoc);
+
+            // 仮身リストに追加
+            this.virtualObjects.push({
+                link_id: virtualObj.link_id,
+                link_name: virtualObj.link_name,
+                vobjleft: dropX,
+                vobjtop: dropY,
+                vobjright: dropX + width,
+                vobjbottom: dropY + height,
+                width: width,
+                heightPx: height,
+                chsz: newVirtualObj.chsz,
+                frcol: newVirtualObj.frcol,
+                chcol: newVirtualObj.chcol,
+                tbcol: newVirtualObj.tbcol,
+                bgcol: newVirtualObj.bgcol,
+                dlen: newVirtualObj.dlen,
+                pictdisp: newVirtualObj.pictdisp,
+                namedisp: newVirtualObj.namedisp,
+                roledisp: newVirtualObj.roledisp,
+                typedisp: newVirtualObj.typedisp,
+                updatedisp: newVirtualObj.updatedisp,
+                framedisp: newVirtualObj.framedisp,
+                autoopen: newVirtualObj.autoopen
+            });
+
+            // 年月実身を保存
+            this.saveMonthToFile();
+
+            this.isModified = true;
+
+            return virtualObj.link_name;
+        } catch (error) {
+            return null;
+        }
     }
 
     /**
@@ -2156,6 +3250,68 @@ class BaseCalendarApp extends window.PluginBase {
     // ===== 仮身操作機能 =====
 
     /**
+     * 仮身に属性を適用（PluginBaseのオーバーライド）
+     * @param {Object} attrs - 適用する属性値
+     */
+    applyVirtualObjectAttributes(attrs) {
+        // contextMenuVirtualObjectを使用
+        const vobj = this.contextMenuVirtualObject?.virtualObj;
+        if (!vobj) return;
+
+        // PluginBaseの共通メソッドで属性を適用し、変更を取得
+        const changes = this._applyVobjAttrs(vobj, attrs);
+
+        // 変更がない場合は早期リターン
+        if (!this._hasVobjAttrChanges(changes)) {
+            return;
+        }
+
+        // XMLを更新して保存
+        this.updateVirtualObjectInXml(vobj);
+        this.renderCalendarGrid();
+        this.setStatus('仮身属性を変更しました');
+    }
+
+    /**
+     * XMLの仮身を更新
+     * @param {Object} vobj - 更新する仮身オブジェクト
+     */
+    updateVirtualObjectInXml(vobj) {
+        if (!this.currentMonthXmlData) return;
+
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(this.currentMonthXmlData, 'text/xml');
+
+            // link_idで検索
+            const linkElement = xmlDoc.querySelector(`link[id="${vobj.link_id}"]`);
+            if (!linkElement) return;
+
+            // 属性を更新
+            if (vobj.chsz !== undefined) linkElement.setAttribute('chsz', vobj.chsz);
+            if (vobj.frcol !== undefined) linkElement.setAttribute('frcol', vobj.frcol);
+            if (vobj.chcol !== undefined) linkElement.setAttribute('chcol', vobj.chcol);
+            if (vobj.tbcol !== undefined) linkElement.setAttribute('tbcol', vobj.tbcol);
+            if (vobj.bgcol !== undefined) linkElement.setAttribute('bgcol', vobj.bgcol);
+            if (vobj.pictdisp !== undefined) linkElement.setAttribute('pictdisp', vobj.pictdisp);
+            if (vobj.namedisp !== undefined) linkElement.setAttribute('namedisp', vobj.namedisp);
+            if (vobj.roledisp !== undefined) linkElement.setAttribute('roledisp', vobj.roledisp);
+            if (vobj.typedisp !== undefined) linkElement.setAttribute('typedisp', vobj.typedisp);
+            if (vobj.updatedisp !== undefined) linkElement.setAttribute('updatedisp', vobj.updatedisp);
+            if (vobj.framedisp !== undefined) linkElement.setAttribute('framedisp', vobj.framedisp);
+            if (vobj.autoopen !== undefined) linkElement.setAttribute('autoopen', vobj.autoopen);
+
+            // XMLを更新
+            const serializer = new XMLSerializer();
+            this.currentMonthXmlData = serializer.serializeToString(xmlDoc);
+            this.saveMonthToFile();
+            this.isModified = true;
+        } catch (error) {
+            // エラー時は何もしない
+        }
+    }
+
+    /**
      * 選択中の仮身のウィンドウを閉じる
      */
     closeSelectedVirtualObject() {
@@ -2172,39 +3328,75 @@ class BaseCalendarApp extends window.PluginBase {
     }
 
     /**
-     * 続柄設定ダイアログ
+     * 続柄設定ダイアログ（PluginBaseのオーバーライド）
      */
     async setRelationship() {
         if (!this.contextMenuVirtualObject) {
             this.setStatus('仮身が選択されていません');
-            return;
+            return { success: false };
         }
 
-        const result = await this.showMessageDialog(
-            '続柄設定機能は現在開発中です。',
-            [{ label: 'OK', value: 'ok' }],
-            0
-        );
+        // 親クラスのsetRelationship()を呼び出す（metadata更新とフック呼び出しを含む）
+        const result = await super.setRelationship();
+
+        return result;
+    }
+
+    /**
+     * 続柄更新後の再描画（PluginBaseフック）
+     */
+    onRelationshipUpdated(virtualObj, result) {
+        this.renderCalendarGrid();
+        this.setStatus('続柄を変更しました');
     }
 
     // ===== 実身操作機能 =====
 
     /**
-     * 実身属性設定プラグインを開く
+     * 実身複製後のフック（PluginBaseオーバーライド）
+     * 複製した実身の仮身をカレンダーに追加
+     *
+     * @param {Object} originalVirtualObj - 元の仮身オブジェクト
+     * @param {Object} result - 複製結果 { success: true, newRealId: string, newName: string }
      */
-    openRealObjectConfig() {
-        if (!this.contextMenuVirtualObject) {
-            this.setStatus('仮身が選択されていません');
-            return;
-        }
+    async onRealObjectDuplicated(originalVirtualObj, result) {
+        // 新しい仮身オブジェクトを作成（元の仮身の属性を継承、位置をオフセット）
+        const newVirtualObj = {
+            link_id: result.newRealId,
+            link_name: result.newName,
+            vobjleft: (originalVirtualObj.vobjleft || 100) + 20,
+            vobjtop: (originalVirtualObj.vobjtop || 100) + 30,
+            vobjright: (originalVirtualObj.vobjright || 200) + 20,
+            vobjbottom: (originalVirtualObj.vobjbottom || 200) + 30,
+            width: originalVirtualObj.width,
+            heightPx: originalVirtualObj.heightPx,
+            chsz: originalVirtualObj.chsz,
+            frcol: originalVirtualObj.frcol,
+            chcol: originalVirtualObj.chcol,
+            tbcol: originalVirtualObj.tbcol,
+            bgcol: originalVirtualObj.bgcol,
+            dlen: originalVirtualObj.dlen,
+            applist: originalVirtualObj.applist || {},
+            pictdisp: originalVirtualObj.pictdisp || 'true',
+            namedisp: originalVirtualObj.namedisp || 'true',
+            roledisp: originalVirtualObj.roledisp || 'false',
+            typedisp: originalVirtualObj.typedisp || 'false',
+            updatedisp: originalVirtualObj.updatedisp || 'false',
+            framedisp: originalVirtualObj.framedisp || 'true',
+            autoopen: originalVirtualObj.autoopen || 'false'
+        };
 
-        const realId = this.contextMenuVirtualObject.realId;
-        if (realId) {
-            this.messageBus.send('open-accessory-plugin', {
-                pluginId: 'realobject-config',
-                params: { realId: realId }
-            });
-        }
+        // 自由仮身として追加
+        await this.addFreeVirtualObjectToMonth(newVirtualObj,
+            newVirtualObj.vobjleft, newVirtualObj.vobjtop);
+
+        // 再描画
+        this.renderCalendarGrid();
+        this.renderFreeVirtualObjects();
+
+        // 保存
+        this.saveMonthToFile();
+        this.isModified = true;
     }
 
     /**
