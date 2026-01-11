@@ -74,8 +74,9 @@
     </script>
     <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
     <script type="module">
-        import { PluginBase } from '../../js/plugin-base.js';
+        import { PluginBase, TextStyleStateManager } from '../../js/plugin-base.js';
         window.PluginBase = PluginBase;
+        window.TextStyleStateManager = TextStyleStateManager;
     </script>
     <!-- 用紙サイズ定義をグローバル変数として読み込み -->
     <script type="module">

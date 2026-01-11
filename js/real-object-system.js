@@ -996,9 +996,9 @@ export class RealObjectSystem {
 
     /**
      * 続柄設定（プラグイン共通）
-     * 実身のrelationship配列を設定する
+     * 実身のrelationship配列とlink要素のrelationship属性を設定する
      * @param {Object} plugin プラグインインスタンス（messageBus、contextMenuVirtualObject、setStatus、generateMessageIdを持つ）
-     * @returns {Promise<Object>} { success: boolean, relationship?: string[], cancelled?: boolean }
+     * @returns {Promise<Object>} { success: boolean, relationship?: string[], linkRelationship?: string[], cancelled?: boolean }
      */
     static async setRelationship(plugin) {
         if (!plugin.contextMenuVirtualObject || !plugin.contextMenuVirtualObject.virtualObj) {
@@ -1006,11 +1006,16 @@ export class RealObjectSystem {
             return { success: false };
         }
 
+        const virtualObj = plugin.contextMenuVirtualObject.virtualObj;
         const realId = plugin.contextMenuVirtualObject.realId;
+        const linkId = virtualObj.link_id || '';
+        const currentLinkRelationship = virtualObj.linkRelationship || [];
         const messageId = plugin.generateMessageId('set-relationship');
 
         plugin.messageBus.send('set-relationship', {
             realId: realId,
+            linkId: linkId,
+            currentLinkRelationship: currentLinkRelationship,
             messageId: messageId
         });
 
@@ -1021,11 +1026,16 @@ export class RealObjectSystem {
             });
 
             if (result.success) {
-                const relationshipText = result.relationship.length > 0
-                    ? result.relationship.join(' ')
-                    : '（なし）';
-                plugin.setStatus(`続柄を設定しました: ${relationshipText}`);
-                return { success: true, relationship: result.relationship };
+                // 表示用テキストを生成（JSON用は[タグ]形式）
+                const jsonText = (result.relationship || []).map(t => `[${t}]`).join(' ');
+                const linkText = (result.linkRelationship || []).join(' ');
+                const displayText = [jsonText, linkText].filter(t => t).join(' ') || '（なし）';
+                plugin.setStatus(`続柄を設定しました: ${displayText}`);
+                return {
+                    success: true,
+                    relationship: result.relationship || [],
+                    linkRelationship: result.linkRelationship || []
+                };
             }
 
             if (result.cancelled) {

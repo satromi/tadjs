@@ -105,42 +105,57 @@ xmlTADには2種類の文書タイプがあります：
 
 #### `<font>` - フォント設定
 
+**サイズ・色（ペアタグ - 推奨形式）**:
 ```xml
-<font size="14"/>
+<font size="21">大きいテキスト</font>
+<font color="#51aefb">青いテキスト</font>
+<font color="#ff0000"><font size="28">赤くて大きいテキスト</font></font>
+```
+
+**フェイス・その他（自己閉じタグ）**:
+```xml
 <font face="sans-serif"/>
-<font color="#000000"/>
-<font color="rgb(81, 174, 251)"/>
 <font style="normal" weight="400" stretch="normal" stretchscale="1.0"/>
 <font direction="horizontal" kerning="0" pattern="0" space="0"/>
 ```
 
-| 属性 | 説明 | 値の例 |
-|------|------|--------|
-| size | フォントサイズ | "14", "28" |
-| face | フォントファミリー | "sans-serif", "monospace" |
-| color | 文字色 | "#000000", "rgb(81, 174, 251)" |
-| style | フォントスタイル | "normal", "italic" |
-| weight | フォントウェイト | "400", "700" |
-| stretch | フォント幅 | "normal", "condensed" |
-| stretchscale | 幅スケール | "1.0" |
-| direction | 文字方向 | "horizontal", "vertical" |
-| kerning | カーニング | "0" |
-| pattern | スペースパターン | "0" |
-| space | 文字間隔 | "0" |
+**サイズ・色（自己閉じタグ - 後方互換）**:
+```xml
+<font size="14"/>テキスト
+<font color="#51aefb"/>青いテキスト<font color=""/>
+```
+
+> **注意**: サイズ・色の自己閉じタグ形式は後方互換性のために読み込みをサポートしますが、
+> 保存時はペアタグ形式で出力されます。ペアタグ形式はスコープが明確で、
+> HTMLとの相互変換時に冗長なタグが生成されにくいという利点があります。
+
+| 属性 | 説明 | 値の例 | タグ形式 |
+|------|------|--------|---------|
+| size | フォントサイズ | "14", "28" | ペアタグ |
+| face | フォントファミリー | "sans-serif", "monospace" | 自己閉じ |
+| color | 文字色 | "#000000", "#51aefb" | ペアタグ |
+| style | フォントスタイル | "normal", "italic" | 自己閉じ |
+| weight | フォントウェイト | "400", "700" | 自己閉じ |
+| stretch | フォント幅 | "normal", "condensed" | 自己閉じ |
+| stretchscale | 幅スケール | "1.0" | 自己閉じ |
+| direction | 文字送り方向 | "0" (横), "1" (縦) | 自己閉じ |
+| kerning | カーニング | "0", "1" | 自己閉じ |
+| pattern | スペースパターン | "0", "1" | 自己閉じ |
+| space | 文字間隔 | "0", "10" | 自己閉じ |
 
 #### `<text>` - テキスト属性（文章TAD内）
 
 ```xml
 <text line-height="24"/>
 <text align="center"/>
-<text direction="vertical"/>
+<text direction="0"/>
 ```
 
 | 属性 | 説明 | 値の例 |
 |------|------|--------|
 | line-height | 行間ピッチ | "24" |
-| align | 揃え | "left", "center", "right" |
-| direction | 文字方向 | "horizontal", "vertical" |
+| align | 揃え | "left", "center", "right", "justify", "justify-all" |
+| direction | テキスト方向 | "0" (横書き), "1" (縦書き) |
 
 #### 文字装飾要素
 
@@ -266,12 +281,16 @@ TRONコードの面切替（文字セット切替）を示すタグ。`mask`属�
 #### `<docoverlay>` - 文書オーバーレイ
 
 ```xml
+<docoverlay data="768, 65440, 2, ..." />
 <docoverlay active="1, 2, 3" />
 ```
 
 | 属性 | 説明 |
 |------|------|
+| data | オーバーレイデータ（カンマ区切りの数値リスト） |
 | active | アクティブなオーバーレイ番号リスト |
+
+**注意**: `<docoverlay="..."/>`のような属性名のない形式は不正です。必ず`data`または`active`属性を使用してください。
 
 #### `<docmemo>` - 文書メモ
 
@@ -880,6 +899,25 @@ Base64エンコードされたデータ...
 | fixed | 位置固定 | false |
 | applist | 起動可能アプリリスト | "{}" |
 
+#### 仮身固有の続柄属性
+
+| 属性 | 説明 | デフォルト |
+|------|------|-----------|
+| relationship | 仮身固有の続柄（スペース区切りで複数可） | "" |
+
+**続柄の二重管理について**:
+- **実身JSON（`{realId}.json`）の`relationship`配列**: 実身に紐づく続柄。続柄設定ダイアログで`[タグ]`形式で入力された値が保存される。
+- **link要素の`relationship`属性**: 仮身（link）に固有の続柄。続柄設定ダイアログで`タグ`形式（`[]`なし）で入力された値が保存される。
+
+**表示ルール**:
+- `roledisp="true"`の場合、両方の続柄を連結表示
+- 実身JSONの続柄は`[タグ]`形式で表示
+- link要素の続柄はそのまま表示
+- 例: JSON `["親"]` + link `"子1 子2"` → 表示 `[親] 子1 子2`
+
+**検索対応**:
+- 続柄検索時、実身JSONとlink要素のrelationship属性の両方が検索対象
+
 #### レイヤー属性（図形TAD用）
 
 | 属性 | 説明 |
@@ -1286,6 +1324,8 @@ class PluginBase {
 | 2025-12-31 | 1.4 | figScale/docScaleのUNITS型仕様を明確化 |
 | 2026-01-01 | 1.5 | l_atr属性を廃止し、lineType/lineWidth属性に分離 |
 | 2026-01-04 | 1.6 | フォーマットルール（タグ内改行禁止）を追加 |
+| 2026-01-04 | 1.7 | `<docoverlay>`のdata属性追加、段落タグ出力修正 |
+| 2026-01-11 | 1.8 | 段落line-height計算修正、ペアタグフォントサイズ検出対応 |
 
 ### 1.5での変更内容
 
@@ -1378,3 +1418,51 @@ class PluginBase {
 **対応ファイル**:
 
 - `plugins/base-calendar/app.js`: `buildCalendarXml()`, `rebuildCalendarXmlWithVirtualObjects()`のrect/linkタグを1行化
+
+### 1.7での変更内容
+
+**`<docoverlay>`要素の修正**:
+
+- `data`属性を追加（オーバーレイデータ用）
+- 不正な形式`<docoverlay="..."/>`を正しい形式`<docoverlay data="..."/>`に修正
+- 属性名のない形式は不正である旨を仕様書に明記
+
+**段落タグ出力の修正**:
+
+- `tsTextStart()`で`<p>`開始タグを出力するように修正
+- 従来は`isParagraphOpen`フラグのみ設定し、タグ出力が欠落していた
+
+**フォールバック処理の追加**:
+
+- `basic-text-editor`で不正なxtad（`<p>`タグなし）に対する耐性を追加
+- 既存の不正なxtadファイルも正しく表示可能に
+
+**対応ファイル**:
+
+- `plugins/unpack-file/unpack.js`: `tsTextStart()`, 文書オーバーレイ処理
+- `plugins/basic-text-editor/editor.js`: `renderTADXML()`
+
+### 1.8での変更内容
+
+**段落line-height計算の修正**:
+
+- 新段落作成時のline-height計算ロジックを修正
+- 空の段落: デフォルトサイズ（14pt）基準のline-height（21px）
+- コンテンツを含む段落: そのコンテンツの最大フォントサイズ基準
+
+**フォントサイズ検出の拡張**:
+
+- XMLロード時のフォントサイズ検出をペアタグ形式にも対応
+- 自己閉じタグ形式: `<font size="18"/>`
+- ペアタグ形式: `<font size="18">...</font>`
+
+**PluginBase共通化**:
+
+- `calculateMaxFontSizeInContent()`: DOM要素内の最大フォントサイズを計算
+- `calculateMaxFontSizeFromXml()`: XMLコンテンツから最大フォントサイズを計算
+- `calculateLineHeight()`: フォントサイズからline-heightを計算
+
+**対応ファイル**:
+
+- `js/plugin-base.js`: 3つの共通メソッド追加
+- `plugins/basic-text-editor/editor.js`: Enter処理とXMLロード処理を修正

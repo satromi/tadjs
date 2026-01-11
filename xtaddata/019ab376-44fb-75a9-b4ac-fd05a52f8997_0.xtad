@@ -1,10 +1,12 @@
 <tad version="1.0" encoding="UTF-8">
 <document>
+<docScale hunit="-72" vunit="-72"/>
+<text lang="0" bpat="0"/>
 <p>
-<font size="28"/><font color="rgb(81, 174, 251)"/><bold>□ユーザ環境設定</bold>
+<font size="28"><font color="#51aefb"><bold>□ユーザ環境設定</bold></font></font>
 </p>
 <p>
-<font size="14"/>ユーザ環境設定は、ユーザ固有にカスタマイズ可能な項目の設定を変更できます。
+<font size="14">ユーザ環境設定は、ユーザ固有にカスタマイズ可能な項目の設定を変更できます。</font>
 </p>
 <p>
 □機能

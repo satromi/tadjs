@@ -1,14 +1,14 @@
 {
-  "name": "仮身一覧",
+  "name": "屑実身操作",
   "linktype": false,
   "makeDate": "2025-11-23T07:09:55.529Z",
-  "updateDate": "2025-11-24T07:27:25.797Z",
-  "accessDate": "2025-11-24T07:25:27.165Z",
+  "updateDate": "2026-01-10T23:36:39.628Z",
+  "accessDate": "2026-01-10T23:36:34.106Z",
   "periodDate": null,
-  "refCount": 0,
+  "refCount": 1,
   "editable": true,
   "readable": true,
-  "maker": "TRON User",
+  "maker": "TADjs User",
   "window": {
     "pos": {
       "x": 204,
@@ -28,7 +28,12 @@
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
-    "backgroundColor": "#ffffff"
+    "backgroundColor": "#ffffff",
+    "scrollPos": {
+      "x": 0,
+      "y": 0
+    },
+    "wordWrap": true
   },
   "applist": {
     "basic-text-editor": {
@@ -41,7 +46,5 @@
     }
   },
   "realId": "019ab4c0-8d40-7590-89a9-cde7934a6a2b",
-  "recordCount": 1,
-  "realName": "屑実身操作",
-  "createDate": "2025-11-24T07:25:09.312Z"
+  "recordCount": 1
 }

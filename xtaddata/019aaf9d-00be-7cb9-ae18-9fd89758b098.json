@@ -1,11 +1,11 @@
 {
-  "name": "仮身一覧",
+  "name": "基本図形編集",
   "linktype": false,
   "makeDate": "2025-11-23T07:09:55.529Z",
   "updateDate": "2025-11-23T07:28:13.503Z",
   "accessDate": "2025-11-23T07:28:13.503Z",
   "periodDate": null,
-  "refCount": 0,
+  "refCount": 1,
   "editable": true,
   "readable": true,
   "maker": "TRON User",
@@ -41,7 +41,5 @@
     }
   },
   "realId": "019aaf9d-00be-7cb9-ae18-9fd89758b098",
-  "recordCount": 1,
-  "realName": "基本図形編集",
-  "createDate": "2025-11-23T07:28:13.503Z"
+  "recordCount": 1
 }

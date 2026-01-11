@@ -1,11 +1,11 @@
 {
-  "name": "仮身一覧",
+  "name": "システム環境設定",
   "linktype": false,
   "makeDate": "2025-11-23T07:09:55.529Z",
   "updateDate": "2025-11-24T01:19:44.555Z",
   "accessDate": "2025-11-24T01:19:44.555Z",
   "periodDate": null,
-  "refCount": 0,
+  "refCount": 1,
   "editable": true,
   "readable": true,
   "maker": "TRON User",
@@ -41,7 +41,5 @@
     }
   },
   "realId": "019ab372-01ab-73f6-990d-9bdc4a4486cb",
-  "recordCount": 1,
-  "realName": "システム環境設定",
-  "createDate": "2025-11-24T01:19:44.555Z"
+  "recordCount": 1
 }

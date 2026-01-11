@@ -677,81 +677,74 @@ class BaseFileManager extends window.PluginBase {
      * 背景色変更ダイアログを表示
      */
     async changeBgColor() {
-        return new Promise((resolve) => {
-            // 現在の背景色を取得
-            const currentBgColor = (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor)
-                ? this.fileData.windowConfig.backgroundColor
-                : '#ffffff';
+        // 現在の背景色を取得
+        const currentBgColor = (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor)
+            ? this.fileData.windowConfig.backgroundColor
+            : '#ffffff';
 
-            // ダイアログのHTML要素を作成
-            const dialogHtml = `
-                <div style="margin-bottom: 10px;">ウインドウ背景色を選択してください。</div>
-                <div style="margin-bottom: 10px;">
-                    <label style="display: block; margin-bottom: 5px;">#FFFFFF形式で入力：</label>
-                    <input type="text" id="bgColorInput" placeholder="#FFFFFF" value="${currentBgColor}"
-                           style="width: 100%; padding: 5px; box-sizing: border-box;">
-                </div>
-            `;
+        // ダイアログのHTML要素を作成
+        const dialogHtml = `
+            <div style="margin-bottom: 10px;">ウインドウ背景色を選択してください。</div>
+            <div style="margin-bottom: 10px;">
+                <label style="display: block; margin-bottom: 5px;">#FFFFFF形式で入力：</label>
+                <input type="text" id="bgColorInput" placeholder="#FFFFFF" value="${currentBgColor}"
+                       style="width: 100%; padding: 5px; box-sizing: border-box;">
+            </div>
+        `;
 
-            const handleResponse = (result) => {
-                // Dialog result is wrapped in result.result
-                const dialogResult = result.result || result;
-
-                if (dialogResult.button === 'ok') {
-                    const inputColor = dialogResult.input;
-
-                    // 入力された色を検証
-                    if (/^#[0-9A-Fa-f]{6}$/.test(inputColor)) {
-                        const newBgColor = inputColor;
-
-                        // コンテナと一覧の背景色を変更
-                        const container = document.querySelector('.manager-container');
-                        const list = document.querySelector('.base-file-list');
-                        if (container) {
-                            container.style.background = newBgColor;
-                        }
-                        if (list) {
-                            list.style.background = newBgColor;
-                        } else {
-                            logger.error('[BaseFileManager] .base-file-listが見つかりません');
-                        }
-
-                        // 実身管理用セグメントのbackgroundColorを更新
-                        if (this.realId) {
-                            this.messageBus.send('update-background-color', {
-                                fileId: this.realId,
-                                backgroundColor: newBgColor
-                            });
-                        }
-
-                        // this.fileDataを更新（再表示時に正しい色を適用するため）
-                        if (!this.fileData) {
-                            this.fileData = {};
-                        }
-                        if (!this.fileData.windowConfig) {
-                            this.fileData.windowConfig = {};
-                        }
-                        this.fileData.windowConfig.backgroundColor = newBgColor;
-                    } else {
-                        logger.warn('[BaseFileManager] 無効な色形式:', inputColor);
-                    }
-                }
-                resolve(result);
-            };
-
-            // MessageBus使用
-            this.messageBus.sendWithCallback('show-custom-dialog', {
-                dialogHtml: dialogHtml,
-                buttons: [
-                    { label: '取消', value: 'cancel' },
-                    { label: '設定', value: 'ok' }
-                ],
-                defaultButton: 1,
-                inputs: {
-                    text: 'bgColorInput'
-                }
-            }, handleResponse);
+        const result = await this.showCustomDialog({
+            dialogHtml: dialogHtml,
+            buttons: [
+                { label: '取消', value: 'cancel' },
+                { label: '設定', value: 'ok' }
+            ],
+            defaultButton: 1,
+            inputs: {
+                text: 'bgColorInput'
+            }
         });
+
+        if (result && result.button === 'ok') {
+            const inputColor = result.input;
+
+            // 入力された色を検証
+            if (/^#[0-9A-Fa-f]{6}$/.test(inputColor)) {
+                const newBgColor = inputColor;
+
+                // コンテナと一覧の背景色を変更
+                const container = document.querySelector('.manager-container');
+                const list = document.querySelector('.base-file-list');
+                if (container) {
+                    container.style.background = newBgColor;
+                }
+                if (list) {
+                    list.style.background = newBgColor;
+                } else {
+                    logger.error('[BaseFileManager] .base-file-listが見つかりません');
+                }
+
+                // 実身管理用セグメントのbackgroundColorを更新
+                if (this.realId) {
+                    this.messageBus.send('update-background-color', {
+                        fileId: this.realId,
+                        backgroundColor: newBgColor
+                    });
+                }
+
+                // this.fileDataを更新（再表示時に正しい色を適用するため）
+                if (!this.fileData) {
+                    this.fileData = {};
+                }
+                if (!this.fileData.windowConfig) {
+                    this.fileData.windowConfig = {};
+                }
+                this.fileData.windowConfig.backgroundColor = newBgColor;
+            } else {
+                logger.warn('[BaseFileManager] 無効な色形式:', inputColor);
+            }
+        }
+
+        return result;
     }
 
     /**

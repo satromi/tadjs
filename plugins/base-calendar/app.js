@@ -521,7 +521,10 @@ class BaseCalendarApp extends window.PluginBase {
 
             // XMLを文字列に変換
             const serializer = new XMLSerializer();
-            this.currentMonthXmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.currentMonthXmlData = xmlString;
 
             // 仮身リストに追加（全属性を含める）
             this.virtualObjects.push({
@@ -577,6 +580,8 @@ class BaseCalendarApp extends window.PluginBase {
             for (const link of linkElements) {
                 const virtualObj = this.parseLinkElement(link);
                 if (virtualObj) {
+                    // 自己閉じタグ対応: JSONから実身名を読み込み
+                    await this.loadVirtualObjectMetadata(virtualObj);
                     this.monthVirtualObjects.push(virtualObj);
                 }
             }
@@ -593,6 +598,30 @@ class BaseCalendarApp extends window.PluginBase {
      */
     findHolidayVirtualObject() {
         return this.monthVirtualObjects.find(vobj => vobj.link_name === '休日') || null;
+    }
+
+    /**
+     * 「年月日実身」テンプレート仮身を検索
+     * @returns {Object|null} テンプレート仮身オブジェクト
+     */
+    findDayTemplateVirtualObject() {
+        return this.monthVirtualObjects.find(vobj => vobj.link_name === '年月日実身') || null;
+    }
+
+    /**
+     * テンプレートxmlTADに日付を適用
+     * @param {string} templateXtad - テンプレートxmlTAD
+     * @param {string} dayName - 日名（YYYY/MM/DD形式）
+     * @returns {string} 日付置換後のxmlTAD
+     */
+    applyDateToTemplate(templateXtad, dayName) {
+        // YYYY/MM/DD を実際の日付に置換
+        let result = templateXtad.replace(/YYYY\/MM\/DD/g, dayName);
+
+        // filename属性も更新
+        result = result.replace(/filename="[^"]*"/, `filename="${dayName}"`);
+
+        return result;
     }
 
     /**
@@ -1381,8 +1410,8 @@ class BaseCalendarApp extends window.PluginBase {
                 bottom = vobj.vobjbottom || (top + 30);
             }
 
-            // link要素を生成
-            xmlTAD += `<link id="${vobj.link_id}" vobjleft="${left}" vobjtop="${top}" vobjright="${right}" vobjbottom="${bottom}" height="${bottom - top}" chsz="${vobj.chsz || 10}" frcol="${vobj.frcol || '#b0c0d0'}" chcol="${vobj.chcol || '#000000'}" tbcol="${vobj.tbcol || '#e8f4ff'}" bgcol="${vobj.bgcol || '#e8f4ff'}" dlen="${vobj.dlen || 0}" pictdisp="${vobj.pictdisp !== undefined ? vobj.pictdisp : 'true'}" namedisp="${vobj.namedisp !== undefined ? vobj.namedisp : 'true'}" roledisp="${vobj.roledisp !== undefined ? vobj.roledisp : 'false'}" typedisp="${vobj.typedisp !== undefined ? vobj.typedisp : 'false'}" updatedisp="${vobj.updatedisp !== undefined ? vobj.updatedisp : 'false'}" framedisp="${vobj.framedisp !== undefined ? vobj.framedisp : 'true'}" autoopen="${vobj.autoopen !== undefined ? vobj.autoopen : 'false'}" zIndex="${zIndex}">${linkName}</link>\r\n`;
+            // link要素を生成（自己閉じタグ形式、link_nameはJSONから取得する方式に統一）
+            xmlTAD += `<link id="${vobj.link_id}" vobjleft="${left}" vobjtop="${top}" vobjright="${right}" vobjbottom="${bottom}" height="${bottom - top}" chsz="${vobj.chsz || 10}" frcol="${vobj.frcol || '#b0c0d0'}" chcol="${vobj.chcol || '#000000'}" tbcol="${vobj.tbcol || '#e8f4ff'}" bgcol="${vobj.bgcol || '#e8f4ff'}" dlen="0" pictdisp="${vobj.pictdisp !== undefined ? vobj.pictdisp : 'true'}" namedisp="${vobj.namedisp !== undefined ? vobj.namedisp : 'true'}" roledisp="${vobj.roledisp !== undefined ? vobj.roledisp : 'false'}" typedisp="${vobj.typedisp !== undefined ? vobj.typedisp : 'false'}" updatedisp="${vobj.updatedisp !== undefined ? vobj.updatedisp : 'false'}" framedisp="${vobj.framedisp !== undefined ? vobj.framedisp : 'true'}" autoopen="${vobj.autoopen !== undefined ? vobj.autoopen : 'false'}" zIndex="${zIndex}"/>\r\n`;
             zIndex++;
         }
 
@@ -1495,7 +1524,10 @@ class BaseCalendarApp extends window.PluginBase {
 
             // XMLを文字列に変換
             const serializer = new XMLSerializer();
-            this.xmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.xmlData = xmlString;
 
             // 年月仮身リストに追加（全属性を含める）
             this.monthVirtualObjects.push({
@@ -1550,6 +1582,8 @@ class BaseCalendarApp extends window.PluginBase {
             for (const link of linkElements) {
                 const virtualObj = this.parseLinkElement(link);
                 if (virtualObj) {
+                    // 自己閉じタグ対応: JSONから実身名を読み込み
+                    await this.loadVirtualObjectMetadata(virtualObj);
                     this.virtualObjects.push(virtualObj);
                 }
             }
@@ -2320,6 +2354,13 @@ class BaseCalendarApp extends window.PluginBase {
      * @param {Event} e - ドロップイベント
      */
     async handleDropEvent(e) {
+        // URLドロップをチェック（PluginBase共通メソッド）
+        const dropX = e.clientX;
+        const dropY = e.clientY;
+        if (this.checkAndHandleUrlDrop(e, dropX, dropY)) {
+            return; // URLドロップは親ウィンドウで処理
+        }
+
         const dragData = this.parseDragData(e.dataTransfer);
         if (!dragData) {
             console.warn('[BaseCalendar] handleDropEvent: dragDataをパースできません');
@@ -2435,7 +2476,10 @@ class BaseCalendarApp extends window.PluginBase {
 
             // XMLを文字列に変換
             const serializer = new XMLSerializer();
-            this.currentMonthXmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.currentMonthXmlData = xmlString;
 
             // 仮身リストに追加
             this.virtualObjects.push({
@@ -2575,12 +2619,27 @@ class BaseCalendarApp extends window.PluginBase {
             return;
         }
 
-        // 新規年月日実身を作成（正しいxmlTAD形式）
-        const initialXtad = this.buildTextDocumentXml(dayName, {
-            fontSize: 20,
-            align: 'center',
-            filename: dayName
-        });
+        // テンプレート仮身を検索
+        let initialXtad = null;
+        const templateVobj = this.findDayTemplateVirtualObject();
+
+        if (templateVobj) {
+            // テンプレートがある場合: テンプレートを読み込んで日付を適用
+            const realIdFromLink = templateVobj.link_id.replace(/_\d+\.xtad$/i, '');
+            const templateXtad = await this.loadRealObjectXtad(realIdFromLink);
+            if (templateXtad) {
+                initialXtad = this.applyDateToTemplate(templateXtad, dayName);
+            }
+        }
+
+        if (!initialXtad) {
+            // テンプレートがない場合: 従来通り自動生成
+            initialXtad = this.buildTextDocumentXml(dayName, {
+                fontSize: 20,
+                align: 'center',
+                filename: dayName
+            });
+        }
 
         // 年月日実身用のapplist（基本文章編集で開く）
         const applist = {
@@ -2683,7 +2742,10 @@ class BaseCalendarApp extends window.PluginBase {
 
             // XMLを文字列に変換
             const serializer = new XMLSerializer();
-            this.currentMonthXmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.currentMonthXmlData = xmlString;
 
             // 仮身リストに追加（全属性を含める）
             this.virtualObjects.push({
@@ -3239,7 +3301,10 @@ class BaseCalendarApp extends window.PluginBase {
 
             // XMLを更新
             const serializer = new XMLSerializer();
-            this.currentMonthXmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.currentMonthXmlData = xmlString;
             this.saveMonthToFile();
             this.isModified = true;
         } catch (error) {
@@ -3301,9 +3366,19 @@ class BaseCalendarApp extends window.PluginBase {
             if (vobj.framedisp !== undefined) linkElement.setAttribute('framedisp', vobj.framedisp);
             if (vobj.autoopen !== undefined) linkElement.setAttribute('autoopen', vobj.autoopen);
 
+            // 仮身固有の続柄（link要素のrelationship属性）
+            if (vobj.linkRelationship && vobj.linkRelationship.length > 0) {
+                linkElement.setAttribute('relationship', vobj.linkRelationship.join(' '));
+            } else if (linkElement.hasAttribute('relationship')) {
+                linkElement.removeAttribute('relationship');
+            }
+
             // XMLを更新
             const serializer = new XMLSerializer();
-            this.currentMonthXmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.currentMonthXmlData = xmlString;
             this.saveMonthToFile();
             this.isModified = true;
         } catch (error) {
@@ -3340,6 +3415,17 @@ class BaseCalendarApp extends window.PluginBase {
         const result = await super.setRelationship();
 
         return result;
+    }
+
+    /**
+     * 仮身の続柄をXMLに保存（PluginBaseフックオーバーライド）
+     * @param {Object} virtualObj - 更新された仮身オブジェクト
+     * @returns {Promise<void>}
+     */
+    async saveVirtualObjectRelationshipToXml(virtualObj) {
+        if (virtualObj && virtualObj.link_id) {
+            this.updateVirtualObjectInXml(virtualObj);
+        }
     }
 
     /**

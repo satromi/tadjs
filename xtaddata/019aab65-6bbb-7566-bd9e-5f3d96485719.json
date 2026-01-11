@@ -1,11 +1,11 @@
 {
-  "name": "開いた仮身サンプル",
+  "name": "閉じた仮身",
   "linktype": false,
   "makeDate": "2025-11-22T11:46:48.927Z",
   "updateDate": "2025-11-22T11:49:02.011Z",
   "accessDate": "2025-11-22T11:49:02.011Z",
   "periodDate": null,
-  "refCount": 0,
+  "refCount": 1,
   "editable": true,
   "readable": true,
   "maker": "TRON User",
@@ -37,7 +37,5 @@
     }
   },
   "realId": "019aab65-6bbb-7566-bd9e-5f3d96485719",
-  "recordCount": 1,
-  "realName": "閉じた仮身",
-  "createDate": "2025-11-22T11:49:02.011Z"
+  "recordCount": 1
 }

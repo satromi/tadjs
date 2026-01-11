@@ -1671,6 +1671,7 @@ function tsTextStart(tadSeg) {
         xmlBuffer.push(`<text lang="${textChar.lang}" bpat="${textChar.bpat}"/>\r\n`);
         isInDocSegment = true;
         isXmlTad = true;
+        xmlBuffer.push('<p>');  // 段落開始タグを出力
         isParagraphOpen = true;  // 段落が開始
         currentIndentLevel++;
     }
@@ -1930,7 +1931,7 @@ function tsDocSizeOfPaperOverlayDefineFusen(segLen, tadSeg) {
 
     // XMLダンプ用
     if (isXmlDumpEnabled()) {
-        xmlBuffer.push(`<docoverlay="${overlayData.join(', ')}" />\r\n`);
+        xmlBuffer.push(`<docoverlay data="${overlayData.join(', ')}" />\r\n`);
     }
 }
 
@@ -2262,7 +2263,7 @@ function tsRulerLineDirectionSetFusen(segLen, tadSeg) {
     // XML出力
     if (isXmlDumpEnabled()) {
         // HTML5のp要素のdir属性として出力
-        const dirValue = textDirection === 0 ? 'ltr' : 'rtl'; // 0:横書き(ltr), 1:縦書き(rtl)
+        const dirValue = textDirection === 0 ? '0' : '1'; // 0:横書き(ltr), 1:縦書き(rtl)
         xmlBuffer.push(`<text direction="${dirValue}"/>`);
     }
 }
@@ -4930,8 +4931,10 @@ function tsVirtualObjSegment(segLen, tadSeg) {
         console.log(`[tsVirtualObjSegment] link_id=${newLink.link_id}, linkedFileIndex=${linkedFileIndex}, realId=${realId}`);
 
         // 図形セグメント内のz-index管理
+        // XMLのリンク情報を保存（自己閉じタグ形式）
+        // link_nameはJSONから取得する方式に統一
         figureZIndexCounter++;
-        xmlBuffer.push(`<link id="${realId}_0.xtad" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}" zIndex="${figureZIndexCounter}">${newLink.link_name || ''}</link>\r\n`);
+        xmlBuffer.push(`<link id="${realId}_0.xtad" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}" zIndex="${figureZIndexCounter}"/>\r\n`);
     }
 
 

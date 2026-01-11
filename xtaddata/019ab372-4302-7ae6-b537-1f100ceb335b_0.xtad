@@ -1,11 +1,13 @@
 <tad version="1.0" encoding="UTF-8">
 <document>
+<docScale hunit="-72" vunit="-72"/>
+<text lang="0" bpat="0"/>
 <p>
-<font size="28"/><font color="rgb(81, 174, 251)"/><bold>□システム環境設定</bold>
+<font size="28"><font color="#51aefb"><bold>□システム環境設定</bold></font></font>
 </p>
 <p>
-<font size="14"/>システム環境設定は、システムに関する設定を変更できます。<br/>
-一応バージョン表示などもありますが、基本はBTORNの画面を再現する小ネタとしての冗談機能です。
+<font size="14">システム環境設定は、システムに関する設定を変更できます。<br/>
+一応バージョン表示などもありますが、基本はBTORNの画面を再現する小ネタとしての冗談機能です。</font>
 </p>
 <p>
 □機能

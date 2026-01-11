@@ -1,11 +1,11 @@
 {
-  "name": "仮身一覧",
+  "name": "屑実身操作",
   "linktype": false,
   "makeDate": "2025-11-23T07:09:55.529Z",
   "updateDate": "2025-11-24T07:25:01.879Z",
   "accessDate": "2025-11-24T07:25:01.879Z",
   "periodDate": null,
-  "refCount": 0,
+  "refCount": 1,
   "editable": true,
   "readable": true,
   "maker": "TRON User",
@@ -41,7 +41,5 @@
     }
   },
   "realId": "019ab4c0-7037-7b42-8fd5-312dcb0e0f22",
-  "recordCount": 1,
-  "realName": "屑実身操作",
-  "createDate": "2025-11-24T07:25:01.879Z"
+  "recordCount": 1
 }

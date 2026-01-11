@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.30
+ * TADjs Ver 0.32
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -1510,20 +1510,55 @@ class TADjsDesktop {
                     logger.debug(`Dropped ${files.length} files:`, files);
                     e.stopPropagation();
                     this.handleFilesDrop(files);
-                } else {
-                    logger.debug('No files in drop event');
+                    return false;
                 }
+
+                // URLドロップをチェック（ブラウザからのURLドラッグ）
+                const uriList = e.dataTransfer.getData('text/uri-list');
+                const plainText = e.dataTransfer.getData('text/plain');
+                console.log('[TADjs] setupDropEvents - uriList:', uriList, 'plainText:', plainText);
+                console.log('[TADjs] setupDropEvents - dataTransfer.types:', Array.from(e.dataTransfer.types));
+
+                let droppedUrl = null;
+                if (uriList) {
+                    const urls = uriList.split('\n')
+                        .map(line => line.trim())
+                        .filter(line => line && !line.startsWith('#'));
+                    if (urls.length > 0) {
+                        droppedUrl = urls[0];
+                    }
+                } else if (plainText && /^https?:\/\/.+/i.test(plainText.trim())) {
+                    droppedUrl = plainText.trim();
+                }
+
+                if (droppedUrl) {
+                    console.log('[TADjs] setupDropEvents - URLドロップ検出:', droppedUrl);
+                    // desktopへのドロップはデフォルト位置（100, 100）を使用
+                    this.handleUrlDrop(droppedUrl, null, 100, 100);
+                    e.stopPropagation();
+                    return false;
+                }
+
+                logger.debug('No files or URL in drop event');
                 return false;
             });
         };
-        
+
             // ドロップゾーンとデスクトップ全体でイベントを設定
             setupDropEvents(dropZone);
             setupDropEvents(desktop);
             
             // ドキュメント全体でもドラッグイベントをキャンセル（ブラウザのデフォルト動作を防ぐ）
+            // dragenterとdragoverでdropEffectを設定しないと外部からのドロップが受け付けられない
+            document.addEventListener('dragenter', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+                return false;
+            });
+
             document.addEventListener('dragover', (e) => {
                 e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
                 return false;
             });
             
@@ -1555,22 +1590,21 @@ class TADjsDesktop {
                     if (iframe && iframe.contentWindow) {
                         logger.debug('[TADjs] iframe上でのドロップを検出、iframeにデータを転送:', targetWindow.id);
 
+                        // iframeの座標系に変換（URLドロップでも使用するため先に計算）
+                        const iframeRect = iframe.getBoundingClientRect();
+                        const iframeX = dropX - iframeRect.left;
+                        const iframeY = dropY - iframeRect.top;
+                        const windowId = this.parentMessageBus.getWindowIdFromIframe(iframe);
+
                         // ドロップデータを取得
                         const textData = e.dataTransfer.getData('text/plain');
                         console.log('[TADjs] textData:', textData ? textData.substring(0, 100) : 'なし');
-                        
+
                         // iframeにpostMessageでドロップイベントを転送
                         if (textData) {
                             try {
                                 const dragData = JSON.parse(textData);
                                 console.log('[TADjs] dragData.type:', dragData.type);
-
-                                // iframeの座標系に変換
-                                const iframeRect = iframe.getBoundingClientRect();
-                                const iframeX = dropX - iframeRect.left;
-                                const iframeY = dropY - iframeRect.top;
-
-                                const windowId = this.parentMessageBus.getWindowIdFromIframe(iframe);
 
                                 // 原紙箱からのドロップの場合は handleBaseFileDrop() で処理
                                 if (dragData.type === 'base-file-copy' || dragData.type === 'user-base-file-copy') {
@@ -1614,8 +1648,33 @@ class TADjsDesktop {
                                 e.preventDefault();
                                 return false;
                             } catch (err) {
-                                logger.debug('[TADjs] ドロップデータのJSON解析失敗、ファイルドロップをチェック');
+                                logger.debug('[TADjs] ドロップデータのJSON解析失敗、URLドロップをチェック');
                             }
+                        }
+
+                        // URLドロップをチェック（ブラウザからのURLドラッグ）
+                        const uriList = e.dataTransfer.getData('text/uri-list');
+                        const plainText = e.dataTransfer.getData('text/plain');
+
+                        // URLを抽出（text/uri-listを優先）
+                        let droppedUrl = null;
+                        if (uriList) {
+                            // text/uri-listは改行区切り、#で始まる行はコメント
+                            const urls = uriList.split('\n')
+                                .map(line => line.trim())
+                                .filter(line => line && !line.startsWith('#'));
+                            if (urls.length > 0) {
+                                droppedUrl = urls[0]; // 最初のURLを使用
+                            }
+                        } else if (plainText && /^https?:\/\/.+/i.test(plainText.trim())) {
+                            droppedUrl = plainText.trim();
+                        }
+
+                        if (droppedUrl) {
+                            logger.debug('[TADjs] URLドロップ検出:', droppedUrl);
+                            this.handleUrlDrop(droppedUrl, iframe, iframeX, iframeY);
+                            e.preventDefault();
+                            return false;
                         }
 
                         // 外部ファイルドロップをチェック（Windowsからのドラッグなど）
@@ -2047,6 +2106,159 @@ class TADjsDesktop {
         }
 
         this.setStatusMessage(`実身「${newName}」を作成しました`);
+    }
+
+    /**
+     * URLドロップを処理
+     * URL原紙を使って新規実身を作成し、ドロップ先に仮身を追加
+     * @param {string} url - ドロップされたURL
+     * @param {HTMLIFrameElement} targetIframe - ドロップ先のiframe
+     * @param {number} dropX - ドロップ位置X（iframe内座標）
+     * @param {number} dropY - ドロップ位置Y（iframe内座標）
+     */
+    async handleUrlDrop(url, targetIframe, dropX, dropY) {
+        logger.debug('[TADjs] handleUrlDrop開始:', url);
+
+        // URLからデフォルトの実身名を生成（ホスト名を使用）
+        let defaultName = 'URL仮身';
+        try {
+            const urlObj = new URL(url);
+            defaultName = urlObj.hostname || 'URL仮身';
+        } catch (e) {
+            // URL解析エラーの場合はデフォルト名を使用
+        }
+
+        // 実身名を入力するダイアログを表示
+        const result = await this.showInputDialog(
+            '新しい実身の名称を入力してください',
+            defaultName,
+            30,
+            [
+                { label: '取消', value: 'cancel' },
+                { label: '設定', value: 'ok' }
+            ],
+            1
+        );
+
+        if (result.button === 'cancel' || !result.value) {
+            logger.debug('[TADjs] URLドロップキャンセル');
+            return;
+        }
+
+        const newName = result.value;
+        logger.debug('[TADjs] URL実身名:', newName);
+
+        // 新しい実身IDを生成
+        const newRealId = typeof generateUUIDv7 === 'function'
+            ? generateUUIDv7()
+            : this.generateRealFileIdSet(1).fileId;
+        logger.debug('[TADjs] URL実身ID:', newRealId);
+
+        // xtadを生成（URLを段落で囲む）
+        const xtadContent = `<tad version="1.0" encoding="UTF-8" filename="${newName}">
+<document>
+<p>
+${url}
+</p>
+</document>
+</tad>
+`;
+
+        // メタデータを生成（URL原紙のapplistを使用）
+        const currentDateTime = new Date().toISOString();
+        const newMetadata = {
+            name: newName,
+            relationship: [],
+            linktype: false,
+            makeDate: currentDateTime,
+            updateDate: currentDateTime,
+            accessDate: currentDateTime,
+            periodDate: null,
+            refCount: 1,
+            editable: true,
+            readable: true,
+            maker: this.currentUser || 'TRON User',
+            window: {
+                pos: { x: 100, y: 100 },
+                width: 400,
+                height: 200,
+                minWidth: 200,
+                minHeight: 200,
+                resizable: true,
+                scrollable: true
+            },
+            applist: {
+                'url-link-exec': { name: 'URL仮身', defaultOpen: true },
+                'basic-text-editor': { name: '基本文章編集', defaultOpen: false }
+            }
+        };
+
+        // RealObjectSystemに保存
+        try {
+            await this.realObjectSystem.saveRealObject(newRealId, {
+                metadata: newMetadata,
+                records: [{ xtad: xtadContent, images: [] }]
+            });
+            logger.debug('[TADjs] URL実身保存完了:', newRealId);
+        } catch (error) {
+            logger.error('[TADjs] URL実身保存エラー:', error);
+            this.setStatusMessage('URL実身の保存に失敗しました');
+            return;
+        }
+
+        // JSONファイルも保存
+        const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(newRealId);
+        await this.saveDataFile(jsonFileName, JSON.stringify(newMetadata, null, 2));
+
+        // XTADファイルも保存
+        const xtadFileName = `${newRealId}_0.xtad`;
+        await this.saveDataFile(xtadFileName, xtadContent);
+
+        // アイコンファイルをコピー（URL原紙のアイコン）
+        const URL_BASE_FILE_REAL_ID = '019a4a5c-8888-4b8a-9d3c-1f6e8a9b2c4d';
+        if (this.isElectronEnv) {
+            try {
+                const basePath = this.realObjectSystem.getDataBasePath();
+                const fs = require('fs');
+                const path = require('path');
+                const sourceIcoPath = path.join(basePath, `${URL_BASE_FILE_REAL_ID}.ico`);
+                const newIcoPath = path.join(basePath, `${newRealId}.ico`);
+
+                if (fs.existsSync(sourceIcoPath)) {
+                    fs.copyFileSync(sourceIcoPath, newIcoPath);
+                    logger.debug('[TADjs] URLアイコンコピー成功');
+                } else {
+                    // プラグインディレクトリからアイコンをコピー
+                    const pluginIcoPath = path.join(__dirname, 'plugins', 'url-link-exec', `${URL_BASE_FILE_REAL_ID}.ico`);
+                    if (fs.existsSync(pluginIcoPath)) {
+                        fs.copyFileSync(pluginIcoPath, newIcoPath);
+                        logger.debug('[TADjs] URLアイコン（プラグインから）コピー成功');
+                    }
+                }
+            } catch (error) {
+                logger.warn('[TADjs] URLアイコンコピーエラー:', error.message);
+            }
+        }
+
+        // ドロップ先のウィンドウに仮身を追加
+        if (targetIframe && targetIframe.contentWindow) {
+            const windowId = this.parentMessageBus.getWindowIdFromIframe(targetIframe);
+            if (windowId) {
+                this.parentMessageBus.sendToWindow(windowId, 'add-virtual-object-from-base', {
+                    realId: newRealId,
+                    name: newName,
+                    dropPosition: { x: dropX, y: dropY },
+                    applist: newMetadata.applist
+                });
+                logger.debug('[TADjs] URL仮身追加:', newRealId, newName);
+            } else {
+                logger.warn('[TADjs] windowIdが見つかりませんでした。URL仮身を追加できません。');
+            }
+        } else {
+            logger.warn('[TADjs] ドロップ先iframeが不明です');
+        }
+
+        this.setStatusMessage(`URL実身「${newName}」を作成しました`);
     }
 
     /**
@@ -5622,6 +5834,12 @@ class TADjsDesktop {
         );
 
         this.messageRouter.register(
+            'url-drop-request',
+            this.handleUrlDropRequest.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
             'trash-real-object-drop-request',
             this.handleTrashRealObjectDropRequest.bind(this),
             { autoResponse: false }
@@ -6370,8 +6588,9 @@ class TADjsDesktop {
                 }
             }
 
-            // 続柄検索
+            // 続柄検索（JSON metadata + link要素のrelationship属性）
             if (searchTarget === 'relationship' || searchTarget === 'all') {
+                // JSON metadataの続柄を検索
                 const relationships = metadata.relationship || [];
                 for (const rel of relationships) {
                     if (useRegex) {
@@ -6383,6 +6602,24 @@ class TADjsDesktop {
                         if (rel.toLowerCase().includes(searchText.toLowerCase())) {
                             relationshipMatched = true;
                             break;
+                        }
+                    }
+                }
+
+                // link要素のrelationship属性も検索
+                if (!relationshipMatched) {
+                    const linkRelationships = await this.extractLinkRelationshipsFromRealObject(metadata.realId);
+                    for (const rel of linkRelationships) {
+                        if (useRegex) {
+                            if (searchPattern.test(rel)) {
+                                relationshipMatched = true;
+                                break;
+                            }
+                        } else {
+                            if (rel.toLowerCase().includes(searchText.toLowerCase())) {
+                                relationshipMatched = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -6567,8 +6804,9 @@ class TADjsDesktop {
                     }
                 }
 
-                // 続柄検索
+                // 続柄検索（JSON metadata + link要素のrelationship属性）
                 if (effectiveSearchTarget === 'relationship' || effectiveSearchTarget === 'all') {
+                    // JSON metadataの続柄を検索
                     const relationships = metadata.relationship || [];
                     for (const rel of relationships) {
                         if (useRegex) {
@@ -6580,6 +6818,24 @@ class TADjsDesktop {
                             if (rel.toLowerCase().includes(searchText.toLowerCase())) {
                                 relationshipMatched = true;
                                 break;
+                            }
+                        }
+                    }
+
+                    // link要素のrelationship属性も検索
+                    if (!relationshipMatched) {
+                        const linkRelationships = await this.extractLinkRelationshipsFromRealObject(metadata.realId);
+                        for (const rel of linkRelationships) {
+                            if (useRegex) {
+                                if (searchPattern.test(rel)) {
+                                    relationshipMatched = true;
+                                    break;
+                                }
+                            } else {
+                                if (rel.toLowerCase().includes(searchText.toLowerCase())) {
+                                    relationshipMatched = true;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -6751,6 +7007,70 @@ class TADjsDesktop {
         } catch (error) {
             logger.warn('[TADjs] XTAD テキスト抽出エラー:', error);
             return '';
+        }
+    }
+
+    /**
+     * 実身からlink要素のrelationship属性を抽出（続柄検索用）
+     * @param {string} realId - 実身ID
+     * @returns {Promise<string[]>} 続柄タグの配列
+     */
+    async extractLinkRelationshipsFromRealObject(realId) {
+        try {
+            const basePath = this.getDataBasePath();
+            const allRelationships = [];
+            let recordNo = 0;
+
+            while (true) {
+                const xtadPath = this.realObjectSystem.path.join(basePath, `${realId}_${recordNo}.xtad`);
+                if (!this.realObjectSystem.fs.existsSync(xtadPath)) {
+                    break;
+                }
+
+                const xtadContent = this.realObjectSystem.fs.readFileSync(xtadPath, 'utf-8');
+                const relationships = this.extractLinkRelationshipsFromXTADContent(xtadContent);
+                allRelationships.push(...relationships);
+                recordNo++;
+            }
+
+            return allRelationships;
+        } catch (error) {
+            logger.warn('[TADjs] link続柄抽出エラー:', realId, error);
+            return [];
+        }
+    }
+
+    /**
+     * XTAD XMLコンテンツからlink要素のrelationship属性を抽出
+     * @param {string} xtadContent - XTAD XML文字列
+     * @returns {string[]} 続柄タグの配列
+     */
+    extractLinkRelationshipsFromXTADContent(xtadContent) {
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xtadContent, 'text/xml');
+
+            const parseError = xmlDoc.querySelector('parsererror');
+            if (parseError) {
+                return [];
+            }
+
+            const relationships = [];
+            const linkElements = xmlDoc.getElementsByTagName('link');
+
+            for (let i = 0; i < linkElements.length; i++) {
+                const link = linkElements[i];
+                const relationshipAttr = link.getAttribute('relationship');
+                if (relationshipAttr && relationshipAttr.trim()) {
+                    // スペース区切りで分割して配列に追加
+                    const tags = relationshipAttr.split(/\s+/).filter(s => s.trim() !== '');
+                    relationships.push(...tags);
+                }
+            }
+
+            return relationships;
+        } catch (error) {
+            return [];
         }
     }
 
@@ -7054,8 +7374,9 @@ class TADjsDesktop {
 
     /**
      * set-relationship MessageRouterハンドラー
-     * 実身の続柄（relationship）を設定する
-     * @param {Object} data - メッセージデータ { realId, messageId }
+     * 実身の続柄（relationship）とlink要素のrelationship属性を設定する
+     * [タグ]形式は実身JSON用、それ以外はlink属性用
+     * @param {Object} data - メッセージデータ { realId, linkId, currentLinkRelationship, messageId }
      * @param {MessageEvent} event - メッセージイベント
      * @returns {Promise<void>}
      */
@@ -7071,7 +7392,7 @@ class TADjsDesktop {
             return;
         }
 
-        const { realId: fullRealId, messageId } = data;
+        const { realId: fullRealId, linkId, currentLinkRelationship, messageId } = data;
 
         // 実身IDを抽出（_0.xtad を除去）
         let realId = fullRealId;
@@ -7082,14 +7403,19 @@ class TADjsDesktop {
         try {
             // 現在の続柄を取得
             const realObject = await this.realObjectSystem.loadRealObject(realId);
-            const currentRelationship = realObject.metadata.relationship || [];
-            const currentText = currentRelationship.join(' ');
+            const currentJsonRelationship = realObject.metadata.relationship || [];
+            const currentLinkRel = currentLinkRelationship || [];
+
+            // 表示用テキストを生成（JSON用は[タグ]形式、link用はそのまま）
+            const jsonPart = currentJsonRelationship.map(t => `[${t}]`).join(' ');
+            const linkPart = currentLinkRel.join(' ');
+            const currentText = [jsonPart, linkPart].filter(t => t).join(' ');
 
             // 入力ダイアログを表示
             const result = await this.showInputDialog(
-                '続柄（リレーションタグ名）を入力してください\n（半角スペース区切りで複数設定可）',
+                '続柄（リレーションタグ名）を入力してください\n[タグ]形式は実身用、それ以外は仮身用（半角スペース区切りで複数設定可）',
                 currentText,
-                40,
+                50,
                 [
                     { label: '取消', value: 'cancel' },
                     { label: '設定', value: 'ok' }
@@ -7107,29 +7433,30 @@ class TADjsDesktop {
                 return;
             }
 
-            // 半角スペースで分割して配列化（空要素除去）
-            const newRelationship = result.value
-                .split(' ')
-                .map(s => s.trim())
-                .filter(s => s !== '');
+            // 入力をパースしてJSON用とlink用に分離
+            const parsed = this.parseRelationshipInput(result.value);
+            const newJsonRelationship = parsed.jsonRelationship;
+            const newLinkRelationship = parsed.linkRelationship;
 
-            // JSONファイルを直接更新
+            // JSONファイルを直接更新（実身の続柄）
             const jsonPath = this.path.join(this.realObjectSystem._basePath, `${realId}.json`);
             const jsonContent = JSON.parse(this.fs.readFileSync(jsonPath, 'utf-8'));
-            jsonContent.relationship = newRelationship;
+            jsonContent.relationship = newJsonRelationship;
             jsonContent.updateDate = new Date().toISOString();
             this.fs.writeFileSync(jsonPath, JSON.stringify(jsonContent, null, 2));
 
-            // 成功を通知
+            // 成功を通知（link属性の更新はプラグイン側で行う）
             this.parentMessageBus.respondTo(source, 'relationship-set', {
                 messageId: messageId,
                 success: true,
-                relationship: newRelationship
+                relationship: newJsonRelationship,
+                linkRelationship: newLinkRelationship
             });
 
-            const relationshipText = newRelationship.length > 0
-                ? newRelationship.join(' ')
-                : '（なし）';
+            // 表示用テキストを生成
+            const displayJsonPart = newJsonRelationship.map(t => `[${t}]`).join(' ');
+            const displayLinkPart = newLinkRelationship.join(' ');
+            const relationshipText = [displayJsonPart, displayLinkPart].filter(t => t).join(' ') || '（なし）';
             logger.info('[TADjs] 続柄設定完了:', realId, relationshipText);
             this.setStatusMessage(`続柄を設定しました: ${relationshipText}`);
         } catch (error) {
@@ -7140,6 +7467,55 @@ class TADjsDesktop {
                 error: error.message
             });
         }
+    }
+
+    /**
+     * 続柄入力文字列をパースしてJSON用とlink属性用に分離
+     * [タグ] 形式は実身JSON用、それ以外はlink属性用
+     * @param {string} input - 入力文字列（例: "[親1] [親2] 子1 子2"）
+     * @returns {{jsonRelationship: string[], linkRelationship: string[]}}
+     */
+    parseRelationshipInput(input) {
+        if (!input || typeof input !== 'string') {
+            return { jsonRelationship: [], linkRelationship: [] };
+        }
+
+        const jsonRelationship = [];
+        const linkRelationship = [];
+
+        // [タグ] 形式を抽出（括弧内にスペースがあっても1つのタグとして扱う）
+        const bracketPattern = /\[([^\]]+)\]/g;
+        let match;
+        let lastIndex = 0;
+        const remainingParts = [];
+
+        // 入力文字列を走査
+        while ((match = bracketPattern.exec(input)) !== null) {
+            // 括弧の前のテキストを保存
+            if (match.index > lastIndex) {
+                remainingParts.push(input.substring(lastIndex, match.index));
+            }
+            // 括弧内のタグをJSON用に追加
+            const tag = match[1].trim();
+            if (tag) {
+                jsonRelationship.push(tag);
+            }
+            lastIndex = match.index + match[0].length;
+        }
+
+        // 残りのテキストを保存
+        if (lastIndex < input.length) {
+            remainingParts.push(input.substring(lastIndex));
+        }
+
+        // 残りのテキストをスペース区切りでlink属性用に分割
+        const remainingText = remainingParts.join('').trim();
+        if (remainingText) {
+            const tags = remainingText.split(/\s+/).filter(s => s.trim() !== '');
+            linkRelationship.push(...tags);
+        }
+
+        return { jsonRelationship, linkRelationship };
     }
 
     // ========================================
@@ -7390,6 +7766,30 @@ class TADjsDesktop {
     async handleBaseFileDropRequest(data, event) {
         logger.info('[TADjs] base-file-drop-request受信:', data);
         this.handleBaseFileDrop(data.dragData, event);
+    }
+
+    /**
+     * url-drop-request ハンドラー
+     * プラグインからのURLドロップ要求を処理
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleUrlDropRequest(data, event) {
+        logger.info('[TADjs] url-drop-request受信:', data.url);
+        const { url, dropX, dropY, windowId } = data;
+
+        // 対象のiframeを取得（childrenから検索）
+        let iframe = null;
+        for (const [_id, childInfo] of this.parentMessageBus.children.entries()) {
+            if (childInfo.windowId === windowId) {
+                iframe = childInfo.iframe;
+                break;
+            }
+        }
+
+        // handleUrlDropを呼び出し
+        await this.handleUrlDrop(url, iframe, dropX, dropY);
     }
 
     /**
@@ -9046,20 +9446,21 @@ class TADjsDesktop {
 
                 const content = xtadResult.data;
 
-                // この実身を参照するlinkタグが存在するか確認
-                const linkPattern = new RegExp(`<link[^>]*id="${realId}_0\\.xtad"[^>]*>([^<]*)</link>`, 'g');
+                // この実身を参照するlinkタグが存在するか確認（自己閉じタグとペアタグの両方に対応）
+                const linkPattern = new RegExp(`<link[^>]*id="${realId}_0\\.xtad"[^>]*(?:\\/>|>([^<]*)</link>)`, 'g');
 
                 if (linkPattern.test(content)) {
-                    // name属性とリンクテキストの両方を更新
+                    // 後方互換性のため、旧形式（ペアタグ）のname属性とリンクテキストも更新
+                    // 新形式（自己閉じタグ）ではこれらは存在しないため、更新されない
                     let updatedContent = content;
 
-                    // 1. name属性を更新
+                    // 1. name属性を更新（旧形式の後方互換性）
                     updatedContent = updatedContent.replace(
                         new RegExp(`(<link[^>]*id="${realId}_0\\.xtad"[^>]*name=")[^"]*("[^>]*>)`, 'g'),
                         `$1${newName}$2`
                     );
 
-                    // 2. リンクテキストを更新
+                    // 2. リンクテキストを更新（旧形式の後方互換性）
                     updatedContent = updatedContent.replace(
                         new RegExp(`(<link[^>]*id="${realId}_0\\.xtad"[^>]*>)[^<]*(</link>)`, 'g'),
                         `$1${newName}$2`

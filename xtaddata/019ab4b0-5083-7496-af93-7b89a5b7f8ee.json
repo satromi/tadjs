@@ -1,14 +1,14 @@
 {
-  "name": "仮身一覧",
+  "name": "ファイル取込",
   "linktype": false,
   "makeDate": "2025-11-23T07:09:55.529Z",
-  "updateDate": "2025-11-24T07:16:30.394Z",
-  "accessDate": "2025-11-24T07:21:24.557Z",
+  "updateDate": "2026-01-10T23:36:18.521Z",
+  "accessDate": "2026-01-10T23:36:17.404Z",
   "periodDate": null,
-  "refCount": 0,
+  "refCount": 2,
   "editable": true,
   "readable": true,
-  "maker": "TRON User",
+  "maker": "TADjs User",
   "window": {
     "pos": {
       "x": 204,
@@ -28,7 +28,12 @@
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
-    "backgroundColor": "#ffffff"
+    "backgroundColor": "#ffffff",
+    "scrollPos": {
+      "x": 0,
+      "y": 0
+    },
+    "wordWrap": true
   },
   "applist": {
     "basic-text-editor": {
@@ -41,7 +46,5 @@
     }
   },
   "realId": "019ab4b0-5083-7496-af93-7b89a5b7f8ee",
-  "recordCount": 1,
-  "realName": "ファイル取込",
-  "createDate": "2025-11-24T07:07:25.187Z"
+  "recordCount": 1
 }

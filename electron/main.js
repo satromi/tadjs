@@ -23,7 +23,16 @@ const fs = require('fs');
 const { execSync } = require('child_process');
 const fontList = require('font-list');
 const fontkit = require('fontkit');
-const winreg = require('winreg');
+
+// winreg は Windows 専用なので条件付きで読み込み
+let winreg = null;
+if (process.platform === 'win32') {
+    try {
+        winreg = require('winreg');
+    } catch (e) {
+        console.warn('winreg module not available');
+    }
+}
 
 let mainWindow;
 let pluginManager;
@@ -230,6 +239,24 @@ function createWindow() {
 
     // 開発ツールを開く（デバッグ用に常に開く）
     // mainWindow.webContents.openDevTools();
+
+    // 外部URLへのナビゲーションを防ぐ（URLドロップ時にブラウザ表示される問題の対策）
+    mainWindow.webContents.on('will-navigate', (event, url) => {
+        // file://以外のプロトコルへのナビゲーションを防ぐ
+        if (!url.startsWith('file://')) {
+            logger.debug('[Main] 外部URLへのナビゲーションをブロック:', url);
+            event.preventDefault();
+        }
+    });
+
+    // 新しいウィンドウを開くことも防ぐ
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        if (!url.startsWith('file://')) {
+            logger.debug('[Main] 外部URLへの新規ウィンドウをブロック:', url);
+            return { action: 'deny' };
+        }
+        return { action: 'allow' };
+    });
 
     mainWindow.on('closed', () => {
         mainWindow = null;
@@ -439,12 +466,34 @@ function getFontAllNames(fontPath, debugFontName = null) {
 }
 
 
+// プラットフォーム別のフォントディレクトリを取得
+function getFontDirectories() {
+    if (process.platform === 'win32') {
+        return [
+            'C:\\Windows\\Fonts',
+            path.join(process.env.LOCALAPPDATA || '', 'Microsoft\\Windows\\Fonts')
+        ];
+    } else if (process.platform === 'darwin') {
+        return [
+            '/Library/Fonts',
+            '/System/Library/Fonts',
+            '/System/Library/Fonts/Supplemental',
+            path.join(process.env.HOME || '', 'Library/Fonts')
+        ];
+    } else {
+        // Linux
+        return [
+            '/usr/share/fonts',
+            '/usr/local/share/fonts',
+            path.join(process.env.HOME || '', '.fonts'),
+            path.join(process.env.HOME || '', '.local/share/fonts')
+        ];
+    }
+}
+
 // フォント名に対応するファイルパスを検索
 function findFontFile(fontName) {
-    const fontDirs = [
-        'C:\\Windows\\Fonts',
-        path.join(process.env.LOCALAPPDATA || '', 'Microsoft\\Windows\\Fonts')
-    ];
+    const fontDirs = getFontDirectories();
 
     // フォント名から推測される可能性のあるファイル名
     const possibleNames = [
@@ -498,8 +547,14 @@ function findFontFile(fontName) {
     return null;
 }
 
-// PowerShellでDirectWrite APIを使ってフォント情報を取得
+// PowerShellでDirectWrite APIを使ってフォント情報を取得（Windows専用）
 async function getSystemFontsViaDirectWrite() {
+    // Windows以外では空配列を返す
+    if (process.platform !== 'win32') {
+        logger.debug('getSystemFontsViaDirectWrite: Windows以外のプラットフォームではスキップ');
+        return [];
+    }
+
     const psScript = `
         Add-Type -AssemblyName PresentationCore
 

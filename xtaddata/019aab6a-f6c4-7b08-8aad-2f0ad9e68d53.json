@@ -1,11 +1,11 @@
 {
-  "name": "開いた仮身サンプル",
+  "name": "原紙箱",
   "linktype": false,
   "makeDate": "2025-11-22T11:46:48.927Z",
   "updateDate": "2025-11-22T11:56:35.697Z",
   "accessDate": "2025-11-22T11:56:23.778Z",
   "periodDate": null,
-  "refCount": 0,
+  "refCount": 1,
   "editable": true,
   "readable": true,
   "maker": "TRON User",
@@ -37,7 +37,5 @@
     }
   },
   "realId": "019aab6a-f6c4-7b08-8aad-2f0ad9e68d53",
-  "recordCount": 1,
-  "realName": "原紙箱",
-  "createDate": "2025-11-22T11:55:05.284Z"
+  "recordCount": 1
 }

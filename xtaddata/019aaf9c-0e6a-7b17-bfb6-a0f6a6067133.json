@@ -1,14 +1,14 @@
 {
-  "name": "仮身一覧",
+  "name": "基本文章編集",
   "linktype": false,
   "makeDate": "2025-11-23T07:09:55.529Z",
-  "updateDate": "2025-11-23T08:12:46.399Z",
-  "accessDate": "2025-11-23T08:47:53.414Z",
+  "updateDate": "2026-01-11T01:57:44.662Z",
+  "accessDate": "2026-01-11T01:57:41.745Z",
   "periodDate": null,
-  "refCount": 0,
+  "refCount": 1,
   "editable": true,
   "readable": true,
-  "maker": "TRON User",
+  "maker": "TADjs User",
   "window": {
     "pos": {
       "x": 100,
@@ -28,7 +28,12 @@
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
-    "backgroundColor": "#ffffff"
+    "backgroundColor": "#ffffff",
+    "scrollPos": {
+      "x": 0,
+      "y": 486.6666564941406
+    },
+    "wordWrap": true
   },
   "applist": {
     "basic-text-editor": {
@@ -41,7 +46,5 @@
     }
   },
   "realId": "019aaf9c-0e6a-7b17-bfb6-a0f6a6067133",
-  "recordCount": 1,
-  "realName": "基本文章編集",
-  "createDate": "2025-11-23T07:27:11.466Z"
+  "recordCount": 1
 }

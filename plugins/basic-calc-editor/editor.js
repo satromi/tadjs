@@ -1862,6 +1862,13 @@ class CalcEditor extends window.PluginBase {
 
             container.style.backgroundColor = '';
 
+            // URLドロップをチェック（PluginBase共通メソッド）
+            const dropX = e.clientX;
+            const dropY = e.clientY;
+            if (this.checkAndHandleUrlDrop(e, dropX, dropY)) {
+                return; // URLドロップは親ウィンドウで処理
+            }
+
             try {
                 // 外部ファイルドロップをチェック（Windowsからのドラッグなど）
                 if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
@@ -5522,8 +5529,8 @@ class CalcEditor extends window.PluginBase {
             return;
         }
 
-        // <link>タグから実身IDを抽出
-        const linkRegex = /<link\s+([^>]*)>(.*?)<\/link>/gi;
+        // <link>タグから実身IDを抽出（自己閉じタグにも対応）
+        const linkRegex = /<link\s+([^>]*?)(?:\/>|>(.*?)<\/link>)/gi;
         const realIds = [];
         let match;
 
@@ -5669,8 +5676,8 @@ class CalcEditor extends window.PluginBase {
                     contentAfterCalcPos = contentAfterCalcPos.replace(/<cell\s+valign="[^"]*"\s*\/>/, '');
                 }
 
-                // <link>タグがあれば仮身セルとして処理
-                const linkMatch = contentAfterCalcPos.match(/<link\s+([^>]*)>(.*?)<\/link>/);
+                // <link>タグがあれば仮身セルとして処理（自己閉じタグにも対応）
+                const linkMatch = contentAfterCalcPos.match(/<link\s+([^>]*?)(?:\/>|>(.*?)<\/link>)/);
                 if (linkMatch) {
                     const attrs = linkMatch[1];
                     const innerContent = linkMatch[2];
@@ -5712,7 +5719,9 @@ class CalcEditor extends window.PluginBase {
                         width: attrMap.width ? parseFloat(attrMap.width) : undefined,
                         heightPx: attrMap.heightPx ? parseFloat(attrMap.heightPx) : undefined,
                         autoopen: attrMap.autoopen || 'false',
-                        applist: applist
+                        applist: applist,
+                        // 仮身固有の続柄（link要素のrelationship属性）
+                        linkRelationship: attrMap.relationship ? attrMap.relationship.split(/\s+/).filter(t => t) : []
                     };
 
                     // メタデータをJSONから読み込み（続柄、更新日時など）
@@ -7123,11 +7132,7 @@ class CalcEditor extends window.PluginBase {
         // 必須属性
         let attrs = ` id="${this.escapeXml(virtualObject.link_id)}"`;
 
-        // 名前
-        const linkName = virtualObject.link_name || virtualObject.displayName || '';
-        if (linkName) {
-            attrs += ` name="${this.escapeXml(linkName)}"`;
-        }
+        // name属性は出力しない（link_nameはJSONから取得する方式に統一）
 
         // 色属性
         if (virtualObject.tbcol) attrs += ` tbcol="${this.escapeXml(virtualObject.tbcol)}"`;
@@ -7155,10 +7160,13 @@ class CalcEditor extends window.PluginBase {
             attrs += ` applist="${this.escapeXml(JSON.stringify(virtualObject.applist))}"`;
         }
 
-        // 内容（linkタグ内のテキスト）
-        const innerContent = linkName;
+        // 仮身固有の続柄属性
+        if (virtualObject.linkRelationship && virtualObject.linkRelationship.length > 0) {
+            attrs += ` relationship="${virtualObject.linkRelationship.join(' ')}"`;
+        }
 
-        return `<link${attrs}>${this.escapeXml(innerContent)}</link>`;
+        // 自己閉じタグ形式（link_nameはJSONから取得する方式に統一）
+        return `<link${attrs}/>`;
     }
 
     /**
@@ -7310,14 +7318,15 @@ class CalcEditor extends window.PluginBase {
      */
     parseLinkTag(linkXml) {
         try {
-            const linkMatch = linkXml.match(/<link\s+([^>]*)>(.*?)<\/link>/);
+            // 自己閉じタグにも対応
+            const linkMatch = linkXml.match(/<link\s+([^>]*?)(?:\/>|>(.*?)<\/link>)/);
             if (!linkMatch) {
                 logger.warn('[CalcEditor] linkタグのマッチに失敗:', linkXml);
                 return null;
             }
 
             const attrs = linkMatch[1];
-            const innerContent = linkMatch[2];
+            const innerContent = linkMatch[2] || '';
 
             // 属性をパース
             const attrMap = {};
@@ -7936,6 +7945,18 @@ class CalcEditor extends window.PluginBase {
     }
 
     /**
+     * 仮身の続柄をXMLに保存（PluginBaseフックオーバーライド）
+     * basic-calc-editorはsaveDocument()でXML全体を再構築するため、saveDocument()を呼ぶ
+     * @param {Object} virtualObj - 更新された仮身オブジェクト
+     * @returns {Promise<void>}
+     */
+    async saveVirtualObjectRelationshipToXml(virtualObj) {
+        if (virtualObj && virtualObj.link_id) {
+            this.saveDocument();
+        }
+    }
+
+    /**
      * 続柄更新後の再描画（PluginBaseフック）
      */
     onRelationshipUpdated(virtualObj, result) {
@@ -7959,25 +7980,34 @@ class CalcEditor extends window.PluginBase {
     }
 
     /**
-     * 実身名を変更
-     * RealObjectSystemの共通メソッドを使用
+     * プラグイン内の全仮身を取得（PluginBaseオーバーライド）
+     * @returns {Array<Object>} 仮身情報の配列
      */
-    async renameRealObject() {
-        const result = await window.RealObjectSystem.renameRealObject(this);
-
-        // 名前変更成功時、仮身の表示を更新
-        if (result && result.success && this.contextMenuVirtualObject) {
-            const cellKey = this.contextMenuVirtualObject.cellKey;
-            if (cellKey) {
-                const cellData = this.cells.get(cellKey);
-                if (cellData && cellData.virtualObject) {
-                    // 仮身の名前を更新
-                    cellData.virtualObject.link_name = result.newName;
-                    // セルを再描画
-                    const [col, row] = cellKey.split(',').map(Number);
-                    this.renderCell(col, row);
-                }
+    getAllVirtualObjects() {
+        const result = [];
+        for (const [key, cellData] of this.cells.entries()) {
+            if (cellData.contentType === 'virtualObject' && cellData.virtualObject) {
+                const [col, row] = key.split(',').map(Number);
+                result.push({
+                    virtualObj: cellData.virtualObject,
+                    col: col,
+                    row: row,
+                    cellKey: key,
+                    cellData: cellData
+                });
             }
+        }
+        return result;
+    }
+
+    /**
+     * 仮身の表示を更新（PluginBaseオーバーライド）
+     * @param {Object} item - getAllVirtualObjectsで返された仮身情報
+     */
+    async updateVirtualObjectDisplay(item) {
+        const { col, row } = item;
+        if (col !== undefined && row !== undefined) {
+            this.renderCell(col, row);
         }
     }
 
@@ -9848,69 +9878,64 @@ class CalcEditor extends window.PluginBase {
             </script>
         `;
 
-        return new Promise((resolve) => {
-            this.messageBus.sendWithCallback('show-custom-dialog', {
-                title: '用紙設定',
-                dialogHtml: dialogHtml,
-                buttons: [
-                    { label: '取消', value: 'cancel' },
-                    { label: '標準設定', value: 'default' },
-                    { label: '設定', value: 'ok' }
-                ],
-                defaultButton: 2,
-                width: 400
-            }, (result) => {
-                const dialogResult = result.result || result;
-
-                if (dialogResult.error) {
-                    resolve(false);
-                    return;
-                }
-
-                if (dialogResult.button === 'default') {
-                    // 標準設定（A4）にリセット
-                    this.paperSize.resetToDefault();
-                    this.paperWidth = this.paperSize.widthMm;
-                    this.paperHeight = this.paperSize.lengthMm;
-                    this.paperSettingsModified = true;
-                    this.isModified = true;
-                    this.redraw();
-                    resolve(true);
-                } else if (dialogResult.button === 'ok') {
-                    // 設定を適用
-                    const formData = dialogResult.formData || {};
-
-                    const width = parseFloat(formData.paperWidth) || this.paperWidth;
-                    const height = parseFloat(formData.paperHeight) || this.paperHeight;
-                    const marginTop = parseFloat(formData.marginTop) || 0;
-                    const marginBottom = parseFloat(formData.marginBottom) || 0;
-                    const marginLeft = parseFloat(formData.marginLeft) || 0;
-                    const marginRight = parseFloat(formData.marginRight) || 0;
-                    const imposition = parseInt(formData.imposition) || 0;
-
-                    // PaperSizeに設定
-                    this.paperSize.widthMm = width;
-                    this.paperSize.lengthMm = height;
-                    this.paperSize.topMm = marginTop;
-                    this.paperSize.bottomMm = marginBottom;
-                    this.paperSize.leftMm = marginLeft;
-                    this.paperSize.rightMm = marginRight;
-                    this.paperSize.imposition = imposition;
-
-                    // 互換性のためpaperWidth/paperHeightも更新
-                    this.paperWidth = width;
-                    this.paperHeight = height;
-
-                    // 用紙設定変更フラグを立てる
-                    this.paperSettingsModified = true;
-                    this.isModified = true;
-                    this.redraw();
-                    resolve(true);
-                } else {
-                    resolve(false);
-                }
-            }, 60000);  // 1分タイムアウト
+        const result = await this.showCustomDialog({
+            title: '用紙設定',
+            dialogHtml: dialogHtml,
+            buttons: [
+                { label: '取消', value: 'cancel' },
+                { label: '標準設定', value: 'default' },
+                { label: '設定', value: 'ok' }
+            ],
+            defaultButton: 2,
+            width: 400
         });
+
+        if (!result) {
+            return false;
+        }
+
+        if (result.button === 'default') {
+            // 標準設定（A4）にリセット
+            this.paperSize.resetToDefault();
+            this.paperWidth = this.paperSize.widthMm;
+            this.paperHeight = this.paperSize.lengthMm;
+            this.paperSettingsModified = true;
+            this.isModified = true;
+            this.redraw();
+            return true;
+        } else if (result.button === 'ok') {
+            // 設定を適用
+            const formData = result.formData || {};
+
+            const width = parseFloat(formData.paperWidth) || this.paperWidth;
+            const height = parseFloat(formData.paperHeight) || this.paperHeight;
+            const marginTop = parseFloat(formData.marginTop) || 0;
+            const marginBottom = parseFloat(formData.marginBottom) || 0;
+            const marginLeft = parseFloat(formData.marginLeft) || 0;
+            const marginRight = parseFloat(formData.marginRight) || 0;
+            const imposition = parseInt(formData.imposition) || 0;
+
+            // PaperSizeに設定
+            this.paperSize.widthMm = width;
+            this.paperSize.lengthMm = height;
+            this.paperSize.topMm = marginTop;
+            this.paperSize.bottomMm = marginBottom;
+            this.paperSize.leftMm = marginLeft;
+            this.paperSize.rightMm = marginRight;
+            this.paperSize.imposition = imposition;
+
+            // 互換性のためpaperWidth/paperHeightも更新
+            this.paperWidth = width;
+            this.paperHeight = height;
+
+            // 用紙設定変更フラグを立てる
+            this.paperSettingsModified = true;
+            this.isModified = true;
+            this.redraw();
+            return true;
+        }
+
+        return false;
     }
 }
 

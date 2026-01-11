@@ -8188,9 +8188,10 @@ function tsVirtualObjSegment(segLen, tadSeg) {
     newLink.right = drawRight;
     newLink.bottom = drawBottom;
 
-    // XMLのリンク情報を保存
+    // XMLのリンク情報を保存（自己閉じタグ形式）
+    // link_nameはJSONから取得する方式に統一
     if(isXmlDumpEnabled) {
-        xmlBuffer.push(`<link id="${newLink.link_id}" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}">${newLink.link_name || ''}</link>\r\n`);
+        xmlBuffer.push(`<link id="${newLink.link_id}" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}"/>\r\n`);
     }
     
     //logger.debug('Link data to save:', newLink);

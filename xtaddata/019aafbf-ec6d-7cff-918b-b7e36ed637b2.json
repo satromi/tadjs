@@ -1,11 +1,11 @@
 {
-  "name": "仮身一覧",
+  "name": "URL仮身",
   "linktype": false,
   "makeDate": "2025-11-23T07:09:55.529Z",
   "updateDate": "2025-11-23T08:11:18.939Z",
   "accessDate": "2025-11-24T07:21:11.592Z",
   "periodDate": null,
-  "refCount": 0,
+  "refCount": 1,
   "editable": true,
   "readable": true,
   "maker": "TRON User",
@@ -41,7 +41,5 @@
     }
   },
   "realId": "019aafbf-ec6d-7cff-918b-b7e36ed637b2",
-  "recordCount": 1,
-  "realName": "URL仮身",
-  "createDate": "2025-11-23T08:06:22.061Z"
+  "recordCount": 1
 }

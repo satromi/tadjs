@@ -653,6 +653,13 @@ class BasicTextEditor extends window.PluginBase {
             // カーソルインジケータを非表示
             this.hideDropCursor();
 
+            // URLドロップをチェック（PluginBase共通メソッド）
+            const dropX = e.clientX;
+            const dropY = e.clientY;
+            if (this.checkAndHandleUrlDrop(e, dropX, dropY)) {
+                return; // URLドロップは親ウィンドウで処理
+            }
+
             try {
                 // 選択中の画像を移動する場合
                 if (this.isDraggingImage && this.draggingImage) {
@@ -1697,9 +1704,15 @@ class BasicTextEditor extends window.PluginBase {
                         currentP.innerHTML = '<br>';
                     }
 
-                    // カーソル直前の文字サイズに基づいてline-heightを設定（px単位で固定）
-                    const fontSizeValue = parseFloat(fontSize);
-                    const lineHeight = fontSizeValue * 1.5; // 1.5倍の行間に調整
+                    // 新段落の内容に基づいてline-heightを設定
+                    // 空の段落（<br>のみ）: デフォルトサイズ（14pt）基準
+                    // コンテンツあり: そのコンテンツの最大フォントサイズ基準
+                    let newParagraphFontSize = 14; // デフォルト
+                    if (newP.textContent.trim() !== '') {
+                        // 新段落にコンテンツがある場合は最大フォントサイズを計算
+                        newParagraphFontSize = this.calculateMaxFontSizeInContent(newP, 14);
+                    }
+                    const lineHeight = this.calculateLineHeight(newParagraphFontSize);
                     newP.style.lineHeight = `${lineHeight}px`;
 
                     // 現在の段落の後に新しい段落を挿入（最下段対応）
@@ -1728,8 +1741,8 @@ class BasicTextEditor extends window.PluginBase {
                     const p = document.createElement('p');
                     p.innerHTML = '<br>';
 
-                    const fontSizeValue = parseFloat(fontSize);
-                    const lineHeight = fontSizeValue * 1.5;
+                    // 空の段落はデフォルトサイズ（14pt）基準のline-height
+                    const lineHeight = this.calculateLineHeight(14);
                     p.style.lineHeight = `${lineHeight}px`;
 
                     range.deleteContents();
@@ -1763,6 +1776,10 @@ class BasicTextEditor extends window.PluginBase {
         // Shift+Enter または Ctrl+Enter: 改行（<br>）を挿入
         if ((e.shiftKey || e.ctrlKey) && e.key === 'Enter') {
             e.preventDefault();
+
+            // MutationObserverを一時停止
+            this.suppressMutationObserver = true;
+
             // <br>タグを挿入
             const selection = window.getSelection();
             if (selection.rangeCount > 0) {
@@ -1771,20 +1788,301 @@ class BasicTextEditor extends window.PluginBase {
                 range.deleteContents();
                 range.insertNode(br);
 
-                // <br>の後に空のテキストノードを挿入してカーソルが次の行に移動できるようにする
-                const textNode = document.createTextNode('');
+                // <br>の後にゼロ幅スペースのテキストノードを挿入
+                // ゼロ幅スペースによりカーソル位置が確実に保持される
+                const textNode = document.createTextNode('\u200B');
                 br.parentNode.insertBefore(textNode, br.nextSibling);
 
-                // カーソルを空のテキストノードに移動
-                range.setStart(textNode, 0);
-                range.setEnd(textNode, 0);
+                // 新しいRangeを作成してカーソルを配置
+                const newRange = document.createRange();
+                newRange.setStart(textNode, 1); // ゼロ幅スペースの後
+                newRange.collapse(true);
                 selection.removeAllRanges();
-                selection.addRange(range);
+                selection.addRange(newRange);
 
                 // 改行位置をスクロール表示（必要最小限のスクロール）
                 br.scrollIntoView({ block: 'nearest' });
             }
+
+            // DOM操作完了後、MutationObserverを再開
+            setTimeout(() => {
+                this.suppressMutationObserver = false;
+                this.updateContentHeight();
+            }, 0);
+
             return;
+        }
+
+        // Backspace: ゼロ幅スペース+<br>のセット削除
+        if (e.key === 'Backspace') {
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0 && selection.isCollapsed) {
+                const range = selection.getRangeAt(0);
+                const node = range.startContainer;
+                const offset = range.startOffset;
+
+                // カーソルがテキストノード内でオフセット1の位置にあり、
+                // そのテキストノードがゼロ幅スペースで始まる場合
+                if (node.nodeType === Node.TEXT_NODE && offset === 1 &&
+                    node.textContent.charAt(0) === '\u200B') {
+
+                    // ケース1: span内のゼロ幅スペースのみの場合（applyFontColor等で挿入）
+                    const parent = node.parentNode;
+                    if (parent && parent.nodeName === 'SPAN' && node.textContent === '\u200B') {
+                        e.preventDefault();
+
+                        // MutationObserverを一時停止
+                        this.suppressMutationObserver = true;
+
+                        // spanの前にカーソルを移動してからspanを削除
+                        const spanParent = parent.parentNode;
+                        const prevNode = parent.previousSibling;
+
+                        const newRange = document.createRange();
+                        if (prevNode && prevNode.nodeType === Node.TEXT_NODE) {
+                            newRange.setStart(prevNode, prevNode.textContent.length);
+                        } else if (prevNode) {
+                            newRange.setStartAfter(prevNode);
+                        } else {
+                            newRange.setStart(spanParent, 0);
+                        }
+                        newRange.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+
+                        // spanを削除
+                        spanParent.removeChild(parent);
+
+                        // DOM操作完了後、MutationObserverを再開
+                        setTimeout(() => {
+                            this.suppressMutationObserver = false;
+                            this.updateContentHeight();
+                        }, 0);
+
+                        return;
+                    }
+
+                    // ケース2: 直前のノードが<br>の場合（Shift+Enterで挿入）
+                    const prevSibling = node.previousSibling;
+                    if (prevSibling && prevSibling.nodeName === 'BR') {
+                        e.preventDefault();
+
+                        // MutationObserverを一時停止
+                        this.suppressMutationObserver = true;
+
+                        // ゼロ幅スペースを削除
+                        node.textContent = node.textContent.substring(1);
+
+                        // <br>を削除
+                        prevSibling.parentNode.removeChild(prevSibling);
+
+                        // カーソル位置を調整（テキストノードが空になった場合は直前のノードへ）
+                        if (node.textContent.length === 0) {
+                            // 空のテキストノードを削除
+                            const parent = node.parentNode;
+                            const prevNode = node.previousSibling;
+                            parent.removeChild(node);
+
+                            // 直前のノードにカーソルを移動
+                            if (prevNode) {
+                                const newRange = document.createRange();
+                                if (prevNode.nodeType === Node.TEXT_NODE) {
+                                    newRange.setStart(prevNode, prevNode.textContent.length);
+                                } else {
+                                    newRange.setStartAfter(prevNode);
+                                }
+                                newRange.collapse(true);
+                                selection.removeAllRanges();
+                                selection.addRange(newRange);
+                            }
+                        } else {
+                            // テキストノードの先頭にカーソルを移動
+                            const newRange = document.createRange();
+                            newRange.setStart(node, 0);
+                            newRange.collapse(true);
+                            selection.removeAllRanges();
+                            selection.addRange(newRange);
+                        }
+
+                        // DOM操作完了後、MutationObserverを再開
+                        setTimeout(() => {
+                            this.suppressMutationObserver = false;
+                            this.updateContentHeight();
+                        }, 0);
+
+                        return;
+                    }
+                }
+            }
+            // それ以外の場合はブラウザのデフォルト動作に任せる
+        }
+
+        // Delete: <br>+ゼロ幅スペースのセット削除、span内ゼロ幅スペース削除
+        if (e.key === 'Delete') {
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0 && selection.isCollapsed) {
+                const range = selection.getRangeAt(0);
+                const node = range.startContainer;
+                const offset = range.startOffset;
+
+                // カーソルがテキストノードの末尾にある場合
+                if (node.nodeType === Node.TEXT_NODE && offset === node.textContent.length) {
+                    // 次のノードがゼロ幅スペースのみのspanの場合（applyFontColor等で挿入）
+                    const nextSibling = node.nextSibling;
+                    if (nextSibling && nextSibling.nodeName === 'SPAN' &&
+                        nextSibling.textContent === '\u200B') {
+                        e.preventDefault();
+
+                        // MutationObserverを一時停止
+                        this.suppressMutationObserver = true;
+
+                        // spanを削除
+                        nextSibling.parentNode.removeChild(nextSibling);
+
+                        // DOM操作完了後、MutationObserverを再開
+                        setTimeout(() => {
+                            this.suppressMutationObserver = false;
+                            this.updateContentHeight();
+                        }, 0);
+
+                        return;
+                    }
+
+                    // 次のノードが<br>かどうか確認
+                    if (nextSibling && nextSibling.nodeName === 'BR') {
+                        // <br>の次がゼロ幅スペースで始まるテキストノードか確認
+                        const afterBr = nextSibling.nextSibling;
+                        if (afterBr && afterBr.nodeType === Node.TEXT_NODE &&
+                            afterBr.textContent.charAt(0) === '\u200B') {
+                            e.preventDefault();
+
+                            // MutationObserverを一時停止
+                            this.suppressMutationObserver = true;
+
+                            // <br>を削除
+                            nextSibling.parentNode.removeChild(nextSibling);
+
+                            // ゼロ幅スペースを削除
+                            afterBr.textContent = afterBr.textContent.substring(1);
+
+                            // 空になったテキストノードを削除
+                            if (afterBr.textContent.length === 0) {
+                                afterBr.parentNode.removeChild(afterBr);
+                            }
+
+                            // DOM操作完了後、MutationObserverを再開
+                            setTimeout(() => {
+                                this.suppressMutationObserver = false;
+                                this.updateContentHeight();
+                            }, 0);
+
+                            return;
+                        }
+                    }
+                }
+                // カーソルが要素ノード内にある場合（段落の末尾など）
+                else if (node.nodeType === Node.ELEMENT_NODE) {
+                    const children = node.childNodes;
+                    if (offset < children.length) {
+                        const nextNode = children[offset];
+                        if (nextNode && nextNode.nodeName === 'BR') {
+                            // <br>の次がゼロ幅スペースで始まるテキストノードか確認
+                            const afterBr = nextNode.nextSibling;
+                            if (afterBr && afterBr.nodeType === Node.TEXT_NODE &&
+                                afterBr.textContent.charAt(0) === '\u200B') {
+                                e.preventDefault();
+
+                                // MutationObserverを一時停止
+                                this.suppressMutationObserver = true;
+
+                                // <br>を削除
+                                nextNode.parentNode.removeChild(nextNode);
+
+                                // ゼロ幅スペースを削除
+                                afterBr.textContent = afterBr.textContent.substring(1);
+
+                                // 空になったテキストノードを削除
+                                if (afterBr.textContent.length === 0) {
+                                    afterBr.parentNode.removeChild(afterBr);
+                                }
+
+                                // DOM操作完了後、MutationObserverを再開
+                                setTimeout(() => {
+                                    this.suppressMutationObserver = false;
+                                    this.updateContentHeight();
+                                }, 0);
+
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            // それ以外の場合はブラウザのデフォルト動作に任せる
+        }
+
+        // 左矢印キー: ゼロ幅スペースをスキップ
+        if (e.key === 'ArrowLeft' && !e.shiftKey) {
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0 && selection.isCollapsed) {
+                const range = selection.getRangeAt(0);
+                const node = range.startContainer;
+                const offset = range.startOffset;
+
+                // カーソルがテキストノード内でオフセット1の位置にあり、
+                // そのテキストノードがゼロ幅スペースで始まる場合
+                if (node.nodeType === Node.TEXT_NODE && offset === 1 &&
+                    node.textContent.charAt(0) === '\u200B') {
+                    e.preventDefault();
+
+                    // 直前のノードが<br>の場合、<br>の前に移動
+                    const prevSibling = node.previousSibling;
+                    if (prevSibling && prevSibling.nodeName === 'BR') {
+                        const newRange = document.createRange();
+                        const beforeBr = prevSibling.previousSibling;
+                        if (beforeBr && beforeBr.nodeType === Node.TEXT_NODE) {
+                            newRange.setStart(beforeBr, beforeBr.textContent.length);
+                        } else {
+                            newRange.setStartBefore(prevSibling);
+                        }
+                        newRange.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+                    }
+                    return;
+                }
+            }
+        }
+
+        // 右矢印キー: ゼロ幅スペースをスキップ
+        if (e.key === 'ArrowRight' && !e.shiftKey) {
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0 && selection.isCollapsed) {
+                const range = selection.getRangeAt(0);
+                const node = range.startContainer;
+                const offset = range.startOffset;
+
+                // カーソルがテキストノードの末尾にある場合
+                if (node.nodeType === Node.TEXT_NODE && offset === node.textContent.length) {
+                    // 次のノードが<br>で、その次がゼロ幅スペースで始まるテキストノードの場合
+                    const nextSibling = node.nextSibling;
+                    if (nextSibling && nextSibling.nodeName === 'BR') {
+                        const afterBr = nextSibling.nextSibling;
+                        if (afterBr && afterBr.nodeType === Node.TEXT_NODE &&
+                            afterBr.textContent.charAt(0) === '\u200B') {
+                            e.preventDefault();
+
+                            // ゼロ幅スペースの後に移動
+                            const newRange = document.createRange();
+                            newRange.setStart(afterBr, 1);
+                            newRange.collapse(true);
+                            selection.removeAllRanges();
+                            selection.addRange(newRange);
+                            return;
+                        }
+                    }
+                }
+            }
         }
 
         // Ctrl+C: コピー
@@ -2107,8 +2405,8 @@ class BasicTextEditor extends window.PluginBase {
      * <link>タグを仮身（Virtual Object）HTMLに変換
      */
     async convertLinkTagsToVirtualObjects(content) {
-        // <link ...>...</link> タグを検出して仮身に変換（すべての属性を保持）
-        const linkRegex = /<link\s+([^>]*)>(.*?)<\/link>/gi;
+        // <link ...>...</link> または <link .../> タグを検出して仮身に変換（すべての属性を保持）
+        const linkRegex = /<link\s+([^>]*?)(?:\/>|>(.*?)<\/link>)/gi;
 
         // まず、すべてのlinkタグからrealIdを抽出してアイコンをキャッシュに入れる
         const linkMatches = [];
@@ -2117,7 +2415,7 @@ class BasicTextEditor extends window.PluginBase {
             linkMatches.push({
                 fullMatch: match[0],
                 attributes: match[1],
-                innerContent: match[2]
+                innerContent: match[2] || ''
             });
         }
 
@@ -2225,12 +2523,14 @@ class BasicTextEditor extends window.PluginBase {
             }
 
             // innerContentも保存（XMLエクスポート時に必要）
-            const escapedInnerContent = this.escapeHtml(innerContent.trim());
+            // 自己閉じタグの場合はinnerContentがundefinedになるため空文字で処理
+            const safeInnerContent = innerContent || '';
+            const escapedInnerContent = this.escapeHtml(safeInnerContent.trim());
             dataAttrs += ` data-link-innercontent="${escapedInnerContent}"`;
 
             // 表示名は<link></link>で囲まれたテキスト（innerContent）を使用
             // innerContentが空の場合はname属性、それもなければidを使用
-            const displayName = innerContent.trim() || attrMap.name || attrMap.id || '無題';
+            const displayName = safeInnerContent.trim() || attrMap.name || attrMap.id || '無題';
 
             // VirtualObjectRendererを使って仮身要素を作成
             if (this.virtualObjectRenderer) {
@@ -2256,7 +2556,9 @@ class BasicTextEditor extends window.PluginBase {
                     roledisp: attrMap.roledisp || 'false',
                     typedisp: attrMap.typedisp || 'false',
                     updatedisp: attrMap.updatedisp || 'false',
-                    autoopen: attrMap.autoopen || 'false'
+                    autoopen: attrMap.autoopen || 'false',
+                    // 仮身固有の続柄（link要素のrelationship属性）
+                    linkRelationship: attrMap.relationship ? attrMap.relationship.split(/\s+/).filter(t => t) : []
                 };
 
                 // 事前ロードしたメタデータを適用（relationship, updateDate等）
@@ -2269,6 +2571,10 @@ class BasicTextEditor extends window.PluginBase {
                     // updateDateをvirtualObjectに直接設定（VirtualObjectRendererが参照）
                     if (metadataCache[realId].updateDate) {
                         virtualObject.updateDate = metadataCache[realId].updateDate;
+                    }
+                    // 実身名もJSONから取得したものを優先（自己閉じタグ対応）
+                    if (metadataCache[realId].name) {
+                        virtualObject.link_name = metadataCache[realId].name;
                     }
                 }
 
@@ -2302,8 +2608,9 @@ class BasicTextEditor extends window.PluginBase {
                 const vobjElement = this.virtualObjectRenderer.createInlineElement(virtualObject, options);
 
                 // innerContentをdata属性として追加（XMLエクスポート時に必要）
-                const escapedInnerContent = this.escapeHtml(innerContent.trim());
-                vobjElement.setAttribute('data-link-innercontent', escapedInnerContent);
+                // safeInnerContentは上で定義済み（自己閉じタグの場合は空文字）
+                const escapedInnerContentForAttr = this.escapeHtml(safeInnerContent.trim());
+                vobjElement.setAttribute('data-link-innercontent', escapedInnerContentForAttr);
 
                 // その他の属性も追加（VirtualObjectRendererが設定しない属性）
                 // applistはVirtualObjectRendererがdata-applistとして設定するため除外
@@ -2316,6 +2623,9 @@ class BasicTextEditor extends window.PluginBase {
                 return vobjElement.outerHTML;
             } else {
                 // フォールバック: VirtualObjectRendererが利用できない場合
+                const realId = attrMap.id.replace(/_\d+\.xtad$/i, '');
+                // 実身名もJSONから取得したものを優先（自己閉じタグ対応）
+                const finalDisplayName = (metadataCache[realId]?.name) || displayName;
                 const frcol = attrMap.frcol || '#000000';
                 const chcol = attrMap.chcol || '#000000';
                 const tbcol = attrMap.tbcol || '#ffffff';
@@ -2323,15 +2633,17 @@ class BasicTextEditor extends window.PluginBase {
                 const fontSize = chsz ? `${window.convertPtToPx(chsz)}px` : '0.9em';  // ポイント値をピクセル値に変換
                 const style = `display: inline-block; padding: 4px 8px; margin: 0 2px; background: ${tbcol}; border: 1px solid ${frcol}; cursor: pointer; color: ${chcol}; font-size: ${fontSize}; line-height: 1; vertical-align: middle; user-select: none; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`;
 
-                return `<span class="virtual-object"${dataAttrs} contenteditable="false" unselectable="on" style="${style}">${this.escapeHtml(displayName)}</span>`;
+                return `<span class="virtual-object"${dataAttrs} contenteditable="false" unselectable="on" style="${style}">${this.escapeHtml(finalDisplayName)}</span>`;
             }
         });
     }
 
     /**
      * TAD XML文字修飾タグをHTMLに変換
+     * @param {string} content - 変換対象のコンテンツ
+     * @param {TextStyleStateManager} textStyleState - テキストスタイル状態（段落間引き継ぎ用、オプション）
      */
-    async convertDecorationTagsToHTML(content) {
+    async convertDecorationTagsToHTML(content, textStyleState = null) {
         let html = content;
 
         // 最初に<link>タグを仮身に変換（他の処理で消されないように先に処理）
@@ -2375,56 +2687,78 @@ class BasicTextEditor extends window.PluginBase {
                 return `<span style="font-size: 14pt;">${tabs}</span><font size="${size}"/>`;
             });
 
-        // <font>タグを処理（自己閉じタグのペア形式を処理）
-        // 状態管理しながらスタック方式で処理
+        // <font>タグを処理（自己閉じタグとペアタグの両方に対応）
+        // シンプルなアプローチ: 各fontタグを個別のspanに変換
+        // インラインスタイルでスタイル情報を保持
         let result = '';
         let pos = 0;
-        const fontRegex = /<font\s+(size|color|face)="([^"]*)"\s*\/>/g;
+        const fontRegex = /<font\s+(size|color|face)="([^"]*)"\s*\/?>|<\/font>/gi;
         let match;
-        const stack = [];
+        const stack = []; // { attr, value, isSelfClosing }
 
         while ((match = fontRegex.exec(html)) !== null) {
-            // マッチする前のテキスト・タグを追加
             result += html.substring(pos, match.index);
 
-            const attr = match[1]; // size, color, face
-            const value = match[2]; // 値
+            const fullMatch = match[0];
 
-            if (value === '') {
-                // 空文字列 = 終了タグ（元に戻す）
-                // スタックから対応する開始タグを探して閉じる
-                for (let i = stack.length - 1; i >= 0; i--) {
-                    if (stack[i].attr === attr) {
-                        result += '</span>';
-                        stack.splice(i, 1);
-                        break;
+            if (fullMatch.toLowerCase() === '</font>') {
+                // ペアタグ終了
+                if (stack.length > 0) {
+                    result += '</span>';
+                    const popped = stack.pop();
+
+                    // textStyleStateを前の状態に戻す
+                    if (textStyleState && !popped.isSelfClosing) {
+                        // 同じ属性の前の値を探す（入れ子対応）
+                        let previousValue = null;
+                        for (let i = stack.length - 1; i >= 0; i--) {
+                            if (stack[i].attr === popped.attr) {
+                                previousValue = stack[i].value;
+                                break;
+                            }
+                        }
+                        // 前の値がなければnullでデフォルトにリセット
+                        textStyleState.update(popped.attr, previousValue);
                     }
                 }
             } else {
-                // 値あり = 開始タグ
-                let styleValue = '';
-                if (attr === 'size') {
-                    styleValue = `font-size: ${value}pt;`;
-                } else if (attr === 'color') {
-                    styleValue = `color: ${value};`;
-                } else if (attr === 'face') {
-                    // フォント名にスペース、カンマ、特殊文字が含まれる場合は引用符で囲む
-                    // 既に引用符で囲まれていない場合のみ追加
-                    let fontFamily = value;
-                    if (!/^["']/.test(fontFamily) && (/\s|,/.test(fontFamily) || /[^\x00-\x7F]/.test(fontFamily))) {
-                        fontFamily = `"${fontFamily}"`;
-                    }
-                    styleValue = `font-family: ${fontFamily};`;
+                const attr = match[1].toLowerCase();
+                const value = match[2];
+                const isSelfClosing = fullMatch.endsWith('/>');
+
+                // textStyleStateが渡されている場合、状態を更新
+                if (textStyleState) {
+                    textStyleState.update(attr, value);
                 }
-                result += `<span style="${styleValue}">`;
-                stack.push({ attr, value });
+
+                if (value === '' && isSelfClosing) {
+                    // 空文字列の自己閉じ = 終了タグ（後方互換）
+                    for (let i = stack.length - 1; i >= 0; i--) {
+                        if (stack[i].attr === attr) {
+                            result += '</span>';
+                            stack.splice(i, 1);
+                            break;
+                        }
+                    }
+                } else {
+                    // 開始タグ: spanを生成
+                    const spanHtml = this.createTadStyledSpan(attr, value);
+                    result += spanHtml;
+                    stack.push({ attr, value, isSelfClosing });
+                }
             }
 
             pos = fontRegex.lastIndex;
         }
 
-        // 残りのテキストを追加
         result += html.substring(pos);
+
+        // 閉じられていないspanを閉じる
+        while (stack.length > 0) {
+            result += '</span>';
+            stack.pop();
+        }
+
         html = result;
 
         // <underline>タグ -> <u>タグ
@@ -2610,7 +2944,30 @@ class BasicTextEditor extends window.PluginBase {
                 return;
             }
 
-            const docContent = docMatch[1];
+            let docContent = docMatch[1];
+
+            // フォールバック: 不正な<docoverlay=形式を正規化（属性名欠落の修正）
+            tadXML = tadXML.replace(/<docoverlay="([^"]*)"\s*\/>/gi, '<docoverlay data="$1" />');
+
+            // フォールバック: <p>タグなしで始まるコンテンツを検出
+            // メタ要素（paper, docmargin, docScale, text, docoverlay）を除いた後、
+            // <p>で始まらず</p>で終わるコンテンツがあれば暗黙的に<p>でラップ
+            const metaPattern = /^(\s*(<paper[^>]*\/>|<docmargin[^>]*\/>|<docScale[^>]*\/>|<text[^>]*\/>|<docoverlay[^>]*\/>)\s*)*/i;
+            const metaMatch = metaPattern.exec(docContent);
+            if (metaMatch) {
+                const afterMeta = docContent.substring(metaMatch[0].length);
+                // <p>で始まらないが</p>を含む場合
+                if (afterMeta && !afterMeta.trim().startsWith('<p>') && !afterMeta.trim().startsWith('<p ')) {
+                    const firstCloseP = afterMeta.indexOf('</p>');
+                    if (firstCloseP !== -1) {
+                        // 最初の</p>の前のコンテンツを<p>でラップ
+                        const beforeCloseP = afterMeta.substring(0, firstCloseP);
+                        const afterCloseP = afterMeta.substring(firstCloseP);
+                        docContent = metaMatch[0] + '<p>' + beforeCloseP + afterCloseP;
+                        logger.debug('[EDITOR] フォールバック: <p>タグなしコンテンツを検出、暗黙的にラップしました');
+                    }
+                }
+            }
 
             // XMLをパース
             const parser = new DOMParser();
@@ -2654,6 +3011,9 @@ class BasicTextEditor extends window.PluginBase {
 
             // ページ追跡を初期化（条件付き改ページ用）
             this.initPageTracker();
+
+            // テキストスタイル状態を段落ループの外で初期化（段落間引き継ぎ用）
+            const textStyleState = new window.TextStyleStateManager();
 
             // <p>タグと<pagebreak>タグを順番に処理
             // 正規表現で<p>...</p>と<pagebreak .../>を取得
@@ -2708,28 +3068,43 @@ class BasicTextEditor extends window.PluginBase {
                 let style = 'margin: 0.5em 0; white-space: pre-wrap;';
                 let maxFontSize = 14; // デフォルトのフォントサイズ
 
+                // 前段落から継承されたスタイルを適用
+                const inheritedStyle = textStyleState.toCssStyle();
+                const inheritedAlignStyle = textStyleState.toAlignCssStyle();
+                if (inheritedStyle) {
+                    style += inheritedStyle;
+                    // 継承されたサイズがあれば最大フォントサイズを更新
+                    if (textStyleState.size !== '14') {
+                        maxFontSize = parseFloat(textStyleState.size);
+                    }
+                }
+                if (inheritedAlignStyle) {
+                    style += inheritedAlignStyle;
+                }
+
                 // フォントサイズ（段落の最初のもののみ）- スタイル抽出のみ、タグは残す
-                const fontSizeMatch = /<font\s+size="([^"]*)"\s*\/>/i.exec(paragraphContent);
-                if (fontSizeMatch) {
-                    style += `font-size: ${fontSizeMatch[1]}pt;`;
-                    maxFontSize = parseFloat(fontSizeMatch[1]);
+                // 自己閉じタグとペアタグの両方をチェック
+                const fontSizeSelfClosingMatch = /<font\s+size="([^"]*)"\s*\/>/i.exec(paragraphContent);
+                const fontSizePairTagMatch = /<font\s+size="([^"]*)">/i.exec(paragraphContent);
+                // 最初に出現する方を採用
+                let firstFontSizeMatch = null;
+                if (fontSizeSelfClosingMatch && fontSizePairTagMatch) {
+                    firstFontSizeMatch = fontSizeSelfClosingMatch.index < fontSizePairTagMatch.index
+                        ? fontSizeSelfClosingMatch : fontSizePairTagMatch;
+                } else {
+                    firstFontSizeMatch = fontSizeSelfClosingMatch || fontSizePairTagMatch;
+                }
+                if (firstFontSizeMatch) {
+                    style += `font-size: ${firstFontSizeMatch[1]}pt;`;
+                    maxFontSize = parseFloat(firstFontSizeMatch[1]);
                     // タグは削除せず残す（convertDecorationTagsToHTMLで処理される）
                 }
 
                 // 段落内の最大フォントサイズを探す（行の高さを決定するため）
-                // デフォルト値への復元タグ（14pt）は除外する
-                const allFontSizes = paragraphContent.match(/<font\s+size="([^"]*)"\s*\/>/g);
-                if (allFontSizes && allFontSizes.length > 0) {
-                    // すべてのフォントサイズを確認し、最大値を取得
-                    allFontSizes.forEach(fontTag => {
-                        const sizeMatch = /<font\s+size="([^"]*)"\s*\/>/.exec(fontTag);
-                        if (sizeMatch && sizeMatch[1] !== '14') {
-                            const size = parseFloat(sizeMatch[1]);
-                            if (size > maxFontSize) {
-                                maxFontSize = size;
-                            }
-                        }
-                    });
+                // 自己閉じタグとペアタグの両方を検出
+                const xmlMaxFontSize = this.calculateMaxFontSizeFromXml(paragraphContent, maxFontSize);
+                if (xmlMaxFontSize > maxFontSize) {
+                    maxFontSize = xmlMaxFontSize;
                 }
 
                 // フォントファミリー（段落の最初のもののみ）- スタイル抽出のみ、タグは残す
@@ -2784,8 +3159,8 @@ class BasicTextEditor extends window.PluginBase {
                 // ただしテキストノード内の空白（タブ、スペース含む）は保持
                 paragraphContent = paragraphContent.replace(/>[\r\n]+</g, '><');
 
-                // インライン<font>タグをHTMLに変換
-                paragraphContent = await this.convertDecorationTagsToHTML(paragraphContent);
+                // インライン<font>タグをHTMLに変換（textStyleStateを渡して段落間で状態を引き継ぐ）
+                paragraphContent = await this.convertDecorationTagsToHTML(paragraphContent, textStyleState);
 
                 // line-heightを最大フォントサイズに基づいて設定
                 const lineHeight = maxFontSize * 1.5;
@@ -2808,28 +3183,44 @@ class BasicTextEditor extends window.PluginBase {
                 let style = 'margin: 0.5em 0; white-space: pre-wrap;';
                 let maxFontSize = 14; // デフォルトのフォントサイズ
 
-                // フォントサイズ
-                const fontSizeMatch = /<font\s+size="([^"]*)"\s*\/>/i.exec(paragraphContent);
-                if (fontSizeMatch) {
-                    style += `font-size: ${fontSizeMatch[1]}pt;`;
-                    maxFontSize = parseFloat(fontSizeMatch[1]);
-                    paragraphContent = paragraphContent.replace(/<font\s+size="[^"]*"\s*\/>/i, '');
+                // 前段落から継承されたスタイルを適用
+                const inheritedStyleRemainder = textStyleState.toCssStyle();
+                const inheritedAlignStyleRemainder = textStyleState.toAlignCssStyle();
+                if (inheritedStyleRemainder) {
+                    style += inheritedStyleRemainder;
+                    if (textStyleState.size !== '14') {
+                        maxFontSize = parseFloat(textStyleState.size);
+                    }
+                }
+                if (inheritedAlignStyleRemainder) {
+                    style += inheritedAlignStyleRemainder;
+                }
+
+                // フォントサイズ（自己閉じタグとペアタグの両方をチェック）
+                const fontSizeSelfClosingMatch = /<font\s+size="([^"]*)"\s*\/>/i.exec(paragraphContent);
+                const fontSizePairTagMatch = /<font\s+size="([^"]*)">/i.exec(paragraphContent);
+                // 最初に出現する方を採用
+                let firstFontSizeMatch = null;
+                if (fontSizeSelfClosingMatch && fontSizePairTagMatch) {
+                    firstFontSizeMatch = fontSizeSelfClosingMatch.index < fontSizePairTagMatch.index
+                        ? fontSizeSelfClosingMatch : fontSizePairTagMatch;
+                } else {
+                    firstFontSizeMatch = fontSizeSelfClosingMatch || fontSizePairTagMatch;
+                }
+                if (firstFontSizeMatch) {
+                    style += `font-size: ${firstFontSizeMatch[1]}pt;`;
+                    maxFontSize = parseFloat(firstFontSizeMatch[1]);
+                    // 自己閉じタグの場合のみ削除（ペアタグはconvertDecorationTagsToHTMLで処理）
+                    if (fontSizeSelfClosingMatch && (!fontSizePairTagMatch || fontSizeSelfClosingMatch.index < fontSizePairTagMatch.index)) {
+                        paragraphContent = paragraphContent.replace(/<font\s+size="[^"]*"\s*\/>/i, '');
+                    }
                 }
 
                 // 段落内の最大フォントサイズを探す（行の高さを決定するため）
-                // デフォルト値への復元タグ（14pt）は除外する
-                const allFontSizes = paragraphContent.match(/<font\s+size="([^"]*)"\s*\/>/g);
-                if (allFontSizes && allFontSizes.length > 0) {
-                    // すべてのフォントサイズを確認し、最大値を取得
-                    allFontSizes.forEach(fontTag => {
-                        const sizeMatch = /<font\s+size="([^"]*)"\s*\/>/.exec(fontTag);
-                        if (sizeMatch && sizeMatch[1] !== '14') {
-                            const size = parseFloat(sizeMatch[1]);
-                            if (size > maxFontSize) {
-                                maxFontSize = size;
-                            }
-                        }
-                    });
+                // 自己閉じタグとペアタグの両方を検出
+                const xmlMaxFontSize = this.calculateMaxFontSizeFromXml(paragraphContent, maxFontSize);
+                if (xmlMaxFontSize > maxFontSize) {
+                    maxFontSize = xmlMaxFontSize;
                 }
 
                 // フォントファミリー
@@ -2839,12 +3230,8 @@ class BasicTextEditor extends window.PluginBase {
                     paragraphContent = paragraphContent.replace(/<font\s+face="[^"]*"\s*\/>/i, '');
                 }
 
-                // フォントカラー
-                const fontColorMatch = /<font\s+color="([^"]*)"\s*\/>/i.exec(paragraphContent);
-                if (fontColorMatch) {
-                    style += `color: ${fontColorMatch[1]};`;
-                    paragraphContent = paragraphContent.replace(/<font\s+color="[^"]*"\s*\/>/i, '');
-                }
+                // フォントカラーは段落レベルで処理しない
+                // 色はペアタグ方式でspan要素レベルで処理する（convertDecorationTagsToHTMLで変換）
 
                 // テキスト配置
                 const textAlignMatch = /<text\s+align="([^"]*)"\s*\/>/i.exec(paragraphContent);
@@ -2883,8 +3270,8 @@ class BasicTextEditor extends window.PluginBase {
                 // タグ間の余分な空白・改行を正規化
                 paragraphContent = paragraphContent.replace(/>\s+</g, '><');
 
-                // インライン<font>タグをHTMLに変換
-                paragraphContent = await this.convertDecorationTagsToHTML(paragraphContent);
+                // インライン<font>タグをHTMLに変換（textStyleStateを渡して段落間で状態を引き継ぐ）
+                paragraphContent = await this.convertDecorationTagsToHTML(paragraphContent, textStyleState);
 
                 // line-heightを最大フォントサイズに基づいて設定
                 const lineHeight = maxFontSize * 1.5;
@@ -3643,7 +4030,7 @@ class BasicTextEditor extends window.PluginBase {
             // デフォルトのフォント状態を設定
             const defaultFontState = {
                 size: '14',
-                color: '#000000',
+                color: null,  // null = 色未設定（黒色と区別）
                 face: ''
             };
 
@@ -3656,9 +4043,15 @@ class BasicTextEditor extends window.PluginBase {
             // デフォルトのフォント状態
             const defaultFontState = {
                 size: '14',
-                color: '#000000',
+                color: null,  // null = 色未設定（黒色と区別）
                 face: ''
             };
+
+            // 前の段落のフォント状態を追跡（冗長なタグ出力を防ぐ）
+            let prevParagraphFontState = { ...defaultFontState };
+
+            // 段落の有効色を追跡（ブラウザデフォルト黒色との区別用）
+            let prevParagraphEffectiveColor = null;
 
             for (const child of editorChildren) {
                 // 段落要素の処理
@@ -3678,28 +4071,31 @@ class BasicTextEditor extends window.PluginBase {
                         xmlParts.push(`<text align="${textAlign}"/>`);
                     }
 
-                    // 段落レベルでフォント情報を出力
-                    if (fontFamily) {
+                    // 段落の有効色を計算（段落のインラインカラー または 前段落の有効色）
+                    const effectiveColor = color || prevParagraphEffectiveColor;
+
+                    // 段落のフォント状態を設定（段落自体のスタイルまたは前の段落の状態を継承）
+                    const paragraphFontState = {
+                        size: fontSize || prevParagraphFontState.size,
+                        color: color !== null ? color : prevParagraphFontState.color,
+                        face: fontFamily || prevParagraphFontState.face
+                    };
+
+                    // 段落レベルでフォント情報を出力（前の段落と異なる場合のみ）
+                    // ※色・サイズはペアタグ方式でSPAN要素レベルで処理するため、段落レベルでは出力しない
+                    if (fontFamily && fontFamily !== prevParagraphFontState.face) {
                         xmlParts.push(`<font face="${fontFamily}"/>`);
                     }
-                    if (fontSize) {
-                        xmlParts.push(`<font size="${fontSize}"/>`);
-                    }
-                    if (color) {
-                        xmlParts.push(`<font color="${color}"/>`);
-                    }
+                    // サイズはペアタグ方式のため段落レベルでは出力しない（SPAN要素レベルで処理）
 
-                    // 段落のフォント状態を設定
-                    const paragraphFontState = {
-                        size: fontSize || '14',
-                        color: color || '#000000',
-                        face: fontFamily || ''
-                    };
+                    // 次の段落のために現在の状態を保存
+                    prevParagraphFontState = { ...paragraphFontState };
+                    prevParagraphEffectiveColor = effectiveColor;
 
                     // 段落の内容を取得（TAD XMLタグをそのまま保持）
                     const xmlPartsLengthBefore = xmlParts.length;
 
-                    this.extractTADXMLFromElement(p, xmlParts, paragraphFontState);
+                    this.extractTADXMLFromElement(p, xmlParts, paragraphFontState, effectiveColor);
 
                     // extractTADXMLFromElement()が追加した内容を取得
                     const paragraphContentParts = xmlParts.slice(xmlPartsLengthBefore);
@@ -3775,13 +4171,22 @@ class BasicTextEditor extends window.PluginBase {
 
     /**
      * 要素からTAD XMLタグを抽出（タグをそのまま保持）
+     * @param {Element} element - 処理対象の要素
+     * @param {Array|Object} xmlParts - XML出力配列（後方互換性のためObjectも受け付ける）
+     * @param {Object} fontState - 現在のフォント状態
+     * @param {string|null} effectiveColor - 段落の有効色（ブラウザデフォルト黒色との区別用）
      */
-    extractTADXMLFromElement(element, xmlParts, fontState = { size: '14', color: '#000000', face: '' }) {
+    extractTADXMLFromElement(element, xmlParts, fontState = { size: '14', color: '#000000', face: '' }, effectiveColor = null) {
         // xmlPartsが配列でない場合（古い呼び出し方）は、配列を作成して戻り値を返す
+        // 古いスタイル: extractTADXMLFromElement(element, fontState, effectiveColor)
+        // 新しいスタイル: extractTADXMLFromElement(element, xmlPartsArray, fontState, effectiveColor)
         const isOldStyle = !Array.isArray(xmlParts);
         if (isOldStyle) {
+            // 古いスタイルでは: xmlParts=fontState, fontState=effectiveColor
+            const oldEffectiveColor = fontState;  // 3rd param was effectiveColor
             fontState = xmlParts || { size: '14', color: '#000000', face: '' };
             xmlParts = [];
+            effectiveColor = (typeof oldEffectiveColor === 'string' || oldEffectiveColor === null) ? oldEffectiveColor : null;
         }
 
         let xml = '';  // 一時的な文字列（このメソッド内でのみ使用）
@@ -3837,8 +4242,8 @@ class BasicTextEditor extends window.PluginBase {
 
                     xml += '>';
 
-                    // 子要素を再帰的に処理（現在のフォント状態を引き継ぐ）
-                    xml += this.extractTADXMLFromElement(node, fontState);
+                    // 子要素を再帰的に処理（現在のフォント状態とeffectiveColorを引き継ぐ）
+                    xml += this.extractTADXMLFromElement(node, fontState, effectiveColor);
 
                     // 終了タグ
                     xml += `</${nodeName}>`;
@@ -3850,19 +4255,25 @@ class BasicTextEditor extends window.PluginBase {
                     const sizeAttr = node.size || this.extractFontSize(node);
                     const face = node.face || this.extractFontFamily(node);
 
-                    // 現在の状態を保存
-                    const prevState = { ...fontState };
-                    
                     // 新しい状態を作成
                     const newState = { ...fontState };
-                    
-                    // フォント情報をXMLの自己閉じタグとして出力（開始）
-                    if (color) {
-                        xml += `<font color="${color}"/>`;
+
+                    // フォントタグ追跡（ペアタグ用）
+                    let colorTagOpened = false;
+                    let sizeTagOpened = false;
+
+                    // フォント情報を出力
+                    // 色・サイズはペアタグ方式: <font color="...">content</font>, <font size="...">content</font>
+                    // フェイスは自己閉じタグ方式を維持
+                    // 黒色（#000000）はデフォルト色なので出力不要
+                    if (color && color !== '#000000' && color !== fontState.color) {
+                        xml += `<font color="${color}">`;
+                        colorTagOpened = true;
                         newState.color = color;
                     }
                     if (sizeAttr) {
-                        xml += `<font size="${sizeAttr}"/>`;
+                        xml += `<font size="${sizeAttr}">`;
+                        sizeTagOpened = true;
                         newState.size = sizeAttr;
                     }
                     if (face) {
@@ -3870,25 +4281,30 @@ class BasicTextEditor extends window.PluginBase {
                         newState.face = face;
                     }
 
-                    // 子要素を再帰的に処理（新しいフォント状態を渡す）
-                    xml += this.extractTADXMLFromElement(node, newState);
+                    // 子要素を再帰的に処理（新しいフォント状態とeffectiveColorを渡す）
+                    xml += this.extractTADXMLFromElement(node, newState, effectiveColor);
 
-                    // フォント情報を元に戻す処理は不要（TAD形式では状態リセットしない）
-                    // 削除することで<font>タグの無限増殖を防ぐ
+                    // ペアタグを閉じる（開いた順の逆順で閉じる）
+                    if (sizeTagOpened) {
+                        xml += '</font>';
+                    }
+                    if (colorTagOpened) {
+                        xml += '</font>';
+                    }
                 }
                 else if (nodeName === 'b' || nodeName === 'strong') {
                     xml += '<bold>';
-                    xml += this.extractTADXMLFromElement(node, fontState);
+                    xml += this.extractTADXMLFromElement(node, fontState, effectiveColor);
                     xml += '</bold>';
                 }
                 else if (nodeName === 'i' || nodeName === 'em') {
                     xml += '<italic>';
-                    xml += this.extractTADXMLFromElement(node, fontState);
+                    xml += this.extractTADXMLFromElement(node, fontState, effectiveColor);
                     xml += '</italic>';
                 }
                 else if (nodeName === 'u') {
                     xml += '<underline>';
-                    xml += this.extractTADXMLFromElement(node, fontState);
+                    xml += this.extractTADXMLFromElement(node, fontState, effectiveColor);
                     xml += '</underline>';
                 }
                 else if (nodeName === 'sup') {
@@ -3900,7 +4316,7 @@ class BasicTextEditor extends window.PluginBase {
                     const baseline = node.getAttribute('data-attend-baseline') || '0';
 
                     xml += `<attend type="${type}" position="${position}" unit="${unit}" targetPosition="${targetPosition}" baseline="${baseline}">`;
-                    xml += this.extractTADXMLFromElement(node, fontState);
+                    xml += this.extractTADXMLFromElement(node, fontState, effectiveColor);
                     xml += '</attend>';
                 }
                 else if (nodeName === 'sub') {
@@ -3912,7 +4328,7 @@ class BasicTextEditor extends window.PluginBase {
                     const baseline = node.getAttribute('data-attend-baseline') || '0';
 
                     xml += `<attend type="${type}" position="${position}" unit="${unit}" targetPosition="${targetPosition}" baseline="${baseline}">`;
-                    xml += this.extractTADXMLFromElement(node, fontState);
+                    xml += this.extractTADXMLFromElement(node, fontState, effectiveColor);
                     xml += '</attend>';
                 }
                 else if (nodeName === 'span') {
@@ -3933,9 +4349,9 @@ class BasicTextEditor extends window.PluginBase {
                                 const attrName = key.replace(/^link/, '').toLowerCase();
                                 const attrValue = node.dataset[key];
 
-                                // innercontentは属性ではなくタグ内テキストとして扱う
-                                if (attrName === 'innercontent') {
-                                    innerContent = attrValue;
+                                // innercontentとnameは不要（link_nameはJSONから取得する方式に統一）
+                                if (attrName === 'innercontent' || attrName === 'name') {
+                                    continue;
                                 }
                                 // 展開状態でない場合は座標属性を保存しない
                                 else if (!isExpanded && (attrName === 'vobjleft' || attrName === 'vobjtop' || attrName === 'vobjright' || attrName === 'vobjbottom')) {
@@ -3950,12 +4366,19 @@ class BasicTextEditor extends window.PluginBase {
                                 applistAttr = ` applist="${this.escapeXml(node.dataset[key])}"`;
                             }
                         }
-                        xml += `<link${attrs}${applistAttr}>${this.escapeXml(innerContent)}</link>`;
+                        // 自己閉じタグ形式（link_nameはJSONから取得する方式に統一）
+                        xml += `<link${attrs}${applistAttr}/>`;
                     } else if (!node._tabProcessed) {
                         // 処理済みのタブspanはスキップ
 
                         // 固定サイズ（14pt）のタブ文字の特別処理
-                        const style = node.style;
+                        // インラインスタイルからスタイル情報を取得
+                        // computedStyleは使用しない（ブラウザデフォルトが混入するため）
+                        const style = {
+                            color: this.getTadStyleFromSpan(node, 'color') || '',
+                            fontSize: this.getTadStyleFromSpan(node, 'size') ? `${this.getTadStyleFromSpan(node, 'size')}pt` : (node.style.fontSize || ''),
+                            fontFamily: this.getTadStyleFromSpan(node, 'face') || node.style.fontFamily || ''
+                        };
                         const textContent = node.textContent;
 
                         // タブ文字を含むかチェック
@@ -4099,35 +4522,48 @@ class BasicTextEditor extends window.PluginBase {
                                     newState.size = size;
                                 }
                                 if (style.color) {
-                                    newState.color = this.rgbToHex(style.color);
+                                    const hexColor = this.rgbToHex(style.color);
+                                    const isDefaultBlack = hexColor === '#000000';
+                                    // ブラウザデフォルト黒色で有効色が非黒色の場合は状態を更新しない
+                                    if (!(isDefaultBlack && effectiveColor && effectiveColor !== '#000000')) {
+                                        newState.color = hexColor;
+                                    }
                                 }
                                 if (style.fontFamily) {
                                     newState.face = style.fontFamily;
                                 }
 
                                 // 子要素を処理（空要素でも子要素がある可能性）
-                                xml += this.extractTADXMLFromElement(node, newState);
+                                xml += this.extractTADXMLFromElement(node, newState, effectiveColor);
+
+                                // fontStateを更新（呼び出し元に反映）
+                                fontState.color = newState.color;
+                                fontState.size = newState.size;
+                                fontState.face = newState.face;
                             } else {
                                 // テキストを含むspan要素の通常処理
                                 // 新しい状態を作成
                                 const newState = { ...fontState };
 
+                                // フォントタグを追跡（ペアタグ用）
+                                let colorTagOpened = false;
+                                let sizeTagOpened = false;
+
                                 // スタイル開始
+                                // 色・サイズはペアタグ方式: <font color="...">content</font>, <font size="...">content</font>
+                                // フェイスは自己閉じタグ方式を維持
                                 if (style.color) {
                                     const hexColor = this.rgbToHex(style.color);
-                                    if (hexColor !== fontState.color) {
-                                        xml += `<font color="${hexColor}"/>`;
-                                    }
-                                    // newStateは常に更新
+                                    // ペアタグ方式：色があれば常に出力
+                                    xml += `<font color="${hexColor}">`;
+                                    colorTagOpened = true;
                                     newState.color = hexColor;
                                 }
                                 if (style.fontSize) {
                                     const size = style.fontSize.replace('pt', '').replace('px', '');
-                                    // fontStateと異なる場合のみ出力
-                                    if (size !== fontState.size) {
-                                        xml += `<font size="${size}"/>`;
-                                    }
-                                    // newStateは常に更新（子要素に正しい状態を渡すため）
+                                    // ペアタグ方式：サイズがあれば常に出力
+                                    xml += `<font size="${size}">`;
+                                    sizeTagOpened = true;
                                     newState.size = size;
                                 }
                                 if (style.fontFamily) {
@@ -4139,17 +4575,27 @@ class BasicTextEditor extends window.PluginBase {
                                 }
 
                                 // 子要素を再帰的に処理（新しいフォント状態を渡す）
-                                xml += this.extractTADXMLFromElement(node, newState);
+                                xml += this.extractTADXMLFromElement(node, newState, effectiveColor);
 
-                                // スタイル終了時の状態リセットは不要（TAD形式では状態リセットしない）
-                                // 削除することで<font>タグの無限増殖を防ぐ
+                                // ペアタグを閉じる（開いた順の逆順で閉じる）
+                                if (sizeTagOpened) {
+                                    xml += '</font>';
+                                }
+                                if (colorTagOpened) {
+                                    xml += '</font>';
+                                }
+
+                                // fontStateを更新（呼び出し元に反映、次の要素や段落で正しい状態を使用）
+                                fontState.color = newState.color;
+                                fontState.size = newState.size;
+                                fontState.face = newState.face;
                             }
                         }
                     }
                 }
                 else {
-                    // その他のHTML要素は内容のみ抽出（現在のフォント状態を引き継ぐ）
-                    xml += this.extractTADXMLFromElement(node, fontState);
+                    // その他のHTML要素は内容のみ抽出（現在のフォント状態とeffectiveColorを引き継ぐ）
+                    xml += this.extractTADXMLFromElement(node, fontState, effectiveColor);
                 }
             }
         });
@@ -4188,13 +4634,13 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
-     * 段落から色を抽出
+     * 段落から色を抽出（常に16進数形式で返す）
      */
     extractColor(element) {
         const style = element.style.color;
         if (style) {
-            // RGB形式をそのまま返す
-            return style;
+            // RGB形式を16進数に変換して返す
+            return this.rgbToHex(style);
         }
         return null;
     }
@@ -4543,13 +4989,22 @@ class BasicTextEditor extends window.PluginBase {
     rgbToHex(color) {
         if (!color) return '';
 
-        // 既に#rrggbb形式の場合はそのまま返す
+        let result;
+
+        // 既に#rrggbb形式の場合
         if (color.startsWith('#')) {
-            return color;
+            result = color;
+        } else {
+            // 共通ユーティリティ関数を使用
+            result = window.rgbToHex ? window.rgbToHex(color) : color;
         }
 
-        // 共通ユーティリティ関数を使用
-        return window.rgbToHex ? window.rgbToHex(color) : color;
+        // Chrome workaround: #010101（黒色の代替）を#000000に正規化
+        if (result && result.toLowerCase() === '#010101') {
+            result = '#000000';
+        }
+
+        return result;
     }
 
     /**
@@ -5250,45 +5705,46 @@ class BasicTextEditor extends window.PluginBase {
                 this.applyHalfWidth();
                 break;
 
-            // 文字色
+            // 文字色（applyFontColorで確実にスタイルを適用）
             case 'color-black':
-                document.execCommand('foreColor', false, '#000000');
+                logger.debug('[EDITOR] color-black action triggered');
+                this.applyFontColor('#000000');
                 this.setStatus('文字色: 黒');
                 break;
             case 'color-blue':
-                document.execCommand('foreColor', false, '#0000ff');
+                this.applyFontColor('#0000ff');
                 this.setStatus('文字色: 青');
                 break;
             case 'color-red':
-                document.execCommand('foreColor', false, '#ee0000');
+                this.applyFontColor('#ee0000');
                 this.setStatus('文字色: 赤');
                 break;
             case 'color-pink':
-                document.execCommand('foreColor', false, '#ff69b4');
+                this.applyFontColor('#ff69b4');
                 this.setStatus('文字色: ピンク');
                 break;
             case 'color-orange':
-                document.execCommand('foreColor', false, '#ff8c00');
+                this.applyFontColor('#ff8c00');
                 this.setStatus('文字色: 橙');
                 break;
             case 'color-green':
-                document.execCommand('foreColor', false, '#008000');
+                this.applyFontColor('#008000');
                 this.setStatus('文字色: 緑');
                 break;
             case 'color-lime':
-                document.execCommand('foreColor', false, '#7fff00');
+                this.applyFontColor('#7fff00');
                 this.setStatus('文字色: 黄緑');
                 break;
             case 'color-cyan':
-                document.execCommand('foreColor', false, '#00ffff');
+                this.applyFontColor('#00ffff');
                 this.setStatus('文字色: 水色');
                 break;
             case 'color-yellow':
-                document.execCommand('foreColor', false, '#ffff00');
+                this.applyFontColor('#ffff00');
                 this.setStatus('文字色: 黄色');
                 break;
             case 'color-white':
-                document.execCommand('foreColor', false, '#ffffff');
+                this.applyFontColor('#ffffff');
                 this.setStatus('文字色: 白');
                 break;
             case 'color-custom':
@@ -5915,11 +6371,10 @@ class BasicTextEditor extends window.PluginBase {
             } else if (node.classList && node.classList.contains('virtual-object')) {
                 // 仮身要素を処理
                 const linkId = node.dataset.linkId || '';
-                const linkName = node.dataset.linkName || '';
                 const attrs = [];
 
                 if (linkId) attrs.push(`id="${this.escapeXml(linkId)}"`);
-                if (linkName) attrs.push(`name="${this.escapeXml(linkName)}"`);
+                // name属性は出力しない（link_nameはJSONから取得する方式に統一）
 
                 // その他の属性も保持
                 const attrNames = ['tbcol', 'frcol', 'chcol', 'bgcol', 'chsz', 'framedisp', 'namedisp', 'pictdisp', 'roledisp', 'typedisp', 'updatedisp'];
@@ -5928,7 +6383,8 @@ class BasicTextEditor extends window.PluginBase {
                     if (value) attrs.push(`${attrName}="${this.escapeXml(value)}"`);
                 });
 
-                xmlParts.push(`<link ${attrs.join(' ')}>${this.escapeXml(linkName)}</link>`);
+                // 自己閉じタグ形式（link_nameはJSONから取得する方式に統一）
+                xmlParts.push(`<link ${attrs.join(' ')}/>`);
             } else if (node.nodeName === 'P') {
                 // 段落
                 xmlParts.push('<p>\r\n');
@@ -6638,61 +7094,51 @@ class BasicTextEditor extends window.PluginBase {
             </div>
         `;
 
-        return new Promise((resolve, reject) => {
-            this.messageBus.sendWithCallback('show-custom-dialog', {
-                title: '書体一覧',
-                dialogHtml: dialogHtml,
-                buttons: [
-                    { label: 'キャンセル', value: 'cancel' },
-                    { label: 'OK', value: 'ok' }
-                ],
-                defaultButton: 1
-            }, (result) => {
-                logger.debug('[EDITOR] ダイアログ応答:', result);
+        logger.debug('[EDITOR] 書体一覧ダイアログ要求:', fonts.length, 'フォント');
 
-                // Dialog result is wrapped in result.result
-                const dialogResult = result.result || result;
-
-                if (dialogResult.error) {
-                    logger.warn('[EDITOR] Custom dialog error:', dialogResult.error);
-                    resolve({ button: 'cancel' });
-                    return;
-                }
-
-                if (dialogResult.button === 'ok') {
-                    logger.debug('[EDITOR] OKボタンが押されました');
-
-                    // 選択されたフォントのインデックスを取得
-                    const fontIndex = dialogResult.selectedFontIndex;
-                    if (fontIndex !== null && fontIndex !== undefined && fontIndex >= 0 && fontIndex < fonts.length) {
-                        const selectedFontObj = fonts[fontIndex];
-                        logger.debug('[EDITOR] フォント選択:', selectedFontObj.displayName);
-                        logger.debug('[EDITOR] 利用可能な全ての名前:', selectedFontObj.allNames);
-
-                        // allNamesがあれば全ての名前を使用、なければdisplayNameのみ
-                        let fontFamilyCSS;
-                        if (selectedFontObj.allNames && selectedFontObj.allNames.length > 0) {
-                            // 各名前をクォートで囲んでカンマ区切りに
-                            fontFamilyCSS = selectedFontObj.allNames
-                                .map(name => `"${name}"`)
-                                .join(', ');
-                        } else {
-                            fontFamilyCSS = `"${selectedFontObj.displayName}"`;
-                        }
-
-                        logger.debug('[EDITOR] CSS font-family:', fontFamilyCSS);
-                        this.applyFont(fontFamilyCSS);
-                    } else {
-                        logger.debug('[EDITOR] フォントが選択されていません');
-                    }
-                } else {
-                    logger.debug('[EDITOR] OKボタンが押されませんでした。button:', dialogResult.button);
-                }
-                resolve(result);
-            });
-
-            logger.debug('[EDITOR] 書体一覧ダイアログ要求:', fonts.length, 'フォント');
+        const result = await this.showCustomDialog({
+            title: '書体一覧',
+            dialogHtml: dialogHtml,
+            buttons: [
+                { label: 'キャンセル', value: 'cancel' },
+                { label: 'OK', value: 'ok' }
+            ],
+            defaultButton: 1
         });
+
+        logger.debug('[EDITOR] ダイアログ応答:', result);
+
+        if (result && result.button === 'ok') {
+            logger.debug('[EDITOR] OKボタンが押されました');
+
+            // 選択されたフォントのインデックスを取得
+            const fontIndex = result.selectedFontIndex;
+            if (fontIndex !== null && fontIndex !== undefined && fontIndex >= 0 && fontIndex < fonts.length) {
+                const selectedFontObj = fonts[fontIndex];
+                logger.debug('[EDITOR] フォント選択:', selectedFontObj.displayName);
+                logger.debug('[EDITOR] 利用可能な全ての名前:', selectedFontObj.allNames);
+
+                // allNamesがあれば全ての名前を使用、なければdisplayNameのみ
+                let fontFamilyCSS;
+                if (selectedFontObj.allNames && selectedFontObj.allNames.length > 0) {
+                    // 各名前をクォートで囲んでカンマ区切りに
+                    fontFamilyCSS = selectedFontObj.allNames
+                        .map(name => `"${name}"`)
+                        .join(', ');
+                } else {
+                    fontFamilyCSS = `"${selectedFontObj.displayName}"`;
+                }
+
+                logger.debug('[EDITOR] CSS font-family:', fontFamilyCSS);
+                this.applyFont(fontFamilyCSS);
+            } else {
+                logger.debug('[EDITOR] フォントが選択されていません');
+            }
+        } else {
+            logger.debug('[EDITOR] OKボタンが押されませんでした。button:', result?.button);
+        }
+
+        return result;
     }
 
     /**
@@ -7213,12 +7659,66 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
+     * フォント色を適用
+     * - 選択範囲あり: document.execCommandで複雑な選択にも対応
+     * - 選択範囲なし: カーソル位置に空のspanを挿入し、次の入力に色を適用
+     * @param {string} color - 色コード（例: #000000）
+     */
+    applyFontColor(color) {
+        logger.debug('[EDITOR] applyFontColor called:', color);
+
+        const selection = window.getSelection();
+        if (!selection.rangeCount) {
+            logger.warn('[EDITOR] applyFontColor: rangeCount=0');
+            return;
+        }
+
+        const range = selection.getRangeAt(0);
+
+        if (range.collapsed) {
+            // 選択範囲なし（カーソルのみ）: 空のspanを挿入
+            logger.debug('[EDITOR] applyFontColor: カーソル位置に色spanを挿入');
+            const span = document.createElement('span');
+            span.style.color = color;
+            // ゼロ幅スペースを入れてspanが消えないようにする
+            span.appendChild(document.createTextNode('\u200B'));
+            range.insertNode(span);
+
+            // カーソルをspan内に配置
+            const newRange = document.createRange();
+            newRange.setStart(span.firstChild, 1); // ゼロ幅スペースの後
+            newRange.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(newRange);
+
+            // 変更フラグを設定
+            this.isModified = true;
+        } else {
+            // 選択範囲あり: document.execCommandを使用（複雑な選択範囲に対応）
+            logger.debug('[EDITOR] applyFontColor: execCommandで色を適用');
+
+            // Chrome/Electron workaround: 黒色(#000000)はspanを生成せず既存の色を削除するだけ
+            // 近似色(#010101)を使用してspanを生成させ、保存時に正規化する
+            let execColor = color;
+            if (color.toLowerCase() === '#000000') {
+                execColor = '#010101';
+                logger.debug('[EDITOR] applyFontColor: 黒色→#010101に変換（Chrome workaround）');
+            }
+            document.execCommand('foreColor', false, execColor);
+        }
+
+        // input イベントを発火（変更フラグ設定のため）
+        const inputEvent = new Event('input', { bubbles: true, cancelable: true });
+        this.editor.dispatchEvent(inputEvent);
+    }
+
+    /**
      * カスタム文字色
      */
     async customColor() {
         const color = await this.showInputDialog('文字色を入力してください（例: #ff0000, #000000）', '#000000', 20, { colorPicker: true });
         if (color) {
-            document.execCommand('foreColor', false, color);
+            this.applyFontColor(color);
             this.setStatus(`文字色: ${color}`);
         }
     }
@@ -8933,6 +9433,7 @@ class BasicTextEditor extends window.PluginBase {
         vo.style.height = 'auto';
         vo.style.minWidth = 'auto';
         vo.style.minHeight = 'auto';
+        vo.style.maxWidth = 'none';  // 幅制限を解除（VirtualObjectRendererのmaxWidth: '100%'をリセット）
         // 選択状態のスタイルをリセット（枠が太くなる問題対策）
         vo.style.outline = 'none';
         vo.classList.remove('selected');
@@ -9020,9 +9521,13 @@ class BasicTextEditor extends window.PluginBase {
         vo.appendChild(textSpan);
 
         // コンテンツを追加した後、実際の幅を測定して固定幅を設定（リサイズを防ぐため）
-        // DOMに反映させるために少し待つ
-        await new Promise(resolve => setTimeout(resolve, 0));
-        const actualWidth = vo.offsetWidth;
+        // レイアウト完了を待つ（requestAnimationFrame二重呼び出しで確実に待機）
+        await new Promise(resolve =>
+            requestAnimationFrame(() => requestAnimationFrame(resolve))
+        );
+        // getBoundingClientRect().widthでサブピクセル精度の幅を取得し、Math.ceilで切り上げ
+        // offsetWidthは整数に丸められるため、数ピクセル足りなくなる問題を回避
+        const actualWidth = Math.ceil(vo.getBoundingClientRect().width);
         vo.style.width = actualWidth + 'px';
         vo.style.minWidth = actualWidth + 'px';
 
@@ -9114,6 +9619,27 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
+     * 仮身の続柄をXMLに保存（PluginBaseフックオーバーライド）
+     * @param {Object} virtualObj - 更新された仮身オブジェクト
+     * @returns {Promise<void>}
+     */
+    async saveVirtualObjectRelationshipToXml(virtualObj) {
+        if (virtualObj && virtualObj.link_id) {
+            // DOM要素のdata-link-relationship属性も更新
+            // （convertEditorToXML()がDOMからXMLを生成するため必要）
+            const element = this.contextMenuVirtualObject?.element;
+            if (element) {
+                if (virtualObj.linkRelationship && virtualObj.linkRelationship.length > 0) {
+                    element.setAttribute('data-link-relationship', virtualObj.linkRelationship.join(' '));
+                } else if (element.hasAttribute('data-link-relationship')) {
+                    element.removeAttribute('data-link-relationship');
+                }
+            }
+            this.updateVirtualObjectInXml(virtualObj);
+        }
+    }
+
+    /**
      * 続柄更新後の再描画（PluginBaseフック）
      * 仮身のDOM要素を再描画して続柄表示を更新
      * applyVirtualObjectAttributesと同じcollapseVirtualObjectパターンを使用
@@ -9157,6 +9683,50 @@ class BasicTextEditor extends window.PluginBase {
         }
         // 開いた仮身の場合はRealObjectSystemでのtextContent/dataset更新で十分
         // （タイトルバー等への反映が必要な場合は追加処理を実装）
+    }
+
+    /**
+     * プラグイン内の全仮身を取得（PluginBaseオーバーライド）
+     * @returns {Array<Object>} 仮身情報の配列
+     */
+    getAllVirtualObjects() {
+        const elements = this.editor.querySelectorAll('.virtual-object');
+        return Array.from(elements).map(element => ({
+            virtualObj: {
+                link_id: element.dataset.linkId,
+                link_name: element.dataset.linkName
+            },
+            element: element
+        }));
+    }
+
+    /**
+     * 仮身の表示を更新（PluginBaseオーバーライド）
+     * @param {Object} item - getAllVirtualObjectsで返された仮身情報
+     */
+    async updateVirtualObjectDisplay(item) {
+        const { virtualObj, element } = item;
+        if (!element || !element.parentNode) {
+            return;
+        }
+
+        // DOM要素のdatasetを更新
+        element.dataset.linkName = virtualObj.link_name;
+
+        // 閉じた仮身の場合、collapseVirtualObjectで再描画
+        if (!element.classList.contains('expanded')) {
+            element.classList.add('expanded');
+            await this.collapseVirtualObject(element);
+        }
+        // 開いた仮身の場合はタイトルバーの名前を更新
+        else {
+            // タイトルバー内の名前spanを正しいセレクタで取得
+            // 構造: .virtual-object-titlebar > span(textSpan) > span:first-child(nameSpan)
+            const nameSpan = element.querySelector('.virtual-object-titlebar > span > span:first-child');
+            if (nameSpan) {
+                nameSpan.textContent = virtualObj.link_name;
+            }
+        }
     }
 
     /**
@@ -9418,9 +9988,15 @@ class BasicTextEditor extends window.PluginBase {
                         linkElement.setAttribute('autoopen', virtualObj.autoopen.toString());
                     }
 
-                    if (virtualObj.link_name !== undefined) {
-                        linkElement.textContent = virtualObj.link_name;
+                    // 仮身固有の続柄（link要素のrelationship属性）
+                    if (virtualObj.linkRelationship && virtualObj.linkRelationship.length > 0) {
+                        linkElement.setAttribute('relationship', virtualObj.linkRelationship.join(' '));
+                    } else if (linkElement.hasAttribute('relationship')) {
+                        linkElement.removeAttribute('relationship');
                     }
+
+                    // テキスト内容は書き込まない（自己閉じタグ形式）
+                    // link_nameはJSONから取得する方式に統一
 
                     logger.debug('[EDITOR] <link>要素を更新:', virtualObj.link_id);
                     break;
@@ -9429,7 +10005,10 @@ class BasicTextEditor extends window.PluginBase {
 
             // XMLを文字列に戻す
             const serializer = new XMLSerializer();
-            this.tadData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>');
+            this.tadData = xmlString;
 
             // 自動保存
             this.notifyXmlDataChanged();
@@ -10048,67 +10627,61 @@ class BasicTextEditor extends window.PluginBase {
             </script>
         `;
 
-        return new Promise((resolve) => {
-            this.messageBus.sendWithCallback('show-custom-dialog', {
-                title: '用紙設定',
-                dialogHtml: dialogHtml,
-                buttons: [
-                    { label: '取消', value: 'cancel' },
-                    { label: '標準設定', value: 'default' },
-                    { label: '設定', value: 'ok' }
-                ],
-                defaultButton: 2,
-                width: 400
-            }, (result) => {
-                const dialogResult = result.result || result;
-
-                if (dialogResult.error) {
-                    logger.warn('[EDITOR] Paper setup dialog error:', dialogResult.error);
-                    resolve(false);
-                    return;
-                }
-
-                if (dialogResult.button === 'default') {
-                    // 標準設定（A4）にリセット
-                    this.paperSize.resetToDefault();
-                    this.paperWidth = this.paperSize.width;
-                    this.paperHeight = this.paperSize.length;
-                    this.isModified = true;
-                    this.setStatus('用紙設定を標準（A4）にリセットしました');
-                    resolve(true);
-                } else if (dialogResult.button === 'ok') {
-                    // 設定を適用
-                    const formData = dialogResult.formData || {};
-
-                    const width = parseFloat(formData.paperWidth) || window.pointsToMm(this.paperWidth);
-                    const height = parseFloat(formData.paperHeight) || window.pointsToMm(this.paperHeight);
-                    const marginTop = parseFloat(formData.marginTop) || 0;
-                    const marginBottom = parseFloat(formData.marginBottom) || 0;
-                    const marginLeft = parseFloat(formData.marginLeft) || 0;
-                    const marginRight = parseFloat(formData.marginRight) || 0;
-                    const imposition = parseInt(formData.imposition) || 0;
-
-                    // PaperSizeに設定
-                    this.paperSize.widthMm = width;
-                    this.paperSize.lengthMm = height;
-                    this.paperSize.topMm = marginTop;
-                    this.paperSize.bottomMm = marginBottom;
-                    this.paperSize.leftMm = marginLeft;
-                    this.paperSize.rightMm = marginRight;
-                    this.paperSize.imposition = imposition;
-
-                    // ポイント単位でも更新
-                    this.paperWidth = this.paperSize.width;
-                    this.paperHeight = this.paperSize.length;
-
-                    this.isModified = true;
-                    this.setStatus(`用紙設定を ${width}×${height}mm に更新しました`);
-                    resolve(true);
-                } else {
-                    resolve(false);
-                }
-            }, 60000);  // 1分タイムアウト
+        const result = await this.showCustomDialog({
+            title: '用紙設定',
+            dialogHtml: dialogHtml,
+            buttons: [
+                { label: '取消', value: 'cancel' },
+                { label: '標準設定', value: 'default' },
+                { label: '設定', value: 'ok' }
+            ],
+            defaultButton: 2,
+            width: 400
         });
+
+        if (!result) {
+            return false;
+        }
+
+        if (result.button === 'default') {
+            // 標準設定（A4）にリセット
+            this.paperSize.resetToDefault();
+            this.paperWidth = this.paperSize.width;
+            this.paperHeight = this.paperSize.length;
+            this.isModified = true;
+            this.setStatus('用紙設定を標準（A4）にリセットしました');
+            return true;
+        } else if (result.button === 'ok') {
+            // 設定を適用
+            const formData = result.formData || {};
+
+            const width = parseFloat(formData.paperWidth) || window.pointsToMm(this.paperWidth);
+            const height = parseFloat(formData.paperHeight) || window.pointsToMm(this.paperHeight);
+            const marginTop = parseFloat(formData.marginTop) || 0;
+            const marginBottom = parseFloat(formData.marginBottom) || 0;
+            const marginLeft = parseFloat(formData.marginLeft) || 0;
+            const marginRight = parseFloat(formData.marginRight) || 0;
+            const imposition = parseInt(formData.imposition) || 0;
+
+            // PaperSizeに設定
+            this.paperSize.widthMm = width;
+            this.paperSize.lengthMm = height;
+            this.paperSize.topMm = marginTop;
+            this.paperSize.bottomMm = marginBottom;
+            this.paperSize.leftMm = marginLeft;
+            this.paperSize.rightMm = marginRight;
+            this.paperSize.imposition = imposition;
+
+            // ポイント単位でも更新
+            this.paperWidth = this.paperSize.width;
+            this.paperHeight = this.paperSize.length;
+
+            this.isModified = true;
+            this.setStatus(`用紙設定を ${width}×${height}mm に更新しました`);
+            return true;
+        }
+
+        return false;
     }
 
     // loadDataFileFromParent() および loadVirtualObjectMetadata() は

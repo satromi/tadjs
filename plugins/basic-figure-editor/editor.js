@@ -847,6 +847,13 @@ class BasicFigureEditor extends window.PluginBase {
             e.preventDefault();
             this.canvas.style.opacity = '1.0';
 
+            // URLドロップをチェック（PluginBase共通メソッド）
+            const dropX = e.clientX;
+            const dropY = e.clientY;
+            if (this.checkAndHandleUrlDrop(e, dropX, dropY)) {
+                return; // URLドロップは親ウィンドウで処理
+            }
+
             try {
                 // 画像ファイルのドロップをチェック
                 if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
@@ -5838,7 +5845,9 @@ class BasicFigureEditor extends window.PluginBase {
                 typedisp: elem.getAttribute('typedisp') || 'false',
                 updatedisp: elem.getAttribute('updatedisp') || 'false',
                 framedisp: elem.getAttribute('framedisp') || 'true',
-                autoopen: elem.getAttribute('autoopen') || 'false'
+                autoopen: elem.getAttribute('autoopen') || 'false',
+                // 仮身固有の続柄（link要素のrelationship属性）
+                linkRelationship: elem.getAttribute('relationship') ? elem.getAttribute('relationship').split(/\s+/).filter(t => t) : []
             },
             strokeColor: elem.getAttribute('frcol') || '#000000',
             textColor: elem.getAttribute('chcol') || '#000000',
@@ -6685,7 +6694,12 @@ class BasicFigureEditor extends window.PluginBase {
                     const backgroundAttr = shape.isBackground ? ' background="true"' : '';
                     // z-index属性を追加
                     const zIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                    xmlParts.push(`<link id="${vo.link_id}" vobjleft="${shape.startX}" vobjtop="${shape.startY}" vobjright="${shape.endX}" vobjbottom="${shape.endY}" height="${height}" chsz="${vo.chsz || 14}" frcol="${vo.frcol || '#000000'}" chcol="${vo.chcol || '#000000'}" tbcol="${vo.tbcol || '#ffffff'}" bgcol="${vo.bgcol || '#ffffff'}" dlen="${vo.link_name.length}" pictdisp="${vo.pictdisp || 'true'}" namedisp="${vo.namedisp || 'true'}" roledisp="${vo.roledisp || 'false'}" typedisp="${vo.typedisp || 'false'}" updatedisp="${vo.updatedisp || 'false'}" framedisp="${vo.framedisp || 'true'}" autoopen="${vo.autoopen || 'false'}"${fixedAttr}${backgroundAttr}${zIndexAttr}>${this.escapeXml(vo.link_name)}</link>\r\n`);
+                    // 仮身固有の続柄属性を追加
+                    const relationshipAttr = vo.linkRelationship && vo.linkRelationship.length > 0
+                        ? ` relationship="${vo.linkRelationship.join(' ')}"`
+                        : '';
+                    // 自己閉じタグ形式（link_nameはJSONから取得する方式に統一）、dlen=0
+                    xmlParts.push(`<link id="${vo.link_id}" vobjleft="${shape.startX}" vobjtop="${shape.startY}" vobjright="${shape.endX}" vobjbottom="${shape.endY}" height="${height}" chsz="${vo.chsz || 14}" frcol="${vo.frcol || '#000000'}" chcol="${vo.chcol || '#000000'}" tbcol="${vo.tbcol || '#ffffff'}" bgcol="${vo.bgcol || '#ffffff'}" dlen="0" pictdisp="${vo.pictdisp || 'true'}" namedisp="${vo.namedisp || 'true'}" roledisp="${vo.roledisp || 'false'}" typedisp="${vo.typedisp || 'false'}" updatedisp="${vo.updatedisp || 'false'}" framedisp="${vo.framedisp || 'true'}" autoopen="${vo.autoopen || 'false'}"${relationshipAttr}${fixedAttr}${backgroundAttr}${zIndexAttr}/>\r\n`);
                 }
                 break;
 
@@ -8560,69 +8574,63 @@ class BasicFigureEditor extends window.PluginBase {
             </script>
         `;
 
-        return new Promise((resolve) => {
-            this.messageBus.sendWithCallback('show-custom-dialog', {
-                title: '用紙設定',
-                dialogHtml: dialogHtml,
-                buttons: [
-                    { label: '取消', value: 'cancel' },
-                    { label: '標準設定', value: 'default' },
-                    { label: '設定', value: 'ok' }
-                ],
-                defaultButton: 2,
-                width: 400
-            }, (result) => {
-                const dialogResult = result.result || result;
-
-                if (dialogResult.error) {
-                    logger.warn('[FIGURE EDITOR] Paper setup dialog error:', dialogResult.error);
-                    resolve(false);
-                    return;
-                }
-
-                if (dialogResult.button === 'default') {
-                    // 標準設定（A4）にリセット
-                    this.paperSize.resetToDefault();
-                    this.paperWidth = this.paperSize.widthMm;
-                    this.paperHeight = this.paperSize.lengthMm;
-                    this.isModified = true;
-                    this.setStatus('用紙設定を標準（A4）にリセットしました');
-                    this.redraw();
-                    resolve(true);
-                } else if (dialogResult.button === 'ok') {
-                    // 設定を適用
-                    const formData = dialogResult.formData || {};
-
-                    const width = parseFloat(formData.paperWidth) || this.paperWidth;
-                    const height = parseFloat(formData.paperHeight) || this.paperHeight;
-                    const marginTop = parseFloat(formData.marginTop) || 0;
-                    const marginBottom = parseFloat(formData.marginBottom) || 0;
-                    const marginLeft = parseFloat(formData.marginLeft) || 0;
-                    const marginRight = parseFloat(formData.marginRight) || 0;
-                    const imposition = parseInt(formData.imposition) || 0;
-
-                    // PaperSizeに設定
-                    this.paperSize.widthMm = width;
-                    this.paperSize.lengthMm = height;
-                    this.paperSize.topMm = marginTop;
-                    this.paperSize.bottomMm = marginBottom;
-                    this.paperSize.leftMm = marginLeft;
-                    this.paperSize.rightMm = marginRight;
-                    this.paperSize.imposition = imposition;
-
-                    // 互換性のためpaperWidth/paperHeightも更新
-                    this.paperWidth = width;
-                    this.paperHeight = height;
-
-                    this.isModified = true;
-                    this.setStatus(`用紙設定を ${width}×${height}mm に更新しました`);
-                    this.redraw();
-                    resolve(true);
-                } else {
-                    resolve(false);
-                }
-            }, 60000);  // 1分タイムアウト
+        const result = await this.showCustomDialog({
+            title: '用紙設定',
+            dialogHtml: dialogHtml,
+            buttons: [
+                { label: '取消', value: 'cancel' },
+                { label: '標準設定', value: 'default' },
+                { label: '設定', value: 'ok' }
+            ],
+            defaultButton: 2,
+            width: 400
         });
+
+        if (!result) {
+            return false;
+        }
+
+        if (result.button === 'default') {
+            // 標準設定（A4）にリセット
+            this.paperSize.resetToDefault();
+            this.paperWidth = this.paperSize.widthMm;
+            this.paperHeight = this.paperSize.lengthMm;
+            this.isModified = true;
+            this.setStatus('用紙設定を標準（A4）にリセットしました');
+            this.redraw();
+            return true;
+        } else if (result.button === 'ok') {
+            // 設定を適用
+            const formData = result.formData || {};
+
+            const width = parseFloat(formData.paperWidth) || this.paperWidth;
+            const height = parseFloat(formData.paperHeight) || this.paperHeight;
+            const marginTop = parseFloat(formData.marginTop) || 0;
+            const marginBottom = parseFloat(formData.marginBottom) || 0;
+            const marginLeft = parseFloat(formData.marginLeft) || 0;
+            const marginRight = parseFloat(formData.marginRight) || 0;
+            const imposition = parseInt(formData.imposition) || 0;
+
+            // PaperSizeに設定
+            this.paperSize.widthMm = width;
+            this.paperSize.lengthMm = height;
+            this.paperSize.topMm = marginTop;
+            this.paperSize.bottomMm = marginBottom;
+            this.paperSize.leftMm = marginLeft;
+            this.paperSize.rightMm = marginRight;
+            this.paperSize.imposition = imposition;
+
+            // 互換性のためpaperWidth/paperHeightも更新
+            this.paperWidth = width;
+            this.paperHeight = height;
+
+            this.isModified = true;
+            this.setStatus(`用紙設定を ${width}×${height}mm に更新しました`);
+            this.redraw();
+            return true;
+        }
+
+        return false;
     }
 
     showPrintPreview() {
@@ -9138,6 +9146,18 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     /**
+     * 仮身の続柄をXMLに保存（PluginBaseフックオーバーライド）
+     * basic-figure-editorはsaveFile()でXML全体を再構築するため、saveFile()を呼ぶ
+     * @param {Object} virtualObj - 更新された仮身オブジェクト
+     * @returns {Promise<void>}
+     */
+    async saveVirtualObjectRelationshipToXml(virtualObj) {
+        if (virtualObj && virtualObj.link_id) {
+            await this.saveFile();
+        }
+    }
+
+    /**
      * 続柄更新後の再描画（PluginBaseフック）
      */
     onRelationshipUpdated(virtualObj, result) {
@@ -9159,34 +9179,38 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     /**
-     * 選択中の仮身が指し示す実身名を変更
+     * プラグイン内の全仮身を取得（PluginBaseオーバーライド）
+     * @returns {Array<Object>} 仮身情報の配列
      */
-    async renameRealObject() {
-        const result = await window.RealObjectSystem.renameRealObject(this);
+    getAllVirtualObjects() {
+        return this.shapes
+            .filter(shape => shape.type === 'vobj' && shape.virtualObject)
+            .map(shape => ({
+                virtualObj: shape.virtualObject,
+                shape: shape,
+                element: shape.vobjElement
+            }));
+    }
 
-        // 図形エディタ特有の処理: 仮身オブジェクトの名前を更新して再描画
-        if (result.success && this.contextMenuVirtualObject && this.contextMenuVirtualObject.virtualObj) {
-            const virtualObj = this.contextMenuVirtualObject.virtualObj;
+    /**
+     * 仮身の表示を更新（PluginBaseオーバーライド）
+     * @param {Object} item - getAllVirtualObjectsで返された仮身情報
+     */
+    async updateVirtualObjectDisplay(item) {
+        const { shape } = item;
+        if (!shape) return;
 
-            // 対応する図形を探す
-            const shape = this.shapes.find(s => s.type === 'vobj' && s.virtualObject === virtualObj);
-
-            // RealObjectSystem.renameRealObject()がelement.textContentで
-            // 仮身要素の構造を破壊しているため、DOM要素を削除して再作成を強制
-            if (shape && shape.vobjElement) {
-                if (shape.vobjElement.parentNode) {
-                    shape.vobjElement.remove();
-                }
-                shape.vobjElement = null;
+        // DOM要素を削除して強制再作成
+        if (shape.vobjElement) {
+            if (shape.vobjElement.parentNode) {
+                shape.vobjElement.remove();
             }
-
-            // 仮身オブジェクトの名前を更新（shapes配列内のオブジェクトと同一参照）
-            virtualObj.link_name = result.newName;
-
-            // 仮身要素を再作成（vobjElement = nullなので新規作成される）
-            this.renderVirtualObjectsAsElements();
-            this.redraw();
+            shape.vobjElement = null;
         }
+
+        // 仮身要素を再作成（vobjElement = nullなので新規作成される）
+        this.renderVirtualObjectsAsElements();
+        this.redraw();
     }
 
     /**
@@ -9925,6 +9949,10 @@ class BasicFigureEditor extends window.PluginBase {
                     virtualObj.applist = jsonData.applist || {};
                     virtualObj.metadata = jsonData;
                     virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                    // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+                    if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+                        virtualObj.link_name = jsonData.name;
+                    }
                     logger.debug('[FIGURE EDITOR] メタデータ読み込み成功:', virtualObj.link_id, virtualObj.applist);
                 } else {
                     // JSONファイルが見つからない場合、Electron環境なら親ウィンドウ経由で読み込み
@@ -9937,6 +9965,10 @@ class BasicFigureEditor extends window.PluginBase {
                         virtualObj.applist = jsonData.applist || {};
                         virtualObj.metadata = jsonData;
                         virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                        // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+                        if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+                            virtualObj.link_name = jsonData.name;
+                        }
                         logger.debug('[FIGURE EDITOR] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
                     } catch (parentError) {
                         logger.debug('[FIGURE EDITOR] 親ウィンドウ経由で失敗、HTTP fetchにフォールバック:', parentError.message);
@@ -9963,6 +9995,10 @@ class BasicFigureEditor extends window.PluginBase {
                                 virtualObj.applist = jsonData.applist || {};
                                 virtualObj.metadata = jsonData;
                                 virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                                // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+                                if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+                                    virtualObj.link_name = jsonData.name;
+                                }
                                 logger.debug('[FIGURE EDITOR] メタデータ読み込み成功（HTTP）:', jsonUrl, virtualObj.applist);
                                 found = true;
                                 break;
@@ -9986,6 +10022,10 @@ class BasicFigureEditor extends window.PluginBase {
                     virtualObj.applist = jsonData.applist || {};
                     virtualObj.metadata = jsonData;
                     virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                    // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+                    if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+                        virtualObj.link_name = jsonData.name;
+                    }
                     logger.debug('[FIGURE EDITOR] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
                 } catch (error) {
                     logger.debug('[FIGURE EDITOR] メタデータ読み込み失敗:', virtualObj.link_id, error.message);

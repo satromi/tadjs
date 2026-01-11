@@ -1,17 +1,19 @@
 <tad version="1.0" encoding="UTF-8">
 <document>
+<docScale hunit="-72" vunit="-72"/>
+<text lang="0" bpat="0"/>
 <p>
-<font size="28"/><font color="rgb(81, 174, 251)"/><bold>□基本文章編集</bold>
+<font size="28"><font color="#51aefb"><bold>□基本文章編集</bold></font></font>
 </p>
 <p>
-<font size="14"/>基本文章編集は、基本となるリッチテキストエディタです。<br/>
-通常のエディタと違い、文章内に仮身や図形を貼り込むことができます。
+<font size="14">基本文章編集は、基本となるリッチテキストエディタです。<br/>
+通常のエディタと違い、文章内に仮身や図形を貼り込むことができます。</font>
 </p>
 <p>
 仮身は開いた仮身状態にすることができるので、文章内に別の実身のデータを貼り込むことが容易になっています。
 </p>
 <p>
-<font size="18"/>□右クリックメニュー、機能紹介
+<font size="18">□右クリックメニュー、機能紹介</font>
 </p>
 <p>
 ・保存

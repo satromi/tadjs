@@ -15,7 +15,6 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver0.31
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -8111,7 +8110,7 @@ function tsVirtualObjSegment(segLen, tadSeg) {
     newLink.right = drawRight;
     newLink.bottom = drawBottom;
 
-    // XMLのリンク情報を保存
+    // XMLのリンク情報を保存（TADバイナリからの変換時はlink_name情報を保持）
     if(isXmlDumpEnabled) {
         xmlBuffer.push(`<link id="${newLink.link_id}" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}">${newLink.link_name || ''}</link>\r\n`);
     }

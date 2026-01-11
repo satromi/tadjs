@@ -2,13 +2,13 @@
   "name": "基本図形編集",
   "linktype": false,
   "makeDate": "2025-11-23T07:09:55.529Z",
-  "updateDate": "2025-11-23T07:30:36.137Z",
-  "accessDate": "2025-11-23T08:48:01.053Z",
+  "updateDate": "2026-01-10T23:37:15.904Z",
+  "accessDate": "2026-01-10T23:37:14.890Z",
   "periodDate": null,
-  "refCount": 0,
+  "refCount": 1,
   "editable": true,
   "readable": true,
-  "maker": "TRON User",
+  "maker": "TADjs User",
   "window": {
     "pos": {
       "x": 100,
@@ -28,7 +28,12 @@
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
-    "backgroundColor": "#ffffff"
+    "backgroundColor": "#ffffff",
+    "scrollPos": {
+      "x": 0,
+      "y": 0
+    },
+    "wordWrap": true
   },
   "applist": {
     "basic-text-editor": {
@@ -41,7 +46,5 @@
     }
   },
   "realId": "019aaf9d-2b0d-79e8-bbe2-5baf847986dc",
-  "recordCount": 1,
-  "realName": "基本文章編集のコピー",
-  "createDate": "2025-11-23T07:28:24.333Z"
+  "recordCount": 1
 }

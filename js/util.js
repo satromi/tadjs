@@ -304,6 +304,7 @@ export function escapeHtml(text) {
 export function escapeXml(text) {
     if (typeof text !== 'string') return '';
     return text
+        .replace(/\u200B/g, '') // ゼロ幅スペースを除去（カーソル位置保持用の技術的文字）
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')

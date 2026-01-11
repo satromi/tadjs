@@ -59,14 +59,15 @@ body {
     flex: 1;
     overflow: visible; /* コンテンツが見えるようにする */
     padding: 0;
-    background: #f0f0f0;
+    /* background は JavaScript の applyBackgroundColor() で動的に設定 */
 }
 
 .virtual-canvas {
     position: relative;
-    background: white;
+    /* background は JavaScript の applyBackgroundColor() で動的に設定 */
     border: none;
     margin: 0;
+    box-sizing: border-box;  /* ボーダーを幅/高さに含める */
 }
 
 /* 閉じた仮身のスタイル */

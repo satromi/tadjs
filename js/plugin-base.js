@@ -13,6 +13,158 @@ import { PaperSize, PaperMargin, PAPER_SIZES, getPaperSizeOptions, pointsToMm, m
 const logger = getLogger('PluginBase');
 
 /**
+ * テキストスタイル状態管理クラス
+ * xmlTADの<font>/<text>タグの効果を段落間で維持するために使用
+ */
+export class TextStyleStateManager {
+    constructor() {
+        this.reset();
+    }
+
+    /**
+     * 状態をデフォルト値にリセット
+     */
+    reset() {
+        // フォント属性
+        this.size = '14';
+        this.color = '#000000';
+        this.face = '';
+        this.style = 'normal';
+        this.weight = '400';
+        this.stretch = 'normal';
+        // 文字送り属性
+        this.direction = '0';          // 文字送り方向 (0:横, 1:縦)
+        this.kerning = '0';            // カーニング (0:無効, 1:有効)
+        this.pattern = '0';            // 文字送りパターン
+        this.space = '0';              // 文字間隔
+        // テキスト属性
+        this.align = 'left';
+        this.lineHeight = '1';         // 行の高さ
+        this.textDirection = '0';      // テキスト方向 (0:横書き, 1:縦書き)
+    }
+
+    /**
+     * 属性を更新
+     * @param {string} attr - 属性名
+     * @param {string} value - 値（空文字列はデフォルトにリセット）
+     */
+    update(attr, value) {
+        const defaults = {
+            size: '14',
+            color: '#000000',
+            face: '',
+            style: 'normal',
+            weight: '400',
+            stretch: 'normal',
+            direction: '0',
+            kerning: '0',
+            pattern: '0',
+            space: '0',
+            align: 'left',
+            lineHeight: '1',
+            textDirection: '0'
+        };
+
+        if (value === '' || value === null || value === undefined) {
+            this[attr] = defaults[attr];
+        } else {
+            this[attr] = value;
+        }
+    }
+
+    /**
+     * <font>タグから属性を更新
+     * @param {Object} attrs - 属性オブジェクト { size, color, face, style, weight, stretch, direction, kerning, pattern, space }
+     */
+    updateFromFontTag(attrs) {
+        if (attrs.size !== undefined) this.update('size', attrs.size);
+        if (attrs.color !== undefined) this.update('color', attrs.color);
+        if (attrs.face !== undefined) this.update('face', attrs.face);
+        if (attrs.style !== undefined) this.update('style', attrs.style);
+        if (attrs.weight !== undefined) this.update('weight', attrs.weight);
+        if (attrs.stretch !== undefined) this.update('stretch', attrs.stretch);
+        if (attrs.direction !== undefined) this.update('direction', attrs.direction);
+        if (attrs.kerning !== undefined) this.update('kerning', attrs.kerning);
+        if (attrs.pattern !== undefined) this.update('pattern', attrs.pattern);
+        if (attrs.space !== undefined) this.update('space', attrs.space);
+    }
+
+    /**
+     * <text>タグから属性を更新
+     * @param {Object} attrs - 属性オブジェクト { align, 'line-height', direction }
+     */
+    updateFromTextTag(attrs) {
+        if (attrs.align !== undefined) this.update('align', attrs.align);
+        if (attrs['line-height'] !== undefined) this.update('lineHeight', attrs['line-height']);
+        if (attrs.direction !== undefined) this.update('textDirection', attrs.direction);
+    }
+
+    /**
+     * 現在のフォント状態をCSSスタイル文字列として取得
+     * デフォルト値と異なる属性のみ出力
+     * @returns {string} CSSスタイル文字列
+     */
+    toCssStyle() {
+        let style = '';
+        if (this.size !== '14') style += `font-size: ${this.size}pt;`;
+        if (this.color !== '#000000') style += `color: ${this.color};`;
+        if (this.face) style += `font-family: ${this.face};`;
+        if (this.style !== 'normal') style += `font-style: ${this.style};`;
+        if (this.weight !== '400') style += `font-weight: ${this.weight};`;
+        if (this.stretch !== 'normal') style += `font-stretch: ${this.stretch};`;
+        if (this.space !== '0') style += `letter-spacing: ${this.space}px;`;
+        return style;
+    }
+
+    /**
+     * 現在のテキスト揃えをCSSスタイル文字列として取得
+     * @returns {string} CSSスタイル文字列
+     */
+    toAlignCssStyle() {
+        if (this.align !== 'left') {
+            return `text-align: ${this.align};`;
+        }
+        return '';
+    }
+
+    /**
+     * デフォルト以外のスタイルがあるか確認
+     * @returns {boolean} デフォルト以外のスタイルがあればtrue
+     */
+    hasNonDefaultStyle() {
+        return this.size !== '14' ||
+               this.color !== '#000000' ||
+               this.face !== '' ||
+               this.style !== 'normal' ||
+               this.weight !== '400' ||
+               this.stretch !== 'normal' ||
+               this.space !== '0';
+    }
+
+    /**
+     * 現在の状態のコピーを作成
+     * @returns {TextStyleStateManager} コピー
+     */
+    clone() {
+        const copy = new TextStyleStateManager();
+        copy.size = this.size;
+        copy.color = this.color;
+        copy.face = this.face;
+        copy.style = this.style;
+        copy.weight = this.weight;
+        copy.stretch = this.stretch;
+        copy.direction = this.direction;
+        copy.kerning = this.kerning;
+        copy.pattern = this.pattern;
+        copy.space = this.space;
+        copy.align = this.align;
+        copy.lineHeight = this.lineHeight;
+        copy.textDirection = this.textDirection;
+        return copy;
+    }
+}
+
+/**
  * プラグイン共通基底クラス
  * 複数のプラグインで共通の機能を提供します
  *
@@ -263,6 +415,12 @@ export class PluginBase {
                     virtualObj.applist = jsonData.applist || {};
                     virtualObj.metadata = jsonData;
                     virtualObj.updateDate = jsonData.updateDate;
+
+                    // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+                    if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+                        virtualObj.link_name = jsonData.name;
+                    }
+
                     return;
                 }
             }
@@ -275,6 +433,12 @@ export class PluginBase {
                 virtualObj.applist = jsonData.applist || {};
                 virtualObj.metadata = jsonData;
                 virtualObj.updateDate = jsonData.updateDate;
+
+                // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+                if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+                    virtualObj.link_name = jsonData.name;
+                }
+
                 return;
             } catch (loadError) {
                 // MessageBus経由でも失敗した場合はデフォルト値を設定
@@ -319,6 +483,23 @@ export class PluginBase {
             } catch {
                 throw new Error('実身データ読み込みタイムアウト');
             }
+        }
+    }
+
+    /**
+     * 実身のxmlTADを読み込み
+     * @param {string} realId - 実身ID
+     * @returns {Promise<string|null>} xmlTAD文字列（読み込み失敗時はnull）
+     */
+    async loadRealObjectXtad(realId) {
+        try {
+            const realObject = await this.loadRealObjectData(realId);
+            if (realObject?.records?.[0]) {
+                return realObject.records[0].xtad || realObject.records[0].data || null;
+            }
+            return null;
+        } catch (error) {
+            return null;
         }
     }
 
@@ -597,6 +778,65 @@ export class PluginBase {
         });
     }
 
+    /**
+     * カスタムダイアログを表示
+     * ユーザー操作を待つダイアログなので、タイムアウトを無限（0）に設定
+     * @param {Object} options - ダイアログオプション
+     * @param {string} options.title - ダイアログタイトル（オプション）
+     * @param {string} options.dialogHtml - ダイアログ本体のHTML
+     * @param {Array} options.buttons - ボタン定義 [{label, value}]
+     * @param {number} options.defaultButton - デフォルトボタンインデックス
+     * @param {Object} options.inputs - 入力要素のID指定（オプション）
+     * @param {Object} options.radios - ラジオボタンのname指定（オプション）
+     * @param {number} options.width - ダイアログ幅（オプション）
+     * @returns {Promise<Object|null>} ダイアログ結果またはnull（エラー/キャンセル時）
+     */
+    async showCustomDialog(options) {
+        // ユーザー操作を待つダイアログなので、タイムアウトを無効化（0に設定）
+        // ボタンが押されるまで無期限に待機する（showInputDialogと同じパターン）
+        const CUSTOM_DIALOG_TIMEOUT_MS = 0;
+
+        const dialogData = {
+            title: options.title || '',
+            dialogHtml: options.dialogHtml,
+            buttons: options.buttons || [{ label: 'OK', value: 'ok' }],
+            defaultButton: options.defaultButton ?? 0,
+            inputs: options.inputs || {},
+            radios: options.radios || {}
+        };
+
+        // オプションのwidth指定があれば追加
+        if (options.width) {
+            dialogData.width = options.width;
+        }
+
+        return new Promise((resolve) => {
+            this.messageBus.sendWithCallback('show-custom-dialog', dialogData, (result) => {
+                logger.debug(`[${this.pluginName}] カスタムダイアログコールバック実行:`, result);
+
+                // null/undefinedチェック（タイムアウト等の異常時対応）
+                if (result == null) {
+                    logger.warn(`[${this.pluginName}] Custom dialog: resultがnull/undefined`);
+                    resolve(null);
+                    return;
+                }
+
+                // result.result のアンラップ
+                const dialogResult = result.result ?? result;
+
+                // エラーチェック
+                if (dialogResult == null || dialogResult.error) {
+                    logger.warn(`[${this.pluginName}] Custom dialog error:`, dialogResult?.error);
+                    resolve(null);
+                    return;
+                }
+
+                logger.debug(`[${this.pluginName}] カスタムダイアログ結果:`, dialogResult);
+                resolve(dialogResult);
+            }, CUSTOM_DIALOG_TIMEOUT_MS);
+        });
+    }
+
     // ========================================
     // 実身/仮身操作
     // ========================================
@@ -615,12 +855,18 @@ export class PluginBase {
     async renameRealObject() {
         const result = await window.RealObjectSystem.renameRealObject(this);
 
-        // 成功した場合、メモリ上のlink_nameを更新し、フックを呼び出す
+        // 成功した場合、同一realIdを持つ全仮身を更新し、フックを呼び出す
         if (result && result.success && this.contextMenuVirtualObject?.virtualObj) {
             const virtualObj = this.contextMenuVirtualObject.virtualObj;
-            virtualObj.link_name = result.newName;
+            // result.realIdを使用（非同期操作中にcontextMenuVirtualObjectが変わる可能性があるため）
+            const realId = result.realId;
 
-            // プラグイン固有の再描画処理を呼び出す
+            // 同一realIdを持つ全仮身のlink_nameを更新し、表示を更新
+            if (realId) {
+                await this.updateAllVirtualObjectsWithRealId(realId, result.newName);
+            }
+
+            // プラグイン固有の再描画処理を呼び出す（互換性維持）
             await this.onRealObjectRenamed(virtualObj, result);
         }
 
@@ -666,12 +912,12 @@ export class PluginBase {
 
     /**
      * 続柄を設定
-     * @returns {Promise<Object>} { success: boolean, relationship?: string[], cancelled?: boolean }
+     * @returns {Promise<Object>} { success: boolean, relationship?: string[], linkRelationship?: string[], cancelled?: boolean }
      */
     async setRelationship() {
         const result = await window.RealObjectSystem.setRelationship(this);
 
-        // 成功した場合、メモリ上のmetadata.relationshipを更新し、フックを呼び出す
+        // 成功した場合、メモリ上のmetadata.relationshipとlinkRelationshipを更新し、フックを呼び出す
         if (result && result.success && this.contextMenuVirtualObject?.virtualObj) {
             const virtualObj = this.contextMenuVirtualObject.virtualObj;
 
@@ -680,6 +926,12 @@ export class PluginBase {
                 virtualObj.metadata = {};
             }
             virtualObj.metadata.relationship = result.relationship || [];
+
+            // 仮身固有の続柄を更新
+            virtualObj.linkRelationship = result.linkRelationship || [];
+
+            // XML保存フックを呼び出し（完了を待つ）
+            await this.saveVirtualObjectRelationshipToXml(virtualObj);
 
             // プラグイン固有の再描画処理を呼び出す
             this.onRelationshipUpdated(virtualObj, result);
@@ -693,11 +945,117 @@ export class PluginBase {
      * setRelationship()成功後に呼ばれる。仮身の再描画などに使用
      *
      * @param {Object} virtualObj - 更新された仮身オブジェクト
-     * @param {Object} result - setRelationshipの結果 { success: true, relationship: string[] }
+     * @param {Object} result - setRelationshipの結果 { success: true, relationship: string[], linkRelationship: string[] }
      */
     onRelationshipUpdated(virtualObj, result) {
         // デフォルト実装: 何もしない
         // サブクラスで再描画処理をオーバーライド
+    }
+
+    /**
+     * 仮身の続柄をXMLに保存するフック（サブクラスでオーバーライド可能）
+     * setRelationship()成功後、onRelationshipUpdated()の前に呼ばれる
+     *
+     * プラグインはこのメソッドをオーバーライドして、
+     * updateVirtualObjectInXml(virtualObj)を呼び出す
+     *
+     * @param {Object} virtualObj - 更新された仮身オブジェクト（linkRelationshipプロパティを含む）
+     * @returns {Promise<void>}
+     */
+    async saveVirtualObjectRelationshipToXml(virtualObj) {
+        // デフォルト実装: 何もしない
+        // サブクラスでupdateVirtualObjectInXml()呼び出しをオーバーライド
+    }
+
+    /**
+     * 続柄入力文字列をパースしてJSON用とlink属性用に分離
+     * [タグ] 形式は実身JSON用、それ以外はlink属性用
+     * @param {string} input - 入力文字列（例: "[親1] [親2] 子1 子2"）
+     * @returns {{jsonRelationship: string[], linkRelationship: string[]}}
+     */
+    parseRelationshipInput(input) {
+        if (!input || typeof input !== 'string') {
+            return { jsonRelationship: [], linkRelationship: [] };
+        }
+
+        const jsonRelationship = [];
+        const linkRelationship = [];
+
+        // [タグ] 形式を抽出（括弧内にスペースがあっても1つのタグとして扱う）
+        const bracketPattern = /\[([^\]]+)\]/g;
+        let match;
+        let lastIndex = 0;
+        const remainingParts = [];
+
+        // 入力文字列を走査
+        let tempInput = input;
+        while ((match = bracketPattern.exec(input)) !== null) {
+            // 括弧の前のテキストを保存
+            if (match.index > lastIndex) {
+                remainingParts.push(input.substring(lastIndex, match.index));
+            }
+            // 括弧内のタグをJSON用に追加
+            const tag = match[1].trim();
+            if (tag) {
+                jsonRelationship.push(tag);
+            }
+            lastIndex = match.index + match[0].length;
+        }
+
+        // 残りのテキストを保存
+        if (lastIndex < input.length) {
+            remainingParts.push(input.substring(lastIndex));
+        }
+
+        // 残りのテキストをスペース区切りでlink属性用に分割
+        const remainingText = remainingParts.join('').trim();
+        if (remainingText) {
+            const tags = remainingText.split(/\s+/).filter(s => s.trim() !== '');
+            linkRelationship.push(...tags);
+        }
+
+        return { jsonRelationship, linkRelationship };
+    }
+
+    /**
+     * 続柄を表示用文字列にフォーマット
+     * JSON用は[タグ]形式、link用はそのまま表示
+     * @param {string[]} jsonRelationship - 実身JSON用の続柄配列
+     * @param {string[]} linkRelationship - link属性用の続柄配列
+     * @returns {string} 表示用文字列
+     */
+    formatRelationshipForDisplay(jsonRelationship, linkRelationship) {
+        const parts = [];
+
+        // JSON用は[タグ]形式で表示
+        if (jsonRelationship && jsonRelationship.length > 0) {
+            for (const tag of jsonRelationship) {
+                parts.push(`[${tag}]`);
+            }
+        }
+
+        // link用はそのまま表示
+        if (linkRelationship && linkRelationship.length > 0) {
+            parts.push(...linkRelationship);
+        }
+
+        return parts.join(' ');
+    }
+
+    /**
+     * link要素からrelationship属性をパース
+     * @param {Element} linkElement - DOM link要素
+     * @returns {string[]} 続柄配列（スペース区切りを配列化）
+     */
+    parseLinkRelationship(linkElement) {
+        if (!linkElement) return [];
+
+        const relationshipAttr = linkElement.getAttribute('relationship');
+        if (!relationshipAttr || relationshipAttr.trim() === '') {
+            return [];
+        }
+
+        return relationshipAttr.split(/\s+/).filter(s => s.trim() !== '');
     }
 
     /**
@@ -710,6 +1068,54 @@ export class PluginBase {
     async onRealObjectRenamed(virtualObj, result) {
         // デフォルト実装: 何もしない
         // サブクラスで再描画処理をオーバーライド
+    }
+
+    /**
+     * プラグイン内の全仮身を取得（サブクラスでオーバーライド必須）
+     * updateAllVirtualObjectsWithRealIdから呼ばれる
+     *
+     * @returns {Array<Object>} 仮身情報の配列 [{ virtualObj, element?, shape?, ... }, ...]
+     */
+    getAllVirtualObjects() {
+        // デフォルト実装: 空配列を返す
+        // サブクラスで実装すること
+        return [];
+    }
+
+    /**
+     * 仮身の表示を更新（サブクラスでオーバーライド必須）
+     * updateAllVirtualObjectsWithRealIdから呼ばれる
+     *
+     * @param {Object} item - getAllVirtualObjectsで返された仮身情報
+     */
+    async updateVirtualObjectDisplay(item) {
+        // デフォルト実装: 何もしない
+        // サブクラスで実装すること
+    }
+
+    /**
+     * 同一realIdを持つ全仮身のlink_nameを更新し、表示を更新
+     *
+     * @param {string} realId - 対象の実身ID
+     * @param {string} newName - 新しい実身名
+     */
+    async updateAllVirtualObjectsWithRealId(realId, newName) {
+        const allVirtualObjects = this.getAllVirtualObjects();
+
+        // 同一realIdを持つ仮身をフィルタ
+        const matchingObjects = allVirtualObjects.filter(item => {
+            if (!item.virtualObj || !item.virtualObj.link_id) {
+                return false;
+            }
+            const itemRealId = window.RealObjectSystem.extractRealId(item.virtualObj.link_id);
+            return itemRealId === realId;
+        });
+
+        // 各仮身のlink_nameを更新し、表示を更新
+        for (const item of matchingObjects) {
+            item.virtualObj.link_name = newName;
+            await this.updateVirtualObjectDisplay(item);
+        }
     }
 
     /**
@@ -2125,6 +2531,84 @@ export class PluginBase {
     }
 
     /**
+     * DataTransferからURLを抽出
+     * ブラウザからのURLドラッグ対応
+     *
+     * @param {DataTransfer} dataTransfer - ドロップイベントのdataTransfer
+     * @returns {string|null} 抽出したURL、またはnull
+     *
+     * @example
+     * // dropハンドラーでの使用例
+     * const url = this.extractUrlFromDataTransfer(e.dataTransfer);
+     * if (url) {
+     *     this.checkAndHandleUrlDrop(e, dropX, dropY);
+     * }
+     */
+    extractUrlFromDataTransfer(dataTransfer) {
+        // text/uri-listを優先（標準的なURL転送形式）
+        const uriList = dataTransfer.getData('text/uri-list');
+        if (uriList) {
+            // 改行区切り、#で始まる行はコメント
+            const urls = uriList.split('\n')
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#'));
+            if (urls.length > 0) {
+                return urls[0];
+            }
+        }
+
+        // text/plainでURLパターンをチェック
+        const plainText = dataTransfer.getData('text/plain');
+        if (plainText && /^https?:\/\/.+/i.test(plainText.trim())) {
+            return plainText.trim();
+        }
+
+        return null;
+    }
+
+    /**
+     * URLドロップをチェックし、検出した場合は親ウィンドウに転送
+     * サブクラスのdropハンドラーから呼び出す
+     *
+     * ブラウザからドロップされたURLを検出し、親ウィンドウに処理を委譲する
+     *
+     * @param {DragEvent} e - ドロップイベント
+     * @param {number} dropX - ドロップ位置X（iframe内座標）
+     * @param {number} dropY - ドロップ位置Y（iframe内座標）
+     * @returns {boolean} URLドロップを検出・処理した場合はtrue
+     *
+     * @example
+     * // dropハンドラーでの使用例（先頭で呼び出す）
+     * handleDrop(e) {
+     *     e.preventDefault();
+     *     const dropX = e.offsetX || e.clientX;
+     *     const dropY = e.offsetY || e.clientY;
+     *     if (this.checkAndHandleUrlDrop(e, dropX, dropY)) {
+     *         return; // URLドロップは親ウィンドウで処理
+     *     }
+     *     // 以下、既存のドロップ処理...
+     * }
+     */
+    checkAndHandleUrlDrop(e, dropX, dropY) {
+        const url = this.extractUrlFromDataTransfer(e.dataTransfer);
+        if (!url) {
+            return false;
+        }
+
+        // 親ウィンドウにURL処理を依頼
+        this.messageBus.send('url-drop-request', {
+            url: url,
+            dropX: dropX,
+            dropY: dropY,
+            windowId: this.windowId
+        });
+
+        e.preventDefault();
+        e.stopPropagation();
+        return true;
+    }
+
+    /**
      * 開いた仮身のiframe pointer-eventsを無効化
      * ドラッグ中に開いた仮身内へのドロップを防ぐ
      * サブクラスのdragstartハンドラーから呼び出す
@@ -2277,6 +2761,14 @@ export class PluginBase {
         // autoopen属性
         if (dataset.autoopen) {
             virtualObj.autoopen = dataset.autoopen;
+        }
+
+        // 仮身固有の続柄（link要素のrelationship属性）
+        // data-link-relationship -> link_relationship (string) -> linkRelationship (array)
+        if (virtualObj.link_relationship) {
+            virtualObj.linkRelationship = virtualObj.link_relationship.split(/\s+/).filter(t => t);
+        } else {
+            virtualObj.linkRelationship = [];
         }
 
         return virtualObj;
@@ -2927,6 +3419,94 @@ export class PluginBase {
     }
 
     // ========================================
+    // TADスタイル処理（data属性方式）
+    // ========================================
+
+    /**
+     * RGB/RGBA形式の色を#rrggbb形式に変換
+     * @param {string} color - rgb(r, g, b) または rgba(r, g, b, a) または #rrggbb 形式の色
+     * @returns {string} #rrggbb形式の色（変換不可の場合は空文字列）
+     */
+    rgbToHex(color) {
+        if (!color) return '';
+
+        let result;
+
+        // 既に#rrggbb形式の場合
+        if (color.startsWith('#')) {
+            result = color;
+        } else {
+            // rgb() または rgba() 形式の場合
+            const rgbMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+            if (rgbMatch) {
+                const r = parseInt(rgbMatch[1], 10);
+                const g = parseInt(rgbMatch[2], 10);
+                const b = parseInt(rgbMatch[3], 10);
+                result = `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+            } else {
+                // 変換不可
+                result = color;
+            }
+        }
+
+        // Chrome workaround: #010101（黒色の代替）を#000000に正規化
+        if (result && result.toLowerCase() === '#010101') {
+            result = '#000000';
+        }
+
+        return result;
+    }
+
+    /**
+     * TADスタイル情報を持つspanのHTML文字列を生成
+     * シンプルにインラインスタイルのみ使用
+     * @param {string} attr - スタイル属性 ('color', 'size', 'face')
+     * @param {string} value - 属性値
+     * @returns {string} span開始タグのHTML文字列
+     */
+    createTadStyledSpan(attr, value) {
+        let styleAttr = '';
+
+        if (attr === 'color') {
+            styleAttr = `color: ${value};`;
+        } else if (attr === 'size') {
+            styleAttr = `font-size: ${value}pt;`;
+        } else if (attr === 'face') {
+            // フォント名にスペース、カンマ、特殊文字が含まれる場合は引用符で囲む
+            let fontFamily = value;
+            if (!/^["']/.test(fontFamily) && (/\s|,/.test(fontFamily) || /[^\x00-\x7F]/.test(fontFamily))) {
+                fontFamily = `"${fontFamily}"`;
+            }
+            styleAttr = `font-family: ${fontFamily};`;
+        }
+
+        return `<span style="${styleAttr}">`;
+    }
+
+    /**
+     * span要素からTADスタイル情報を取得
+     * インラインスタイルから直接取得
+     * @param {HTMLElement} node - span要素
+     * @param {string} attr - 取得する属性 ('color', 'size', 'face')
+     * @returns {string|null} 属性値（取得できない場合はnull）
+     */
+    getTadStyleFromSpan(node, attr) {
+        if (!node || !node.style) return null;
+
+        const style = node.style;
+        if (attr === 'color' && style.color) {
+            return this.rgbToHex(style.color);
+        } else if (attr === 'size' && style.fontSize) {
+            // pt/px単位を除去
+            return style.fontSize.replace('pt', '').replace('px', '');
+        } else if (attr === 'face' && style.fontFamily) {
+            return style.fontFamily;
+        }
+
+        return null;
+    }
+
+    // ========================================
     // xmlTAD要素生成ヘルパー
     // ========================================
 
@@ -3499,14 +4079,6 @@ export class PluginBase {
      */
     closeRealObject() {
         window.RealObjectSystem.closeRealObject(this);
-    }
-
-    /**
-     * 選択中の仮身が指し示す実身名を変更
-     * @returns {Promise<{success: boolean, newName?: string}>}
-     */
-    async renameRealObject() {
-        return await window.RealObjectSystem.renameRealObject(this);
     }
 
     // ========================================
@@ -4402,7 +4974,9 @@ export class PluginBase {
                 typedisp: linkElement.getAttribute('typedisp') || 'false',
                 updatedisp: linkElement.getAttribute('updatedisp') || 'false',
                 framedisp: linkElement.getAttribute('framedisp') || 'true',
-                autoopen: linkElement.getAttribute('autoopen') || 'false'
+                autoopen: linkElement.getAttribute('autoopen') || 'false',
+                // 仮身固有の続柄（link要素のrelationship属性）
+                linkRelationship: this.parseLinkRelationship(linkElement)
             };
         } catch (error) {
             return null;
@@ -4460,7 +5034,9 @@ export class PluginBase {
             typedisp: baseData.typedisp !== undefined ? baseData.typedisp : 'false',
             updatedisp: baseData.updatedisp !== undefined ? baseData.updatedisp : 'false',
             framedisp: baseData.framedisp !== undefined ? baseData.framedisp : 'true',
-            autoopen: baseData.autoopen !== undefined ? baseData.autoopen : 'false'
+            autoopen: baseData.autoopen !== undefined ? baseData.autoopen : 'false',
+            // 仮身固有の続柄（link要素のrelationship属性）
+            linkRelationship: baseData.linkRelationship || []
         };
     }
 
@@ -4494,10 +5070,16 @@ export class PluginBase {
         linkElement.setAttribute('framedisp', virtualObj.framedisp !== undefined ? virtualObj.framedisp.toString() : 'true');
         linkElement.setAttribute('autoopen', virtualObj.autoopen !== undefined ? virtualObj.autoopen.toString() : 'false');
 
-        // テキスト内容
-        if (virtualObj.link_name) {
-            linkElement.textContent = virtualObj.link_name;
+        // 仮身固有の続柄（link要素のrelationship属性）
+        if (virtualObj.linkRelationship && virtualObj.linkRelationship.length > 0) {
+            linkElement.setAttribute('relationship', virtualObj.linkRelationship.join(' '));
+        } else {
+            // 空の場合は属性を削除
+            linkElement.removeAttribute('relationship');
         }
+
+        // テキスト内容は書き込まない（自己閉じタグ形式）
+        // link_nameはJSONから取得する方式に統一
     }
 
     /**
@@ -4556,6 +5138,86 @@ export class PluginBase {
         figureContainer.style.transform = `scale(${finalScale})`;
 
         return finalScale;
+    }
+
+    // ========================================
+    // line-height計算関連メソッド
+    // ========================================
+
+    /**
+     * DOM要素/DocumentFragment内の最大フォントサイズを計算
+     * @param {Element|DocumentFragment} content - 対象要素
+     * @param {number} defaultSize - デフォルトサイズ（pt）
+     * @returns {number} 最大フォントサイズ（pt）
+     */
+    calculateMaxFontSizeInContent(content, defaultSize = 14) {
+        let maxSize = defaultSize;
+
+        // DocumentFragmentまたはElementの場合
+        if (content && (content.nodeType === Node.DOCUMENT_FRAGMENT_NODE || content.nodeType === Node.ELEMENT_NODE)) {
+            // 直接のテキストノードがある場合はデフォルトサイズを使用
+            // スタイル付き要素（span, font）を検索
+            const styledElements = content.querySelectorAll('[style*="font-size"]');
+            styledElements.forEach(el => {
+                const style = el.style.fontSize;
+                if (style) {
+                    let size;
+                    if (style.endsWith('pt')) {
+                        size = parseFloat(style);
+                    } else if (style.endsWith('px')) {
+                        // pxをptに変換（1pt ≈ 1.333px）
+                        size = parseFloat(style) / 1.333;
+                    }
+                    if (!isNaN(size) && size > maxSize) {
+                        maxSize = size;
+                    }
+                }
+            });
+        }
+
+        return maxSize;
+    }
+
+    /**
+     * xmlTADの段落コンテンツから最大フォントサイズを計算
+     * 自己閉じタグとペアタグの両方を検出
+     * @param {string} paragraphContent - 段落のXMLコンテンツ
+     * @param {number} defaultSize - デフォルトサイズ（pt）
+     * @returns {number} 最大フォントサイズ（pt）
+     */
+    calculateMaxFontSizeFromXml(paragraphContent, defaultSize = 14) {
+        let maxSize = defaultSize;
+
+        // 自己閉じタグ形式: <font size="18"/>
+        const selfClosingRegex = /<font\s+size="([^"]*)"\s*\/>/gi;
+        let match;
+        while ((match = selfClosingRegex.exec(paragraphContent)) !== null) {
+            const size = parseFloat(match[1]);
+            if (!isNaN(size) && size > maxSize) {
+                maxSize = size;
+            }
+        }
+
+        // ペアタグ形式: <font size="18">...</font>
+        const pairTagRegex = /<font\s+size="([^"]*)">/gi;
+        while ((match = pairTagRegex.exec(paragraphContent)) !== null) {
+            const size = parseFloat(match[1]);
+            if (!isNaN(size) && size > maxSize) {
+                maxSize = size;
+            }
+        }
+
+        return maxSize;
+    }
+
+    /**
+     * フォントサイズに基づいてline-heightを計算
+     * @param {number} fontSize - フォントサイズ（pt）
+     * @param {number} ratio - line-height係数（デフォルト: 1.5）
+     * @returns {number} line-height（px）
+     */
+    calculateLineHeight(fontSize, ratio = 1.5) {
+        return fontSize * ratio;
     }
 }
 

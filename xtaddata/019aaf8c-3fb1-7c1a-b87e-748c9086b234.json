@@ -2,13 +2,13 @@
   "name": "仮身一覧",
   "linktype": false,
   "makeDate": "2025-11-23T07:09:55.529Z",
-  "updateDate": "2025-11-23T07:51:47.526Z",
-  "accessDate": "2025-11-23T08:47:34.848Z",
+  "updateDate": "2026-01-11T01:57:40.750Z",
+  "accessDate": "2026-01-11T01:57:37.228Z",
   "periodDate": null,
   "refCount": 1,
   "editable": true,
   "readable": true,
-  "maker": "TRON User",
+  "maker": "TADjs User",
   "window": {
     "pos": {
       "x": 396,
@@ -28,7 +28,12 @@
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
-    "backgroundColor": "#ffffff"
+    "backgroundColor": "#ffffff",
+    "scrollPos": {
+      "x": 0,
+      "y": 112.66666412353516
+    },
+    "wordWrap": true
   },
   "applist": {
     "basic-text-editor": {

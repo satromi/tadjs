@@ -218,12 +218,24 @@ export class VirtualObjectRenderer {
             textSpan.appendChild(nameSpan);
         }
 
-        // 続柄
-        if (showRole && virtualObject.metadata && virtualObject.metadata.relationship && virtualObject.metadata.relationship.length > 0) {
-            const relationshipText = virtualObject.metadata.relationship.join(' ');
-            const relationshipSpan = document.createElement('span');
-            relationshipSpan.textContent = ' : ' + relationshipText;
-            textSpan.appendChild(relationshipSpan);
+        // 続柄（JSON metadataの続柄 + link要素のrelationship属性）
+        if (showRole) {
+            const jsonRelationship = (virtualObject.metadata && virtualObject.metadata.relationship) || [];
+            const linkRelationship = virtualObject.linkRelationship || [];
+
+            if (jsonRelationship.length > 0 || linkRelationship.length > 0) {
+                // JSON用は[タグ]形式、link用はそのまま表示
+                const parts = [];
+                for (const tag of jsonRelationship) {
+                    parts.push(`[${tag}]`);
+                }
+                parts.push(...linkRelationship);
+
+                const relationshipText = parts.join(' ');
+                const relationshipSpan = document.createElement('span');
+                relationshipSpan.textContent = ' : ' + relationshipText;
+                textSpan.appendChild(relationshipSpan);
+            }
         }
 
         // タイプ
@@ -417,13 +429,25 @@ export class VirtualObjectRenderer {
             titleTextSpan.appendChild(nameSpan);
         }
 
-        // 続柄（relationship配列をスペース区切りで表示）
-        if (showRole && virtualObject.metadata && virtualObject.metadata.relationship && virtualObject.metadata.relationship.length > 0) {
-            const relationshipText = virtualObject.metadata.relationship.join(' ');
-            const relationshipSpan = document.createElement('span');
-            relationshipSpan.textContent = ' : ' + relationshipText;
-            relationshipSpan.setAttribute('data-element-type', 'relationship');
-            titleTextSpan.appendChild(relationshipSpan);
+        // 続柄（JSON metadataの続柄 + link要素のrelationship属性）
+        if (showRole) {
+            const jsonRelationship = (virtualObject.metadata && virtualObject.metadata.relationship) || [];
+            const linkRelationship = virtualObject.linkRelationship || [];
+
+            if (jsonRelationship.length > 0 || linkRelationship.length > 0) {
+                // JSON用は[タグ]形式、link用はそのまま表示
+                const parts = [];
+                for (const tag of jsonRelationship) {
+                    parts.push(`[${tag}]`);
+                }
+                parts.push(...linkRelationship);
+
+                const relationshipText = parts.join(' ');
+                const relationshipSpan = document.createElement('span');
+                relationshipSpan.textContent = ' : ' + relationshipText;
+                relationshipSpan.setAttribute('data-element-type', 'relationship');
+                titleTextSpan.appendChild(relationshipSpan);
+            }
         }
 
         // タイプ（applistから取得）
@@ -647,12 +671,24 @@ export class VirtualObjectRenderer {
                 titleTextSpan.appendChild(nameSpan);
             }
 
-            // 続柄（relationship配列をスペース区切りで表示）
-            if (showRole && virtualObject.metadata && virtualObject.metadata.relationship && virtualObject.metadata.relationship.length > 0) {
-                const relationshipText = virtualObject.metadata.relationship.join(' ');
-                const relationshipSpan = document.createElement('span');
-                relationshipSpan.textContent = ' : ' + relationshipText;
-                titleTextSpan.appendChild(relationshipSpan);
+            // 続柄（JSON metadataの続柄 + link要素のrelationship属性）
+            if (showRole) {
+                const jsonRelationship = (virtualObject.metadata && virtualObject.metadata.relationship) || [];
+                const linkRelationship = virtualObject.linkRelationship || [];
+
+                if (jsonRelationship.length > 0 || linkRelationship.length > 0) {
+                    // JSON用は[タグ]形式、link用はそのまま表示
+                    const parts = [];
+                    for (const tag of jsonRelationship) {
+                        parts.push(`[${tag}]`);
+                    }
+                    parts.push(...linkRelationship);
+
+                    const relationshipText = parts.join(' ');
+                    const relationshipSpan = document.createElement('span');
+                    relationshipSpan.textContent = ' : ' + relationshipText;
+                    titleTextSpan.appendChild(relationshipSpan);
+                }
             }
 
             // タイプ（applistから取得）

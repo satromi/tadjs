@@ -172,6 +172,13 @@ class VirtualObjectListApp extends window.PluginBase {
             e.preventDefault();
             listElement.style.backgroundColor = '';
 
+            // URLドロップをチェック（PluginBase共通メソッド）
+            const dropX = e.clientX;
+            const dropY = e.clientY;
+            if (this.checkAndHandleUrlDrop(e, dropX, dropY)) {
+                return; // URLドロップは親ウィンドウで処理
+            }
+
             try {
                 // 外部ファイルドロップをチェック（Windowsからのドラッグなど）
                 if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
@@ -546,8 +553,10 @@ class VirtualObjectListApp extends window.PluginBase {
         // xmlTADに追加
         this.addVirtualObjectToXml(virtualObj);
 
-        // 再描画
-        this.renderVirtualObjects();
+        // インクリメンタル追加（DOM再構築なし、フラッシュ防止）
+        const insertAt = this.virtualObjects.length - 1;
+        this.addVirtualObjectElement(virtualObj, insertAt);
+        this.updateCanvasSize();
 
         logger.debug('[VirtualObjectList] ルート実身配置完了');
 
@@ -617,8 +626,10 @@ class VirtualObjectListApp extends window.PluginBase {
         // xmlTADに追加
         this.addVirtualObjectToXml(virtualObj);
 
-        // 再描画
-        this.renderVirtualObjects();
+        // インクリメンタル追加（DOM再構築なし、フラッシュ防止）
+        const insertAt = this.virtualObjects.length - 1;
+        this.addVirtualObjectElement(virtualObj, insertAt);
+        this.updateCanvasSize();
     }
 
     // showMessageDialog() は基底クラス PluginBase で定義
@@ -1469,8 +1480,9 @@ class VirtualObjectListApp extends window.PluginBase {
         // XMLの順序を更新
         this.reorderVirtualObjectsInXml();
 
-        // 再描画
-        this.renderVirtualObjects();
+        // z-indexとインデックスを更新（インクリメンタル更新：iframeを破棄しない）
+        this.updateVobjIndices();
+        this.updateVirtualObjectElementZIndex();
 
         // 保存通知
         this.notifyXmlDataChanged();
@@ -1517,8 +1529,9 @@ class VirtualObjectListApp extends window.PluginBase {
         // XMLの順序を更新
         this.reorderVirtualObjectsInXml();
 
-        // 再描画
-        this.renderVirtualObjects();
+        // z-indexとインデックスを更新（インクリメンタル更新：iframeを破棄しない）
+        this.updateVobjIndices();
+        this.updateVirtualObjectElementZIndex();
 
         // 保存通知
         this.notifyXmlDataChanged();
@@ -1752,9 +1765,16 @@ class VirtualObjectListApp extends window.PluginBase {
         // 元の仮身を削除
         const index = this.virtualObjects.findIndex(obj => obj === selectedVirtualObject);
         if (index !== -1) {
+            // DOM要素を削除（インクリメンタル更新：他のiframeを破棄しない）
+            this.removeVirtualObjectElement(index);
+
+            // 配列から削除
             this.virtualObjects.splice(index, 1);
             this.selectedVirtualObjects.clear();
-            this.renderVirtualObjects();
+
+            // インデックスを再計算
+            this.updateVobjIndices();
+            this.updateCanvasSize();
 
             // refCount-1（カット = ドキュメントから参照が削除される）
             this.requestDeleteVirtualObject(selectedVirtualObject.link_id);
@@ -1789,8 +1809,10 @@ class VirtualObjectListApp extends window.PluginBase {
         // xmlTADに追加
         this.addVirtualObjectToXml(newVirtualObj);
 
-        // 再描画
-        this.renderVirtualObjects();
+        // インクリメンタル追加（DOM再構築なし、フラッシュ防止）
+        const insertAt = this.virtualObjects.length - 1;
+        await this.addVirtualObjectElement(newVirtualObj, insertAt);
+        this.updateCanvasSize();
 
         // 親ウィンドウに仮身コピーを通知してrefCountを+1
         this.requestCopyVirtualObject(realId);
@@ -1826,6 +1848,11 @@ class VirtualObjectListApp extends window.PluginBase {
         // xmlTADから削除（配列から削除する前にインデックスを渡す）
         this.removeVirtualObjectFromXml(selectedVirtualObject, index);
 
+        // DOM要素を削除（インクリメンタル更新：他のiframeを破棄しない）
+        if (index !== -1) {
+            this.removeVirtualObjectElement(index);
+        }
+
         // 配列から削除
         if (index !== -1) {
             this.virtualObjects.splice(index, 1);
@@ -1834,8 +1861,9 @@ class VirtualObjectListApp extends window.PluginBase {
         // 選択解除
         this.selectedVirtualObjects.clear();
 
-        // 再描画
-        this.renderVirtualObjects();
+        // インデックスを再計算
+        this.updateVobjIndices();
+        this.updateCanvasSize();
 
         // 親ウィンドウに仮身削除を通知してrefCount-1
         this.requestDeleteVirtualObject(realId);
@@ -1971,8 +1999,10 @@ class VirtualObjectListApp extends window.PluginBase {
                     // xmlTADに追加
                     this.addVirtualObjectToXml(newVirtualObj);
 
-                    // 再描画
-                    this.renderVirtualObjects();
+                    // インクリメンタル追加（DOM再構築なし、フラッシュ防止）
+                    const insertAt = this.virtualObjects.length - 1;
+                    await this.addVirtualObjectElement(newVirtualObj, insertAt);
+                    this.updateCanvasSize();
 
                     this.setStatus(`実身を複製しました: ${result.newName}`);
                 }
@@ -2143,8 +2173,10 @@ class VirtualObjectListApp extends window.PluginBase {
                 // xmlTADに追加
                 this.addVirtualObjectToXml(newVirtualObj);
 
-                // 再描画
-                this.renderVirtualObjects();
+                // インクリメンタル追加（DOM再構築なし、フラッシュ防止）
+                const insertAt = this.virtualObjects.length - 1;
+                await this.addVirtualObjectElement(newVirtualObj, insertAt);
+                this.updateCanvasSize();
             } else {
                 logger.error('[VirtualObjectList] 実身複製失敗:', result.error);
             }
@@ -2316,6 +2348,17 @@ class VirtualObjectListApp extends window.PluginBase {
         this.contextMenuVirtualObject = null;
 
         return result;
+    }
+
+    /**
+     * 仮身の続柄をXMLに保存（PluginBaseフックオーバーライド）
+     * @param {Object} virtualObj - 更新された仮身オブジェクト
+     * @returns {Promise<void>}
+     */
+    async saveVirtualObjectRelationshipToXml(virtualObj) {
+        if (virtualObj && virtualObj.link_id) {
+            this.updateVirtualObjectInXml(virtualObj);
+        }
     }
 
     /**
@@ -2663,67 +2706,56 @@ class VirtualObjectListApp extends window.PluginBase {
     </div>
 </div>`;
 
-        return new Promise((resolve) => {
-            this.messageBus.sendWithCallback('show-custom-dialog', {
-                title: '整頓',
-                dialogHtml: dialogHtml,
-                buttons: [
-                    { label: 'キャンセル', value: 'cancel' },
-                    { label: 'OK', value: 'ok' }
-                ],
-                defaultButton: 1,
-                inputs: {
-                    text: 'columnCount'
-                },
-                radios: {
-                    horizontal: 'horizontal',
-                    vertical: 'vertical',
-                    column: 'column',
-                    length: 'length',
-                    sortBy: 'sortBy',
-                    sortOrder: 'sortOrder'
-                }
-            }, (result) => {
-                logger.debug('[VirtualObjectList] 整頓ダイアログコールバック実行:', result);
-
-                // Dialog result is wrapped in result.result
-                const dialogResult = result.result || result;
-
-                if (dialogResult.error) {
-                    logger.warn('[VirtualObjectList] Arrange dialog error:', dialogResult.error);
-                    resolve(null);
-                    return;
-                }
-
-                if (dialogResult.button === 'ok') {
-                    logger.debug('[VirtualObjectList] OKボタンが押されました');
-
-                    // フォームの値を取得
-                    const horizontal = (dialogResult.radios && dialogResult.radios.horizontal) || 'none';
-                    const vertical = (dialogResult.radios && dialogResult.radios.vertical) || 'none';
-                    const column = (dialogResult.radios && dialogResult.radios.column) || 'none';
-                    const length = (dialogResult.radios && dialogResult.radios.length) || 'none';
-                    const sortBy = (dialogResult.radios && dialogResult.radios.sortBy) || 'none';
-                    const sortOrder = (dialogResult.radios && dialogResult.radios.sortOrder) || 'asc';
-                    const columnCount = parseInt((dialogResult.inputs && dialogResult.inputs.columnCount) || '1') || 1;
-
-                    logger.debug('[VirtualObjectList] 整頓設定:', {
-                        horizontal, vertical, column, columnCount,
-                        length, sortBy, sortOrder
-                    });
-
-                    // 整頓処理を実行
-                    this.arrangeVirtualObjects({
-                        horizontal, vertical, column, columnCount,
-                        length, sortBy, sortOrder
-                    });
-                } else {
-                    logger.debug('[VirtualObjectList] OKボタンが押されませんでした。button:', dialogResult.button);
-                }
-
-                resolve(result);
-            }, 300000); // タイムアウト5分（ユーザー操作待ち）
+        const result = await this.showCustomDialog({
+            title: '整頓',
+            dialogHtml: dialogHtml,
+            buttons: [
+                { label: 'キャンセル', value: 'cancel' },
+                { label: 'OK', value: 'ok' }
+            ],
+            defaultButton: 1,
+            inputs: {
+                text: 'columnCount'
+            },
+            radios: {
+                horizontal: 'horizontal',
+                vertical: 'vertical',
+                column: 'column',
+                length: 'length',
+                sortBy: 'sortBy',
+                sortOrder: 'sortOrder'
+            }
         });
+
+        logger.debug('[VirtualObjectList] 整頓ダイアログコールバック実行:', result);
+
+        if (result && result.button === 'ok') {
+            logger.debug('[VirtualObjectList] OKボタンが押されました');
+
+            // フォームの値を取得
+            const horizontal = (result.radios && result.radios.horizontal) || 'none';
+            const vertical = (result.radios && result.radios.vertical) || 'none';
+            const column = (result.radios && result.radios.column) || 'none';
+            const length = (result.radios && result.radios.length) || 'none';
+            const sortBy = (result.radios && result.radios.sortBy) || 'none';
+            const sortOrder = (result.radios && result.radios.sortOrder) || 'asc';
+            const columnCount = parseInt((result.inputs && result.inputs.columnCount) || '1') || 1;
+
+            logger.debug('[VirtualObjectList] 整頓設定:', {
+                horizontal, vertical, column, columnCount,
+                length, sortBy, sortOrder
+            });
+
+            // 整頓処理を実行
+            this.arrangeVirtualObjects({
+                horizontal, vertical, column, columnCount,
+                length, sortBy, sortOrder
+            });
+        } else {
+            logger.debug('[VirtualObjectList] OKボタンが押されませんでした。button:', result?.button);
+        }
+
+        return result;
     }
 
     /**
@@ -3246,7 +3278,8 @@ class VirtualObjectListApp extends window.PluginBase {
             linkElement.setAttribute('tbcol', virtualObj.tbcol || '#ffffff');
             linkElement.setAttribute('bgcol', virtualObj.bgcol || '#ffffff');
             linkElement.setAttribute('dlen', (virtualObj.dlen || 0).toString());
-            linkElement.textContent = virtualObj.link_name || '';
+            // テキスト内容は書き込まない（自己閉じタグ形式）
+            // link_nameはJSONから取得する方式に統一
 
             // 表示属性（あれば設定）
             if (virtualObj.pictdisp !== undefined) {
@@ -3292,7 +3325,10 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // XMLを文字列に戻す
             const serializer = new XMLSerializer();
-            this.xmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.xmlData = xmlString;
 
             logger.debug('[VirtualObjectList] xmlTADに仮身を追加:', virtualObj.link_id);
 
@@ -3337,7 +3373,10 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // XMLを文字列に戻す
             const serializer = new XMLSerializer();
-            this.xmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.xmlData = xmlString;
 
             logger.debug('[VirtualObjectList] xmlTADから仮身を削除:', virtualObj.link_id);
 
@@ -3417,7 +3456,15 @@ class VirtualObjectListApp extends window.PluginBase {
                     linkElement.removeAttribute('background');
                 }
 
-                linkElement.textContent = virtualObj.link_name || '';
+                // 仮身固有の続柄（link要素のrelationship属性）
+                if (virtualObj.linkRelationship && virtualObj.linkRelationship.length > 0) {
+                    linkElement.setAttribute('relationship', virtualObj.linkRelationship.join(' '));
+                } else if (linkElement.hasAttribute('relationship')) {
+                    linkElement.removeAttribute('relationship');
+                }
+
+                // テキスト内容は書き込まない（自己閉じタグ形式）
+                // link_nameはJSONから取得する方式に統一
                 logger.debug('[VirtualObjectList] <link>要素を更新: index=', xmlIndex, 'link_id=', virtualObj.link_id);
 
                 // 元の位置情報を更新（次回の移動時に正しく識別できるように）
@@ -3431,7 +3478,10 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // XMLを文字列に戻す
             const serializer = new XMLSerializer();
-            this.xmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.xmlData = xmlString;
 
             logger.debug('[VirtualObjectList] xmlTADの仮身を更新:', virtualObj.link_id);
 
@@ -3505,7 +3555,10 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // XMLを文字列に戻す
             const serializer = new XMLSerializer();
-            this.xmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.xmlData = xmlString;
 
             // _xmlIndexをリセット（次回の並び替えのため、現在の配列順がXML順になる）
             for (let i = 0; i < this.virtualObjects.length; i++) {
@@ -3927,12 +3980,16 @@ class VirtualObjectListApp extends window.PluginBase {
                         logger.debug('[VirtualObjectList] 仮身を削除:', vobj.link_name, 'vobjIndex:', vobjIndex);
                         // XMLから削除（配列から削除する前にインデックスを渡す）
                         this.removeVirtualObjectFromXml(vobj, vobjIndex);
+                        // DOM要素を削除（インクリメンタル削除、フラッシュ防止）
+                        this.removeVirtualObjectElement(vobjIndex);
                         // 配列から削除
                         this.virtualObjects.splice(vobjIndex, 1);
                     }
                 });
 
-                this.renderVirtualObjects();
+                // インデックスとキャンバスサイズを更新（DOM再構築なし）
+                this.updateVobjIndices();
+                this.updateCanvasSize();
                 this.saveToFile();
             } else if (this.virtualObjectDragState.dragMode === 'copy') {
                 logger.debug('[VirtualObjectList] copyモード: 元ウィンドウの仮身は保持');
@@ -4035,12 +4092,16 @@ class VirtualObjectListApp extends window.PluginBase {
                     // xmlTADに追加
                     this.addVirtualObjectToXml(newObj);
 
+                    // インクリメンタル追加（DOM再構築なし、フラッシュ防止）
+                    const insertAt = this.virtualObjects.length - 1;
+                    this.addVirtualObjectElement(newObj, insertAt);
+
                     // refCountを増やす
                     this.requestCopyVirtualObject(sourceObj.link_id);
                 });
 
-                // 再描画
-                this.renderVirtualObjects();
+                // キャンバスサイズを更新（DOM再構築なし）
+                this.updateCanvasSize();
 
             } else {
                 // 移動モード: 位置を更新
@@ -4070,10 +4131,16 @@ class VirtualObjectListApp extends window.PluginBase {
 
                     // xmlTADを更新
                     this.updateVirtualObjectPosition(targetObj);
-                });
 
-                // 仮身の表示を再描画（元のウィンドウに戻った場合も確実に表示）
-                this.renderVirtualObjects();
+                    // DOM要素の位置を更新（インクリメンタル更新：iframeを破棄しない）
+                    const vobjIndex = this.virtualObjects.indexOf(targetObj);
+                    this.updateVirtualObjectElementPosition(vobjIndex, {
+                        left: targetObj.vobjleft,
+                        top: targetObj.vobjtop,
+                        right: targetObj.vobjright,
+                        bottom: targetObj.vobjbottom
+                    });
+                });
             }
 
             // キャンバスサイズを更新
@@ -4159,16 +4226,22 @@ class VirtualObjectListApp extends window.PluginBase {
             this.bgColor = bgColor;
             // DOM要素が生成されるまで待機
             setTimeout(() => {
-                // 開いた仮身として表示される場合は、body全体に背景色を適用
-                if (this.bgcol) {
-                    document.body.style.backgroundColor = bgColor;
-                    const pluginContent = document.querySelector('.plugin-content');
-                    if (pluginContent) {
-                        pluginContent.style.backgroundColor = bgColor;
-                    }
+                // body に背景色を適用
+                document.body.style.backgroundColor = bgColor;
+
+                // スクロールコンテナに背景色を適用
+                const pluginContent = document.querySelector('.plugin-content');
+                if (pluginContent) {
+                    pluginContent.style.backgroundColor = bgColor;
                 }
 
-                // 通常のウィンドウ表示の場合は、canvasに背景色を適用
+                // .virtual-list に背景色を適用（スクロール領域全体をカバー）
+                const virtualList = document.querySelector('.virtual-list');
+                if (virtualList) {
+                    virtualList.style.backgroundColor = bgColor;
+                }
+
+                // canvas要素に背景色を適用
                 const canvas = document.querySelector('.virtual-canvas');
                 if (canvas) {
                     canvas.style.background = bgColor;
@@ -4277,46 +4350,57 @@ class VirtualObjectListApp extends window.PluginBase {
         // XMLの改行文字を削除（タグの外側の改行のみ）
         html = html.replace(/\n/g, '').replace(/\r/g, '');
 
-        // <font>タグを処理（自己閉じタグのペア形式を処理）
+        // <font>タグを処理（自己閉じタグとペアタグの両方に対応）
+        // シンプルなアプローチ: 各fontタグを個別のspanに変換
         let result = '';
         let pos = 0;
-        const fontRegex = /<font\s+(size|color|face)="([^"]*)"\s*\/>/g;
+        const fontRegex = /<font\s+(size|color|face)="([^"]*)"\s*\/?>|<\/font>/gi;
         let match;
         const stack = [];
 
         while ((match = fontRegex.exec(html)) !== null) {
             result += html.substring(pos, match.index);
 
-            const attr = match[1];
-            const value = match[2];
+            const fullMatch = match[0];
 
-            if (value === '') {
-                // 終了タグ
-                for (let i = stack.length - 1; i >= 0; i--) {
-                    if (stack[i].attr === attr) {
-                        result += '</span>';
-                        stack.splice(i, 1);
-                        break;
-                    }
+            if (fullMatch.toLowerCase() === '</font>') {
+                // ペアタグ終了
+                if (stack.length > 0) {
+                    result += '</span>';
+                    stack.pop();
                 }
             } else {
-                // 開始タグ
-                let styleValue = '';
-                if (attr === 'size') {
-                    styleValue = `font-size: ${value}pt;`;
-                } else if (attr === 'color') {
-                    styleValue = `color: ${value};`;
-                } else if (attr === 'face') {
-                    styleValue = `font-family: ${value};`;
+                const attr = match[1].toLowerCase();
+                const value = match[2];
+                const isSelfClosing = fullMatch.endsWith('/>');
+
+                if (value === '' && isSelfClosing) {
+                    // 空文字列の自己閉じ = 終了タグ（後方互換）
+                    for (let i = stack.length - 1; i >= 0; i--) {
+                        if (stack[i].attr === attr) {
+                            result += '</span>';
+                            stack.splice(i, 1);
+                            break;
+                        }
+                    }
+                } else {
+                    // 開始タグ: spanを生成
+                    result += this.createTadStyledSpan(attr, value);
+                    stack.push({ attr, value, isSelfClosing });
                 }
-                result += `<span style="${styleValue}">`;
-                stack.push({ attr, value });
             }
 
             pos = fontRegex.lastIndex;
         }
 
         result += html.substring(pos);
+
+        // 閉じられていないspanを閉じる
+        while (stack.length > 0) {
+            result += '</span>';
+            stack.pop();
+        }
+
         html = result;
 
         // 各種修飾タグの変換
@@ -4387,12 +4471,8 @@ class VirtualObjectListApp extends window.PluginBase {
                     paragraphContent = paragraphContent.replace(/<font\s+face="[^"]*"\s*\/>/i, '');
                 }
 
-                // フォントカラー
-                const fontColorMatch = /<font\s+color="([^"]*)"\s*\/>/i.exec(paragraphContent);
-                if (fontColorMatch) {
-                    style += `color: ${fontColorMatch[1]};`;
-                    paragraphContent = paragraphContent.replace(/<font\s+color="[^"]*"\s*\/>/i, '');
-                }
+                // フォントカラーは段落レベルで処理しない
+                // 色はペアタグ方式でspan要素レベルで処理する（convertDecorationTagsToHTMLで変換）
 
                 // テキスト配置
                 const textAlignMatch = /<text\s+align="([^"]*)"\s*\/>/i.exec(paragraphContent);
@@ -4460,14 +4540,12 @@ class VirtualObjectListApp extends window.PluginBase {
                 }
 
                 // フォント情報を自己閉じタグとして追加
+                // ※色はペアタグ方式でSPAN要素レベルで処理するため、段落レベルでは出力しない
                 if (fontFamily) {
                     xmlParts.push(`<font face="${fontFamily}"/>`);
                 }
                 if (fontSize) {
                     xmlParts.push(`<font size="${fontSize}"/>`);
-                }
-                if (color) {
-                    xmlParts.push(`<font color="${color}"/>`);
                 }
 
                 // 段落の内容を取得
@@ -4526,11 +4604,17 @@ class VirtualObjectListApp extends window.PluginBase {
                     const sizeAttr = node.size || this.extractFontSize(node);
                     const face = node.face || this.extractFontFamily(node);
 
-                    const prevState = { ...fontState };
                     const newState = { ...fontState };
 
-                    if (color) {
-                        xml += `<font color="${color}"/>`;
+                    // 色タグ追跡（ペアタグ用）
+                    let colorTagOpened = false;
+
+                    // 色はペアタグ方式: <font color="...">content</font>
+                    // サイズ・フェイスは自己閉じタグ方式を維持
+                    // 黒色（#000000）はデフォルト色なので出力不要
+                    if (color && color !== '#000000' && color !== fontState.color) {
+                        xml += `<font color="${color}">`;
+                        colorTagOpened = true;
                         newState.color = color;
                     }
                     if (sizeAttr) {
@@ -4544,14 +4628,9 @@ class VirtualObjectListApp extends window.PluginBase {
 
                     xml += this.extractTADXMLFromElement(node, xmlParts, newState);
 
-                    if (face) {
-                        xml += `<font face="${prevState.face}"/>`;
-                    }
-                    if (sizeAttr) {
-                        xml += `<font size="${prevState.size}"/>`;
-                    }
-                    if (color) {
-                        xml += `<font color="${prevState.color}"/>`;
+                    // ペアタグを閉じる
+                    if (colorTagOpened) {
+                        xml += '</font>';
                     }
                 }
                 else if (nodeName === 'b' || nodeName === 'strong') {
@@ -4580,35 +4659,46 @@ class VirtualObjectListApp extends window.PluginBase {
                     xml += '</subscript>';
                 }
                 else if (nodeName === 'span') {
-                    const style = node.style;
-                    const prevState = { ...fontState };
+                    // インラインスタイルからスタイル情報を取得
+                    // computedStyleは使用しない（ブラウザデフォルトが混入するため）
+                    const style = {
+                        color: this.getTadStyleFromSpan(node, 'color') || '',
+                        fontSize: this.getTadStyleFromSpan(node, 'size') ? `${this.getTadStyleFromSpan(node, 'size')}pt` : (node.style.fontSize || ''),
+                        fontFamily: this.getTadStyleFromSpan(node, 'face') || node.style.fontFamily || ''
+                    };
                     const newState = { ...fontState };
 
+                    // 色タグ追跡（ペアタグ用）
+                    let colorTagOpened = false;
+
+                    // 色はペアタグ方式: <font color="...">content</font>
+                    // サイズ・フェイスは自己閉じタグ方式を維持
                     if (style.color) {
                         const hexColor = this.rgbToHex(style.color);
-                        xml += `<font color="${hexColor}"/>`;
+                        // ペアタグ方式：色があれば常に出力
+                        xml += `<font color="${hexColor}">`;
+                        colorTagOpened = true;
                         newState.color = hexColor;
                     }
                     if (style.fontSize) {
                         const size = style.fontSize.replace('pt', '');
-                        xml += `<font size="${size}"/>`;
+                        if (size !== fontState.size) {
+                            xml += `<font size="${size}"/>`;
+                        }
                         newState.size = size;
                     }
                     if (style.fontFamily) {
-                        xml += `<font face="${style.fontFamily}"/>`;
+                        if (style.fontFamily !== fontState.face) {
+                            xml += `<font face="${style.fontFamily}"/>`;
+                        }
                         newState.face = style.fontFamily;
                     }
 
                     xml += this.extractTADXMLFromElement(node, xmlParts, newState);
 
-                    if (style.fontFamily) {
-                        xml += `<font face="${prevState.face}"/>`;
-                    }
-                    if (style.fontSize) {
-                        xml += `<font size="${prevState.size}"/>`;
-                    }
-                    if (style.color) {
-                        xml += `<font color="${prevState.color}"/>`;
+                    // ペアタグを閉じる
+                    if (colorTagOpened) {
+                        xml += '</font>';
                     }
                 }
                 else {
@@ -4696,16 +4786,30 @@ class VirtualObjectListApp extends window.PluginBase {
             // すべての<link>要素を取得（仮身として表示）
             const linkElements = xmlDoc.getElementsByTagName('link');
 
-            this.virtualObjects = [];
-
+            // 1. まずすべてのvirtualObjを同期的にパース（順序を維持）
+            const parsedObjects = [];
             for (const link of linkElements) {
                 const virtualObj = this.parseLinkElement(link);
                 if (virtualObj) {
-                    // 仮身のlink_idに対応するJSONファイルを読み込んでapplist情報を取得
-                    await this.loadVirtualObjectMetadata(virtualObj);
-                    this.virtualObjects.push(virtualObj);
+                    parsedObjects.push(virtualObj);
                 }
             }
+
+            // 2. メタデータ読み込みを並列実行（高速化）
+            // Promise.allSettledで個別エラーを許容
+            const results = await Promise.allSettled(
+                parsedObjects.map(obj => this.loadVirtualObjectMetadata(obj))
+            );
+
+            // 3. 元の順序を維持して配列に追加（失敗してもオブジェクトは追加）
+            this.virtualObjects = [];
+            parsedObjects.forEach((obj, index) => {
+                if (results[index].status === 'rejected') {
+                    logger.warn('[VirtualObjectList] メタデータ読み込み失敗:', obj.link_id, results[index].reason);
+                }
+                // メタデータ読み込み失敗時もオブジェクトは追加（メタデータなしで表示）
+                this.virtualObjects.push(obj);
+            });
 
             logger.debug('[VirtualObjectList] 仮身数:', this.virtualObjects.length);
 
@@ -4776,6 +4880,10 @@ class VirtualObjectListApp extends window.PluginBase {
                     virtualObj.applist = jsonData.applist || {};
                     virtualObj.metadata = jsonData;
                     virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                    // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+                    if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+                        virtualObj.link_name = jsonData.name;
+                    }
                     logger.debug('[VirtualObjectList] メタデータ読み込み成功:', virtualObj.link_id, virtualObj.applist);
                 } else {
                     // JSONファイルが見つからない場合、Electron環境なら親ウィンドウ経由で読み込み
@@ -4788,6 +4896,10 @@ class VirtualObjectListApp extends window.PluginBase {
                         virtualObj.applist = jsonData.applist || {};
                         virtualObj.metadata = jsonData;
                         virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                        // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+                        if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+                            virtualObj.link_name = jsonData.name;
+                        }
                         logger.debug('[VirtualObjectList] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
                     } catch (parentError) {
                         logger.debug('[VirtualObjectList] 親ウィンドウ経由で失敗、HTTP fetchにフォールバック:', parentError.message);
@@ -4814,6 +4926,10 @@ class VirtualObjectListApp extends window.PluginBase {
                                 virtualObj.applist = jsonData.applist || {};
                                 virtualObj.metadata = jsonData;
                                 virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                                // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+                                if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+                                    virtualObj.link_name = jsonData.name;
+                                }
                                 logger.debug('[VirtualObjectList] メタデータ読み込み成功（HTTP）:', jsonUrl, virtualObj.applist);
                                 found = true;
                                 break;
@@ -4837,6 +4953,10 @@ class VirtualObjectListApp extends window.PluginBase {
                     virtualObj.applist = jsonData.applist || {};
                     virtualObj.metadata = jsonData;
                     virtualObj.updateDate = jsonData.updateDate; // 更新日時を保存
+                    // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+                    if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+                        virtualObj.link_name = jsonData.name;
+                    }
                     logger.debug('[VirtualObjectList] メタデータ読み込み成功（親ウィンドウ経由）:', jsonFileName, virtualObj.applist);
                 } catch (error) {
                     logger.debug('[VirtualObjectList] メタデータ読み込み失敗:', virtualObj.link_id, error.message);
@@ -4925,6 +5045,130 @@ class VirtualObjectListApp extends window.PluginBase {
         }
     }
 
+    // =====================================================================
+    // インクリメンタルDOM更新メソッド（フラッシュ防止用）
+    // =====================================================================
+
+    /**
+     * 仮身が「開いた仮身」かどうかを判定
+     * @param {Object} obj - 仮身オブジェクト
+     * @returns {boolean} 開いた仮身ならtrue
+     */
+    isOpenVirtualObject(obj) {
+        const vobjHeight = obj.vobjbottom - obj.vobjtop;
+        const chsz = Math.round(obj.chsz || 14);
+        const lineHeight = 1.2;
+        const chszPx = window.convertPtToPx(chsz);
+        const textHeight = Math.ceil(chszPx * lineHeight);
+        const minOpenHeight = textHeight + 28; // タイトルバー + 区切り線 + コンテンツ最小
+        return vobjHeight >= minOpenHeight;
+    }
+
+    /**
+     * 仮身要素の位置のみを更新（DOM再作成なし）
+     * @param {number} vobjIndex - virtualObjects配列内でのインデックス
+     * @param {Object} newPosition - 新しい位置 {left, top, right, bottom}
+     */
+    updateVirtualObjectElementPosition(vobjIndex, newPosition) {
+        const canvas = document.querySelector('.virtual-canvas');
+        if (!canvas) return;
+
+        const element = canvas.querySelector(`[data-vobj-index="${vobjIndex}"]`);
+        if (!element) return;
+
+        element.style.left = newPosition.left + 'px';
+        element.style.top = newPosition.top + 'px';
+        element.style.width = (newPosition.right - newPosition.left) + 'px';
+        element.style.height = (newPosition.bottom - newPosition.top) + 'px';
+    }
+
+    /**
+     * 仮身要素を削除（DOM再作成なし）
+     * @param {number} vobjIndex - virtualObjects配列内でのインデックス
+     */
+    removeVirtualObjectElement(vobjIndex) {
+        const canvas = document.querySelector('.virtual-canvas');
+        if (!canvas) return;
+
+        const element = canvas.querySelector(`[data-vobj-index="${vobjIndex}"]`);
+        if (element) {
+            // 開いた仮身の場合、iframeを展開リストから削除
+            const iframe = element.querySelector('iframe');
+            if (iframe) {
+                this.expandedIframes.delete(iframe);
+            }
+            element.remove();
+        }
+    }
+
+    /**
+     * 仮身要素を追加（DOM再作成なし）
+     * @param {Object} obj - 仮身オブジェクト
+     * @param {number} insertAt - 挿入位置（virtualObjects配列内でのインデックス）
+     */
+    async addVirtualObjectElement(obj, insertAt) {
+        const canvas = document.querySelector('.virtual-canvas');
+        if (!canvas) return;
+
+        const vobjElement = this.createVirtualObjectElement(obj, insertAt);
+        vobjElement.style.zIndex = 1000 + insertAt;
+        canvas.appendChild(vobjElement);
+
+        // 開いた仮身の場合は展開
+        if (this.isOpenVirtualObject(obj)) {
+            await this.expandVirtualObject(vobjElement, obj, {
+                readonly: true,
+                noScrollbar: true,
+                bgcol: obj.bgcol
+            });
+        }
+    }
+
+    /**
+     * 全仮身要素のz-indexを再計算して更新
+     */
+    updateVirtualObjectElementZIndex() {
+        const canvas = document.querySelector('.virtual-canvas');
+        if (!canvas) return;
+
+        const backgroundObjects = this.virtualObjects.filter(obj => obj.isBackground);
+        const normalObjects = this.virtualObjects.filter(obj => !obj.isBackground);
+        const allObjectsInOrder = [...backgroundObjects, ...normalObjects];
+
+        allObjectsInOrder.forEach((obj, index) => {
+            const vobjIndex = this.virtualObjects.indexOf(obj);
+            const element = canvas.querySelector(`[data-vobj-index="${vobjIndex}"]`);
+            if (element) {
+                if (obj.isBackground) {
+                    element.style.zIndex = index + 1;
+                } else {
+                    element.style.zIndex = 1000 + index - backgroundObjects.length;
+                }
+            }
+        });
+    }
+
+    /**
+     * 全仮身要素のdata-vobj-indexを再計算
+     * 注意: link_idは重複可能（同じ実身への複数の仮身）なので、
+     * DOM順でインデックスを割り当てる
+     */
+    updateVobjIndices() {
+        const canvas = document.querySelector('.virtual-canvas');
+        if (!canvas) return;
+
+        // DOM順で全仮身要素を取得し、インデックスを順番に割り当てる
+        // （同じlink_idを持つ複数の要素がある場合も正しく処理される）
+        const elements = canvas.querySelectorAll('.virtual-object');
+        elements.forEach((element, index) => {
+            element.setAttribute('data-vobj-index', index);
+        });
+    }
+
+    // =====================================================================
+    // 既存メソッド
+    // =====================================================================
+
     renderVirtualObjects() {
         const listElement = document.getElementById('virtualList');
         if (!listElement) return;
@@ -4984,7 +5228,7 @@ class VirtualObjectListApp extends window.PluginBase {
         canvas.style.width = finalWidth + 'px';   // 動的に幅を設定
         canvas.style.height = finalHeight + 'px'; // 動的に高さを設定
         // 背景色はapplyBackgroundColor()で設定
-        canvas.style.border = '1px solid #808080';
+        // ボーダーは不要（背景色との境界で線が見える問題を回避）
 
         // 図形要素の描画（Phase 2対応）
         // xmlDataにfigure要素が含まれている場合は描画
@@ -5138,7 +5382,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 return;
             }
 
-            this.selectVirtualObject(obj, vobj, e);
+            // data-vobj-index属性からインデックスを取得（indexOf回避）
+            const vobjIndex = parseInt(vobj.getAttribute('data-vobj-index'));
+            this.selectVirtualObject(obj, vobj, e, vobjIndex);
         });
 
         // ダブルクリックはmouseupで判定するため、dblclickイベントは使用しない
@@ -5386,7 +5632,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 return;
             }
 
-            this.selectVirtualObject(obj, vobj, e);
+            // data-vobj-index属性からインデックスを取得（indexOf回避）
+            const clickVobjIndex = parseInt(vobj.getAttribute('data-vobj-index'));
+            this.selectVirtualObject(obj, vobj, e, clickVobjIndex);
         });
 
         // ダブルクリックはmouseupで判定するため、dblclickイベントは使用しない
@@ -5402,21 +5650,32 @@ class VirtualObjectListApp extends window.PluginBase {
 
     /**
      * 仮身を選択状態にする
-     * @param {Object} obj - 選択する仮身オブジェクト
+     * @param {Object} obj - 選択する仮身オブジェクト（参照用、実際はvobjIndexから取得）
      * @param {HTMLElement} element - 仮身のDOM要素
      * @param {Event} event - クリックイベント（Shiftキー判定用）
+     * @param {number|null} vobjIndex - 仮身のインデックス（省略時はdata-vobj-indexから取得）
      */
-    selectVirtualObject(obj, element, event) {
+    selectVirtualObject(obj, element, event, vobjIndex = null) {
         // 背景化された仮身も選択可能（背景解除するため）
         // ドラッグとリサイズは別途無効化されている
 
         const isShiftKey = event && event.shiftKey;
-        const vobjIndex = this.virtualObjects.indexOf(obj);
 
-        if (vobjIndex === -1) {
-            logger.warn('[VirtualObjectList] 仮身がvirtualObjects配列に見つかりません:', obj.link_name);
+        // vobjIndexが渡されていない場合はdata-vobj-index属性から取得
+        if (vobjIndex === null) {
+            vobjIndex = parseInt(element.getAttribute('data-vobj-index'));
+        }
+
+        // 配列から最新のオブジェクトを取得（クロージャの参照問題を回避）
+        const currentObj = this.virtualObjects[vobjIndex];
+
+        if (!currentObj) {
+            logger.warn('[VirtualObjectList] 仮身が見つかりません: vobjIndex=', vobjIndex);
             return;
         }
+
+        // 以降はobjではなくcurrentObjを使用
+        obj = currentObj;
 
         if (isShiftKey) {
             // Shift+クリック: 複数選択のトグル
@@ -6000,7 +6259,8 @@ class VirtualObjectListApp extends window.PluginBase {
             // 詳細な初期化（dragMode, hasMoved, isDragging, startX/Y）はdragstartで実行
 
             // ドラッグした仮身が選択されている場合、選択中の全仮身を記録
-            const draggedVobjIndex = this.virtualObjects.indexOf(obj);
+            // data-vobj-index属性から取得済みのインデックスを使用（indexOf回避）
+            const draggedVobjIndex = this.vobjDragState.vobjIndex;
             if (this.selectedVirtualObjects.has(draggedVobjIndex)) {
                 this.vobjDragState.selectedObjects = Array.from(this.selectedVirtualObjects).map(vobjIndex => {
                     const vobj = this.virtualObjects[vobjIndex];
@@ -6022,7 +6282,7 @@ class VirtualObjectListApp extends window.PluginBase {
             } else {
                 // ドラッグする仮身が未選択の場合、まず選択状態にする
                 logger.debug('[VirtualObjectList] mousedown: 未選択の仮身をドラッグ開始 → まず選択');
-                this.selectVirtualObject(obj, vobjElement, e);
+                this.selectVirtualObject(obj, vobjElement, e, draggedVobjIndex);
 
                 // mousedownで選択した直後にclickイベントが発火するのを防ぐフラグ
                 this.justSelectedInMouseDown = true;
@@ -6414,7 +6674,10 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // XMLを文字列に戻す
             const serializer = new XMLSerializer();
-            this.xmlData = serializer.serializeToString(xmlDoc);
+            let xmlString = serializer.serializeToString(xmlDoc);
+            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
+            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
+            this.xmlData = xmlString;
 
             logger.debug('[VirtualObjectList] xmlTAD更新完了:', obj.link_id, '新しい位置:', obj.vobjleft, obj.vobjtop);
 
