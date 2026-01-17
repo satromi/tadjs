@@ -4953,8 +4953,8 @@ class BasicFigureEditor extends window.PluginBase {
 
             logger.debug('[FIGURE EDITOR] 図形を読み込みました:', this.shapes.length, '個');
 
-            // 仮身のメタデータ（applist等）を読み込み
-            const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'vobj' && shape.virtualObject);
+            // 仮身のメタデータ（applist等）を読み込み（グループ内を含む全仮身）
+            const virtualObjectShapes = this.collectAllVirtualObjectShapes();
             logger.debug('[FIGURE EDITOR] 仮身のメタデータを読み込み中:', virtualObjectShapes.length, '個');
             for (const shape of virtualObjectShapes) {
                 await this.loadVirtualObjectMetadata(shape.virtualObject);
@@ -4980,9 +4980,8 @@ class BasicFigureEditor extends window.PluginBase {
      * autoopen属性がtrueの仮身を自動的に開く
      */
     async autoOpenVirtualObjects() {
-        const virtualObjectShapes = this.shapes.filter(shape =>
-            shape.type === 'vobj' && shape.virtualObject
-        );
+        // グループ内を含む全仮身を対象
+        const virtualObjectShapes = this.collectAllVirtualObjectShapes();
 
         for (const shape of virtualObjectShapes) {
             const vobj = shape.virtualObject;
@@ -5025,6 +5024,28 @@ class BasicFigureEditor extends window.PluginBase {
                 }
             }
         }
+    }
+
+    /**
+     * グループ内を含む全ての仮身図形を再帰的に収集
+     * @param {Array} shapes - 検索対象の図形配列（省略時はthis.shapes）
+     * @returns {Array} 仮身図形の配列
+     */
+    collectAllVirtualObjectShapes(shapes = null) {
+        const targetShapes = shapes || this.shapes;
+        const result = [];
+
+        for (const shape of targetShapes) {
+            if (shape.type === 'vobj' && shape.virtualObject) {
+                result.push(shape);
+            } else if (shape.type === 'group' && shape.children && shape.children.length > 0) {
+                // グループ内を再帰的に検索
+                const nestedVobjs = this.collectAllVirtualObjectShapes(shape.children);
+                result.push(...nestedVobjs);
+            }
+        }
+
+        return result;
     }
 
     /**
@@ -10283,8 +10304,8 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        // 仮身図形から実身IDを抽出
-        const virtualObjectShapes = this.shapes.filter(shape => shape.type === 'vobj' && shape.virtualObject && shape.virtualObject.link_id);
+        // 仮身図形から実身IDを抽出（グループ内を含む全仮身）
+        const virtualObjectShapes = this.collectAllVirtualObjectShapes().filter(shape => shape.virtualObject.link_id);
         const realIds = virtualObjectShapes.map(shape =>
             shape.virtualObject.link_id.replace(/_\d+\.xtad$/i, '')
         );

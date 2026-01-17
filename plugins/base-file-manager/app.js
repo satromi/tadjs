@@ -305,7 +305,10 @@ class BaseFileManager extends window.PluginBase {
 
                 // 実身IDを抽出（_0.xtad を除去）
                 const realId = linkId.replace(/_\d+\.xtad$/, '');
-                const displayName = link.textContent.trim() || '無題';
+
+                // PluginBase共通メソッドで仮身属性を読み込む
+                const linkAttributes = this.parseLinkElement(link);
+                const displayName = linkAttributes?.link_name || link.textContent.trim() || '無題';
 
                 // メタデータを読み込み
                 const metadata = await this.loadRealObjectMetadata(realId);
@@ -315,7 +318,8 @@ class BaseFileManager extends window.PluginBase {
                     realId: realId,
                     displayName: metadata?.name || displayName,
                     iconFile: null,
-                    metadata: metadata
+                    metadata: metadata,
+                    linkAttributes: linkAttributes  // 仮身属性を保存
                 });
             }
         } catch (error) {
@@ -438,22 +442,25 @@ class BaseFileManager extends window.PluginBase {
 
         // VirtualObjectRendererを使用する場合
         if (this.virtualObjectRenderer && baseFile.realId) {
+            // ユーザ原紙の場合は仮身属性を使用、なければデフォルト値
+            const attrs = baseFile.linkAttributes || {};
+
             // 仮身オブジェクトを作成
             const virtualObject = {
                 link_id: `${baseFile.realId}_0.xtad`,
                 link_name: baseFile.displayName,
-                chsz: chsz,  // ポイント値を渡す
-                frcol: '#000000',
-                chcol: '#000000',
-                tbcol: '#ffffff',
-                bgcol: '#ffffff',
-                pictdisp: 'true',
-                namedisp: 'true',
-                roledisp: 'false',
-                typedisp: 'false',
-                updatedisp: 'false',
-                framedisp: 'true',
-                autoopen: 'false'
+                chsz: attrs.chsz || chsz,  // 仮身属性優先、なければメニュー文字サイズ
+                frcol: attrs.frcol || '#000000',
+                chcol: attrs.chcol || '#000000',
+                tbcol: attrs.tbcol || '#ffffff',
+                bgcol: attrs.bgcol || '#ffffff',
+                pictdisp: attrs.pictdisp || 'true',
+                namedisp: attrs.namedisp || 'true',
+                roledisp: attrs.roledisp || 'false',
+                typedisp: attrs.typedisp || 'false',
+                updatedisp: attrs.updatedisp || 'false',
+                framedisp: attrs.framedisp || 'true',
+                autoopen: attrs.autoopen || 'false'
             };
 
             // VirtualObjectRendererでインライン要素を作成
@@ -596,7 +603,8 @@ class BaseFileManager extends window.PluginBase {
                 baseFile: {
                     type: 'user',
                     realId: baseFile.realId,
-                    displayName: baseFile.displayName
+                    displayName: baseFile.displayName,
+                    linkAttributes: baseFile.linkAttributes || null  // 仮身属性を追加
                 }
             };
         } else {

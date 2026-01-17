@@ -65,7 +65,8 @@ export class IconCacheManager {
                         return null;
                     }
                 } else {
-                    logger.error(`${this.logPrefix} require not available (not in Electron environment)`);
+                    // ネストしたiframe環境（プレビュー表示等）では require が使えないため、これは想定内の動作
+                    logger.debug(`${this.logPrefix} require not available (nested iframe environment)`);
                     this.iconCache.set(realId, null);
                     return null;
                 }

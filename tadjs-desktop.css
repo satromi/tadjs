@@ -459,7 +459,7 @@ input[type="text"], input[type="password"], textarea, .config-input {
     background: var(--window-background);
     border: 2px outset var(--menu-border-color);
     box-shadow: 2px 2px 4px var(--window-shadow-color);
-    z-index: 1000;
+    z-index: 5000; /* プレゼンテーションモード(z-index:3000)より上に表示 */
     min-width: 120px;
     font-size: var(--menu-font-size, 11px);
 }
@@ -639,18 +639,6 @@ input[type="text"], input[type="password"], textarea, .config-input {
     width: 20px;  /* スクロールバーサイズ(16px)+ 余裕 */
     height: 20px; /* スクロールバーサイズ(16px)+ 余裕 */
     cursor: se-resize;
-    /* 三本斜線の表示 */
-    background: linear-gradient(135deg,
-        transparent 0%, transparent 42%,
-        #808080 42%, #808080 44%,
-        transparent 44%, transparent 52%,
-        #808080 52%, #808080 54%,
-        transparent 54%, transparent 62%,
-        #808080 62%, #808080 64%,
-        transparent 64%);
-    background-repeat: no-repeat;
-    background-position: bottom 4px right 4px;
-    background-size: 10px 10px;
 }
 
 .resize-handle.n {
@@ -1720,4 +1708,118 @@ input[type="text"], input[type="password"], textarea, .config-input {
         height: 60vh;
         max-width: none;
     }
+}
+
+/* ===============================================
+   リストボックス標準スタイル（ダイアログ用）
+   =============================================== */
+
+/* リストボックスコンテナ */
+.dialog-listbox {
+    max-height: 400px;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #808080;
+}
+
+/* リストボックスアイテム */
+.dialog-listbox-item {
+    padding: 6px 8px;
+    cursor: pointer;
+    border-bottom: 1px solid #e0e0e0;
+    background: white;
+    transition: background 0.1s;
+}
+
+.dialog-listbox-item:last-child {
+    border-bottom: none;
+}
+
+.dialog-listbox-item:hover {
+    background: #e0e0e0;
+}
+
+/* 現在位置（スライドのカレント表示用） */
+.dialog-listbox-item.current {
+    background: #c0c0ff;
+}
+
+/* 選択状態 */
+.dialog-listbox-item.selected {
+    background: #0078d4;
+    color: #fff;
+}
+
+/* 選択状態かつ現在位置 */
+.dialog-listbox-item.selected.current {
+    background: #0078d4;
+    color: #fff;
+}
+
+/* ============================================
+   ダイアログリストボックス用カスタムスクロールバー
+   ============================================ */
+
+/* ラッパー（リストボックス + スクロールバー） */
+.dialog-listbox-wrapper {
+    display: flex;
+    max-height: 400px;
+}
+
+/* リストボックス本体（ネイティブスクロールバー非表示） */
+.dialog-listbox-wrapper .dialog-listbox {
+    flex: 1;
+    max-height: none;  /* wrapperで制御するため解除 */
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.dialog-listbox-wrapper .dialog-listbox::-webkit-scrollbar {
+    display: none;
+}
+
+/* スクロールバー */
+.dialog-listbox-wrapper > .custom-scrollbar.vertical {
+    position: relative;
+    width: 16px;
+    flex-shrink: 0;
+    background: #e0e0e0;
+}
+
+/* トラック */
+.dialog-listbox-wrapper .scroll-track {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: #e0e0e0;
+}
+
+/* ツマミ */
+.dialog-listbox-wrapper .scroll-thumb {
+    position: absolute;
+    left: 2px;
+    right: 2px;
+    min-height: 20px;
+    background: #c0c0c0;
+    border: 1px outset #808080;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dialog-listbox-wrapper .scroll-thumb:hover {
+    background: #a0a0a0;
+}
+
+.dialog-listbox-wrapper .scroll-thumb.dragging {
+    background: #808080;
+}
+
+/* インジケーター（黄色のライン） */
+.dialog-listbox-wrapper .scroll-thumb-indicator {
+    width: 14px;
+    height: 2px;
+    background: #ffff00;
 }

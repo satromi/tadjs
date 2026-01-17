@@ -40,12 +40,15 @@ xmlTADは、BTRONの標準データフォーマットであるTAD (Text And Draw
 
 ### 2.2 文書タイプ
 
-xmlTADには2種類の文書タイプがあります：
+xmlTADには3種類の文書タイプがあります：
 
 | タイプ | ルート子要素 | 用途 | 対応プラグイン |
 |--------|------------|------|--------------|
 | 文章TAD | `<document>` | テキスト文書 | basic-text-editor, basic-calc-editor |
 | 図形TAD | `<figure>` | 図形・画像 | basic-figure-editor, virtual-object-list |
+| 実時間TAD | `<realtime>` | 音楽・アニメーション・マルチメディア | （未実装） |
+
+> **注**: 実時間TADの詳細仕様は [realtimeDataTAD.md](./realtimeDataTAD.md) を参照してください。
 
 ---
 
@@ -1308,6 +1311,7 @@ class PluginBase {
 ## 10. 参考資料
 
 - [BTRON TAD仕様](http://www.personal-media.co.jp/book/tron/tronware_62.html)
+- [realtimeDataTAD.md](./realtimeDataTAD.md) - 実時間制御xmlTAD仕様書（音楽・アニメーション・マルチメディア）
 - [PLUGIN_DEVELOPMENT_GUIDE.md](./PLUGIN_DEVELOPMENT_GUIDE.md)
 - [CLAUDE.md](../CLAUDE.md) - PluginBase共通化思想
 
@@ -1317,6 +1321,7 @@ class PluginBase {
 
 | 日付 | 版 | 内容 |
 |------|-----|------|
+| 2026-01-17 | 1.9 | 実時間TAD（`<realtime>`）を文書タイプに追加、realtimeDataTAD.mdへのリンクを追加 |
 | 2025-12-31 | 1.0 | 初版作成 |
 | 2025-12-31 | 1.1 | unpack.js/tad.jsから網羅的にタグを追加 |
 | 2025-12-31 | 1.2 | xmlTAD出力形式を統一（figView/figDraw/figScale、docView/docDraw/docScale、image形式） |

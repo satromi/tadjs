@@ -422,6 +422,7 @@ PluginBaseが提供する共通メソッドの一覧です。開発者はこれ�
 | `showInputDialog(message, defaultValue, inputWidth, options)` | `string \| null` | 入力ダイアログ。キャンセル時null |
 | `showSaveConfirmDialog()` | `'yes' \| 'no' \| 'cancel'` | 保存確認ダイアログ |
 | `showMessageDialog(message, buttons, defaultButton)` | `string` | カスタムボタンダイアログ |
+| `showCustomDialog(options)` | `Object \| null` | カスタムHTMLダイアログ（無限タイムアウト） |
 
 **showInputDialogのオプション**:
 
@@ -503,6 +504,8 @@ const result = await this.showInputDialog(
 | `duplicateRealObjectForDrag(virtualObject)` | `Promise<Object>` | ダブルクリックドラッグ時の実身複製 |
 | `handleBaseFileDrop(dragData, clientX, clientY, additionalData)` | void | 原紙箱からのドロップ処理 |
 | `buildVirtualObjFromDataset(dataset)` | `Object` | DOM要素のdatasetから仮身オブジェクトを構築 |
+| `extractUrlFromDataTransfer(dataTransfer)` | `string\|null` | DataTransferからURLを抽出（text/uri-list優先） |
+| `checkAndHandleUrlDrop(e, dropX, dropY)` | `boolean` | URLドロップをチェックし、親ウィンドウに転送 |
 
 ### 5.7 ダブルクリック+ドラッグ
 
@@ -1254,6 +1257,35 @@ onCrossWindowDropSuccess(data) {
 }
 ```
 
+### 7.5 URLドロップ
+
+ブラウザからURLがドロップされた場合、URL仮身（url-link-exec）を作成して挿入します。
+
+```javascript
+// ドロップハンドラの先頭でURLドロップをチェック
+handleDrop(e) {
+    e.preventDefault();
+
+    // URLドロップをチェック（PluginBase共通メソッド）
+    const dropX = e.clientX;
+    const dropY = e.clientY;
+    if (this.checkAndHandleUrlDrop(e, dropX, dropY)) {
+        return; // URLドロップは親ウィンドウで処理
+    }
+
+    // 通常の仮身ドロップ処理
+    const dragData = this.parseDragData(e.dataTransfer);
+    if (!dragData) return;
+    // ...
+}
+```
+
+**内部動作**:
+
+1. `checkAndHandleUrlDrop()` がDataTransferからURLを抽出
+2. URLが見つかれば `url-drop-request` メッセージを親ウィンドウに送信
+3. 親ウィンドウがURL仮身を作成し、`virtual-object-dropped` メッセージで仮身を挿入
+
 ---
 
 ## 8. ダイアログ表示
@@ -1311,7 +1343,51 @@ if (result === 'delete') {
 }
 ```
 
-### 8.4 戻り値の注意点
+### 8.4 カスタムダイアログ
+
+複雑なUI（フォント選択リスト、用紙設定など）が必要な場合は`showCustomDialog`を使用します。
+ユーザー操作を待つため**タイムアウトは無限（0）**に設定されています。
+
+```javascript
+const result = await this.showCustomDialog({
+    title: '書体一覧',
+    dialogHtml: `
+        <div style="max-height:400px;overflow-y:auto;">
+            ${fontListHtml}
+        </div>
+    `,
+    buttons: [
+        { label: 'キャンセル', value: 'cancel' },
+        { label: 'OK', value: 'ok' }
+    ],
+    defaultButton: 1,
+    width: 400,             // オプション: ダイアログ幅
+    inputs: { text: 'inputId' },  // オプション: 入力フィールドID
+    radios: { name: 'radioName' } // オプション: ラジオボタンname
+});
+
+if (result && result.button === 'ok') {
+    // result.selectedFontIndex - フォントリスト選択時のインデックス
+    // result.formData - 自動収集されたフォームデータ
+    // result.radios - ラジオボタンの値
+    // result.input - テキスト入力値
+}
+```
+
+**戻り値構造**:
+
+```javascript
+{
+    button: 'ok' | 'cancel' | string,  // 押されたボタンのvalue
+    checkbox: boolean,                  // チェックボックス状態
+    input: string,                      // テキスト入力値
+    radios: { [name]: value },          // ラジオボタン値
+    formData: { [id]: value },          // 自動収集フォームデータ
+    selectedFontIndex: number | null    // フォントリスト選択時のインデックス
+}
+```
+
+### 8.5 戻り値の注意点
 
 **重要**: `showInputDialog`の戻り値は**文字列**です。オブジェクトではありません。
 
@@ -1325,7 +1401,7 @@ const name = await this.showInputDialog('名前', '');
 if (name) { ... }  // name は文字列または null
 ```
 
-### 8.5 ダイアログ先行パターン
+### 8.6 ダイアログ先行パターン
 
 MessageBusメッセージを送信する前にダイアログを表示することで、タイムアウトを防ぎます。
 

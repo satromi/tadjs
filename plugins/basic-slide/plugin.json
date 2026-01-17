@@ -1,0 +1,33 @@
+{
+  "id": "basic-slide",
+  "name": "スライド",
+  "version": "1.0.0",
+  "type": "base",
+  "basefile": {
+    "json": "019a1132-762b-7b02-ba2a-a918a9b37c39.json",
+    "xmltad": "019a1132-762b-7b02-ba2a-a918a9b37c39_0.xtad",
+    "ico": "019a1132-762b-7b02-ba2a-a918a9b37c39.ico"
+  },
+  "description": "スライド表示プラグイン",
+  "icon": "🎞️",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 1024,
+    "height": 768,
+    "resizable": true,
+    "scrollable": false,
+    "openable": true
+  },
+  "contextMenu": [
+    {
+      "label": "スライド",
+      "fileTypes": ["tad", "TAD", "bpk", "BPK", "xtad", "XTAD"],
+      "action": "open-editor"
+    }
+  ],
+  "permissions": [
+    "file-read"
+  ]
+}

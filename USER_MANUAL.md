@@ -1,6 +1,6 @@
 # TADjs Desktop ユーザーマニュアル
 
-Ver0.32
+Ver0.33
 
 ## 目次
 1. [TADjs Desktopについて](#tadjs-desktopについて)
@@ -732,5 +732,5 @@ Copyright (c) 2025-2026 satromi
 ---
 
 **TADjs Desktop User Manual**
-Ver0.32
+Ver0.33
 最終更新: 2026年1月

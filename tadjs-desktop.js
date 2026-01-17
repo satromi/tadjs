@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.32
+ * TADjs Ver 0.33
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -23,6 +23,9 @@
  */
 
 const logger = window.getLogger('TADjs');
+
+// Electron 23以降ではfile.pathが非推奨のため、webUtilsを使用
+const { webUtils } = require('electron');
 
 class TADjsDesktop {
     constructor() {
@@ -484,6 +487,16 @@ class TADjsDesktop {
             } else {
                 logger.warn('[TADjs] toggle-maximize: windowIdが見つかりません');
             }
+        });
+
+        // enter-presentation-mode: プレゼンテーションモード開始
+        this.parentMessageBus.on('enter-presentation-mode', (data, event) => {
+            this.handleEnterPresentationMode(data, event);
+        });
+
+        // exit-presentation-mode: プレゼンテーションモード終了
+        this.parentMessageBus.on('exit-presentation-mode', (data, event) => {
+            this.handleExitPresentationMode(data, event);
         });
 
         // close-window: ウィンドウを閉じる
@@ -1003,9 +1016,11 @@ class TADjsDesktop {
             'import-files': { handler: 'handleImportFiles', async: true },
             'save-calc-image-file': { handler: 'handleSaveCalcImageFile', async: true },
             'delete-image-file': { handler: 'handleDeleteImageFile', async: true },
+            'copy-file-to-data': { handler: 'handleCopyFileToData', async: true },
             // 仮身ネットワーク用ハンドラ
             'get-real-object-info': { handler: 'handleGetRealObjectInfo', async: true },
             'get-virtual-objects-from-real': { handler: 'handleGetVirtualObjectsFromReal', async: true },
+            'load-xtad-content': { handler: 'handleLoadXtadContent', async: true },
             // 実身/仮身検索用ハンドラ
             'search-real-objects': { handler: 'handleSearchRealObjects', async: true },
             'abort-search': { handler: 'handleAbortSearch', async: false },
@@ -1561,7 +1576,16 @@ class TADjsDesktop {
                 e.dataTransfer.dropEffect = 'copy';
                 return false;
             });
-            
+
+            // ドラッグがドキュメント外に出た時にオーバーレイを削除
+            document.addEventListener('dragleave', (e) => {
+                // ドキュメント外に出たかチェック
+                if (e.clientX <= 0 || e.clientY <= 0 ||
+                    e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+                    this.removeMediaDropOverlay();
+                }
+            });
+
             document.addEventListener('drop', (e) => {
                 console.log('[TADjs] Document drop event fired at:', e.clientX, e.clientY);
 
@@ -1682,8 +1706,20 @@ class TADjsDesktop {
                         if (files.length > 0) {
                             logger.debug('[TADjs] 外部ファイルドロップ検出:', files.length, '個のファイル');
 
-                            // FileImportManagerを使用してファイルを処理
-                            if (this.fileImportManager) {
+                            // プラグインIDを取得（parentMessageBus.childrenから取得）
+                            const childInfo = windowId ? this.parentMessageBus?.children?.get(windowId) : null;
+                            const pluginId = childInfo ? childInfo.pluginId : null;
+                            logger.debug('[TADjs] ドロップ先プラグイン:', pluginId);
+
+                            // basic-playerプラグインの場合はメディアファイル専用処理
+                            if (pluginId === 'basic-player') {
+                                this.handleMediaFilesDropToPlayer(files, windowId, windowInfo).then(() => {
+                                    logger.debug('[TADjs] メディアファイルドロップ処理完了');
+                                }).catch(err => {
+                                    logger.error('[TADjs] メディアファイルドロップエラー:', err);
+                                });
+                            } else if (this.fileImportManager) {
+                                // FileImportManagerを使用してファイルを処理
                                 this.fileImportManager.handleFilesImport(files, iframe).then(() => {
                                     logger.debug('[TADjs] 外部ファイルインポート完了');
                                 }).catch(err => {
@@ -1889,7 +1925,8 @@ class TADjsDesktop {
                         name: newName,
                         dropPosition: dropPosition,
                         targetCell: targetCell,
-                        applist: newMetadata.applist || {}
+                        applist: newMetadata.applist || {},
+                        linkAttributes: baseFile.linkAttributes || null  // 仮身属性を追加
                     });
                     logger.debug('[TADjs] ユーザ原紙からドロップ先に仮身を追加:', newRealId, newName, dropPosition, 'targetCell:', targetCell);
                 } else {
@@ -3540,9 +3577,9 @@ ${url}
      * @returns {Promise<boolean>} クローズを許可するか
      */
     async requestCloseConfirmation(windowId, iframe) {
-        // プラグインのメタデータを確認
-        const windowInfo = this.windows.get(windowId);
-        const pluginId = windowInfo?.pluginId;
+        // プラグインのメタデータを確認（parentMessageBus.childrenから取得）
+        const childInfo = this.parentMessageBus?.children?.get(windowId);
+        const pluginId = childInfo?.pluginId;
 
         if (!pluginId) {
             // プラグインIDが不明な場合は即座にクローズ許可
@@ -3636,6 +3673,183 @@ ${url}
         } else {
             logger.warn('[TADjs] WindowManagerが利用できません');
         }
+    }
+
+    /**
+     * プレゼンテーションモード開始ハンドラー
+     * スクロールバー非表示、タイトルバー非表示、Electronフルスクリーン化
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     */
+    handleEnterPresentationMode(data, event) {
+        const windowId = data.windowId || this.parentMessageBus.getWindowIdFromSource(event.source);
+        const windowElement = document.getElementById(windowId);
+
+        if (!windowElement) {
+            logger.warn('[TADjs] enter-presentation-mode: windowElementが見つかりません:', windowId);
+            return;
+        }
+
+        const options = data.options || {};
+
+        // プレゼンテーションモード状態を保存（復元用）
+        if (!this.presentationModeState) {
+            this.presentationModeState = {};
+        }
+        this.presentationModeState[windowId] = {
+            scrollbarDisplay: null,
+            titlebarDisplay: null,
+            scrollCornerDisplay: null,
+            windowCornerDisplay: null,
+            originalZIndex: windowElement.style.zIndex || '',
+            hadFramelessClass: windowElement.classList.contains('frameless')
+        };
+
+        // スクロールバー非表示
+        if (options.hideScrollbar !== false) {
+            const scrollbarContainer = windowElement.querySelector('.custom-scroll-container');
+            if (scrollbarContainer) {
+                this.presentationModeState[windowId].scrollbarDisplay = scrollbarContainer.style.display;
+                scrollbarContainer.style.display = 'none';
+            }
+        }
+
+        // タイトルバー非表示
+        if (options.hideFrame !== false) {
+            const titlebar = windowElement.querySelector('.window-titlebar');
+            if (titlebar) {
+                this.presentationModeState[windowId].titlebarDisplay = titlebar.style.display;
+                titlebar.style.display = 'none';
+            }
+            windowElement.classList.add('frameless');
+        }
+
+        // デスクトップ全体をステータスバー(z-index:2000)より上に表示
+        // ※ウィンドウは#desktop内にあるため、#desktop自体のz-indexを変更する必要がある
+        // ※また、desktopのbottom: 20pxをリセットしてステータスバー領域も覆う
+        const desktop = document.getElementById('desktop');
+        if (desktop) {
+            this.presentationModeState[windowId].originalDesktopZIndex = desktop.style.zIndex || '';
+            this.presentationModeState[windowId].originalDesktopBottom = desktop.style.bottom || '';
+            desktop.style.zIndex = '3000';
+            desktop.style.bottom = '0';
+        }
+
+        // ステータスバーをデスクトップより下に配置（非表示ではなく背面に）
+        const statusBar = document.getElementById('status-bar');
+        if (statusBar) {
+            this.presentationModeState[windowId].originalStatusBarZIndex = statusBar.style.zIndex || '';
+            statusBar.style.zIndex = '1';
+        }
+
+        // スクロールコーナー非表示（右下のスクロールバー交点）
+        const scrollCorner = windowElement.querySelector('.scroll-corner');
+        if (scrollCorner) {
+            this.presentationModeState[windowId].scrollCornerDisplay = scrollCorner.style.display;
+            scrollCorner.style.display = 'none';
+        }
+
+        // ウィンドウコーナー非表示（右下のサイズボックス）
+        const windowCorner = windowElement.querySelector('.window-corner');
+        if (windowCorner) {
+            this.presentationModeState[windowId].windowCornerDisplay = windowCorner.style.display;
+            windowCorner.style.display = 'none';
+        }
+
+        // 内部ウィンドウを最大化
+        const windowInfo = this.windowManager?.windows?.get(windowId);
+        if (windowInfo) {
+            this.presentationModeState[windowId].wasMaximized = windowInfo.isMaximized;
+            if (!windowInfo.isMaximized) {
+                this.toggleMaximizeWindow(windowId);
+            }
+        }
+
+        // Electronフルスクリーン
+        if (options.electronFullscreen !== false) {
+            if (window.electronAPI && window.electronAPI.enterFullscreen) {
+                window.electronAPI.enterFullscreen();
+            }
+        }
+
+        logger.info('[TADjs] プレゼンテーションモード開始:', windowId);
+    }
+
+    /**
+     * プレゼンテーションモード終了ハンドラー
+     * 元の状態に復元
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     */
+    handleExitPresentationMode(data, event) {
+        const windowId = data.windowId || this.parentMessageBus.getWindowIdFromSource(event.source);
+        const windowElement = document.getElementById(windowId);
+
+        if (!windowElement) {
+            logger.warn('[TADjs] exit-presentation-mode: windowElementが見つかりません:', windowId);
+            return;
+        }
+
+        const savedState = this.presentationModeState?.[windowId];
+
+        // スクロールバー復元
+        const scrollbarContainer = windowElement.querySelector('.custom-scroll-container');
+        if (scrollbarContainer && savedState) {
+            scrollbarContainer.style.display = savedState.scrollbarDisplay || '';
+        }
+
+        // タイトルバー復元
+        const titlebar = windowElement.querySelector('.window-titlebar');
+        if (titlebar && savedState) {
+            titlebar.style.display = savedState.titlebarDisplay || '';
+        }
+        if (savedState && !savedState.hadFramelessClass) {
+            windowElement.classList.remove('frameless');
+        }
+
+        // デスクトップのz-indexとbottom復元
+        const desktop = document.getElementById('desktop');
+        if (desktop && savedState) {
+            desktop.style.zIndex = savedState.originalDesktopZIndex || '';
+            desktop.style.bottom = savedState.originalDesktopBottom || '';
+        }
+
+        // ステータスバーのz-index復元
+        const statusBar = document.getElementById('status-bar');
+        if (statusBar && savedState) {
+            statusBar.style.zIndex = savedState.originalStatusBarZIndex || '';
+        }
+
+        // スクロールコーナー復元
+        const scrollCorner = windowElement.querySelector('.scroll-corner');
+        if (scrollCorner && savedState) {
+            scrollCorner.style.display = savedState.scrollCornerDisplay || '';
+        }
+
+        // ウィンドウコーナー復元
+        const windowCorner = windowElement.querySelector('.window-corner');
+        if (windowCorner && savedState) {
+            windowCorner.style.display = savedState.windowCornerDisplay || '';
+        }
+
+        // 内部ウィンドウの最大化状態を復元
+        const windowInfo = this.windowManager?.windows?.get(windowId);
+        if (windowInfo && savedState && !savedState.wasMaximized && windowInfo.isMaximized) {
+            // 元々最大化されていなかった場合は、元のサイズに戻す
+            this.toggleMaximizeWindow(windowId);
+        }
+
+        // Electronフルスクリーン解除
+        if (window.electronAPI && window.electronAPI.exitFullscreen) {
+            window.electronAPI.exitFullscreen();
+        }
+
+        // 状態クリア
+        if (this.presentationModeState) {
+            delete this.presentationModeState[windowId];
+        }
+
+        logger.info('[TADjs] プレゼンテーションモード終了:', windowId);
     }
 
     /**
@@ -5448,23 +5662,31 @@ ${url}
                     );
 
                     // カスタムダイアログの特殊処理
-                    // selectedFontIndex の抽出
-                    let selectedFontIndex = null;
+                    // selectedItemIndex の抽出（汎用化）
+                    let selectedItemIndex = null;
                     if (result.dialogElement) {
-                        const selectedElement = result.dialogElement.querySelector('.font-list-item.selected');
+                        // .dialog-listbox-item.selected を検索（標準クラス）
+                        let selectedElement = result.dialogElement.querySelector('.dialog-listbox-item.selected');
+
+                        // 後方互換性: .font-list-item.selected も検索
+                        if (!selectedElement) {
+                            selectedElement = result.dialogElement.querySelector('.font-list-item.selected');
+                        }
+
                         if (selectedElement) {
-                            selectedFontIndex = parseInt(selectedElement.getAttribute('data-index'));
+                            selectedItemIndex = parseInt(selectedElement.getAttribute('data-index'));
                         }
                     }
 
                     // dialogElement は postMessage で送信できないため除外
                     const { dialogElement, ...resultWithoutElement } = result;
 
-                    // selectedFontIndex を結果に追加
+                    // selectedItemIndex を結果に追加（後方互換性のためselectedFontIndexも維持）
                     this.respondSuccess(event.source, responseType, {
                         result: {
                             ...resultWithoutElement,
-                            selectedFontIndex: selectedFontIndex
+                            selectedItemIndex: selectedItemIndex,
+                            selectedFontIndex: selectedItemIndex  // 後方互換性
                         }
                     }, params.messageId, sourceWindowId);
                     return; // 早期リターン
@@ -5893,7 +6115,20 @@ ${url}
             { autoResponse: false }
         );
 
-        logger.info('[TADjs] Phase 4 Batch 5: ドラッグ&ドロップ系+その他ハンドラー登録完了 (13件)');
+        // basic-playerプラグイン用メディアドロップオーバーレイ
+        this.messageRouter.register(
+            'show-media-drop-overlay',
+            this.handleShowMediaDropOverlay.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'hide-media-drop-overlay',
+            this.handleHideMediaDropOverlay.bind(this),
+            { autoResponse: false }
+        );
+
+        logger.info('[TADjs] Phase 4 Batch 5: ドラッグ&ドロップ系+その他ハンドラー登録完了 (15件)');
 
         // Phase 4 Batch 6: 道具パネル系 + 特殊フラグ系ハンドラー登録 (6件)
         this.messageRouter.register(
@@ -6236,7 +6471,19 @@ ${url}
 
         let success = false;
         try {
-            success = this.saveImageFile(data.fileName, data.imageData);
+            let imageData = data.imageData;
+
+            // base64データの場合はデコード
+            if (data.isBase64 && typeof imageData === 'string') {
+                const binaryString = atob(imageData);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                imageData = bytes;
+            }
+
+            success = this.saveImageFile(data.fileName, imageData);
         } catch (error) {
             logger.error('[TADjs] 画像ファイル保存エラー:', error);
         }
@@ -6352,6 +6599,264 @@ ${url}
     }
 
     /**
+     * メディアドロップオーバーレイを削除
+     */
+    removeMediaDropOverlay() {
+        const overlay = document.getElementById('media-drop-overlay');
+        if (overlay) {
+            overlay.remove();
+        }
+    }
+
+    /**
+     * プラグインからのオーバーレイ表示要求を処理
+     * @param {Object} event - メッセージイベント
+     */
+    handleShowMediaDropOverlay(event) {
+        const data = event.data || event;
+        const windowId = data.windowId;
+
+        logger.debug('[TADjs] show-media-drop-overlay受信:', windowId);
+
+        if (!windowId) return;
+
+        const targetWindow = document.getElementById(windowId);
+        if (!targetWindow) return;
+
+        // プラグインIDを確認（parentMessageBus.childrenから取得）
+        const childInfo = this.parentMessageBus?.children?.get(windowId);
+        if (!childInfo || childInfo.pluginId !== 'basic-player') return;
+
+        const iframe = targetWindow.querySelector('iframe');
+        if (!iframe) return;
+
+        const iframeRect = iframe.getBoundingClientRect();
+
+        // 既存のオーバーレイがあれば削除
+        this.removeMediaDropOverlay();
+
+        // オーバーレイを作成
+        const overlay = document.createElement('div');
+        overlay.id = 'media-drop-overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            background-color: rgba(74, 144, 217, 0.1);
+            outline: 3px dashed #4a90d9;
+            outline-offset: -3px;
+            pointer-events: auto;
+            z-index: 999999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            left: ${iframeRect.left}px;
+            top: ${iframeRect.top}px;
+            width: ${iframeRect.width}px;
+            height: ${iframeRect.height}px;
+        `;
+        overlay.dataset.windowId = windowId;
+
+        // ドロップメッセージ
+        const message = document.createElement('div');
+        message.style.cssText = `
+            color: #4a90d9;
+            font-size: 18px;
+            font-weight: bold;
+            text-align: center;
+            pointer-events: none;
+        `;
+        message.textContent = 'ファイルをドロップしてメディアを追加';
+        overlay.appendChild(message);
+
+        // ドロップイベントを設定
+        overlay.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+
+        overlay.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const files = Array.from(e.dataTransfer.files);
+            const overlayWindowId = overlay.dataset.windowId;
+            const winInfo = this.windows.get(overlayWindowId);
+
+            logger.info('[TADjs] オーバーレイでドロップ検出:', files.length, '個, windowId:', overlayWindowId);
+
+            if (files.length > 0 && winInfo) {
+                await this.handleMediaFilesDropToPlayer(files, overlayWindowId, winInfo);
+            }
+
+            this.removeMediaDropOverlay();
+        });
+
+        overlay.addEventListener('dragleave', (e) => {
+            // オーバーレイ外に出た場合のみ削除
+            const rect = overlay.getBoundingClientRect();
+            if (e.clientX < rect.left || e.clientX > rect.right ||
+                e.clientY < rect.top || e.clientY > rect.bottom) {
+                this.removeMediaDropOverlay();
+            }
+        });
+
+        document.body.appendChild(overlay);
+        logger.debug('[TADjs] メディアドロップオーバーレイ表示:', windowId);
+    }
+
+    /**
+     * プラグインからのオーバーレイ非表示要求を処理
+     * @param {Object} event - メッセージイベント
+     */
+    handleHideMediaDropOverlay(event) {
+        const data = event.data || event;
+        logger.debug('[TADjs] hide-media-drop-overlay受信:', data.windowId);
+        this.removeMediaDropOverlay();
+    }
+
+    /**
+     * basic-playerプラグインへのメディアファイルドロップを処理
+     * @param {Array<File>} files - ドロップされたファイル
+     * @param {string} windowId - ウィンドウID
+     * @param {Object} windowInfo - ウィンドウ情報
+     */
+    async handleMediaFilesDropToPlayer(files, windowId, windowInfo) {
+        logger.info('[TADjs] メディアファイルドロップ処理開始:', files.length, '個');
+
+        // 対応するメディア拡張子
+        const videoExtensions = ['mp4', 'webm', 'mov', 'avi', 'mkv'];
+        const audioExtensions = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'opus'];
+
+        // 実身IDを取得（parentMessageBus.childrenから取得）
+        const childInfo = this.parentMessageBus.children?.get(windowId);
+        const realId = childInfo?.realId;
+        if (!realId) {
+            logger.error('[TADjs] 実身IDが取得できません windowId:', windowId, 'childInfo:', childInfo);
+            return;
+        }
+
+        // ベースIDを取得（_数字.xtadを除去）
+        const baseId = realId.replace(/_\d+\.xtad$/i, '');
+
+        // メディアファイルをフィルタリング
+        const mediaFiles = [];
+        for (const file of files) {
+            const ext = file.name.split('.').pop().toLowerCase();
+            let mediaType = null;
+            if (videoExtensions.includes(ext)) {
+                mediaType = 'video';
+            } else if (audioExtensions.includes(ext)) {
+                mediaType = 'audio';
+            }
+            if (mediaType) {
+                mediaFiles.push({ file, ext, mediaType });
+            }
+        }
+
+        if (mediaFiles.length === 0) {
+            logger.warn('[TADjs] 対応するメディアファイルがありません');
+            return;
+        }
+
+        // 各メディアファイルを処理
+        const addedMedia = [];
+        for (const { file, ext, mediaType } of mediaFiles) {
+            // webUtils.getPathForFile()でファイルパスを取得（Electron 23以降対応）
+            let filePath = null;
+            try {
+                filePath = webUtils.getPathForFile(file);
+            } catch (e) {
+                // フォールバック: 古いElectronの場合はfile.pathを使用
+                filePath = file.path;
+            }
+
+            if (!filePath) {
+                logger.warn('[TADjs] ファイルパスが取得できません:', file.name);
+                continue;
+            }
+
+            try {
+                // 次のリソース番号を取得
+                const existingFiles = this.realObjectSystem.listImageFiles(baseId, 0);
+                let nextNo = 0;
+                if (existingFiles && existingFiles.length > 0) {
+                    const maxNo = Math.max(...existingFiles.map(f => f.imageNo || 0));
+                    nextNo = maxNo + 1;
+                }
+
+                // 保存ファイル名を生成
+                const saveFileName = `${baseId}_0_${nextNo}.${ext}`;
+
+                // ファイルをコピー
+                const basePath = this.getDataBasePath();
+                const destPath = this.realObjectSystem.path.join(basePath, saveFileName);
+                this.realObjectSystem.fs.copyFileSync(filePath, destPath);
+
+                logger.info('[TADjs] メディアファイルコピー成功:', saveFileName);
+
+                addedMedia.push({
+                    fileName: saveFileName,
+                    mediaType: mediaType,
+                    format: ext
+                });
+            } catch (error) {
+                logger.error('[TADjs] メディアファイルコピーエラー:', error);
+            }
+        }
+
+        // プラグインに追加されたメディア情報を送信
+        if (addedMedia.length > 0 && windowId) {
+            this.parentMessageBus.sendToWindow(windowId, 'media-files-added', {
+                mediaFiles: addedMedia
+            });
+            logger.info('[TADjs] メディア追加通知を送信:', addedMedia.length, '個');
+        }
+    }
+
+    /**
+     * copy-file-to-data ハンドラー
+     * ソースファイルをデータフォルダにコピー
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleCopyFileToData(event) {
+        const data = event.data || event;
+        const { sourcePath, destFileName, messageId } = data;
+        logger.info('[TADjs] ファイルコピー要求:', sourcePath, '->', destFileName);
+
+        let success = false;
+        try {
+            if (this.realObjectSystem && this.realObjectSystem.fs) {
+                const basePath = this.getDataBasePath();
+                const destPath = this.realObjectSystem.path.join(basePath, destFileName);
+
+                // ソースファイルが存在するか確認
+                if (this.realObjectSystem.fs.existsSync(sourcePath)) {
+                    // ファイルをコピー
+                    this.realObjectSystem.fs.copyFileSync(sourcePath, destPath);
+                    success = true;
+                    logger.info('[TADjs] ファイルコピー成功:', destPath);
+                } else {
+                    logger.error('[TADjs] ソースファイルが存在しません:', sourcePath);
+                }
+            } else {
+                logger.warn('[TADjs] ファイルシステムが利用できません');
+            }
+        } catch (error) {
+            logger.error('[TADjs] ファイルコピーエラー:', error);
+        }
+
+        // レスポンスを返す
+        if (event.source && messageId) {
+            this.parentMessageBus.respondTo(event.source, 'copy-file-result', {
+                messageId: messageId,
+                success: success,
+                destFileName: destFileName
+            });
+        }
+    }
+
+    /**
      * get-real-object-info ハンドラー（仮身ネットワーク用）
      * 実身のメタデータを取得
      * @param {Object} data - メッセージデータ
@@ -6454,9 +6959,35 @@ ${url}
                     logger.info('[TADjs] link要素数:', linkElements.length);
 
                     for (const link of linkElements) {
+                        const linkId = link.getAttribute('id') || '';
+
+                        // link_idから実身IDを抽出してJSONから実身名を取得
+                        let linkName = link.getAttribute('name') || link.textContent.trim() || '';
+                        if (!linkName) {
+                            // JSONファイルから実身名を取得（共通メソッドを使用）
+                            const childRealId = window.RealObjectSystem.extractRealId(linkId);
+                            if (childRealId) {
+                                try {
+                                    const jsonPath = this.realObjectSystem.path.join(basePath, `${childRealId}.json`);
+                                    if (this.realObjectSystem.fs.existsSync(jsonPath)) {
+                                        const jsonContent = this.realObjectSystem.fs.readFileSync(jsonPath, 'utf-8');
+                                        const metadata = JSON.parse(jsonContent);
+                                        linkName = metadata.name || '無題';
+                                    } else {
+                                        linkName = '無題';
+                                    }
+                                } catch (jsonError) {
+                                    logger.warn('[TADjs] 実身名取得エラー:', childRealId, jsonError.message);
+                                    linkName = '無題';
+                                }
+                            } else {
+                                linkName = '無題';
+                            }
+                        }
+
                         const vobj = {
-                            link_id: link.getAttribute('id') || '',
-                            link_name: link.getAttribute('name') || link.textContent.trim() || '無題',
+                            link_id: linkId,
+                            link_name: linkName,
                             frcol: link.getAttribute('frcol') || '#000000',
                             tbcol: link.getAttribute('tbcol') || '#ffffff',
                             chcol: link.getAttribute('chcol') || '#000000',
@@ -6480,6 +7011,42 @@ ${url}
                 messageId: data.messageId,
                 success: success,
                 virtualObjects: virtualObjects
+            });
+        }
+    }
+
+    /**
+     * load-xtad-content ハンドラー（仮身ネットワーク用）
+     * 実身のXTADコンテンツを取得
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleLoadXtadContent(event) {
+        const data = event.data || {};
+        const realId = data.realId;
+
+        let success = false;
+        let content = null;
+
+        try {
+            // XTADファイルを読み込み
+            const basePath = this.getDataBasePath();
+            const xtadPath = this.realObjectSystem.path.join(basePath, `${realId}_0.xtad`);
+
+            if (this.realObjectSystem.fs.existsSync(xtadPath)) {
+                content = this.realObjectSystem.fs.readFileSync(xtadPath, 'utf-8');
+                success = true;
+            }
+        } catch (error) {
+            logger.error('[TADjs] XTADコンテンツ読み込みエラー:', error);
+        }
+
+        // レスポンスを返す
+        if (event.source) {
+            this.parentMessageBus.respondTo(event.source, 'xtad-content-response', {
+                messageId: data.messageId,
+                success: success,
+                content: content
             });
         }
     }
@@ -9517,15 +10084,17 @@ ${url}
             // アクティブな仮身一覧プラグインのiframeを探す
             let virtualObjectListIframe = null;
 
-            // まず、windows Mapから仮身一覧プラグインのウィンドウを探す
-            for (const [wId, windowInfo] of this.windows.entries()) {
-                if (windowInfo.pluginId === 'virtual-object-list') {
-                    const windowElement = document.getElementById(wId);
-                    if (windowElement) {
-                        virtualObjectListIframe = windowElement.querySelector('iframe');
-                        if (virtualObjectListIframe && virtualObjectListIframe.contentWindow) {
-                            logger.info('[TADjs] 仮身一覧プラグインのiframeを見つけました:', wId);
-                            break;
+            // まず、parentMessageBus.childrenから仮身一覧プラグインのウィンドウを探す
+            if (this.parentMessageBus?.children) {
+                for (const [wId, childInfo] of this.parentMessageBus.children.entries()) {
+                    if (childInfo.pluginId === 'virtual-object-list') {
+                        const windowElement = document.getElementById(wId);
+                        if (windowElement) {
+                            virtualObjectListIframe = windowElement.querySelector('iframe');
+                            if (virtualObjectListIframe && virtualObjectListIframe.contentWindow) {
+                                logger.info('[TADjs] 仮身一覧プラグインのiframeを見つけました:', wId);
+                                break;
+                            }
                         }
                     }
                 }

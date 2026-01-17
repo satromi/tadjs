@@ -37,6 +37,8 @@ html, body {
 
 #network-svg {
     display: block;
+    width: 100%;
+    height: 100%;
 }
 
 /* 仮身ノード */
@@ -106,4 +108,133 @@ html, body {
     transform: translate(-50%, -50%);
     font-size: 14px;
     color: #666666;
+}
+
+/* ========================================
+   グラフビュー用スタイル
+   ======================================== */
+
+/* グラフ背景 */
+.graph-background {
+    cursor: grab;
+}
+
+.graph-background:active {
+    cursor: grabbing;
+}
+
+/* グラフノード */
+.graph-node {
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.graph-node.dimmed {
+    opacity: 0.2;
+}
+
+.graph-node.selected .node-circle {
+    stroke: #0066cc;
+    stroke-width: 3;
+}
+
+.graph-node.selected .node-rect {
+    stroke: #0066cc;
+    stroke-width: 3;
+}
+
+.node-circle {
+    stroke-width: 2;
+    transition: filter 0.2s, stroke-width 0.2s;
+}
+
+.graph-node:hover .node-circle {
+    filter: brightness(1.15);
+    stroke-width: 3;
+}
+
+/* 開いた仮身表示（拡大時） */
+.node-rect {
+    stroke-width: 2;
+    transition: filter 0.2s, stroke-width 0.2s;
+}
+
+.graph-node:hover .node-rect {
+    filter: brightness(1.05);
+    stroke-width: 3;
+}
+
+.node-title-bar {
+    pointer-events: none;
+}
+
+.node-title {
+    pointer-events: none;
+    user-select: none;
+    font-family: "MS Gothic", "ＭＳ ゴシック", monospace;
+}
+
+.node-icon {
+    pointer-events: none;
+}
+
+.node-content {
+    pointer-events: none;
+}
+
+.node-content text {
+    font-family: "MS Gothic", "ＭＳ ゴシック", monospace;
+    user-select: none;
+}
+
+/* foreignObject（iframeコンテンツ用） */
+.node-content-fo {
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.node-content-iframe {
+    display: block;
+    background: #ffffff;
+    pointer-events: none;
+}
+
+.node-label {
+    pointer-events: none;
+    user-select: none;
+    font-family: "MS Gothic", "ＭＳ ゴシック", monospace;
+    text-shadow:
+        1px 1px 0 #ffffff,
+        -1px 1px 0 #ffffff,
+        1px -1px 0 #ffffff,
+        -1px -1px 0 #ffffff;
+}
+
+/* グラフ接続線 */
+.graph-connection {
+    stroke: #9ca3af;
+    stroke-width: 1;
+    transition: opacity 0.2s, stroke 0.2s, stroke-width 0.2s;
+}
+
+.graph-connection.dimmed {
+    opacity: 0.1;
+}
+
+.graph-connection.highlight {
+    stroke: #3b82f6;
+    stroke-width: 2;
+}
+
+/* ツールチップ */
+.node-tooltip {
+    position: absolute;
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    pointer-events: none;
+    z-index: 1000;
+    white-space: nowrap;
 }

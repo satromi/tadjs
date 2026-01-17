@@ -1,0 +1,33 @@
+{
+  "id": "basic-player",
+  "name": "基本動画再生",
+  "version": "1.0.0",
+  "type": "base",
+  "basefile": {
+    "json": "019bc56c-5692-774c-84fe-7911f25adabf.json",
+    "xmltad": "019bc56c-5692-774c-84fe-7911f25adabf_0.xtad",
+    "ico": "019bc56c-5692-774c-84fe-7911f25adabf.ico"
+  },
+  "description": "実時間制御xmlTADの映像・音声を再生",
+  "icon": "🎬",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "scrollable": false,
+    "openable": true
+  },
+  "contextMenu": [
+    {
+      "label": "基本動画再生",
+      "fileTypes": ["xtad", "XTAD"],
+      "action": "open-editor"
+    }
+  ],
+  "permissions": [
+    "file-read"
+  ]
+}

@@ -154,6 +154,11 @@ export const DEFAULT_LINE_HEIGHT = 1.2;
 export const DEFAULT_FONT_SIZE = 14;
 
 /**
+ * デフォルトフォントファミリー（仮身名表示用）
+ */
+export const DEFAULT_FONT_FAMILY = "'Noto Sans JP', sans-serif";
+
+/**
  * デフォルト入力欄の幅（文字数）
  */
 export const DEFAULT_INPUT_WIDTH = 30;

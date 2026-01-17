@@ -1667,6 +1667,10 @@ class BasicTextEditor extends window.PluginBase {
                     element = element.parentElement;
                 }
 
+                // カーソル位置のスタイルを取得（スタイル引き継ぎ用）
+                const caretStyle = this.getCaretStyle(container);
+                const needsInherit = this.needsStyleInherit(caretStyle);
+
                 // 現在の段落要素を取得
                 let currentP = range.startContainer;
                 while (currentP && currentP.nodeName !== 'P' && currentP !== this.editor) {
@@ -1683,6 +1687,9 @@ class BasicTextEditor extends window.PluginBase {
                     const newP = document.createElement('p');
                     newP.innerHTML = '<br>';
 
+                    // スタイル引き継ぎ用のspanを保持
+                    let styleSpan = null;
+
                     if (!isEmpty) {
                         // 空でない場合は、カーソル位置で段落を分割
                         const afterRange = range.cloneRange();
@@ -1691,14 +1698,26 @@ class BasicTextEditor extends window.PluginBase {
 
                         // 分割後の内容を新しい段落に追加
                         if (afterContent.textContent.trim() === '') {
-                            // テキストが空の場合は<br>を保持（既に設定済み）
+                            // テキストが空の場合、スタイル引き継ぎが必要ならspanを追加
+                            if (needsInherit) {
+                                newP.innerHTML = '';
+                                styleSpan = this.createStyleInheritSpan(caretStyle);
+                                newP.appendChild(styleSpan);
+                            }
+                            // スタイル引き継ぎ不要なら<br>を保持（既に設定済み）
                         } else {
                             // 実際の内容がある場合は追加
                             newP.innerHTML = ''; // 既存の<br>をクリア
                             newP.appendChild(afterContent);
                         }
+                    } else {
+                        // isEmpty の場合もスタイル引き継ぎが必要ならspanを追加
+                        if (needsInherit) {
+                            newP.innerHTML = '';
+                            styleSpan = this.createStyleInheritSpan(caretStyle);
+                            newP.appendChild(styleSpan);
+                        }
                     }
-                    // isEmpty の場合は、新しい段落は既に<br>を含んでいる
                     // また、元の段落が空になった場合も<br>を追加
                     if (!isEmpty && currentP.childNodes.length === 0) {
                         currentP.innerHTML = '<br>';
@@ -1711,6 +1730,9 @@ class BasicTextEditor extends window.PluginBase {
                     if (newP.textContent.trim() !== '') {
                         // 新段落にコンテンツがある場合は最大フォントサイズを計算
                         newParagraphFontSize = this.calculateMaxFontSizeInContent(newP, 14);
+                    } else if (needsInherit) {
+                        // 空だがスタイル引き継ぎがある場合は引き継いだサイズを使用
+                        newParagraphFontSize = parseFloat(caretStyle.fontSize) || 14;
                     }
                     const lineHeight = this.calculateLineHeight(newParagraphFontSize);
                     newP.style.lineHeight = `${lineHeight}px`;
@@ -1724,8 +1746,11 @@ class BasicTextEditor extends window.PluginBase {
 
                     // カーソルを新しい段落の先頭に移動
                     const newRange = document.createRange();
-                    // <br>がある場合は、その前にカーソルを配置
-                    if (newP.firstChild) {
+                    if (styleSpan) {
+                        // スタイル引き継ぎspanがある場合、その中のゼロ幅スペースの後にカーソルを配置
+                        newRange.setStart(styleSpan.firstChild, 1);
+                    } else if (newP.firstChild) {
+                        // <br>がある場合は、その前にカーソルを配置
                         newRange.setStartBefore(newP.firstChild);
                     } else {
                         newRange.setStart(newP, 0);
@@ -1739,17 +1764,33 @@ class BasicTextEditor extends window.PluginBase {
                 } else {
                     // 段落要素が見つからない場合はデフォルト処理
                     const p = document.createElement('p');
-                    p.innerHTML = '<br>';
 
-                    // 空の段落はデフォルトサイズ（14pt）基準のline-height
-                    const lineHeight = this.calculateLineHeight(14);
+                    // スタイル引き継ぎ用のspan
+                    let styleSpanAlt = null;
+                    if (needsInherit) {
+                        styleSpanAlt = this.createStyleInheritSpan(caretStyle);
+                        p.appendChild(styleSpanAlt);
+                    } else {
+                        p.innerHTML = '<br>';
+                    }
+
+                    // line-height設定（スタイル引き継ぎがある場合はそのサイズを使用）
+                    let altFontSize = 14;
+                    if (needsInherit) {
+                        altFontSize = parseFloat(caretStyle.fontSize) || 14;
+                    }
+                    const lineHeight = this.calculateLineHeight(altFontSize);
                     p.style.lineHeight = `${lineHeight}px`;
 
                     range.deleteContents();
                     range.insertNode(p);
                     const newRange = document.createRange();
-                    // <br>がある場合は、その前にカーソルを配置
-                    if (p.firstChild) {
+                    if (styleSpanAlt) {
+                        // スタイル引き継ぎspanがある場合、その中のゼロ幅スペースの後にカーソルを配置
+                        newRange.setStart(styleSpanAlt.firstChild, 1);
+                        newRange.setEnd(styleSpanAlt.firstChild, 1);
+                    } else if (p.firstChild) {
+                        // <br>がある場合は、その前にカーソルを配置
                         newRange.setStartBefore(p.firstChild);
                         newRange.setEndBefore(p.firstChild);
                     } else {
@@ -3107,12 +3148,8 @@ class BasicTextEditor extends window.PluginBase {
                     maxFontSize = xmlMaxFontSize;
                 }
 
-                // フォントファミリー（段落の最初のもののみ）- スタイル抽出のみ、タグは残す
-                const fontFaceMatch = /<font\s+face="([^"]*)"\s*\/>/i.exec(paragraphContent);
-                if (fontFaceMatch) {
-                    style += `font-family: ${fontFaceMatch[1]};`;
-                    // タグは削除せず残す（convertDecorationTagsToHTMLで処理される）
-                }
+                // フォントファミリーは段落レベルでは適用せず、convertDecorationTagsToHTMLでインライン処理
+                // （段落内に複数のfont faceがある場合に正しく個別適用するため）
 
                 // フォントカラー（段落の最初のもののみ）- スタイル抽出のみ、タグは残す
                 const fontColorMatch = /<font\s+color="([^"]*)"\s*\/>/i.exec(paragraphContent);
@@ -3223,12 +3260,8 @@ class BasicTextEditor extends window.PluginBase {
                     maxFontSize = xmlMaxFontSize;
                 }
 
-                // フォントファミリー
-                const fontFaceMatch = /<font\s+face="([^"]*)"\s*\/>/i.exec(paragraphContent);
-                if (fontFaceMatch) {
-                    style += `font-family: ${fontFaceMatch[1]};`;
-                    paragraphContent = paragraphContent.replace(/<font\s+face="[^"]*"\s*\/>/i, '');
-                }
+                // フォントファミリーは段落レベルでは適用せず、convertDecorationTagsToHTMLでインライン処理
+                // （段落内に複数のfont faceがある場合に正しく個別適用するため）
 
                 // フォントカラーは段落レベルで処理しない
                 // 色はペアタグ方式でspan要素レベルで処理する（convertDecorationTagsToHTMLで変換）
@@ -4195,7 +4228,9 @@ class BasicTextEditor extends window.PluginBase {
         nodes.forEach(node => {
             if (node.nodeType === Node.TEXT_NODE) {
                 // テキストノードはXMLエスケープして追加
-                xml += this.escapeXml(node.textContent);
+                // font sizeは親要素（span）で既に処理されているため、ここでは出力しない
+                const escapedText = this.escapeXml(node.textContent);
+                xml += escapedText;
             } else if (node.nodeName === 'BR') {
                 // 改行タグ
                 xml += '<br/>\r\n';
@@ -4261,10 +4296,10 @@ class BasicTextEditor extends window.PluginBase {
                     // フォントタグ追跡（ペアタグ用）
                     let colorTagOpened = false;
                     let sizeTagOpened = false;
+                    let faceTagOpened = false;
 
                     // フォント情報を出力
-                    // 色・サイズはペアタグ方式: <font color="...">content</font>, <font size="...">content</font>
-                    // フェイスは自己閉じタグ方式を維持
+                    // 色・サイズ・フェイスすべてペアタグ方式: <font ...>content</font>
                     // 黒色（#000000）はデフォルト色なので出力不要
                     if (color && color !== '#000000' && color !== fontState.color) {
                         xml += `<font color="${color}">`;
@@ -4277,7 +4312,8 @@ class BasicTextEditor extends window.PluginBase {
                         newState.size = sizeAttr;
                     }
                     if (face) {
-                        xml += `<font face="${face}"/>`;
+                        xml += `<font face="${face}">`;
+                        faceTagOpened = true;
                         newState.face = face;
                     }
 
@@ -4285,6 +4321,9 @@ class BasicTextEditor extends window.PluginBase {
                     xml += this.extractTADXMLFromElement(node, newState, effectiveColor);
 
                     // ペアタグを閉じる（開いた順の逆順で閉じる）
+                    if (faceTagOpened) {
+                        xml += '</font>';
+                    }
                     if (sizeTagOpened) {
                         xml += '</font>';
                     }
@@ -4548,10 +4587,10 @@ class BasicTextEditor extends window.PluginBase {
                                 // フォントタグを追跡（ペアタグ用）
                                 let colorTagOpened = false;
                                 let sizeTagOpened = false;
+                                let faceTagOpened = false;
 
                                 // スタイル開始
-                                // 色・サイズはペアタグ方式: <font color="...">content</font>, <font size="...">content</font>
-                                // フェイスは自己閉じタグ方式を維持
+                                // 色・サイズ・フェイスすべてペアタグ方式: <font ...>content</font>
                                 if (style.color) {
                                     const hexColor = this.rgbToHex(style.color);
                                     // ペアタグ方式：色があれば常に出力
@@ -4568,7 +4607,9 @@ class BasicTextEditor extends window.PluginBase {
                                 }
                                 if (style.fontFamily) {
                                     if (style.fontFamily !== fontState.face) {
-                                        xml += `<font face="${style.fontFamily}"/>`;
+                                        // ペアタグ方式：フェイスが変わった場合のみ出力
+                                        xml += `<font face="${style.fontFamily}">`;
+                                        faceTagOpened = true;
                                     }
                                     // newStateは常に更新
                                     newState.face = style.fontFamily;
@@ -4578,6 +4619,9 @@ class BasicTextEditor extends window.PluginBase {
                                 xml += this.extractTADXMLFromElement(node, newState, effectiveColor);
 
                                 // ペアタグを閉じる（開いた順の逆順で閉じる）
+                                if (faceTagOpened) {
+                                    xml += '</font>';
+                                }
                                 if (sizeTagOpened) {
                                     xml += '</font>';
                                 }
@@ -4585,10 +4629,18 @@ class BasicTextEditor extends window.PluginBase {
                                     xml += '</font>';
                                 }
 
-                                // fontStateを更新（呼び出し元に反映、次の要素や段落で正しい状態を使用）
-                                fontState.color = newState.color;
-                                fontState.size = newState.size;
-                                fontState.face = newState.face;
+                                // fontStateを更新（ペアタグとして閉じたものは除外、スコープ終了のため）
+                                // ペアタグを開いた場合、そのスコープは終了したので、
+                                // 兄弟要素に状態を伝搬させない（同じフォントの別span要素も正しく出力するため）
+                                if (!colorTagOpened) {
+                                    fontState.color = newState.color;
+                                }
+                                if (!sizeTagOpened) {
+                                    fontState.size = newState.size;
+                                }
+                                if (!faceTagOpened) {
+                                    fontState.face = newState.face;
+                                }
                             }
                         }
                     }
@@ -7052,7 +7104,7 @@ class BasicTextEditor extends window.PluginBase {
             return;
         }
 
-        // フォント選択用のリストHTMLを作成（クリック可能なリスト形式、上下の空白なし）
+        // フォント選択用のリストHTMLを作成（標準クラス使用）
         const fontListHtml = fonts.map((fontObj, index) => {
             // 表示名をエスケープ
             const escapedDisplayName = fontObj.displayName.replace(/'/g, "\\'").replace(/"/g, '&quot;');
@@ -7069,29 +7121,32 @@ class BasicTextEditor extends window.PluginBase {
             }
             fontFamilyForPreview += ',sans-serif'; // フォールバック
 
-            return `<div class="font-list-item" data-index="${index}" style="margin:0;padding:6px 8px;line-height:1.3;cursor:pointer;font-family:${fontFamilyForPreview};border-bottom:1px solid #e0e0e0;background:white;transition:background 0.1s" onmouseover="this.style.background='#e3f2fd'" onmouseout="if(!this.classList.contains('selected')) this.style.background='white'" onclick="
-                // 他の選択を解除
-                Array.from(this.parentElement.querySelectorAll('.font-list-item')).forEach(el => {
-                    el.classList.remove('selected');
-                    el.style.background = 'white';
-                    el.style.fontWeight = 'normal';
-                });
-                // この要素を選択
-                this.classList.add('selected');
-                this.style.background = '#bbdefb';
-                this.style.fontWeight = 'bold';
-            ">${escapedDisplayName}</div>`;
+            return `<div class="dialog-listbox-item" data-index="${index}" style="font-family:${fontFamilyForPreview}">${escapedDisplayName}</div>`;
         }).join('');
 
         const dialogHtml = `
             <style>
-                .font-list-item:last-child {
+                .dialog-listbox-item:last-child {
                     border-bottom: none;
                 }
             </style>
-            <div style="max-height:400px;overflow-y:auto;padding:0;margin:0;border:1px solid #ccc">
+            <div class="dialog-listbox">
                 ${fontListHtml}
             </div>
+            <script>
+                // イベント委譲でクリック処理
+                document.querySelector('.dialog-listbox').addEventListener('click', function(e) {
+                    const item = e.target.closest('.dialog-listbox-item');
+                    if (item) {
+                        // 他の選択を解除
+                        this.querySelectorAll('.dialog-listbox-item').forEach(el => {
+                            el.classList.remove('selected');
+                        });
+                        // この要素を選択
+                        item.classList.add('selected');
+                    }
+                });
+            </script>
         `;
 
         logger.debug('[EDITOR] 書体一覧ダイアログ要求:', fonts.length, 'フォント');
@@ -7111,8 +7166,8 @@ class BasicTextEditor extends window.PluginBase {
         if (result && result.button === 'ok') {
             logger.debug('[EDITOR] OKボタンが押されました');
 
-            // 選択されたフォントのインデックスを取得
-            const fontIndex = result.selectedFontIndex;
+            // 選択されたフォントのインデックスを取得（selectedItemIndexを使用）
+            const fontIndex = result.selectedItemIndex;
             if (fontIndex !== null && fontIndex !== undefined && fontIndex >= 0 && fontIndex < fonts.length) {
                 const selectedFontObj = fonts[fontIndex];
                 logger.debug('[EDITOR] フォント選択:', selectedFontObj.displayName);
@@ -7656,6 +7711,100 @@ class BasicTextEditor extends window.PluginBase {
         return str.replace(/[！-～]/g, (char) => {
             return String.fromCharCode(char.charCodeAt(0) - 0xFEE0);
         });
+    }
+
+    // ========================================
+    // 改段落時スタイル引き継ぎ
+    // ========================================
+
+    /**
+     * カーソル位置の文字スタイルを取得
+     * @param {Element} element - 基準要素
+     * @returns {Object} スタイル情報
+     */
+    getCaretStyle(element) {
+        const computedStyle = window.getComputedStyle(element);
+        return {
+            fontSize: computedStyle.fontSize,
+            color: computedStyle.color,
+            fontWeight: computedStyle.fontWeight,
+            fontStyle: computedStyle.fontStyle,
+            textDecoration: computedStyle.textDecoration,
+            fontFamily: computedStyle.fontFamily
+        };
+    }
+
+    /**
+     * スタイル引き継ぎが必要か判定
+     * @param {Object} style - スタイル情報
+     * @returns {boolean} 引き継ぎ必要ならtrue
+     */
+    needsStyleInherit(style) {
+        // フォントサイズがデフォルト（14pt）以外
+        // computedStyleはpx単位で返されるため、pt値に変換して比較
+        let fontSizePt = parseFloat(style.fontSize);
+        if (style.fontSize && style.fontSize.endsWith('px')) {
+            fontSizePt = fontSizePt / 1.333;  // px → pt 変換
+        }
+        if (Math.abs(fontSizePt - 14) > 0.5) return true;
+
+        // 色が黒以外（rgb(0, 0, 0) または rgb(1, 1, 1) はデフォルト扱い）
+        if (style.color && style.color !== 'rgb(0, 0, 0)' && style.color !== 'rgb(1, 1, 1)') return true;
+
+        // 太字
+        if (style.fontWeight === 'bold' || parseInt(style.fontWeight) >= 700) return true;
+
+        // 斜体
+        if (style.fontStyle === 'italic' || style.fontStyle === 'oblique') return true;
+
+        // 下線等（none以外で、かつ実際に装飾がある場合）
+        if (style.textDecoration && !style.textDecoration.startsWith('none')) return true;
+
+        return false;
+    }
+
+    /**
+     * スタイル引き継ぎ用のspanを作成
+     * @param {Object} style - スタイル情報
+     * @returns {HTMLSpanElement} span要素
+     */
+    createStyleInheritSpan(style) {
+        const span = document.createElement('span');
+
+        // フォントサイズ
+        // computedStyleはpx単位で返されるため、pt値に変換して比較・設定
+        let fontSizePt = parseFloat(style.fontSize);
+        if (style.fontSize && style.fontSize.endsWith('px')) {
+            fontSizePt = fontSizePt / 1.333;  // px → pt 変換
+        }
+        if (Math.abs(fontSizePt - 14) > 0.5) {
+            span.style.fontSize = fontSizePt + 'pt';  // pt単位で設定
+        }
+
+        // 色（黒以外）
+        if (style.color && style.color !== 'rgb(0, 0, 0)' && style.color !== 'rgb(1, 1, 1)') {
+            span.style.color = style.color;
+        }
+
+        // 太字
+        if (style.fontWeight === 'bold' || parseInt(style.fontWeight) >= 700) {
+            span.style.fontWeight = 'bold';
+        }
+
+        // 斜体
+        if (style.fontStyle === 'italic' || style.fontStyle === 'oblique') {
+            span.style.fontStyle = style.fontStyle;
+        }
+
+        // 下線等
+        if (style.textDecoration && !style.textDecoration.startsWith('none')) {
+            span.style.textDecoration = style.textDecoration;
+        }
+
+        // ゼロ幅スペースを追加（spanが消えないように）
+        span.appendChild(document.createTextNode('\u200B'));
+
+        return span;
     }
 
     /**
@@ -10875,7 +11024,16 @@ class BasicTextEditor extends window.PluginBase {
 
 }
 
-// エディタを初期化
+// BasicTextEditorクラスをグローバルに公開（継承用）
+window.BasicTextEditor = BasicTextEditor;
+
+// エディタを初期化（basic-text-editorプラグインの場合のみ）
 document.addEventListener('DOMContentLoaded', () => {
-    window.editor = new BasicTextEditor();
+    // スライドプラグインなど継承先では自前でインスタンス化するため、
+    // basic-text-editorプラグインの場合のみインスタンス化
+    const isBasicTextEditor = document.body.getAttribute('data-plugin-id') === 'basic-text-editor' ||
+                              !document.body.hasAttribute('data-plugin-id');
+    if (isBasicTextEditor) {
+        window.editor = new BasicTextEditor();
+    }
 });

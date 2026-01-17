@@ -1,0 +1,84 @@
+/**
+ * スライドプラグイン固有スタイル
+ */
+
+/* bodyの設定 */
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+/* スライド用ラッパー */
+#slide-wrapper {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #000;
+    overflow: hidden;
+}
+
+/* plugin-contentのスクロールを無効化 */
+#slide-wrapper .plugin-content {
+    overflow: hidden;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+}
+
+/* エディタコンテナ（拡大縮小の対象） */
+#slide-wrapper .editor-container {
+    background: #fff;
+    overflow: hidden;
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    margin: 0;
+    padding: 0;
+}
+
+/* エディタ本体 */
+#slide-wrapper #editor {
+    background: #fff;
+    cursor: default;
+    user-select: none;
+    min-height: 100%;
+}
+
+/* 編集不可時のカーソル */
+#slide-wrapper #editor[contenteditable="false"] {
+    cursor: default;
+    caret-color: transparent;
+}
+
+/* テキスト選択を無効化 */
+#slide-wrapper #editor * {
+    user-select: none;
+}
+
+/* 終了画面メッセージ */
+.end-screen-message {
+    color: #fff;
+    font-size: 32px;
+    text-align: center;
+    font-family: "MS UI Gothic", sans-serif;
+}
+
+/* 仮身スタイル（クリック可能） */
+#slide-wrapper .virtual-object {
+    cursor: pointer;
+}
+
+/* 背景色選択ダイアログ */
+.color-list {
+    background: #fff;
+    border: 1px solid #808080;
+}
+
+.color-item:hover {
+    background: #e0e0e0;
+}

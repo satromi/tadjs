@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>スライド</title>
+    <!-- 基本文章編集のスタイルを継承 -->
+    <link rel="stylesheet" href="../basic-text-editor/style.css">
+    <!-- スライド固有スタイル -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body tabindex="0" data-plugin-id="basic-slide">
+    <!-- スライド用ラッパー -->
+    <div id="slide-wrapper">
+        <div class="plugin-content">
+            <div class="editor-container">
+                <!-- エディタ本体（編集不可） -->
+                <div id="editor" class="editor" contenteditable="false">
+                    <p>...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ロガーをグローバル変数として読み込み（最初に読み込む必要がある） -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <!-- アイコンキャッシュマネージャー -->
+    <script type="module">
+        import { IconCacheManager } from '../../js/icon-cache-manager.js';
+        window.IconCacheManager = IconCacheManager;
+    </script>
+    <!-- グローバル設定 -->
+    <script type="module">
+        import { CONFIG } from '../../js/config.js';
+        window.TADjsConfig = CONFIG;
+    </script>
+    <script src="../../encoding.js"></script>
+    <script type="module" src="../../tad.js"></script>
+    <!-- VirtualObjectRendererをグローバル変数として読み込み -->
+    <script type="module">
+        import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
+        window.VirtualObjectRenderer = VirtualObjectRenderer;
+    </script>
+    <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
+    <script type="module">
+        import {
+            convertPtToPx, rgbToHex, hexToRgb, invertColor,
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, UI_UPDATE_DELAY_MS
+        } from '../../js/util.js';
+        window.convertPtToPx = convertPtToPx;
+        window.rgbToHex = rgbToHex;
+        window.hexToRgb = hexToRgb;
+        window.invertColor = invertColor;
+        window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+        window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
+        window.ICON_LOAD_TIMEOUT_MS = ICON_LOAD_TIMEOUT_MS;
+        window.UI_UPDATE_DELAY_MS = UI_UPDATE_DELAY_MS;
+    </script>
+    <!-- パフォーマンス最適化ユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import { debounce, throttle, throttleRAF } from '../../js/performance-utils.js';
+        window.debounce = debounce;
+        window.throttle = throttle;
+        window.throttleRAF = throttleRAF;
+    </script>
+    <!-- メッセージバスをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
+    </script>
+    <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
+    <script type="module">
+        import { PluginBase, TextStyleStateManager } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+        window.TextStyleStateManager = TextStyleStateManager;
+    </script>
+    <!-- 用紙サイズ定義をグローバル変数として読み込み -->
+    <script type="module">
+        import { PaperSize, PaperMargin, PAPER_SIZES, pointsToMm, mmToPoints, getPaperSizeByName, getPaperSizeOptions } from '../../js/paper-size.js';
+        window.PaperSize = PaperSize;
+        window.PaperMargin = PaperMargin;
+        window.PAPER_SIZES = PAPER_SIZES;
+        window.pointsToMm = pointsToMm;
+        window.mmToPoints = mmToPoints;
+        window.getPaperSizeByName = getPaperSizeByName;
+        window.getPaperSizeOptions = getPaperSizeOptions;
+    </script>
+    <!-- 基本文章編集のeditor.jsを読み込み（グローバルにBasicTextEditorを定義） -->
+    <script type="module" src="../basic-text-editor/editor.js"></script>
+    <!-- スライド固有ロジック（BasicTextEditorを継承） -->
+    <script type="module" src="slide.js"></script>
+</body>
+</html>

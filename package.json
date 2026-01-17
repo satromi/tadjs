@@ -1,6 +1,6 @@
 {
   "name": "tadjs-desktop",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "TADjs Desktop Environment with Plugin System",
   "main": "electron/main.js",
   "scripts": {
@@ -11,9 +11,9 @@
     "build:mac": "electron-builder --mac --x64",
     "build:mac-arm": "electron-builder --mac --arm64",
     "build:mac-universal": "electron-builder --mac --universal",
-    "package": "electron-packager . \"TADjs Desktop\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=tadjs.ico --executable-name=tadjs_desktop --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|.*\\.ps1)$\" --prune=true",
-    "package:mac": "electron-packager . \"TADjs Desktop\" --platform=darwin --arch=x64 --out=dist --overwrite --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|.*\\.ps1)$\" --prune=true",
-    "package:mac-arm": "electron-packager . \"TADjs Desktop\" --platform=darwin --arch=arm64 --out=dist --overwrite --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|.*\\.ps1)$\" --prune=true",
+    "package": "electron-packager . \"TADjs Desktop\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=tadjs.ico --executable-name=tadjs_desktop --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|designlog|xtaddata|CLAUDE\\.md|DEVELOPMENT_NOTES\\.md|tmpclaude.*|.*\\.ps1)$\" --prune=true",
+    "package:mac": "electron-packager . \"TADjs Desktop\" --platform=darwin --arch=x64 --out=dist --overwrite --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|designlog|xtaddata|CLAUDE\\.md|DEVELOPMENT_NOTES\\.md|tmpclaude.*|.*\\.ps1)$\" --prune=true",
+    "package:mac-arm": "electron-packager . \"TADjs Desktop\" --platform=darwin --arch=arm64 --out=dist --overwrite --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|designlog|xtaddata|CLAUDE\\.md|DEVELOPMENT_NOTES\\.md|tmpclaude.*|.*\\.ps1)$\" --prune=true",
     "postpackage": "node scripts/postpackage.js",
     "postinstall": "node scripts/patch-font-list.js"
   },
@@ -31,7 +31,7 @@
     "url": "https://github.com/satromi/tadjs.git"
   },
   "devDependencies": {
-    "electron": "^39.2.7",
+    "electron": "^40.0.0",
     "electron-builder": "^24.9.1",
     "electron-packager": "^17.1.2"
   },

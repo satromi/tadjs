@@ -3473,9 +3473,10 @@ export class PluginBase {
             styleAttr = `font-size: ${value}pt;`;
         } else if (attr === 'face') {
             // フォント名にスペース、カンマ、特殊文字が含まれる場合は引用符で囲む
+            // style属性がダブルクォートを使用するため、フォント名はシングルクォートで囲む
             let fontFamily = value;
             if (!/^["']/.test(fontFamily) && (/\s|,/.test(fontFamily) || /[^\x00-\x7F]/.test(fontFamily))) {
-                fontFamily = `"${fontFamily}"`;
+                fontFamily = `'${fontFamily}'`;
             }
             styleAttr = `font-family: ${fontFamily};`;
         }

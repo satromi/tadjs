@@ -1,6 +1,6 @@
 # TADjs
 
-[TADjs Desktop Ver0.32](https://github.com/satromi/tadjs/releases/tag/Ver0.32 "TADjs Desktop Ver0.32 Release")
+[TADjs Desktop Ver0.33](https://github.com/satromi/tadjs/releases/tag/Ver0.33 "TADjs Desktop Ver0.33 Release")
 
 satromi@gmai.com
 
@@ -329,6 +329,21 @@ tadjs-desktop.jsと基本文章編集プラグイン、基本図形編集プラ�
   - 仮身移動、削除時の再描画処理を修正
 - 書庫解凍プラグインの下記の不具合を修正しました。
   - 実身の1段落目で変換に失敗する不具合を修正
+
+### Ver0.33
+
+- スライドプラグインを追加しました。
+  - スライド実身（文章xmlTAD）に加えた文章xmlTADの実身を拡大縮小して順次表示するスライド機能を追加
+- 基本動画再生プラグインを追加しました。
+  - 動画データ、音声データを再生する機能を追加
+  - xmlTADに実時間制御xmlTAD規格を追加
+- 仮身ネットワークプラグインの機能を追加しました。
+  - 仮身ネットワークをノードグラフ表示する機能を追加
+  - ノードグラフ表示で開いた仮身表示する機能を追加
+- 基本文章編集プラグインの下記の不具合を修正しました。
+  - 改段落時の文字サイズ、文字色、文字修飾が引き継がれない不具合を修正
+- 原紙箱プラグインの下記の不具合を修正しました。
+  - ユーザ原紙の仮身属性が反映されない不具合を修正
 
 ## 【既知のバグ】TADjs（TADjs Desktopではなく）
 

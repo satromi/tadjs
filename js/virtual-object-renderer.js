@@ -5,6 +5,7 @@ import {
     DEFAULT_TBCOL,
     DEFAULT_BGCOL,
     DEFAULT_FONT_SIZE,
+    DEFAULT_FONT_FAMILY,
     DEFAULT_LINE_HEIGHT
 } from './util.js';
 import { getLogger } from './logger.js';
@@ -214,6 +215,7 @@ export class VirtualObjectRenderer {
         // 名称
         if (showName) {
             const nameSpan = document.createElement('span');
+            nameSpan.style.fontFamily = DEFAULT_FONT_FAMILY;  // 親要素のfont継承を無視してデフォルトフォントを使用
             nameSpan.textContent = virtualObject.link_name || '無題';
             textSpan.appendChild(nameSpan);
         }
@@ -423,6 +425,7 @@ export class VirtualObjectRenderer {
         if (showName) {
             const nameSpan = document.createElement('span');
             nameSpan.className = 'virtual-object-name'; // DOM更新用のクラスを追加
+            nameSpan.style.fontFamily = DEFAULT_FONT_FAMILY;  // 親要素のfont継承を無視してデフォルトフォントを使用
             nameSpan.textContent = virtualObject.link_name;
             nameSpan.style.textDecoration = 'none'; // アンダーラインを防止
             nameSpan.setAttribute('data-element-type', 'name');
@@ -667,6 +670,7 @@ export class VirtualObjectRenderer {
             if (showName) {
                 const nameSpan = document.createElement('span');
                 nameSpan.className = 'virtual-object-name'; // DOM更新用のクラスを追加
+                nameSpan.style.fontFamily = DEFAULT_FONT_FAMILY;  // 親要素のfont継承を無視してデフォルトフォントを使用
                 nameSpan.textContent = virtualObject.link_name || '無題';
                 titleTextSpan.appendChild(nameSpan);
             }

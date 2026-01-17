@@ -232,7 +232,8 @@ export class DialogManager {
             // メッセージを設定
             messageText.textContent = message;
 
-            // 入力欄を設定
+            // 入力欄を設定（showCustomDialogで非表示になっている場合があるため再表示）
+            inputField.style.display = '';
             inputField.value = defaultValue;
             inputField.style.width = `${inputWidth}ch`;
             inputField.select();
@@ -382,8 +383,17 @@ export class DialogManager {
                 existingColorPicker.remove();
             }
 
+            // テキスト入力欄を非表示（カスタムダイアログでは使用しない）
+            const inputField = document.getElementById('dialog-input-field');
+            if (inputField) {
+                inputField.style.display = 'none';
+            }
+
             // カスタムHTMLを設定
             messageText.innerHTML = dialogHtml;
+
+            // ダイアログリストボックスにカスタムスクロールバーを適用
+            this._initDialogListboxScrollbars(messageText);
 
             // innerHTML で挿入された script タグは実行されないため、手動で実行
             // DOM要素が準備された後に実行するため setTimeout を使用
@@ -432,8 +442,8 @@ export class DialogManager {
 
                 // ダイアログ内の全入力要素を自動収集 (formData)
                 const formData = {};
-                // テキスト入力、数値入力
-                messageText.querySelectorAll('input[id][type="text"], input[id][type="number"], input[id]:not([type])').forEach(el => {
+                // テキスト入力、数値入力、hidden入力
+                messageText.querySelectorAll('input[id][type="text"], input[id][type="number"], input[id][type="hidden"], input[id]:not([type])').forEach(el => {
                     formData[el.id] = el.value;
                 });
                 // セレクトボックス
@@ -680,5 +690,180 @@ export class DialogManager {
             autoopen: dialogElement.querySelector('#autoopen').checked,
             chsz: chszValue
         };
+    }
+
+    /**
+     * ダイアログ内のリストボックスにカスタムスクロールバーを適用
+     * @param {HTMLElement} container - ダイアログコンテナ
+     * @private
+     */
+    _initDialogListboxScrollbars(container) {
+        const listboxes = container.querySelectorAll('.dialog-listbox');
+
+        listboxes.forEach(listbox => {
+            // 既に初期化済みの場合はスキップ
+            if (listbox.parentElement?.classList.contains('dialog-listbox-wrapper')) {
+                return;
+            }
+
+            // ラッパーを作成
+            const wrapper = document.createElement('div');
+            wrapper.className = 'dialog-listbox-wrapper';
+
+            // リストボックスをラッパーに移動
+            listbox.parentNode.insertBefore(wrapper, listbox);
+            wrapper.appendChild(listbox);
+
+            // カスタムスクロールバーを作成
+            const scrollbar = this._createDialogScrollbar(listbox);
+            wrapper.appendChild(scrollbar);
+
+            // スクロールイベントでツマミ位置を同期
+            listbox.addEventListener('scroll', () => {
+                this._updateDialogScrollbarThumb(listbox, scrollbar);
+            });
+
+            // 初期状態を設定
+            requestAnimationFrame(() => {
+                this._updateDialogScrollbarThumb(listbox, scrollbar);
+                this._updateDialogScrollbarVisibility(listbox, scrollbar);
+            });
+
+            // MutationObserverでコンテンツ変更を監視
+            const observer = new MutationObserver(() => {
+                requestAnimationFrame(() => {
+                    this._updateDialogScrollbarThumb(listbox, scrollbar);
+                    this._updateDialogScrollbarVisibility(listbox, scrollbar);
+                });
+            });
+            observer.observe(listbox, { childList: true, subtree: true });
+        });
+    }
+
+    /**
+     * ダイアログ用カスタムスクロールバーを作成
+     * @param {HTMLElement} listbox - リストボックス要素
+     * @returns {HTMLElement} スクロールバー要素
+     * @private
+     */
+    _createDialogScrollbar(listbox) {
+        const scrollbar = document.createElement('div');
+        scrollbar.className = 'custom-scrollbar vertical';
+
+        const track = document.createElement('div');
+        track.className = 'scroll-track';
+
+        const thumb = document.createElement('div');
+        thumb.className = 'scroll-thumb';
+
+        const indicator = document.createElement('div');
+        indicator.className = 'scroll-thumb-indicator';
+
+        thumb.appendChild(indicator);
+        track.appendChild(thumb);
+        scrollbar.appendChild(track);
+
+        // ツマミドラッグ処理
+        this._setupDialogScrollbarDrag(listbox, thumb);
+
+        // トラッククリック処理
+        track.addEventListener('click', (e) => {
+            if (e.target === thumb || thumb.contains(e.target)) return;
+
+            const trackRect = track.getBoundingClientRect();
+            const clickPos = e.clientY - trackRect.top;
+            const trackHeight = trackRect.height;
+            const scrollRatio = clickPos / trackHeight;
+            const maxScroll = listbox.scrollHeight - listbox.clientHeight;
+
+            listbox.scrollTop = scrollRatio * maxScroll;
+        });
+
+        return scrollbar;
+    }
+
+    /**
+     * スクロールバーツマミの位置を更新
+     * @param {HTMLElement} listbox - リストボックス要素
+     * @param {HTMLElement} scrollbar - スクロールバー要素
+     * @private
+     */
+    _updateDialogScrollbarThumb(listbox, scrollbar) {
+        const thumb = scrollbar.querySelector('.scroll-thumb');
+        if (!thumb) return;
+
+        const track = scrollbar.querySelector('.scroll-track');
+        const trackHeight = track.clientHeight;
+        const contentHeight = listbox.scrollHeight;
+        const viewportHeight = listbox.clientHeight;
+
+        // ツマミのサイズ計算（最小20px）
+        const thumbHeight = Math.max(20, (viewportHeight / contentHeight) * trackHeight);
+        thumb.style.height = `${thumbHeight}px`;
+
+        // ツマミの位置計算
+        const maxScroll = contentHeight - viewportHeight;
+        const scrollRatio = maxScroll > 0 ? listbox.scrollTop / maxScroll : 0;
+        const thumbTop = scrollRatio * (trackHeight - thumbHeight);
+
+        thumb.style.top = `${thumbTop}px`;
+    }
+
+    /**
+     * スクロールバーの表示/非表示を更新
+     * @param {HTMLElement} listbox - リストボックス要素
+     * @param {HTMLElement} scrollbar - スクロールバー要素
+     * @private
+     */
+    _updateDialogScrollbarVisibility(listbox, scrollbar) {
+        const needsScrollbar = listbox.scrollHeight > listbox.clientHeight;
+        scrollbar.style.display = needsScrollbar ? 'block' : 'none';
+    }
+
+    /**
+     * ツマミのドラッグ処理を設定
+     * @param {HTMLElement} listbox - リストボックス要素
+     * @param {HTMLElement} thumb - ツマミ要素
+     * @private
+     */
+    _setupDialogScrollbarDrag(listbox, thumb) {
+        let isDragging = false;
+        let startY = 0;
+        let startScrollTop = 0;
+
+        const onMouseDown = (e) => {
+            isDragging = true;
+            startY = e.clientY;
+            startScrollTop = listbox.scrollTop;
+            thumb.classList.add('dragging');
+            e.preventDefault();
+        };
+
+        const onMouseMove = (e) => {
+            if (!isDragging) return;
+
+            const track = thumb.parentElement;
+            const trackHeight = track.clientHeight;
+            const thumbHeight = thumb.clientHeight;
+            const contentHeight = listbox.scrollHeight;
+            const viewportHeight = listbox.clientHeight;
+
+            const deltaY = e.clientY - startY;
+            const scrollRatio = (contentHeight - viewportHeight) / (trackHeight - thumbHeight);
+            const newScrollTop = startScrollTop + (deltaY * scrollRatio);
+
+            listbox.scrollTop = Math.max(0, Math.min(newScrollTop, contentHeight - viewportHeight));
+        };
+
+        const onMouseUp = () => {
+            if (isDragging) {
+                isDragging = false;
+                thumb.classList.remove('dragging');
+            }
+        };
+
+        thumb.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
     }
 }

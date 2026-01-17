@@ -400,6 +400,7 @@ export class MessageBus {
      * @param {Object} options - オプション
      * @param {string} options.windowId - ウィンドウID
      * @param {string} options.pluginId - プラグインID
+     * @param {string} options.realId - 実身ID
      */
     registerChild(id, iframe, options = {}) {
         if (this.mode !== 'parent') {
@@ -415,7 +416,8 @@ export class MessageBus {
         const childInfo = {
             iframe: iframe,
             windowId: options.windowId || id,
-            pluginId: options.pluginId || null
+            pluginId: options.pluginId || null,
+            realId: options.realId || null
         };
 
         this.children.set(id, childInfo);

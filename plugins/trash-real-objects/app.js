@@ -14,7 +14,7 @@ class TrashRealObjectsApp extends window.PluginBase {
         super('TrashRealObjects');
 
         this.trashObjects = [];
-        this.selectedObject = null;
+        this.selectedObjects = new Set();  // realIdのSet（複数選択対応）
         this.copyMode = false; // コピーモード
         this.clipboard = null; // クリップボードに保存された屑実身データ
 
@@ -47,6 +47,25 @@ class TrashRealObjectsApp extends window.PluginBase {
 
         // キーボードショートカットを設定
         this.setupKeyboardShortcuts();
+
+        // リスト背景クリックで選択解除
+        this.setupSelectionClear();
+    }
+
+    /**
+     * リスト背景クリック時の選択解除を設定
+     */
+    setupSelectionClear() {
+        const trashList = document.getElementById('trashList');
+        if (trashList) {
+            trashList.addEventListener('click', (e) => {
+                // 仮身要素からのイベント伝播は stopPropagation() で止まるため
+                // ここに来るのはリスト背景クリックのみ
+                if (e.target === trashList || e.target.classList.contains('empty-message')) {
+                    this.clearSelection();
+                }
+            });
+        }
     }
 
     /**
@@ -61,14 +80,16 @@ class TrashRealObjectsApp extends window.PluginBase {
             target = target.parentElement;
         }
 
-        // 仮身が右クリックされた場合、その仮身を選択
+        // 仮身が右クリックされた場合
         if (target && target.dataset.realId) {
             const realId = target.dataset.realId;
-            const obj = this.trashObjects.find(o => o.realId === realId);
-            if (obj) {
-                this.selectedObject = obj;
-                this.selectTrashObject(obj);
+            // 右クリックされた仮身が未選択の場合、単一選択として扱う
+            if (!this.selectedObjects.has(realId)) {
+                this.selectedObjects.clear();
+                this.selectedObjects.add(realId);
+                this.updateSelectionDisplay();
             }
+            // 選択済みの場合はそのまま（複数選択を維持）
         }
     }
 
@@ -131,11 +152,12 @@ class TrashRealObjectsApp extends window.PluginBase {
         ];
 
         // 屑実身が選択されている場合は「編集」メニューを追加
-        if (this.selectedObject) {
+        if (this.selectedObjects.size > 0) {
+            const isSingleSelection = this.selectedObjects.size === 1;
             const editSubmenu = [
-                { text: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
+                { text: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C', disabled: !isSingleSelection },
                 { text: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
-                { text: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
+                { text: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X', disabled: !isSingleSelection },
                 { text: 'クリップボードから移動', action: 'redo', shortcut: 'Ctrl+Z' },
                 { separator: true },
                 { text: '削除', action: 'delete', shortcut: 'Delete' }
@@ -231,7 +253,7 @@ class TrashRealObjectsApp extends window.PluginBase {
         vobj.dataset.index = index;
 
         // 選択状態のクラス
-        if (this.selectedObject && this.selectedObject.realId === obj.realId) {
+        if (this.selectedObjects.has(obj.realId)) {
             vobj.classList.add('selected');
         }
 
@@ -260,10 +282,10 @@ class TrashRealObjectsApp extends window.PluginBase {
         // draggableを設定
         vobj.draggable = true;
 
-        // クリックで選択
+        // クリックで選択（eventを渡してShift+クリック対応）
         vobj.addEventListener('click', (e) => {
             e.stopPropagation();
-            this.selectTrashObject(obj);
+            this.selectTrashObject(obj, e);
         });
 
         // ドラッグ開始イベント
@@ -309,13 +331,41 @@ class TrashRealObjectsApp extends window.PluginBase {
         event.target.style.opacity = '1';
     }
 
-    selectTrashObject(obj) {
-        this.selectedObject = obj;
+    /**
+     * 屑実身を選択
+     * @param {Object} obj - 選択する屑実身オブジェクト
+     * @param {Event} event - クリックイベント（Shiftキー判定用）
+     */
+    selectTrashObject(obj, event = null) {
+        const isShiftKey = event && event.shiftKey;
+        const realId = obj.realId;
 
-        // 選択状態を視覚的に更新（全体の再レンダリングではなく、クラス更新のみ）
+        if (isShiftKey) {
+            // Shift+クリック: トグル選択
+            if (this.selectedObjects.has(realId)) {
+                // 既に選択されている場合は解除
+                this.selectedObjects.delete(realId);
+            } else {
+                // 選択されていない場合は追加
+                this.selectedObjects.add(realId);
+            }
+        } else {
+            // 通常クリック: 単一選択（既存選択をクリアして新規選択）
+            this.selectedObjects.clear();
+            this.selectedObjects.add(realId);
+        }
+
+        // 選択状態を視覚的に更新
+        this.updateSelectionDisplay();
+    }
+
+    /**
+     * 選択状態の表示を更新
+     */
+    updateSelectionDisplay() {
         const allVobjs = document.querySelectorAll('.trash-object-vobj');
         allVobjs.forEach(vobj => {
-            if (vobj.dataset.realId === obj.realId) {
+            if (this.selectedObjects.has(vobj.dataset.realId)) {
                 vobj.classList.add('selected');
             } else {
                 vobj.classList.remove('selected');
@@ -323,16 +373,49 @@ class TrashRealObjectsApp extends window.PluginBase {
         });
     }
 
-    copyToClipboard() {
-        if (!this.selectedObject) return;
+    /**
+     * 全選択を解除
+     */
+    clearSelection() {
+        this.selectedObjects.clear();
+        this.updateSelectionDisplay();
+    }
 
-        this.clipboard = { ...this.selectedObject };
+    /**
+     * 全ての屑実身を選択
+     */
+    selectAllTrashObjects() {
+        this.selectedObjects.clear();
+        this.trashObjects.forEach(obj => {
+            this.selectedObjects.add(obj.realId);
+        });
+        this.updateSelectionDisplay();
+    }
+
+    /**
+     * 選択中の屑実身を取得（単一選択時のみ）
+     * @returns {Object|null} 選択中の屑実身オブジェクト（複数選択時はnull）
+     */
+    getSelectedObject() {
+        if (this.selectedObjects.size !== 1) {
+            return null;
+        }
+        const realId = Array.from(this.selectedObjects)[0];
+        return this.trashObjects.find(o => o.realId === realId) || null;
+    }
+
+    copyToClipboard() {
+        // 単一選択時のみ動作
+        const selectedObj = this.getSelectedObject();
+        if (!selectedObj) return;
+
+        this.clipboard = { ...selectedObj };
         this.copyMode = true;
 
         // グローバルクリップボードにも仮身形式で設定（他プラグインとの連携用）
         const vobjData = {
-            link_id: this.selectedObject.realId,
-            link_name: this.selectedObject.name || '無題',
+            link_id: selectedObj.realId,
+            link_name: selectedObj.name || '無題',
             vobjleft: 0,
             vobjtop: 0,
             vobjright: 100,
@@ -357,15 +440,17 @@ class TrashRealObjectsApp extends window.PluginBase {
     }
 
     cutToClipboard() {
-        if (!this.selectedObject) return;
+        // 単一選択時のみ動作
+        const selectedObj = this.getSelectedObject();
+        if (!selectedObj) return;
 
-        this.clipboard = { ...this.selectedObject };
+        this.clipboard = { ...selectedObj };
         this.copyMode = false;
 
         // グローバルクリップボードにも仮身形式で設定（他プラグインとの連携用）
         const vobjData = {
-            link_id: this.selectedObject.realId,
-            link_name: this.selectedObject.name || '無題',
+            link_id: selectedObj.realId,
+            link_name: selectedObj.name || '無題',
             vobjleft: 0,
             vobjtop: 0,
             vobjright: 100,
@@ -395,14 +480,23 @@ class TrashRealObjectsApp extends window.PluginBase {
      * 確認ダイアログを表示後、物理削除を実行
      */
     async deleteRealObject() {
-        if (!this.selectedObject) return;
+        if (this.selectedObjects.size === 0) return;
 
-        const realId = this.selectedObject.realId;
-        const realName = this.selectedObject.name || '無題';
+        const selectedCount = this.selectedObjects.size;
+        const realIds = Array.from(this.selectedObjects);
+
+        // 選択されたオブジェクトの名前を取得
+        const selectedObjs = this.trashObjects.filter(obj => this.selectedObjects.has(obj.realId));
+        const names = selectedObjs.map(obj => obj.name || '無題');
+
+        // 確認メッセージ
+        const message = selectedCount === 1
+            ? `実身「${names[0]}」を完全に削除しますか？\nこの操作は取り消せません。`
+            : `${selectedCount}件の実身を完全に削除しますか？\nこの操作は取り消せません。`;
 
         // 確認ダイアログを表示
         this.messageBus.sendWithCallback('show-message-dialog', {
-            message: `実身「${realName}」を完全に削除しますか？\nこの操作は取り消せません。`,
+            message: message,
             buttons: [
                 { label: 'はい', value: 'yes' },
                 { label: 'いいえ', value: 'no' }
@@ -416,31 +510,44 @@ class TrashRealObjectsApp extends window.PluginBase {
 
             // 「はい」が選択された場合のみ削除
             if (confirmResult.result === 'yes') {
-                // 親ウィンドウに削除要求
-                this.messageBus.sendWithCallback('physical-delete-real-object', {
-                    realId: realId
-                }, async (deleteResult) => {
-                    if (deleteResult.error) {
-                        logger.error('[TrashRealObjects] Delete request error:', deleteResult.error);
-                        return;
-                    }
+                // 選択された全ての実身を削除
+                let deleteCount = 0;
+                let errorCount = 0;
 
-                    if (deleteResult.success) {
-                        logger.info('[TrashRealObjects] 実身削除成功:', realId);
-                        this.selectedObject = null;
-                        await this.refresh();
-                    } else {
-                        logger.error('[TrashRealObjects] 実身削除失敗:', deleteResult.error);
-                        // エラーメッセージも標準ダイアログで表示
-                        this.messageBus.sendWithCallback('show-message-dialog', {
-                            message: `実身の削除に失敗しました: ${deleteResult.error}`,
-                            buttons: [
-                                { label: 'OK', value: 'ok' }
-                            ],
-                            defaultButton: 0
-                        }, () => {});
-                    }
-                });
+                for (const realId of realIds) {
+                    await new Promise((resolve) => {
+                        this.messageBus.sendWithCallback('physical-delete-real-object', {
+                            realId: realId
+                        }, (deleteResult) => {
+                            if (deleteResult.error) {
+                                logger.error('[TrashRealObjects] Delete request error:', deleteResult.error);
+                                errorCount++;
+                            } else if (deleteResult.success) {
+                                logger.info('[TrashRealObjects] 実身削除成功:', realId);
+                                deleteCount++;
+                            } else {
+                                logger.error('[TrashRealObjects] 実身削除失敗:', deleteResult.error);
+                                errorCount++;
+                            }
+                            resolve();
+                        });
+                    });
+                }
+
+                // 選択をクリアしてリストを更新
+                this.selectedObjects.clear();
+                await this.refresh();
+
+                // エラーがあった場合は通知
+                if (errorCount > 0) {
+                    this.messageBus.sendWithCallback('show-message-dialog', {
+                        message: `${deleteCount}件の削除に成功、${errorCount}件の削除に失敗しました。`,
+                        buttons: [
+                            { label: 'OK', value: 'ok' }
+                        ],
+                        defaultButton: 0
+                    }, () => {});
+                }
             }
         });
     }
@@ -492,6 +599,10 @@ class TrashRealObjectsApp extends window.PluginBase {
             if (e.ctrlKey && e.key === 'l') {
                 e.preventDefault();
                 this.toggleFullscreen();
+            } else if (e.ctrlKey && e.key === 'a') {
+                // Ctrl+A: 全選択
+                e.preventDefault();
+                this.selectAllTrashObjects();
             } else if (e.ctrlKey && e.key === 'c') {
                 e.preventDefault();
                 this.copyToClipboard();

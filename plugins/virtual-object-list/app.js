@@ -1,5 +1,5 @@
 /**
- * 仮身一覧ビューアプラグイン
+ * 仮身一覧プラグイン
  * @module VirtualObjectList
  * @extends PluginBase
  * @license MIT
@@ -573,8 +573,9 @@ class VirtualObjectListApp extends window.PluginBase {
      * @param {string} name - 実身名
      * @param {Object} dropPosition - ドロップ位置 {x, y}
      * @param {Object} applist - アプリケーションリスト
+     * @param {Object} linkAttributes - 仮身属性（オプション）
      */
-    addVirtualObjectFromRealId(realId, name, dropPosition, applist) {
+    addVirtualObjectFromRealId(realId, name, dropPosition, applist, linkAttributes = null) {
         logger.debug('[VirtualObjectList] 実身IDから仮身を追加:', realId, name, dropPosition, 'applist:', applist);
 
         // ドロップ位置を計算
@@ -596,6 +597,9 @@ class VirtualObjectListApp extends window.PluginBase {
             }
         }
 
+        // 仮身属性を使用（指定がなければデフォルト値）
+        const attrs = linkAttributes || {};
+
         // 仮身オブジェクトを作成（ドロップ位置に配置）
         const virtualObj = {
             link_id: `${realId}_0.xtad`,
@@ -606,11 +610,11 @@ class VirtualObjectListApp extends window.PluginBase {
             vobjbottom: Math.max(0, y + 15),
             width: 150,
             heightPx: 30,
-            chsz: 14,
-            frcol: '#000000',
-            chcol: '#000000',
-            tbcol: '#ffffff',
-            bgcol: '#ffffff',
+            chsz: attrs.chsz || 14,
+            frcol: attrs.frcol || '#000000',
+            chcol: attrs.chcol || '#000000',
+            tbcol: attrs.tbcol || '#ffffff',
+            bgcol: attrs.bgcol || '#ffffff',
             dlen: 0,
             applist: applist || {},  // 親ウィンドウから渡されたapplist情報を使用
             // 新しく作成された仮身なので、元の位置は現在の位置と同じ
@@ -829,7 +833,7 @@ class VirtualObjectListApp extends window.PluginBase {
         // add-virtual-object-from-base メッセージ
         this.messageBus.on('add-virtual-object-from-base', (data) => {
             logger.debug('[VirtualObjectList] [MessageBus] 原紙箱から仮身追加:', data.realId, data.name);
-            this.addVirtualObjectFromRealId(data.realId, data.name, data.dropPosition, data.applist);
+            this.addVirtualObjectFromRealId(data.realId, data.name, data.dropPosition, data.applist, data.linkAttributes);
         });
 
         // add-virtual-object-from-trash メッセージ
@@ -3672,6 +3676,11 @@ class VirtualObjectListApp extends window.PluginBase {
                 e.preventDefault();
                 this.deleteSelectedVirtualObject();
             }
+            // Ctrl+A: 全選択（固定化・背景化を除く）
+            else if (e.ctrlKey && e.key === 'a') {
+                e.preventDefault();
+                this.selectAllVirtualObjects();
+            }
         });
     }
 
@@ -5744,6 +5753,23 @@ class VirtualObjectListApp extends window.PluginBase {
             }
         });
         return indices;
+    }
+
+    /**
+     * 全ての仮身を選択（固定化・背景化を除く）
+     */
+    selectAllVirtualObjects() {
+        this.selectedVirtualObjects.clear();
+
+        this.virtualObjects.forEach((obj, index) => {
+            // 固定化または背景化された仮身は除外
+            if (!obj.isFixed && !obj.isBackground) {
+                this.selectedVirtualObjects.add(index);
+            }
+        });
+
+        // 選択表示を更新
+        this.updateSelectionDisplay();
     }
 
     /**
