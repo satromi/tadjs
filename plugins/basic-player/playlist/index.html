@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>プレイリスト</title>
+    <link rel="stylesheet" href="../../../tadjs-desktop.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="plugin-content" id="pluginContent">
+        <div class="playlist-header" id="playlistHeader">
+            プレイリスト: 0 曲
+        </div>
+        <div class="playlist-container">
+            <div class="playlist-list" id="playlistList">
+                <!-- トラック行が動的に追加される -->
+            </div>
+        </div>
+    </div>
+
+    <!-- MessageBusをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <!-- メインアプリケーション -->
+    <script src="app.js"></script>
+</body>
+</html>

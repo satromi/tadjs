@@ -10,6 +10,9 @@ import {
 } from './util.js';
 import { getLogger } from './logger.js';
 
+// UuidV7Generatorはグローバルスコープから取得（uuid-v7.jsがHTMLで先に読み込まれる前提）
+const UuidV7Generator = globalThis.UuidV7Generator;
+
 const logger = getLogger('RealObjectSystem');
 
 /**
@@ -196,7 +199,7 @@ export class RealObjectSystem {
         logger.debug(`実身新規作成: ${realName}`);
 
         // 新しいUUIDを生成
-        const newRealId = this.generateUUIDv7();
+        const newRealId = UuidV7Generator.generate();
         logger.debug(`新しい実身ID: ${newRealId}`);
 
         // メタデータを作成
@@ -271,7 +274,7 @@ export class RealObjectSystem {
         const sourceRealObject = await this.loadRealObject(sourceRealId);
 
         // 新しいUUIDを生成
-        const newRealId = this.generateUUIDv7();
+        const newRealId = UuidV7Generator.generate();
         logger.debug(`新しい実身ID: ${newRealId}`);
 
         // IDマッピングに登録（循環参照対策）
@@ -413,7 +416,7 @@ export class RealObjectSystem {
         const sourceRealObject = await this.loadRealObject(sourceRealId);
 
         // 新しいUUIDを生成
-        const newRealId = this.generateUUIDv7();
+        const newRealId = UuidV7Generator.generate();
         logger.debug(`新しい実身ID: ${newRealId}`);
 
         // レコードをコピー（参照実身は複製しない）
@@ -473,27 +476,6 @@ export class RealObjectSystem {
 
         logger.debug(`実身非再帰的コピー完了: ${sourceRealId} -> ${newRealId}`);
         return newRealId;
-    }
-
-    /**
-     * UUID v7を生成
-     * @returns {string} UUID v7文字列
-     */
-    generateUUIDv7() {
-        const timestamp = Date.now();
-        const randomBytes = this.crypto.randomBytes(10);
-
-        // タイムスタンプ（48ビット）
-        const timestampHex = timestamp.toString(16).padStart(12, '0');
-        const timeLow = timestampHex.substring(0, 8);
-        const timeMid = timestampHex.substring(8, 12);
-
-        // バージョン7とランダムデータ
-        const timeHiAndVersion = (0x7000 | (randomBytes[0] << 8 | randomBytes[1]) & 0x0fff).toString(16).padStart(4, '0');
-        const clockSeqAndVariant = (0x8000 | (randomBytes[2] << 8 | randomBytes[3]) & 0x3fff).toString(16).padStart(4, '0');
-        const node = randomBytes.slice(4, 10).toString('hex');
-
-        return `${timeLow}-${timeMid}-${timeHiAndVersion}-${clockSeqAndVariant}-${node}`;
     }
 
     /**
@@ -1385,6 +1367,45 @@ export class RealObjectSystem {
             return result;
         } catch (error) {
             logger.error('画像ファイル一覧取得エラー:', error);
+            return [];
+        }
+    }
+
+    /**
+     * 指定パターンに一致するメディアファイル一覧を取得（任意拡張子対応）
+     * @param {string} realId - 実身ID
+     * @param {number} recordNo - レコード番号
+     * @returns {Array<{fileName: string, resourceNo: number, ext: string}>} ファイル一覧
+     */
+    listMediaFiles(realId, recordNo) {
+        if (!this.isElectronEnv) {
+            logger.error('メディアファイル一覧取得エラー: Electron環境が必要です');
+            return [];
+        }
+
+        try {
+            const basePath = this.getDataBasePath();
+            const files = this.fs.readdirSync(basePath);
+
+            // パターン: realId_recordNo_resourceNo.拡張子（任意）
+            const escapedRealId = realId.replace(/[-]/g, '\\-');
+            const pattern = new RegExp(`^${escapedRealId}_${recordNo}_(\\d+)\\.([a-zA-Z0-9]+)$`);
+
+            const result = [];
+            for (const file of files) {
+                const match = file.match(pattern);
+                if (match) {
+                    result.push({
+                        fileName: file,
+                        resourceNo: parseInt(match[1], 10),
+                        ext: match[2]
+                    });
+                }
+            }
+
+            return result;
+        } catch (error) {
+            logger.error('メディアファイル一覧取得エラー:', error);
             return [];
         }
     }

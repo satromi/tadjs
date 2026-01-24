@@ -14,7 +14,7 @@
  *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
- *
+ * 
  *
  * BTRONのドキュメント形式である文章TAD、図形TADをブラウザ上で表示するツールです
  * @link https://github.com/satromi/tadjs
@@ -316,6 +316,24 @@ let decorationRanges = {
     bagChar: [],
     noprint: []
 };
+
+/**
+ * 現在アクティブな文字修飾タグ名の配列を取得
+ * 仮身出力時に文字修飾を一時的に閉じて再開するために使用
+ * @returns {string[]} アクティブな文字修飾タグ名の配列
+ */
+function getActiveDecorations() {
+    const active = [];
+    if (textDecorations.underline) active.push('underline');
+    if (textDecorations.overline) active.push('overline');
+    if (textDecorations.strikethrough) active.push('strikethrough');
+    if (textDecorations.box) active.push('box');
+    if (textDecorations.invert) active.push('invert');
+    if (textDecorations.mesh) active.push('mesh');
+    if (textDecorations.background) active.push('background');
+    if (textDecorations.noprint) active.push('noprint');
+    return active;
+}
 
 // 添え字状態管理
 let subscriptState = {
@@ -906,67 +924,6 @@ function getBottomUBinUH(UH) {
     //console.debug("Bottom UB: " + bottomUB);
     return bottomUB;
 }
-
-/**
- * UUID v7を生成する（RFC 9562準拠）
- * タイムスタンプベースの時系列順UUID
- * @returns {string} UUID v7文字列（8-4-4-4-12形式）
- */
-function generateUUIDv7() {
-    // 現在時刻のミリ秒タイムスタンプ（48ビット）
-    const timestamp = Date.now();
-
-    // 暗号学的に安全な乱数を生成（80ビット）
-    const randomBytes = new Uint8Array(10);
-    // ブラウザ環境とNode.js環境の両方に対応
-    if (typeof window !== 'undefined' && window.crypto) {
-        window.crypto.getRandomValues(randomBytes);
-    } else if (typeof globalThis !== 'undefined' && globalThis.crypto) {
-        globalThis.crypto.getRandomValues(randomBytes);
-    } else {
-        // フォールバック: Math.randomを使用（非推奨だが互換性のため）
-        for (let i = 0; i < randomBytes.length; i++) {
-            randomBytes[i] = Math.floor(Math.random() * 256);
-        }
-    }
-
-    // UUID v7の構造:
-    // - 48ビット: Unix タイムスタンプ（ミリ秒）
-    // - 4ビット: バージョン（0111 = 7）
-    // - 12ビット: ランダムA
-    // - 2ビット: バリアント（10）
-    // - 62ビット: ランダムB
-
-    // タイムスタンプを16進数文字列に変換（12桁）
-    const timestampHex = timestamp.toString(16).padStart(12, '0');
-
-    // ランダムバイトを16進数に変換
-    const randomHex = Array.from(randomBytes)
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-
-    // UUID v7フォーマットに組み立て
-    // time_high (32ビット) + time_mid (16ビット)
-    const timeLow = timestampHex;
-
-    // time_hi_and_version: ランダム12ビット + バージョン4ビット(0111)
-    const timeHiAndVersion = '7' + randomHex.substring(0, 3);
-
-    // clock_seq_hi_and_reserved: バリアント2ビット(10) + ランダム6ビット
-    const clockSeqByte = parseInt(randomHex.substring(3, 5), 16);
-    const clockSeqHi = ((clockSeqByte & 0x3F) | 0x80).toString(16).padStart(2, '0');
-
-    // clock_seq_low: ランダム8ビット
-    const clockSeqLow = randomHex.substring(5, 7);
-
-    // node: ランダム48ビット
-    const node = randomHex.substring(7, 19);
-
-    // 8-4-4-4-12フォーマットで結合
-    return `${timeLow.substring(0, 8)}-${timeLow.substring(8, 12)}-${timeHiAndVersion}-${clockSeqHi}${clockSeqLow}-${node}`;
-}
-
-
 
 /**
  * カラーを取得
@@ -4930,11 +4887,22 @@ function tsVirtualObjSegment(segLen, tadSeg) {
 
         console.log(`[tsVirtualObjSegment] link_id=${newLink.link_id}, linkedFileIndex=${linkedFileIndex}, realId=${realId}`);
 
+        // 仮身には文字修飾を付けないため、アクティブな文字修飾を一時的に閉じる
+        const activeDecorations = getActiveDecorations();
+        for (let i = activeDecorations.length - 1; i >= 0; i--) {
+            xmlBuffer.push(`</${activeDecorations[i]}>`);
+        }
+
         // 図形セグメント内のz-index管理
         // XMLのリンク情報を保存（自己閉じタグ形式）
         // link_nameはJSONから取得する方式に統一
         figureZIndexCounter++;
         xmlBuffer.push(`<link id="${realId}_0.xtad" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}" zIndex="${figureZIndexCounter}"/>\r\n`);
+
+        // 文字修飾を再度開く
+        for (const deco of activeDecorations) {
+            xmlBuffer.push(`<${deco}>`);
+        }
     }
 
 

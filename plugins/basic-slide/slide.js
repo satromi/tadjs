@@ -112,12 +112,16 @@ function initSlidePlugin() {
                 await this.parseSlideData(xtad);
 
                 if (this.slides.length > 0) {
+                    // 先にプレゼンテーションモード（全画面化）を完了させる
+                    await this.enterPresentationModeAndWait();
+                    // 全画面化完了後にスライド表示
                     await this.showSlide(0);
-                    // スライド表示後にプレゼンテーションモード開始
-                    this.enterPresentationMode();
+                    // スライドを表示可能にする
+                    this.showSlideWrapper();
                 } else {
                     // スライド（仮身）がない場合はエラー表示
                     this.editor.innerHTML = '<p style="color: red; padding: 20px;">スライドがありません。仮身を追加してください。</p>';
+                    this.showSlideWrapper();
                 }
             }
         }
@@ -137,11 +141,15 @@ function initSlidePlugin() {
                 await this.parseSlideData(realData.xmlData);
 
                 if (this.slides.length > 0) {
+                    // 先にプレゼンテーションモード（全画面化）を完了させる
+                    await this.enterPresentationModeAndWait();
+                    // 全画面化完了後にスライド表示
                     await this.showSlide(0);
-                    // スライド表示後にプレゼンテーションモード開始
-                    this.enterPresentationMode();
+                    // スライドを表示可能にする
+                    this.showSlideWrapper();
                 } else {
                     this.editor.innerHTML = '<p style="color: red; padding: 20px;">スライドがありません。仮身を追加してください。</p>';
+                    this.showSlideWrapper();
                 }
             }
         }
@@ -759,20 +767,60 @@ function initSlidePlugin() {
          * プレゼンテーションモード開始
          * スクロールバー非表示、タイトルバー非表示、内部ウィンドウ最大化
          * ※Electronフルスクリーンはユーザーがf11で操作する
+         * ※完了を待機しない（後方互換性のため残す）
          */
         enterPresentationMode() {
-            // ウィンドウのサイズ計算が完了するまで少し待機（100ms）
-            setTimeout(() => {
-                logger.info('[BasicSlide] プレゼンテーションモード開始');
+            logger.info('[BasicSlide] プレゼンテーションモード開始');
+            this.messageBus.send('enter-presentation-mode', {
+                windowId: this.windowId,
+                options: {
+                    hideScrollbar: true,
+                    hideFrame: true,
+                    electronFullscreen: false  // ユーザーがF11で操作
+                }
+            });
+        }
+
+        /**
+         * プレゼンテーションモード開始（完了を待機）
+         * ウィンドウ最大化が完了してから解決するPromiseを返す
+         * @returns {Promise<void>}
+         */
+        enterPresentationModeAndWait() {
+            return new Promise((resolve) => {
+                const messageId = this.generateMessageId('presentation-mode');
+
+                // 完了メッセージを待機
+                const handler = (data) => {
+                    if (data.messageId === messageId) {
+                        this.messageBus.off('enter-presentation-mode-complete', handler);
+                        // リサイズ完了を確実に待つ
+                        requestAnimationFrame(() => {
+                            resolve();
+                        });
+                    }
+                };
+
+                this.messageBus.on('enter-presentation-mode-complete', handler);
+
+                // プレゼンテーションモード開始メッセージ送信
+                logger.info('[BasicSlide] プレゼンテーションモード開始（待機あり）');
                 this.messageBus.send('enter-presentation-mode', {
                     windowId: this.windowId,
+                    messageId: messageId,
                     options: {
                         hideScrollbar: true,
                         hideFrame: true,
-                        electronFullscreen: false  // ユーザーがF11で操作
+                        electronFullscreen: false
                     }
                 });
-            }, 100);
+
+                // タイムアウト（フォールバック）
+                setTimeout(() => {
+                    this.messageBus.off('enter-presentation-mode-complete', handler);
+                    resolve();
+                }, 500);  // 500msでタイムアウト
+            });
         }
 
         /**
@@ -783,6 +831,17 @@ function initSlidePlugin() {
             this.messageBus.send('exit-presentation-mode', {
                 windowId: this.windowId
             });
+        }
+
+        /**
+         * スライドラッパーを表示する
+         * CSSで初期非表示になっているラッパーに'ready'クラスを追加
+         */
+        showSlideWrapper() {
+            const wrapper = document.getElementById('slide-wrapper');
+            if (wrapper) {
+                wrapper.classList.add('ready');
+            }
         }
 
         /**

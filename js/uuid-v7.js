@@ -1,6 +1,7 @@
 /**
  * UUID v7 生成ユーティリティ
  * 時刻ベースのUUID生成
+ *
  * 
  */
 
@@ -14,7 +15,34 @@ class UuidV7Generator {
         const timestamp = Date.now();
 
         // ランダムビット生成（10バイト = 80ビット、うち74ビット使用）
-        const randomBytes = crypto.getRandomValues(new Uint8Array(10));
+        const randomBytes = new Uint8Array(10);
+
+        // 環境に応じたランダムバイト生成
+        if (typeof window !== 'undefined' && window.crypto) {
+            // Browser環境
+            window.crypto.getRandomValues(randomBytes);
+        } else if (typeof globalThis !== 'undefined' && globalThis.crypto &&
+                   typeof globalThis.crypto.getRandomValues === 'function') {
+            // Node.js 19+ または Web Crypto API対応環境
+            globalThis.crypto.getRandomValues(randomBytes);
+        } else if (typeof require === 'function') {
+            // Node.js 18以前（CommonJS）
+            try {
+                const crypto = require('crypto');
+                const nodeBytes = crypto.randomBytes(10);
+                randomBytes.set(nodeBytes);
+            } catch (e) {
+                // require失敗時はフォールバック
+                for (let i = 0; i < randomBytes.length; i++) {
+                    randomBytes[i] = Math.floor(Math.random() * 256);
+                }
+            }
+        } else {
+            // フォールバック（非推奨）
+            for (let i = 0; i < randomBytes.length; i++) {
+                randomBytes[i] = Math.floor(Math.random() * 256);
+            }
+        }
 
         // UUID v7フォーマット (RFC 9562準拠)
         // xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx
@@ -74,9 +102,14 @@ class UuidV7Generator {
     }
 }
 
-// CommonJS環境(Electron)用のエクスポート
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = {
-        UuidV7Generator
-    };
+// グローバル関数・クラスとして公開
+if (typeof window !== 'undefined') {
+    window.generateUUIDv7 = () => UuidV7Generator.generate();
+    window.UuidV7Generator = UuidV7Generator;
+}
+
+// グローバルスコープにも設定（ES6モジュールからアクセス可能に）
+if (typeof globalThis !== 'undefined') {
+    globalThis.generateUUIDv7 = () => UuidV7Generator.generate();
+    globalThis.UuidV7Generator = UuidV7Generator;
 }

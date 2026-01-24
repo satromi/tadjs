@@ -15,5 +15,9 @@ window.electronAPI = {
     saveFileDialog: (defaultName) => ipcRenderer.invoke('save-file-dialog', defaultName),
     saveFile: (filePath, data) => ipcRenderer.invoke('save-file', filePath, data),
     readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
-    deleteFile: (filePath) => ipcRenderer.invoke('delete-file', filePath)
+    deleteFile: (filePath) => ipcRenderer.invoke('delete-file', filePath),
+
+    // フルスクリーン制御
+    enterFullscreen: () => ipcRenderer.invoke('enter-fullscreen'),
+    exitFullscreen: () => ipcRenderer.invoke('exit-fullscreen')
 };

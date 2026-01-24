@@ -89,6 +89,11 @@
         window.getPaperSizeByName = getPaperSizeByName;
         window.getPaperSizeOptions = getPaperSizeOptions;
     </script>
+    <!-- TAD単位変換ユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import { roundFontSize } from '../../js/tad-units.js';
+        window.roundFontSize = roundFontSize;
+    </script>
     <script type="module" src="editor.js?v=202511130203"></script>
 </body>
 </html>

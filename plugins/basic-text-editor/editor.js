@@ -1,7 +1,7 @@
 /**
  * 基本文章編集プラグイン
  * TADファイルをリッチテキストエディタで編集
- * 
+ *
  * @module BasicTextEditor
  * @extends PluginBase
  * @license MIT
@@ -26,7 +26,7 @@ class BasicTextEditor extends window.PluginBase {
         this.originalContent = ''; // 保存時の内容
         this.updateHeightTimer = null; // スクロールバー更新のデバウンスタイマー
         this.mutationObserver = null; // MutationObserverインスタンス
-        this.suppressMutationObserver = false; // MutationObserver一時停止フラグ
+        this.suppressMutationObserverCount = 0; // MutationObserver一時停止カウンタ（ネスト対応）
         this.selectedImage = null; // 選択中の画像要素
         this.lastSelectedText = ''; // メニュー操作用の最後の選択テキスト
         this.isResizing = false; // リサイズ中フラグ
@@ -498,7 +498,7 @@ class BasicTextEditor extends window.PluginBase {
         });
 
         // コンテンツ変更時に高さを更新（入力、削除、貼り付けなど）
-        this.editor.addEventListener('input', () => {
+        this.editor.addEventListener('input', (e) => {
             this.updateContentHeight();
             // 編集状態を記録
             this.isModified = true;
@@ -510,8 +510,8 @@ class BasicTextEditor extends window.PluginBase {
 
         // DOMの変更も監視（delete、backspaceなど）
         this.mutationObserver = new MutationObserver((mutations) => {
-            // 一時停止フラグがtrueの場合はスキップ
-            if (this.suppressMutationObserver) {
+            // 一時停止カウンタが0より大きい場合はスキップ（ネスト対応）
+            if (this.suppressMutationObserverCount > 0) {
                 return;
             }
 
@@ -1021,6 +1021,7 @@ class BasicTextEditor extends window.PluginBase {
                 logger.debug('[EDITOR] TAD XMLをペースト:', tadXml);
                 const htmlContent = await this.renderTADXML(tadXml);
                 document.execCommand('insertHTML', false, htmlContent);
+                this.updateParagraphLineHeight(); // 段落のline-heightを更新
                 this.isModified = true;
                 this.setStatus('仮身を含むコンテンツを貼り付けました');
                 return;
@@ -1033,6 +1034,7 @@ class BasicTextEditor extends window.PluginBase {
             // （メニュー操作等でシステムクリップボード書き込みが失敗した場合に対応）
             if (globalClipboard && globalClipboard.type === 'text' && globalClipboard.text) {
                 document.execCommand('insertText', false, globalClipboard.text);
+                this.updateParagraphLineHeight(); // 段落のline-heightを更新
                 this.isModified = true;
                 this.setStatus('テキストをクリップボードから貼り付けました');
                 return;
@@ -1042,6 +1044,7 @@ class BasicTextEditor extends window.PluginBase {
             const text = clipboardData.getData('text/plain');
             if (text) {
                 document.execCommand('insertText', false, text);
+                this.updateParagraphLineHeight(); // 段落のline-heightを更新
                 this.isModified = true;
                 this.setStatus('クリップボードから貼り付けました');
                 return;
@@ -1189,6 +1192,7 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         this.updateContentHeight();
+        this.updateParagraphLineHeight(); // 段落のline-heightを更新
 
         // 仮身のイベントハンドラをセットアップ（選択、移動、リサイズを可能にする）
         this.setupVirtualObjectEventHandlers();
@@ -1640,12 +1644,11 @@ class BasicTextEditor extends window.PluginBase {
             e.preventDefault();
 
             // MutationObserverを一時停止
-            this.suppressMutationObserver = true;
+            this.suppressMutationObserverCount++;
 
             const selection = window.getSelection();
             if (selection.rangeCount > 0) {
                 const range = selection.getRangeAt(0);
-
 
                 // カーソル直前の文字サイズを取得
                 let fontSize = '14pt'; // デフォルト
@@ -1668,7 +1671,25 @@ class BasicTextEditor extends window.PluginBase {
                 }
 
                 // カーソル位置のスタイルを取得（スタイル引き継ぎ用）
-                const caretStyle = this.getCaretStyle(container);
+                let caretStyle = this.getCaretStyle(container);
+
+                // containerがP要素の場合、カーソルがspan外（段落末尾など）にある可能性がある
+                // その場合、段落内の最後のスタイル付き要素からスタイルを取得
+                if (container.nodeName === 'P') {
+                    // 段落内の最後のテキストを含む要素を探す
+                    let lastStyledElement = this.findLastStyledElement(container);
+                    if (lastStyledElement && lastStyledElement !== container) {
+                        caretStyle = this.getCaretStyle(lastStyledElement);
+                    } else if (container.style.fontSize) {
+                        // 段落自体にstyle.fontSizeが設定されている場合（空の段落など）
+                        // pt単位をpx単位に変換してcaretStyleに設定
+                        let fontSizePt = parseFloat(container.style.fontSize);
+                        if (container.style.fontSize.endsWith('pt')) {
+                            caretStyle.fontSize = (fontSizePt * 1.333) + 'px';
+                        }
+                    }
+                }
+
                 const needsInherit = this.needsStyleInherit(caretStyle);
 
                 // 現在の段落要素を取得
@@ -1679,13 +1700,35 @@ class BasicTextEditor extends window.PluginBase {
 
                 if (currentP && currentP.nodeName === 'P') {
 
-                    // 現在の段落が空（<br>のみ）かチェック
-                    const isEmpty = currentP.childNodes.length === 1 &&
-                                   currentP.firstChild.nodeName === 'BR';
+                    // 現在の段落が空（<br>のみ、またはスタイル継承spanのみ）かチェック
+                    let isEmpty = currentP.childNodes.length === 1 &&
+                                 currentP.firstChild.nodeName === 'BR';
+
+                    // スタイル継承spanのみの場合も空として扱う
+                    // 構造: <p><span style="...">​<br></span></p>
+                    // ※ブラウザによりノード構造が異なる可能性があるため、
+                    //   ノード数ではなくテキストコンテンツで判定する
+                    if (!isEmpty && currentP.childNodes.length === 1 &&
+                        currentP.firstChild.nodeName === 'SPAN') {
+                        const span = currentP.firstChild;
+                        // spanのテキストコンテンツがゼロ幅スペースのみ、または空の場合
+                        const textContent = span.textContent.replace(/\u200B/g, '').trim();
+                        if (textContent === '') {
+                            isEmpty = true;
+                        }
+                    }
 
                     // 新しい段落を作成
                     const newP = document.createElement('p');
                     newP.innerHTML = '<br>';
+
+                    // インデントスタイルをcurrentPからコピー（padding-left, text-indent）
+                    if (currentP.style.paddingLeft) {
+                        newP.style.paddingLeft = currentP.style.paddingLeft;
+                    }
+                    if (currentP.style.textIndent) {
+                        newP.style.textIndent = currentP.style.textIndent;
+                    }
 
                     // スタイル引き継ぎ用のspanを保持
                     let styleSpan = null;
@@ -1702,25 +1745,81 @@ class BasicTextEditor extends window.PluginBase {
                             if (needsInherit) {
                                 newP.innerHTML = '';
                                 styleSpan = this.createStyleInheritSpan(caretStyle);
+                                // スタイル継承spanに<br>を追加（行高とカーソル配置のため）
+                                styleSpan.appendChild(document.createElement('br'));
                                 newP.appendChild(styleSpan);
+
+                                // 段落にもフォントサイズを設定（extractFontSize対応）
+                                let fontSizePt = parseFloat(caretStyle.fontSize);
+                                if (caretStyle.fontSize && caretStyle.fontSize.endsWith('px')) {
+                                    fontSizePt = fontSizePt / 1.333;  // px → pt 変換
+                                }
+                                fontSizePt = Math.round(fontSizePt * 10) / 10;
+                                if (Math.abs(fontSizePt - 14) > 0.5) {
+                                    newP.style.fontSize = `${fontSizePt}pt`;
+                                }
                             }
                             // スタイル引き継ぎ不要なら<br>を保持（既に設定済み）
                         } else {
                             // 実際の内容がある場合は追加
                             newP.innerHTML = ''; // 既存の<br>をクリア
                             newP.appendChild(afterContent);
+
+                            // extractContents()後に残る空のspan構造をクリーンアップ
+                            this.removeEmptySpans(newP);
+
+                            // newPにもフォントサイズを設定（コンテンツがある場合でも）
+                            if (needsInherit) {
+                                let fontSizePt = parseFloat(caretStyle.fontSize);
+                                if (caretStyle.fontSize && caretStyle.fontSize.endsWith('px')) {
+                                    fontSizePt = fontSizePt / 1.333;
+                                }
+                                fontSizePt = Math.round(fontSizePt * 10) / 10;
+                                if (Math.abs(fontSizePt - 14) > 0.5) {
+                                    newP.style.fontSize = `${fontSizePt}pt`;
+                                }
+                            }
                         }
                     } else {
                         // isEmpty の場合もスタイル引き継ぎが必要ならspanを追加
                         if (needsInherit) {
                             newP.innerHTML = '';
                             styleSpan = this.createStyleInheritSpan(caretStyle);
+                            // スタイル継承spanに<br>を追加（行高とカーソル配置のため）
+                            styleSpan.appendChild(document.createElement('br'));
                             newP.appendChild(styleSpan);
+
+                            // 段落にもフォントサイズを設定（extractFontSize対応）
+                            let fontSizePt = parseFloat(caretStyle.fontSize);
+                            if (caretStyle.fontSize && caretStyle.fontSize.endsWith('px')) {
+                                fontSizePt = fontSizePt / 1.333;  // px → pt 変換
+                            }
+                            fontSizePt = Math.round(fontSizePt * 10) / 10;
+                            if (Math.abs(fontSizePt - 14) > 0.5) {
+                                newP.style.fontSize = `${fontSizePt}pt`;
+                            }
                         }
                     }
-                    // また、元の段落が空になった場合も<br>を追加
+                    // また、元の段落が空になった場合もスタイル引き継ぎ処理
                     if (!isEmpty && currentP.childNodes.length === 0) {
-                        currentP.innerHTML = '<br>';
+                        if (needsInherit) {
+                            // フォントサイズ引き継ぎが必要な場合はstyleSpanを追加
+                            const currentStyleSpan = this.createStyleInheritSpan(caretStyle);
+                            currentStyleSpan.appendChild(document.createElement('br'));
+                            currentP.appendChild(currentStyleSpan);
+
+                            // 段落にもフォントサイズを設定（extractFontSize対応）
+                            let fontSizePt = parseFloat(caretStyle.fontSize);
+                            if (caretStyle.fontSize && caretStyle.fontSize.endsWith('px')) {
+                                fontSizePt = fontSizePt / 1.333;
+                            }
+                            fontSizePt = Math.round(fontSizePt * 10) / 10;
+                            if (Math.abs(fontSizePt - 14) > 0.5) {
+                                currentP.style.fontSize = `${fontSizePt}pt`;
+                            }
+                        } else {
+                            currentP.innerHTML = '<br>';
+                        }
                     }
 
                     // 新段落の内容に基づいてline-heightを設定
@@ -1747,8 +1846,10 @@ class BasicTextEditor extends window.PluginBase {
                     // カーソルを新しい段落の先頭に移動
                     const newRange = document.createRange();
                     if (styleSpan) {
-                        // スタイル引き継ぎspanがある場合、その中のゼロ幅スペースの後にカーソルを配置
-                        newRange.setStart(styleSpan.firstChild, 1);
+                        // スタイル引き継ぎspanがある場合、ゼロ幅スペースのテキストノード内にカーソルを配置
+                        // テキストノードのオフセット1（ゼロ幅スペースの後）に配置することで
+                        // 入力文字が確実にテキストノードに追加され、spanのスタイルが適用される
+                        newRange.setStart(styleSpan.firstChild, 1);  // ゼロ幅スペースの後
                     } else if (newP.firstChild) {
                         // <br>がある場合は、その前にカーソルを配置
                         newRange.setStartBefore(newP.firstChild);
@@ -1807,7 +1908,7 @@ class BasicTextEditor extends window.PluginBase {
 
             // DOM操作完了後、MutationObserverを再開し、スクロールバー更新を1回だけ実行
             setTimeout(() => {
-                this.suppressMutationObserver = false;
+                this.suppressMutationObserverCount--;
                 this.updateContentHeight();
             }, 0);
 
@@ -1819,7 +1920,7 @@ class BasicTextEditor extends window.PluginBase {
             e.preventDefault();
 
             // MutationObserverを一時停止
-            this.suppressMutationObserver = true;
+            this.suppressMutationObserverCount++;
 
             // <br>タグを挿入
             const selection = window.getSelection();
@@ -1847,7 +1948,7 @@ class BasicTextEditor extends window.PluginBase {
 
             // DOM操作完了後、MutationObserverを再開
             setTimeout(() => {
-                this.suppressMutationObserver = false;
+                this.suppressMutationObserverCount--;
                 this.updateContentHeight();
             }, 0);
 
@@ -1867,49 +1968,14 @@ class BasicTextEditor extends window.PluginBase {
                 if (node.nodeType === Node.TEXT_NODE && offset === 1 &&
                     node.textContent.charAt(0) === '\u200B') {
 
-                    // ケース1: span内のゼロ幅スペースのみの場合（applyFontColor等で挿入）
-                    const parent = node.parentNode;
-                    if (parent && parent.nodeName === 'SPAN' && node.textContent === '\u200B') {
-                        e.preventDefault();
-
-                        // MutationObserverを一時停止
-                        this.suppressMutationObserver = true;
-
-                        // spanの前にカーソルを移動してからspanを削除
-                        const spanParent = parent.parentNode;
-                        const prevNode = parent.previousSibling;
-
-                        const newRange = document.createRange();
-                        if (prevNode && prevNode.nodeType === Node.TEXT_NODE) {
-                            newRange.setStart(prevNode, prevNode.textContent.length);
-                        } else if (prevNode) {
-                            newRange.setStartAfter(prevNode);
-                        } else {
-                            newRange.setStart(spanParent, 0);
-                        }
-                        newRange.collapse(true);
-                        selection.removeAllRanges();
-                        selection.addRange(newRange);
-
-                        // spanを削除
-                        spanParent.removeChild(parent);
-
-                        // DOM操作完了後、MutationObserverを再開
-                        setTimeout(() => {
-                            this.suppressMutationObserver = false;
-                            this.updateContentHeight();
-                        }, 0);
-
-                        return;
-                    }
-
-                    // ケース2: 直前のノードが<br>の場合（Shift+Enterで挿入）
+                    // ケース2を先にチェック: 直前のノードが<br>の場合（Shift+Enterで挿入）
+                    // ※ケース1より優先。<br>+ZWSPのセットを削除する
                     const prevSibling = node.previousSibling;
                     if (prevSibling && prevSibling.nodeName === 'BR') {
                         e.preventDefault();
 
                         // MutationObserverを一時停止
-                        this.suppressMutationObserver = true;
+                        this.suppressMutationObserverCount++;
 
                         // ゼロ幅スペースを削除
                         node.textContent = node.textContent.substring(1);
@@ -1947,7 +2013,103 @@ class BasicTextEditor extends window.PluginBase {
 
                         // DOM操作完了後、MutationObserverを再開
                         setTimeout(() => {
-                            this.suppressMutationObserver = false;
+                            this.suppressMutationObserverCount--;
+                            this.updateContentHeight();
+                        }, 0);
+
+                        return;
+                    }
+
+                    // ケース1: span内のゼロ幅スペースのみの場合（applyFontColor等で挿入）
+                    // ※spanがZWSPテキストノードのみを含む場合のみ適用
+                    const parent = node.parentNode;
+                    if (parent && parent.nodeName === 'SPAN' &&
+                        node.textContent === '\u200B' &&
+                        parent.childNodes.length === 1) {
+                        e.preventDefault();
+
+                        // MutationObserverを一時停止
+                        this.suppressMutationObserverCount++;
+
+                        // spanの前にカーソルを移動してからspanを削除
+                        const spanParent = parent.parentNode;
+                        const prevNode = parent.previousSibling;
+
+                        const newRange = document.createRange();
+                        if (prevNode && prevNode.nodeType === Node.TEXT_NODE) {
+                            newRange.setStart(prevNode, prevNode.textContent.length);
+                        } else if (prevNode) {
+                            newRange.setStartAfter(prevNode);
+                        } else {
+                            newRange.setStart(spanParent, 0);
+                        }
+                        newRange.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+
+                        // spanを削除
+                        spanParent.removeChild(parent);
+
+                        // DOM操作完了後、MutationObserverを再開
+                        setTimeout(() => {
+                            this.suppressMutationObserverCount--;
+                            this.updateContentHeight();
+                        }, 0);
+
+                        return;
+                    }
+
+                }
+
+                // ケース3: offset === 0で直前のノードが<br>の場合
+                // （マウスクリック時やファイル再読み込み後にカーソルがoffset 0に配置される場合の対応）
+                if (node.nodeType === Node.TEXT_NODE && offset === 0) {
+                    let prevSibling = node.previousSibling;
+
+                    // 直前がゼロ幅スペースのみのテキストノードの場合はスキップ
+                    if (prevSibling && prevSibling.nodeType === Node.TEXT_NODE &&
+                        prevSibling.textContent === '\u200B') {
+                        prevSibling = prevSibling.previousSibling;
+                    }
+
+                    if (prevSibling && prevSibling.nodeName === 'BR') {
+                        e.preventDefault();
+
+                        // MutationObserverを一時停止
+                        this.suppressMutationObserverCount++;
+
+                        // 直前のノードがZWSPのみのテキストノードなら削除
+                        const directPrevSibling = node.previousSibling;
+                        if (directPrevSibling && directPrevSibling.nodeType === Node.TEXT_NODE &&
+                            directPrevSibling.textContent === '\u200B') {
+                            directPrevSibling.parentNode.removeChild(directPrevSibling);
+                        }
+
+                        // <br>を削除
+                        prevSibling.parentNode.removeChild(prevSibling);
+
+                        // <br>の前のノードを探してカーソルを移動
+                        const prevNode = node.previousSibling;
+                        const newRange = document.createRange();
+                        if (prevNode && prevNode.nodeType === Node.TEXT_NODE) {
+                            // テキストノードの末尾にカーソルを移動
+                            newRange.setStart(prevNode, prevNode.textContent.length);
+                        } else if (prevNode && prevNode.nodeName === 'BR') {
+                            // 連続した<br>の場合、次の<br>の後にカーソル配置
+                            newRange.setStartAfter(prevNode);
+                        } else if (prevNode) {
+                            newRange.setStartAfter(prevNode);
+                        } else {
+                            // 前にノードがない場合は現在のテキストノードの先頭に留まる
+                            newRange.setStart(node, 0);
+                        }
+                        newRange.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+
+                        // DOM操作完了後、MutationObserverを再開
+                        setTimeout(() => {
+                            this.suppressMutationObserverCount--;
                             this.updateContentHeight();
                         }, 0);
 
@@ -1975,14 +2137,14 @@ class BasicTextEditor extends window.PluginBase {
                         e.preventDefault();
 
                         // MutationObserverを一時停止
-                        this.suppressMutationObserver = true;
+                        this.suppressMutationObserverCount++;
 
                         // spanを削除
                         nextSibling.parentNode.removeChild(nextSibling);
 
                         // DOM操作完了後、MutationObserverを再開
                         setTimeout(() => {
-                            this.suppressMutationObserver = false;
+                            this.suppressMutationObserverCount--;
                             this.updateContentHeight();
                         }, 0);
 
@@ -1998,7 +2160,7 @@ class BasicTextEditor extends window.PluginBase {
                             e.preventDefault();
 
                             // MutationObserverを一時停止
-                            this.suppressMutationObserver = true;
+                            this.suppressMutationObserverCount++;
 
                             // <br>を削除
                             nextSibling.parentNode.removeChild(nextSibling);
@@ -2013,7 +2175,7 @@ class BasicTextEditor extends window.PluginBase {
 
                             // DOM操作完了後、MutationObserverを再開
                             setTimeout(() => {
-                                this.suppressMutationObserver = false;
+                                this.suppressMutationObserverCount--;
                                 this.updateContentHeight();
                             }, 0);
 
@@ -2034,7 +2196,7 @@ class BasicTextEditor extends window.PluginBase {
                                 e.preventDefault();
 
                                 // MutationObserverを一時停止
-                                this.suppressMutationObserver = true;
+                                this.suppressMutationObserverCount++;
 
                                 // <br>を削除
                                 nextNode.parentNode.removeChild(nextNode);
@@ -2049,7 +2211,7 @@ class BasicTextEditor extends window.PluginBase {
 
                                 // DOM操作完了後、MutationObserverを再開
                                 setTimeout(() => {
-                                    this.suppressMutationObserver = false;
+                                    this.suppressMutationObserverCount--;
                                     this.updateContentHeight();
                                 }, 0);
 
@@ -2197,14 +2359,14 @@ class BasicTextEditor extends window.PluginBase {
             document.execCommand('bold');
         }
 
-        // Ctrl+Shift+I: 字下げ（行頭移動指定付箋）
+        // Ctrl+Shift+I: 斜体
         if (e.ctrlKey && e.shiftKey && e.key === 'I') {
             e.preventDefault();
-            this.applyIndent();
+            document.execCommand('italic');
             return;
         }
 
-        // Ctrl+I: 字下げ（Ctrl+Shift+Iと同じ）
+        // Ctrl+I: 字下げ
         // 注: 通常Ctrl+Iは斜体だが、BTRONでは字下げに使用
         if (e.ctrlKey && !e.shiftKey && e.key === 'i') {
             e.preventDefault();
@@ -4107,9 +4269,11 @@ class BasicTextEditor extends window.PluginBase {
                     // 段落の有効色を計算（段落のインラインカラー または 前段落の有効色）
                     const effectiveColor = color || prevParagraphEffectiveColor;
 
-                    // 段落のフォント状態を設定（段落自体のスタイルまたは前の段落の状態を継承）
+                    // 段落のフォント状態を設定
+                    // ※sizeは前段落から継承されるサイズを使用する（現段落のfontSizeは行高計算用のため除外）
+                    // これにより、SPAN要素に明示的に設定されたサイズと継承サイズを比較してペアタグ出力を判定できる
                     const paragraphFontState = {
-                        size: fontSize || prevParagraphFontState.size,
+                        size: prevParagraphFontState.size || '14',
                         color: color !== null ? color : prevParagraphFontState.color,
                         face: fontFamily || prevParagraphFontState.face
                     };
@@ -4119,10 +4283,27 @@ class BasicTextEditor extends window.PluginBase {
                     if (fontFamily && fontFamily !== prevParagraphFontState.face) {
                         xmlParts.push(`<font face="${fontFamily}"/>`);
                     }
-                    // サイズはペアタグ方式のため段落レベルでは出力しない（SPAN要素レベルで処理）
+                    // 段落レベルでフォントサイズを出力
+                    const isEmptyParagraph = this.isParagraphEffectivelyEmpty(p);
+                    let inheritedFontSizeForPairTag = null;  // ペアタグ出力用（空段落・非空段落共通）
+
+                    // 空段落・非空段落共通：有効なフォントサイズ（14以外）があればペアタグで囲む
+                    // ※読み込み時に段落にstyle.fontSizeが設定されるため、fontSizeがある場合も処理が必要
+                    const effectiveFontSize = fontSize || prevParagraphFontState.size;
+                    if (effectiveFontSize && effectiveFontSize !== '14') {
+                        inheritedFontSizeForPairTag = effectiveFontSize;
+                        // ペアタグで囲む場合、extractTADXMLFromElement()で重複タグが出力されないよう
+                        // paragraphFontState.sizeを更新
+                        paragraphFontState.size = effectiveFontSize;
+                    }
 
                     // 次の段落のために現在の状態を保存
-                    prevParagraphFontState = { ...paragraphFontState };
+                    // ※sizeは段落のfontSizeを使用（空段落への継承用）
+                    prevParagraphFontState = {
+                        size: fontSize || prevParagraphFontState.size,
+                        color: paragraphFontState.color,
+                        face: paragraphFontState.face
+                    };
                     prevParagraphEffectiveColor = effectiveColor;
 
                     // 段落の内容を取得（TAD XMLタグをそのまま保持）
@@ -4138,11 +4319,19 @@ class BasicTextEditor extends window.PluginBase {
                     xmlParts.length = xmlPartsLengthBefore;
 
                     // インデントタグを適切な位置に挿入（実測による文字位置特定）
+                    // フォントサイズは段落のサイズ、または前段落からの継承サイズを使用
                     let finalContent = paragraphContent;
                     if (indentPx > 0) {
-                        const indentCharCount = await this.findIndentCharPositionByWidth(paragraphContent, indentPx);
+                        const effectiveFontSizePt = fontSize || prevParagraphFontState.size || '14';
+                        const indentCharCount = await this.findIndentCharPositionByWidth(paragraphContent, indentPx, effectiveFontSizePt);
                         finalContent = this.insertIndentTagAtPosition(paragraphContent, indentCharCount);
                     }
+
+                    // 継承フォントサイズがある場合、ペアタグで囲む
+                    if (inheritedFontSizeForPairTag) {
+                        finalContent = `<font size="${inheritedFontSizeForPairTag}">${finalContent}</font>`;
+                    }
+
                     xmlParts.push(finalContent);
 
                     xmlParts.push('\r\n</p>\r\n');
@@ -4475,25 +4664,15 @@ class BasicTextEditor extends window.PluginBase {
                                     endNode.nextSibling.nodeType === Node.ELEMENT_NODE &&
                                     endNode.nextSibling.nodeName === 'SPAN' &&
                                     endNode.nextSibling.style.fontSize) {
-                                    const size = endNode.nextSibling.style.fontSize.replace('pt', '').replace('px', '');
+                                    const size = window.roundFontSize(endNode.nextSibling.style.fontSize.replace('pt', '').replace('px', ''));
                                     if (size) nextFontSize = size;
                                 }
 
-                                // タブ前のフォントサイズが14と異なる場合のみ<font size="14"/>を出力
-                                if (fontState.size !== '14') {
-                                    xml += `<font size="14"/>`;
-                                }
-
-                                // 全てのタブ文字を出力
+                                // タブ文字を出力（自己閉じタグは使用しない）
+                                // タブは14ptで表示されるため、fontStateを14にリセット
+                                // 後続のSPAN要素処理でペアタグが正しく出力される
                                 xml += allTabs;
-
-                                // タブ後のフォントサイズが14と異なる場合のみ復元タグを出力
-                                if (nextFontSize !== '14') {
-                                    xml += `<font size="${nextFontSize}"/>`;
-                                    fontState.size = nextFontSize;
-                                } else {
-                                    fontState.size = '14';
-                                }
+                                fontState.size = '14';
 
                                 // 処理済みのタブspanをスキップするためのマーク
                                 // (次のループでこのノードが再度処理されないように)
@@ -4515,49 +4694,42 @@ class BasicTextEditor extends window.PluginBase {
                                     node.nextSibling.nodeType === Node.ELEMENT_NODE &&
                                     node.nextSibling.nodeName === 'SPAN' &&
                                     node.nextSibling.style.fontSize) {
-                                    tabFollowSize = node.nextSibling.style.fontSize.replace('pt', '').replace('px', '');
+                                    tabFollowSize = window.roundFontSize(node.nextSibling.style.fontSize.replace('pt', '').replace('px', ''));
                                 } else if (style.fontSize) {
                                     // span自身のフォントサイズ
-                                    tabFollowSize = style.fontSize.replace('pt', '').replace('px', '');
+                                    tabFollowSize = window.roundFontSize(style.fontSize.replace('pt', '').replace('px', ''));
                                 }
 
                                 parts.forEach((part, index) => {
                                     if (part === '\t') {
-                                        // タブは14ptで固定出力し、その後のフォントサイズを復元
-                                        // fontStateと異なる場合のみタグを出力
-                                        if (fontState.size !== '14') {
-                                            xml += `<font size="14"/>`;
-                                        }
+                                        // タブは14ptで出力（自己閉じタグは使用しない）
                                         xml += '\t';
-                                        if (tabFollowSize !== '14') {
-                                            xml += `<font size="${tabFollowSize}"/>`;
-                                        }
-                                        fontState.size = tabFollowSize; // 状態を更新
+                                        fontState.size = '14';  // タブ後はfontStateを14にリセット
                                     } else if (part.length > 0) {
-                                        // 通常のテキスト
-                                        // タブの直後のテキストの場合、フォントサイズタグは不要（既に出力済み）
-                                        const prevPartIsTab = index > 0 && parts[index - 1] === '\t';
-                                        if (!prevPartIsTab && style.fontSize) {
-                                            const size = style.fontSize.replace('pt', '').replace('px', '');
-                                            if (size !== fontState.size) {
-                                                xml += `<font size="${size}"/>`;
-                                                fontState.size = size;
-                                            }
+                                        // テキスト部分をペアタグで囲む
+                                        const textSize = tabFollowSize || fontState.size || '14';
+                                        if (textSize !== '14') {
+                                            xml += `<font size="${textSize}">`;
+                                            xml += this.escapeXml(part);
+                                            xml += '</font>';
+                                        } else {
+                                            xml += this.escapeXml(part);
                                         }
-                                        xml += this.escapeXml(part);
+                                        fontState.size = textSize;
                                     }
                                 });
                             }
                         } else {
                             // 空のspan要素（テキストなし）の場合、fontタグ出力せずに状態のみ更新
-                            const hasTextContent = node.textContent && node.textContent.trim().length > 0;
+                            // ゼロ幅スペース（\u200B）も空扱いとする
+                            const hasTextContent = node.textContent && node.textContent.replace(/\u200B/g, '').trim().length > 0;
 
                             if (!hasTextContent) {
                                 // 空のspan要素の場合、fontStateのみ更新して子要素を処理
                                 const newState = { ...fontState };
 
                                 if (style.fontSize) {
-                                    const size = style.fontSize.replace('pt', '').replace('px', '');
+                                    const size = window.roundFontSize(style.fontSize.replace('pt', '').replace('px', ''));
                                     newState.size = size;
                                 }
                                 if (style.color) {
@@ -4599,10 +4771,12 @@ class BasicTextEditor extends window.PluginBase {
                                     newState.color = hexColor;
                                 }
                                 if (style.fontSize) {
-                                    const size = style.fontSize.replace('pt', '').replace('px', '');
-                                    // ペアタグ方式：サイズがあれば常に出力
-                                    xml += `<font size="${size}">`;
-                                    sizeTagOpened = true;
+                                    const size = window.roundFontSize(style.fontSize.replace('pt', '').replace('px', ''));
+                                    // ペアタグ方式：親と異なるサイズの場合のみ出力（重複防止）
+                                    if (size !== fontState.size) {
+                                        xml += `<font size="${size}">`;
+                                        sizeTagOpened = true;
+                                    }
                                     newState.size = size;
                                 }
                                 if (style.fontFamily) {
@@ -4669,9 +4843,44 @@ class BasicTextEditor extends window.PluginBase {
     extractFontSize(element) {
         const style = element.style.fontSize;
         if (style) {
-            return style.replace('pt', '');
+            const size = style.replace('pt', '').replace('px', '');
+            return window.roundFontSize(size);
         }
         return null;
+    }
+
+    /**
+     * 段落が実質的に空かどうかを判定
+     * <br>のみ、またはゼロ幅スペースのみのspanを含む場合にtrueを返す
+     * @param {HTMLElement} paragraph - 段落要素
+     * @returns {boolean}
+     */
+    isParagraphEffectivelyEmpty(paragraph) {
+        const children = paragraph.childNodes;
+
+        for (const child of children) {
+            if (child.nodeType === Node.ELEMENT_NODE) {
+                if (child.nodeName === 'BR') {
+                    continue;  // <br>は空扱い
+                }
+                if (child.nodeName === 'SPAN') {
+                    // ゼロ幅スペースのみなら空扱い
+                    const text = child.textContent.replace(/\u200B/g, '').trim();
+                    if (text === '') {
+                        continue;
+                    }
+                }
+                return false;  // 他の要素があれば空ではない
+            } else if (child.nodeType === Node.TEXT_NODE) {
+                // テキストノードがあれば空ではない（ゼロ幅スペース除く）
+                const text = child.textContent.replace(/\u200B/g, '').trim();
+                if (text !== '') {
+                    return false;
+                }
+            }
+        }
+
+        return true;  // 全て空扱いの要素のみ
     }
 
     /**
@@ -4804,7 +5013,7 @@ class BasicTextEditor extends window.PluginBase {
      * @param {number} targetWidth - 目標のピクセル幅
      * @returns {Promise<number>} 文字位置（0始まり）
      */
-    async findIndentCharPositionByWidth(xmlContent, targetWidth) {
+    async findIndentCharPositionByWidth(xmlContent, targetWidth, fontSizePt = '14') {
         if (targetWidth <= 0) {
             return 0;
         }
@@ -4842,7 +5051,7 @@ class BasicTextEditor extends window.PluginBase {
 
         for (let pos = 1; pos <= charPositions.length; pos++) {
             const testText = charPositions.slice(0, pos).map(p => p.char).join('');
-            const width = await this.measureXmlTextWidth(testText);
+            const width = await this.measureXmlTextWidth(testText, fontSizePt);
 
             const diff = Math.abs(width - targetWidth);
             if (diff < bestDiff) {
@@ -4861,13 +5070,15 @@ class BasicTextEditor extends window.PluginBase {
 
     /**
      * テキストの実際の幅を測定（エディタのスタイルを使用）
+     * @param {string} text - 測定するテキスト
+     * @param {string} fontSizePt - フォントサイズ（ポイント単位、デフォルト: '14'）
      */
-    async measureXmlTextWidth(text) {
+    async measureXmlTextWidth(text, fontSizePt = '14') {
         const measureElement = document.createElement('span');
         const editorStyle = window.getComputedStyle(this.editor);
 
         measureElement.style.fontFamily = editorStyle.fontFamily;
-        measureElement.style.fontSize = editorStyle.fontSize;
+        measureElement.style.fontSize = `${fontSizePt}pt`;  // 指定されたフォントサイズを使用
         measureElement.style.fontWeight = editorStyle.fontWeight;
         measureElement.style.fontStyle = editorStyle.fontStyle;
         measureElement.style.letterSpacing = editorStyle.letterSpacing;
@@ -4970,10 +5181,23 @@ class BasicTextEditor extends window.PluginBase {
                 const innerText = this.convertHTMLToText(node);
 
                 // HTML要素をTAD XMLタグに変換
-                if (nodeName === 'U') {
+                // 標準HTMLタグ
+                if (nodeName === 'U' || nodeName === 'UNDERLINE') {
                     text += `<underline>${innerText}</underline>`;
-                } else if (nodeName === 'S') {
+                } else if (nodeName === 'S' || nodeName === 'STRIKETHROUGH') {
                     text += `<strikethrough>${innerText}</strikethrough>`;
+                } else if (nodeName === 'OVERLINE') {
+                    text += `<overline>${innerText}</overline>`;
+                } else if (nodeName === 'INVERT') {
+                    text += `<invert>${innerText}</invert>`;
+                } else if (nodeName === 'MESH') {
+                    text += `<mesh>${innerText}</mesh>`;
+                } else if (nodeName === 'NOPRINT') {
+                    text += `<noprint>${innerText}</noprint>`;
+                } else if (nodeName === 'BAGCHAR') {
+                    text += `<bagchar>${innerText}</bagchar>`;
+                } else if (nodeName === 'BOX') {
+                    text += `<box>${innerText}</box>`;
                 } else if (nodeName === 'RUBY') {
                     // rubyタグの処理
                     const rt = node.querySelector('rt');
@@ -5365,7 +5589,8 @@ class BasicTextEditor extends window.PluginBase {
                 submenu: [
                     { label: '標準', action: 'style-normal' },
                     { label: '太字', action: 'style-bold', shortcut: 'Ctrl+B' },
-                    { label: '斜体', action: 'style-italic' },
+                    { label: '斜体', action: 'style-italic',
+                        shortcut: 'Ctrl+Shift+I'},
                     { label: '袋文字', action: 'style-bagchar' },
                     { label: '枠囲み', action: 'style-box' },
                     { label: '影付き', action: 'style-shadow' },
@@ -5380,7 +5605,7 @@ class BasicTextEditor extends window.PluginBase {
                     { label: '上付き', action: 'style-superscript' },
                     { label: '下付き', action: 'style-subscript' },
                     { separator: true },
-                    { label: '字下げ', action: 'style-indent', shortcut: 'Ctrl+Shift+I / Tab' },
+                    { label: '字下げ', action: 'style-indent', shortcut: 'Tab' },
                     { label: '解除', action: 'style-clear' }
                 ]
             },
@@ -5429,7 +5654,7 @@ class BasicTextEditor extends window.PluginBase {
             {
                 label: '書式',
                 submenu: [
-                    { label: '字下げ', action: 'format-indent' },
+                    { label: '字下げ', action: 'format-indent', shortcut: 'Ctrl+I' },
                     {
                         label: '行揃え',
                         submenu: [
@@ -5742,8 +5967,7 @@ class BasicTextEditor extends window.PluginBase {
                 this.setStatus('字下げを挿入しました');
                 break;
             case 'style-clear':
-                document.execCommand('removeFormat');
-                this.setStatus('書式を解除しました');
+                this.clearDecorationOnly();
                 break;
 
             // 文字サイズ
@@ -6101,42 +6325,43 @@ class BasicTextEditor extends window.PluginBase {
 
     /**
      * 段落の先頭からカーソル位置までの実際のインデント幅を測定
-     * エディタの基準フォント（14pt）でタブ幅を測定し、フォントサイズに依存しない
+     * DOMに実際に描画されている位置を使用し、フォントサイズを問わず正確に測定
      */
     measureIndentWidth(paragraph, targetNode, targetOffset) {
-        // 段落の先頭からカーソル位置までのRangeを作成
-        const range = document.createRange();
-        range.setStart(paragraph, 0);
-        range.setEnd(targetNode, targetOffset);
+        // 段落の先頭からカーソル位置までのRangeを作成（空チェック用）
+        const checkRange = document.createRange();
+        checkRange.setStart(paragraph, 0);
+        checkRange.setEnd(targetNode, targetOffset);
 
-        // テキストを取得
-        const text = range.toString();
-
+        // テキストを取得して空チェック
+        const text = checkRange.toString();
         if (text.length === 0) {
             return 0;
         }
 
-        // タブ1文字の基準幅を取得（初回のみ測定、キャッシュ）
-        if (!this.tabWidth) {
-            this.tabWidth = this.measureTabWidth();
-        }
+        // カーソル位置に一時的なマーカー要素を挿入
+        const tempMarker = document.createElement('span');
+        tempMarker.style.display = 'inline';
+        tempMarker.style.width = '0';
+        tempMarker.style.height = '0';
 
-        // タブ文字の数をカウント
-        const tabCount = (text.match(/\t/g) || []).length;
+        // Rangeを折り畳んでカーソル位置に設定
+        const insertRange = document.createRange();
+        insertRange.setStart(targetNode, targetOffset);
+        insertRange.setEnd(targetNode, targetOffset);
+        insertRange.insertNode(tempMarker);
 
-        // タブ以外のテキスト
-        const textWithoutTabs = text.replace(/\t/g, '');
+        // DOM上の実際の位置を取得
+        const markerRect = tempMarker.getBoundingClientRect();
+        const paragraphRect = paragraph.getBoundingClientRect();
 
-        // タブ以外のテキストの幅を測定
-        let otherTextWidth = 0;
-        if (textWithoutTabs.length > 0) {
-            otherTextWidth = this.measureTextWidth(textWithoutTabs);
-        }
+        // インデント幅を計算（段落左端からマーカー位置まで）
+        const indentPx = markerRect.left - paragraphRect.left;
 
-        // 合計幅 = タブ幅 * タブ数 + その他のテキスト幅
-        const totalWidth = this.tabWidth * tabCount + otherTextWidth;
+        // マーカーを削除
+        tempMarker.remove();
 
-        return totalWidth;
+        return Math.max(0, indentPx);
     }
 
     /**
@@ -6199,6 +6424,18 @@ class BasicTextEditor extends window.PluginBase {
         this.bgColor = color;
         this.editor.style.backgroundColor = color;
         document.body.style.backgroundColor = color;
+
+        // スクロールコンテナに背景色を適用（スクロール時の灰色表示を防ぐ）
+        const pluginContent = document.querySelector('.plugin-content');
+        if (pluginContent) {
+            pluginContent.style.backgroundColor = color;
+        }
+
+        // editor-containerに背景色を適用
+        const editorContainer = document.querySelector('.editor-container');
+        if (editorContainer) {
+            editorContainer.style.backgroundColor = color;
+        }
     }
 
     /**
@@ -7302,7 +7539,9 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
-     * 書式クリア
+     * 書式クリア（標準）
+     * 選択範囲およびその親要素から文字修飾タグを削除
+     * 文字色・文字サイズは保持する
      */
     clearFormatting() {
         const selection = window.getSelection();
@@ -7312,27 +7551,122 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         const range = selection.getRangeAt(0);
-        
-        // 選択範囲のテキストを取得
         const selectedText = range.toString();
-        
+
         if (!selectedText) {
             this.setStatus('テキストを選択してください');
             return;
         }
 
-        // 選択範囲を削除して、プレーンテキストとして再挿入
-        range.deleteContents();
-        const textNode = document.createTextNode(selectedText);
-        range.insertNode(textNode);
-        
-        // カーソル位置をテキストの後ろに移動
-        range.setStartAfter(textNode);
-        range.setEndAfter(textNode);
-        selection.removeAllRanges();
-        selection.addRange(range);
-        
+        // 文字修飾タグのリスト（カスタム要素と標準HTML）
+        const decorationTags = [
+            'UNDERLINE', 'OVERLINE', 'STRIKETHROUGH',
+            'MESH', 'INVERT', 'NOPRINT', 'BAGCHAR', 'BOX',
+            'U', 'S', 'B', 'I', 'SUB', 'SUP'
+        ];
+
+        // 選択範囲の共通祖先を取得
+        const container = range.commonAncestorContainer;
+        let current = container.nodeType === Node.TEXT_NODE ? container.parentNode : container;
+
+        // 祖先要素から文字修飾タグを検出
+        const tagsToRemove = [];
+        while (current && current !== this.editor && current.nodeType === Node.ELEMENT_NODE) {
+            const nodeName = current.nodeName.toUpperCase();
+            if (decorationTags.includes(nodeName)) {
+                tagsToRemove.push(current);
+            }
+            // SPANでスタイル付きのものもチェック
+            if (nodeName === 'SPAN') {
+                const style = current.getAttribute('style') || '';
+                if (style.includes('text-decoration') ||
+                    style.includes('-webkit-text-stroke') ||
+                    style.includes('background-color: currentColor') ||
+                    style.includes('repeating-linear-gradient') ||
+                    current.hasAttribute('data-noprint')) {
+                    tagsToRemove.push(current);
+                }
+            }
+            current = current.parentNode;
+        }
+
+        // タグを削除（内容は保持）
+        tagsToRemove.forEach(tag => {
+            const parent = tag.parentNode;
+            if (parent) {
+                while (tag.firstChild) {
+                    parent.insertBefore(tag.firstChild, tag);
+                }
+                parent.removeChild(tag);
+            }
+        });
+
         this.setStatus('書式を解除しました');
+    }
+
+    /**
+     * 文字修飾のみ解除（解除）
+     * 文字サイズ・文字色は保持したまま、文字修飾のみを削除
+     */
+    clearDecorationOnly() {
+        const selection = window.getSelection();
+        if (!selection.rangeCount) {
+            this.setStatus('テキストを選択してください');
+            return;
+        }
+
+        const range = selection.getRangeAt(0);
+        const selectedText = range.toString();
+
+        if (!selectedText) {
+            this.setStatus('テキストを選択してください');
+            return;
+        }
+
+        // 文字修飾タグのリスト（fontタグは除外 - サイズ・色を保持）
+        const decorationTags = [
+            'UNDERLINE', 'OVERLINE', 'STRIKETHROUGH',
+            'MESH', 'INVERT', 'NOPRINT', 'BAGCHAR', 'BOX',
+            'U', 'S', 'B', 'I', 'SUB', 'SUP'
+        ];
+
+        // 選択範囲の共通祖先を取得
+        const container = range.commonAncestorContainer;
+        let current = container.nodeType === Node.TEXT_NODE ? container.parentNode : container;
+
+        // 祖先要素から文字修飾タグを検出
+        const tagsToRemove = [];
+        while (current && current !== this.editor && current.nodeType === Node.ELEMENT_NODE) {
+            const nodeName = current.nodeName.toUpperCase();
+            if (decorationTags.includes(nodeName)) {
+                tagsToRemove.push(current);
+            }
+            // SPANでスタイル付きのものもチェック（text-decorationのみ、font関連は除外）
+            if (nodeName === 'SPAN') {
+                const style = current.getAttribute('style') || '';
+                if (style.includes('text-decoration') ||
+                    style.includes('-webkit-text-stroke') ||
+                    style.includes('background-color: currentColor') ||
+                    style.includes('repeating-linear-gradient') ||
+                    current.hasAttribute('data-noprint')) {
+                    tagsToRemove.push(current);
+                }
+            }
+            current = current.parentNode;
+        }
+
+        // タグを削除（内容は保持）
+        tagsToRemove.forEach(tag => {
+            const parent = tag.parentNode;
+            if (parent) {
+                while (tag.firstChild) {
+                    parent.insertBefore(tag.firstChild, tag);
+                }
+                parent.removeChild(tag);
+            }
+        });
+
+        this.setStatus('文字修飾を解除しました');
     }
 
     /**
@@ -7402,13 +7736,45 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
+     * 選択範囲の文字色を取得
+     * @returns {string|null} 文字色（rgb形式またはhex形式）、黒以外の場合のみ返す
+     */
+    getSelectionTextColor() {
+        const selection = window.getSelection();
+        if (!selection.rangeCount) return null;
+
+        const range = selection.getRangeAt(0);
+        let startNode = range.startContainer;
+        if (startNode.nodeType === Node.TEXT_NODE) {
+            startNode = startNode.parentNode;
+        }
+
+        const computedStyle = window.getComputedStyle(startNode);
+        const color = computedStyle.color;
+
+        // 黒色（rgb(0, 0, 0)）以外の場合のみ返す
+        if (color && color !== 'rgb(0, 0, 0)') {
+            return color;
+        }
+        return null;
+    }
+
+    /**
      * 下線
+     * 文字色と同じ色で下線を適用
      */
     applyUnderline() {
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
             const range = selection.getRangeAt(0);
+            const textColor = this.getSelectionTextColor();
+
             const underline = document.createElement('underline');
+            // 文字色と同じ色で下線を設定
+            if (textColor) {
+                underline.style.textDecorationColor = textColor;
+            }
+
             range.surroundContents(underline);
             this.setStatus('下線を適用しました');
         }
@@ -7416,12 +7782,20 @@ class BasicTextEditor extends window.PluginBase {
 
     /**
      * 上線
+     * 文字色と同じ色で上線を適用
      */
     applyOverline() {
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
             const range = selection.getRangeAt(0);
+            const textColor = this.getSelectionTextColor();
+
             const overline = document.createElement('overline');
+            // 文字色と同じ色で上線を設定
+            if (textColor) {
+                overline.style.textDecorationColor = textColor;
+            }
+
             range.surroundContents(overline);
             this.setStatus('上線を適用しました');
         }
@@ -7429,12 +7803,20 @@ class BasicTextEditor extends window.PluginBase {
 
     /**
      * 取り消し線
+     * 文字色と同じ色で取り消し線を適用
      */
     applyStrikethrough() {
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
             const range = selection.getRangeAt(0);
+            const textColor = this.getSelectionTextColor();
+
             const strikethrough = document.createElement('strikethrough');
+            // 文字色と同じ色で取り消し線を設定
+            if (textColor) {
+                strikethrough.style.textDecorationColor = textColor;
+            }
+
             range.surroundContents(strikethrough);
             this.setStatus('取り消し線を適用しました');
         }
@@ -7646,12 +8028,11 @@ class BasicTextEditor extends window.PluginBase {
                     // 段落内のすべてのフォントサイズを取得
                     let maxFontSize = 14; // デフォルト
 
-                    // 段落内のすべてのfont要素とspan要素を確認
-                    const fontElements = paragraph.querySelectorAll('font[style*="font-size"], span[style*="font-size"]');
-                    fontElements.forEach(el => {
-                        const style = el.style.fontSize;
-                        if (style) {
-                            const size = parseFloat(style);
+                    // 段落内のすべてのfont要素とspan要素を確認（属性セレクタではなく直接プロパティをチェック）
+                    const allElements = paragraph.querySelectorAll('font, span');
+                    allElements.forEach(el => {
+                        if (el.style.fontSize) {
+                            const size = parseFloat(el.style.fontSize);
                             if (!isNaN(size) && size > maxFontSize) {
                                 maxFontSize = size;
                             }
@@ -7719,12 +8100,13 @@ class BasicTextEditor extends window.PluginBase {
 
     /**
      * カーソル位置の文字スタイルを取得
+     * ネストされたfont要素も考慮して、祖先を辿ってスタイルをマージ
      * @param {Element} element - 基準要素
      * @returns {Object} スタイル情報
      */
     getCaretStyle(element) {
         const computedStyle = window.getComputedStyle(element);
-        return {
+        const result = {
             fontSize: computedStyle.fontSize,
             color: computedStyle.color,
             fontWeight: computedStyle.fontWeight,
@@ -7732,6 +8114,72 @@ class BasicTextEditor extends window.PluginBase {
             textDecoration: computedStyle.textDecoration,
             fontFamily: computedStyle.fontFamily
         };
+
+        // font要素のネストに対応: 祖先のfont要素からsize/color属性を取得
+        let current = element;
+        while (current && current !== this.editor) {
+            if (current.tagName === 'FONT') {
+                // font要素のsize属性（最も内側を優先するため、未設定の場合のみ取得）
+                const fontSizeAttr = current.getAttribute('size');
+                if (fontSizeAttr && !result.fontSizeFromAttr) {
+                    result.fontSizeFromAttr = fontSizeAttr;
+                }
+                // font要素のcolor属性
+                const colorAttr = current.getAttribute('color');
+                if (colorAttr && !result.colorFromAttr) {
+                    result.colorFromAttr = colorAttr;
+                }
+            }
+            current = current.parentElement;
+        }
+
+        return result;
+    }
+
+    /**
+     * 段落内の最後のテキストを含むスタイル付き要素を探す
+     * カーソルがP要素内（span外）にある場合に使用
+     * @param {Element} paragraph - 段落要素
+     * @returns {Element|null} 最後のスタイル付き要素、見つからない場合はnull
+     */
+    findLastStyledElement(paragraph) {
+        // 段落内を後ろから探索して、テキストを含む最後の要素を見つける
+        const walker = document.createTreeWalker(
+            paragraph,
+            NodeFilter.SHOW_TEXT,
+            null,
+            false
+        );
+
+        let lastTextNode = null;
+        let lastStyledTextNode = null;  // スタイル付き要素内の最後のテキストノード
+        let node;
+        while (node = walker.nextNode()) {
+            // 空白のみのテキストノードは除外
+            if (node.textContent.trim() !== '' || node.textContent === '\u200B') {
+                lastTextNode = node;
+                // 親がP要素以外（span等のスタイル付き要素）の場合は記録
+                if (node.parentElement && node.parentElement !== paragraph) {
+                    lastStyledTextNode = node;
+                }
+            }
+        }
+
+        // 最後のテキストノードの親がスタイル付き要素の場合はそれを返す
+        if (lastTextNode) {
+            let parent = lastTextNode.parentElement;
+            if (parent && parent !== paragraph) {
+                return parent;
+            }
+        }
+
+        // 最後のテキストノードの親がP要素の場合（スタイルなしテキスト）、
+        // その前のスタイル付き要素内の最後のテキストノードを使用
+        if (lastStyledTextNode) {
+            return lastStyledTextNode.parentElement;
+        }
+
+        return null;
     }
 
     /**
@@ -7805,6 +8253,35 @@ class BasicTextEditor extends window.PluginBase {
         span.appendChild(document.createTextNode('\u200B'));
 
         return span;
+    }
+
+    /**
+     * 空のspan要素を再帰的に削除
+     * extractContents()後に残る空のspan構造をクリーンアップする
+     * @param {HTMLElement} element - クリーンアップ対象の要素
+     */
+    removeEmptySpans(element) {
+        if (!element) return;
+
+        // 子要素を後ろから処理（削除時のインデックスずれを防ぐ）
+        const children = Array.from(element.childNodes);
+        for (let i = children.length - 1; i >= 0; i--) {
+            const child = children[i];
+            if (child.nodeType === Node.ELEMENT_NODE && child.nodeName === 'SPAN') {
+                // 再帰的に子のspanも処理
+                this.removeEmptySpans(child);
+
+                // spanが空（テキストコンテンツなし、または空白のみ）なら削除
+                // ただし、ZWSPのみのspanは残す（スタイル継承用）
+                const textContent = child.textContent;
+                const hasOnlyZWSP = textContent === '\u200B';
+                const hasBR = child.querySelector('br');
+
+                if (!hasOnlyZWSP && !hasBR && textContent.trim() === '') {
+                    child.parentNode.removeChild(child);
+                }
+            }
+        }
     }
 
     /**
@@ -7931,7 +8408,10 @@ class BasicTextEditor extends window.PluginBase {
                 // 空文字列の場合はルビタグを削除
                 const textContent = existingRuby.textContent;
                 const textNode = document.createTextNode(textContent);
-                existingRuby.parentNode.replaceChild(textNode, existingRuby);
+                const parentNode = existingRuby.parentNode;
+                parentNode.replaceChild(textNode, existingRuby);
+                // 隣接テキストノードを結合して空白の蓄積を防ぐ
+                parentNode.normalize();
                 this.setStatus('ルビを削除しました');
             } else {
                 // ルビテキストを更新
@@ -8398,8 +8878,21 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         // 画像の現在のサイズを取得（単位付き文字列で統一）
-        const currentWidth = img.getAttribute('data-current-width') || img.style.width || (img.width + 'px');
-        const currentHeight = img.getAttribute('data-current-height') || img.style.height || (img.height + 'px');
+        // 優先順位: data-current-* > style.* > 実際の表示サイズ
+        let currentWidth = img.getAttribute('data-current-width') || img.style.width;
+        let currentHeight = img.getAttribute('data-current-height') || img.style.height;
+
+        // 単位がない場合や値がない場合は実際の表示サイズを使用
+        if (!currentWidth || parseFloat(currentWidth) === 0) {
+            currentWidth = (img.offsetWidth || img.width || 100) + 'px';
+        } else if (!currentWidth.includes('px') && !currentWidth.includes('%')) {
+            currentWidth = parseFloat(currentWidth) + 'px';
+        }
+        if (!currentHeight || parseFloat(currentHeight) === 0) {
+            currentHeight = (img.offsetHeight || img.height || 100) + 'px';
+        } else if (!currentHeight.includes('px') && !currentHeight.includes('%')) {
+            currentHeight = parseFloat(currentHeight) + 'px';
+        }
 
         logger.debug('[EDITOR] 移動時のサイズを復元:', currentWidth, currentHeight);
 
@@ -8584,12 +9077,12 @@ class BasicTextEditor extends window.PluginBase {
         };
 
         // MutationObserverを一時停止して画像を削除（ファイル削除をバイパス）
-        this.suppressMutationObserver = true;
+        this.suppressMutationObserverCount++;
         try {
             this.deselectImage();
             img.remove();
         } finally {
-            this.suppressMutationObserver = false;
+            this.suppressMutationObserverCount--;
         }
 
         // 手動でファイルを削除
@@ -9023,6 +9516,7 @@ class BasicTextEditor extends window.PluginBase {
             if (text) {
                 // テキストを挿入
                 document.execCommand('insertText', false, text);
+                this.updateParagraphLineHeight(); // 段落のline-heightを更新
                 this.setStatus('クリップボードから貼り付けました');
             } else {
                 this.setStatus('クリップボードにデータがありません');
@@ -9048,6 +9542,7 @@ class BasicTextEditor extends window.PluginBase {
             if (text) {
                 // テキストを挿入
                 document.execCommand('insertText', false, text);
+                this.updateParagraphLineHeight(); // 段落のline-heightを更新
                 // システムクリップボードをクリア
                 await navigator.clipboard.writeText('');
                 this.setStatus('クリップボードから移動しました');
@@ -9596,9 +10091,13 @@ class BasicTextEditor extends window.PluginBase {
             iconImg.className = 'virtual-object-icon';
             iconImg.style.width = chszPx + 'px';
             iconImg.style.height = chszPx + 'px';
+            // min-width/min-heightを設定してsrcが空でもスペースを確保
+            iconImg.style.minWidth = chszPx + 'px';
+            iconImg.style.minHeight = chszPx + 'px';
             iconImg.style.objectFit = 'contain';
             iconImg.style.flexShrink = '0';
             iconImg.style.backgroundColor = 'transparent';
+            iconImg.style.boxSizing = 'border-box';
 
             // アイコンを読み込む
             if (realId) {
@@ -9879,6 +10378,27 @@ class BasicTextEditor extends window.PluginBase {
     }
 
     /**
+     * 表示属性値をbooleanに変換するヘルパー
+     * 文字列'true'/'false'とboolean両方を正しく処理
+     * @param {string|boolean|undefined} value - 属性値
+     * @param {boolean} defaultValue - デフォルト値
+     * @returns {boolean}
+     */
+    parseBooleanAttr(value, defaultValue) {
+        if (value === undefined || value === null) {
+            return defaultValue;
+        }
+        if (typeof value === 'boolean') {
+            return value;
+        }
+        // 文字列として比較
+        const strValue = String(value).toLowerCase();
+        if (strValue === 'true') return true;
+        if (strValue === 'false') return false;
+        return defaultValue;
+    }
+
+    /**
      * 仮身オブジェクトから現在の属性値を取得（element.dataset対応）
      * @param {Object} vobj - 仮身オブジェクト
      * @param {HTMLElement|null} element - DOM要素
@@ -9891,31 +10411,33 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         // elementのdatasetから最新の値を読み取る（vobjをフォールバック）
-        const pictdisp = element.dataset.linkPictdisp !== undefined ? element.dataset.linkPictdisp : (vobj.pictdisp || 'true');
-        const namedisp = element.dataset.linkNamedisp !== undefined ? element.dataset.linkNamedisp : (vobj.namedisp || 'true');
-        const roledisp = element.dataset.linkRoledisp !== undefined ? element.dataset.linkRoledisp : (vobj.roledisp || 'false');
-        const typedisp = element.dataset.linkTypedisp !== undefined ? element.dataset.linkTypedisp : (vobj.typedisp || 'false');
-        const updatedisp = element.dataset.linkUpdatedisp !== undefined ? element.dataset.linkUpdatedisp : (vobj.updatedisp || 'false');
-        const framedisp = element.dataset.linkFramedisp !== undefined ? element.dataset.linkFramedisp : (vobj.framedisp || 'true');
+        // parseBooleanAttrで文字列/boolean両方を正しく処理
+        const pictdispRaw = element.dataset.linkPictdisp !== undefined ? element.dataset.linkPictdisp : vobj.pictdisp;
+        const namedispRaw = element.dataset.linkNamedisp !== undefined ? element.dataset.linkNamedisp : vobj.namedisp;
+        const roledispRaw = element.dataset.linkRoledisp !== undefined ? element.dataset.linkRoledisp : vobj.roledisp;
+        const typedispRaw = element.dataset.linkTypedisp !== undefined ? element.dataset.linkTypedisp : vobj.typedisp;
+        const updatedispRaw = element.dataset.linkUpdatedisp !== undefined ? element.dataset.linkUpdatedisp : vobj.updatedisp;
+        const framedispRaw = element.dataset.linkFramedisp !== undefined ? element.dataset.linkFramedisp : vobj.framedisp;
+        const autoopenRaw = element.dataset.linkAutoopen !== undefined ? element.dataset.linkAutoopen : vobj.autoopen;
+
         const frcol = element.dataset.linkFrcol || vobj.frcol || '#000000';
         const chcol = element.dataset.linkChcol || vobj.chcol || '#000000';
         const tbcol = element.dataset.linkTbcol || vobj.tbcol || '#ffffff';
         const bgcol = element.dataset.linkBgcol || vobj.bgcol || '#ffffff';
-        const autoopen = element.dataset.linkAutoopen !== undefined ? element.dataset.linkAutoopen : (vobj.autoopen || 'false');
         const chsz = element.dataset.linkChsz ? parseFloat(element.dataset.linkChsz) : (parseFloat(vobj.chsz) || 14);
 
         return {
-            pictdisp: pictdisp !== 'false',
-            namedisp: namedisp !== 'false',
-            roledisp: roledisp === 'true',
-            typedisp: typedisp === 'true',
-            updatedisp: updatedisp === 'true',
-            framedisp: framedisp !== 'false',
+            pictdisp: this.parseBooleanAttr(pictdispRaw, true),
+            namedisp: this.parseBooleanAttr(namedispRaw, true),
+            roledisp: this.parseBooleanAttr(roledispRaw, false),
+            typedisp: this.parseBooleanAttr(typedispRaw, false),
+            updatedisp: this.parseBooleanAttr(updatedispRaw, false),
+            framedisp: this.parseBooleanAttr(framedispRaw, true),
             frcol: frcol,
             chcol: chcol,
             tbcol: tbcol,
             bgcol: bgcol,
-            autoopen: autoopen === 'true',
+            autoopen: this.parseBooleanAttr(autoopenRaw, false),
             chsz: chsz
         };
     }
@@ -10615,13 +11137,13 @@ class BasicTextEditor extends window.PluginBase {
         paperOptionsHtml += '<option disabled>──────────</option>';
         paperOptionsHtml += `<option value="CUSTOM" ${currentSizeName === 'CUSTOM' ? 'selected' : ''}>カスタム</option>`;
 
-        // 現在の値
-        const curWidth = Math.round(this.paperSize.widthMm * 10) / 10;
-        const curHeight = Math.round(this.paperSize.lengthMm * 10) / 10;
-        const curTopMm = Math.round(this.paperSize.topMm * 10) / 10;
-        const curBottomMm = Math.round(this.paperSize.bottomMm * 10) / 10;
-        const curLeftMm = Math.round(this.paperSize.leftMm * 10) / 10;
-        const curRightMm = Math.round(this.paperSize.rightMm * 10) / 10;
+        // 現在の値（0.01mm精度で丸めて誤差蓄積を軽減）
+        const curWidth = Math.round(this.paperSize.widthMm * 100) / 100;
+        const curHeight = Math.round(this.paperSize.lengthMm * 100) / 100;
+        const curTopMm = Math.round(this.paperSize.topMm * 100) / 100;
+        const curBottomMm = Math.round(this.paperSize.bottomMm * 100) / 100;
+        const curLeftMm = Math.round(this.paperSize.leftMm * 100) / 100;
+        const curRightMm = Math.round(this.paperSize.rightMm * 100) / 100;
         const curImposition = this.paperSize.imposition;
 
         const dialogHtml = `

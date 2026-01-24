@@ -72,3 +72,17 @@ export function parseScaleValue(scaleValue, baseValuePoints, unit = -72) {
         return baseValuePoints * ratio;
     }
 }
+
+/**
+ * フォントサイズを小数点第一位まで丸める
+ * px→pt変換時の誤差（例: 28pt → 37.324px → 28.007pt）を補正する
+ * @param {string|number} size - フォントサイズ（数値または文字列）
+ * @returns {string} 丸めた値の文字列
+ */
+export function roundFontSize(size) {
+    const num = parseFloat(size);
+    if (isNaN(num)) return size;
+    const rounded = Math.round(num * 10) / 10;
+    // 整数の場合は小数点以下を省略（28.0 → 28）
+    return rounded === Math.floor(rounded) ? rounded.toString() : rounded.toString();
+}

@@ -441,9 +441,10 @@ class RealObjectSearchApp extends window.PluginBase {
 
     /**
      * 検索結果ウィンドウを開く
+     * 複数ウィンドウを開くことが可能
      */
     openSearchResultWindow(results, searchParams) {
-        if (window.parent && window.parent !== window && window.parent.pluginManager) {
+        if (window.parent && window.parent.tadjsDesktop) {
             try {
                 // 検索ウィンドウの位置を取得して、重ならない位置を計算
                 let windowX = 100;
@@ -475,17 +476,34 @@ class RealObjectSearchApp extends window.PluginBase {
                     }
                 }
 
-                const fileData = {
+                // 検索条件をタイトルに反映
+                let windowTitle = '検索結果';
+                if (searchParams && searchParams.searchText) {
+                    windowTitle = `検索結果: ${searchParams.searchText}`;
+                }
+
+                const initData = {
                     searchResults: results,
                     searchParams: searchParams,
-                    windowConfig: {
+                    parentSearchWindowId: this.windowId
+                };
+
+                // createIframeWindow方式で検索結果ウィンドウを開く（複数可能）
+                window.parent.tadjsDesktop.createIframeWindow(
+                    'plugins/real-object-search/result/index.html',
+                    windowTitle,
+                    initData,
+                    {
+                        width: 600,
+                        height: 500,
+                        resizable: true,
+                        customScrollbar: true,
                         pos: {
                             x: windowX,
                             y: windowY
                         }
                     }
-                };
-                window.parent.pluginManager.launchPlugin('real-object-search-result', fileData);
+                );
                 logger.info('[RealObjectSearch] 検索結果ウィンドウ起動');
             } catch (error) {
                 logger.error('[RealObjectSearch] 検索結果ウィンドウ起動エラー:', error);

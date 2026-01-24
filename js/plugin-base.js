@@ -4293,7 +4293,8 @@ export class PluginBase {
                 return 0;
             }
 
-            const maxNo = Math.max(...result.files.map(f => f.imageNo));
+            // resourceNoを優先し、後方互換としてimageNoもサポート
+            const maxNo = Math.max(...result.files.map(f => f.resourceNo ?? f.imageNo));
             return maxNo + 1;
         } catch (error) {
             logger.warn(`[${this.pluginName}] ディスクからの連番取得失敗:`, error);
@@ -4335,12 +4336,14 @@ export class PluginBase {
     }
 
     /**
-     * 次の画像番号を取得（メモリ+ディスク両方を考慮）
-     * @returns {Promise<number>} 次の画像番号
+     * 次のリソース番号を取得（メモリ+ディスク両方を考慮）
+     * 画像、pixelmap等のリソース番号計算に使用する汎用メソッド
+     * @param {Function} getMemoryMaxFn - メモリ上の最大番号を返す関数（デフォルト: -1を返す）
+     * @returns {Promise<number>} 次のリソース番号
      */
-    async getNextImageNumber() {
-        // 1. メモリ上の最大値（子クラスで実装）
-        const memoryMax = this.getMemoryMaxImageNumber();
+    async getNextResourceNumber(getMemoryMaxFn = () => -1) {
+        // 1. メモリ上の最大値
+        const memoryMax = getMemoryMaxFn();
 
         // 2. ディスク上の最大値
         let diskMax = -1;
@@ -4354,6 +4357,14 @@ export class PluginBase {
         }
 
         return Math.max(memoryMax, diskMax) + 1;
+    }
+
+    /**
+     * 次の画像番号を取得（メモリ+ディスク両方を考慮）
+     * @returns {Promise<number>} 次の画像番号
+     */
+    async getNextImageNumber() {
+        return this.getNextResourceNumber(() => this.getMemoryMaxImageNumber());
     }
 
     // ========================================

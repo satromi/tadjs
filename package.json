@@ -1,6 +1,6 @@
 {
   "name": "tadjs-desktop",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "description": "TADjs Desktop Environment with Plugin System",
   "main": "electron/main.js",
   "scripts": {
@@ -11,10 +11,9 @@
     "build:mac": "electron-builder --mac --x64",
     "build:mac-arm": "electron-builder --mac --arm64",
     "build:mac-universal": "electron-builder --mac --universal",
-    "package": "electron-packager . \"TADjs Desktop\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=tadjs.ico --executable-name=tadjs_desktop --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|designlog|xtaddata|CLAUDE\\.md|DEVELOPMENT_NOTES\\.md|tmpclaude.*|.*\\.ps1)$\" --prune=true",
-    "package:mac": "electron-packager . \"TADjs Desktop\" --platform=darwin --arch=x64 --out=dist --overwrite --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|designlog|xtaddata|CLAUDE\\.md|DEVELOPMENT_NOTES\\.md|tmpclaude.*|.*\\.ps1)$\" --prune=true",
-    "package:mac-arm": "electron-packager . \"TADjs Desktop\" --platform=darwin --arch=arm64 --out=dist --overwrite --ignore=\"^/(dist.*|\\.git|\\.vscode|\\.serena|\\.claude|designlog|xtaddata|CLAUDE\\.md|DEVELOPMENT_NOTES\\.md|tmpclaude.*|.*\\.ps1)$\" --prune=true",
-    "postpackage": "node scripts/postpackage.js",
+    "package": "electron-packager . \"TADjs Desktop\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=tadjs.ico --executable-name=tadjs_desktop --ignore=\"^/dist$|^/\\.git$|^/\\.vscode$|^/\\.serena$|^/\\.claude$|^/designlog$|^/xtaddata$|^/scripts$|^/CLAUDE\\.md$|^/DEVELOPMENT_NOTES\\.md$|tmpclaude|\\.ps1$\" --prune=true && node scripts/postpackage.js",
+    "package:mac": "electron-builder --mac --x64 --dir",
+    "package:mac-arm": "electron-builder --mac --arm64 --dir",
     "postinstall": "node scripts/patch-font-list.js"
   },
   "keywords": [
@@ -33,7 +32,9 @@
   "devDependencies": {
     "electron": "^40.0.0",
     "electron-builder": "^24.9.1",
-    "electron-packager": "^17.1.2"
+    "electron-packager": "^17.1.2",
+    "jsmediatags": "^3.9.7",
+    "rcedit": "^5.0.2"
   },
   "build": {
     "appId": "com.tadjs.desktop",
@@ -41,37 +42,16 @@
     "directories": {
       "output": "dist"
     },
-    "files": [
-      "electron/**/*",
-      "tadjs-desktop.html",
-      "tadjs-desktop.css",
-      "tadjs-desktop.js",
-      "tad.js",
-      "lh5.js",
-      "encoding.js",
-      "encoding.min.js",
-      "pages15.js",
-      "favicon.svg",
-      "JIS0208.txt",
-      "plugins/**/*",
-      "tad_data/**/*",
-      "js/**/*",
-      "data/**/*",
-      "!node_modules/**/*",
-      "!**/node_modules/**/*",
-      "!**/*.map"
-    ],
     "win": {
       "target": [
         {
-          "target": "portable",
+          "target": "dir",
           "arch": [
             "x64"
           ]
         }
       ],
-      "signingHashAlgorithms": [],
-      "verifyUpdateCodeSignature": false
+      "icon": "tadjs.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -83,7 +63,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "category": "public.app-category.productivity",

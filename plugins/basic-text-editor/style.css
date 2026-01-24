@@ -40,7 +40,7 @@ body {
     display: flex;
     flex-direction: column;
     background: #ffffff;
-    height: 100%;
+    min-height: 100%; /* heightからmin-heightに変更（スクロール時の背景色問題を修正） */
 }
 
 /* ツールバー */
@@ -171,16 +171,21 @@ body {
 }
 
 /* TAD XML カスタムタグのスタイル */
-.editor underline {
+.editor underline,
+.editor u {
     text-decoration: underline;
+    text-decoration-color: inherit;
 }
 
 .editor overline {
     text-decoration: overline;
+    text-decoration-color: inherit;
 }
 
-.editor strikethrough {
+.editor strikethrough,
+.editor s {
     text-decoration: line-through;
+    text-decoration-color: inherit;
 }
 
 .editor bagchar {
@@ -318,6 +323,11 @@ body {
     white-space: nowrap; /* テキストを折り返さない */
     overflow: hidden; /* 溢れたテキストを隠す */
     text-overflow: ellipsis; /* 省略記号(...)を表示 */
+    /* 親要素からの文字修飾継承をリセット（仮身は常に通常表示） */
+    font-style: normal !important;
+    font-weight: normal !important;
+    text-decoration: none !important;
+    -webkit-text-stroke: 0 !important;
 }
 
 .virtual-object:hover {
@@ -513,7 +523,7 @@ body.readonly-mode .virtual-object.selected:hover {
 sup[data-attend-type],
 sub[data-attend-type] {
     font-size: 0.75em;
-    line-height: 0;
+    line-height: inherit;
 }
 
 /* position属性: 前置（position=0）はブラウザデフォルト */

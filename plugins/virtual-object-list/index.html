@@ -70,6 +70,12 @@
         import { RealObjectSystem } from '../../js/real-object-system.js';
         window.RealObjectSystem = RealObjectSystem;
     </script>
+    <!-- 図形境界計算ユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import { calculateFigureContentBounds, updateFigViewToContentBounds } from '../../js/figure-bounds.js';
+        window.calculateFigureContentBounds = calculateFigureContentBounds;
+        window.updateFigViewToContentBounds = updateFigViewToContentBounds;
+    </script>
     <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
     <script type="module">
         import { PluginBase } from '../../js/plugin-base.js';

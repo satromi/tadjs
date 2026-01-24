@@ -155,7 +155,12 @@ export class VirtualObjectRenderer {
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             maxWidth: '100%',
-            boxSizing: 'border-box'
+            boxSizing: 'border-box',
+            // 親要素からの文字修飾継承をリセット（仮身は常に通常表示）
+            fontStyle: 'normal',
+            fontWeight: 'normal',
+            textDecoration: 'none',
+            WebkitTextStroke: '0'
         });
 
         // 表示設定

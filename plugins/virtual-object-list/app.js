@@ -406,8 +406,9 @@ class VirtualObjectListApp extends window.PluginBase {
         }
 
         const rect = canvas.getBoundingClientRect();
-        const baseX = clientX - rect.left;
-        const baseY = clientY - rect.top;
+        // スクロール位置を考慮した座標計算
+        const baseX = clientX - rect.left + canvas.scrollLeft;
+        const baseY = clientY - rect.top + canvas.scrollTop;
 
         // 複数の仮身を順番に挿入
         virtualObjects.forEach((virtualObjectData, index) => {
@@ -1065,7 +1066,12 @@ class VirtualObjectListApp extends window.PluginBase {
 
                 if (this.vobjDragState.selectedObjects && this.vobjDragState.selectedObjectsInitialPositions) {
                     this.vobjDragState.selectedObjects.forEach((item, index) => {
+                        // 境界チェック: 初期位置配列の範囲外アクセスを防止
+                        if (index >= this.vobjDragState.selectedObjectsInitialPositions.length) {
+                            return;
+                        }
                         const initialPos = this.vobjDragState.selectedObjectsInitialPositions[index];
+                        if (!initialPos) return;
                         const newLeft = initialPos.left + deltaX;
                         const newTop = initialPos.top + deltaY;
 
@@ -1094,7 +1100,8 @@ class VirtualObjectListApp extends window.PluginBase {
                             element.style.visibility = 'visible';
                         }
                     });
-                } else {
+                } else if (this.vobjDragState.currentElement) {
+                    // nullチェック追加
                     this.vobjDragState.currentElement.style.visibility = 'visible';
                 }
             }
@@ -1106,7 +1113,12 @@ class VirtualObjectListApp extends window.PluginBase {
                 if (this.vobjDragState.selectedObjects && this.vobjDragState.selectedObjectsInitialPositions) {
                     // 複数選択: 全ての選択仮身を元の位置で表示
                     this.vobjDragState.selectedObjects.forEach((item, index) => {
+                        // 境界チェック: 初期位置配列の範囲外アクセスを防止
+                        if (index >= this.vobjDragState.selectedObjectsInitialPositions.length) {
+                            return;
+                        }
                         const initialPos = this.vobjDragState.selectedObjectsInitialPositions[index];
+                        if (!initialPos) return;
                         // data-vobj-indexを使って特定の仮身要素を取得
                         const element = document.querySelector(`[data-vobj-index="${item.vobjIndex}"]`);
                         if (element) {
@@ -1115,8 +1127,8 @@ class VirtualObjectListApp extends window.PluginBase {
                             element.style.visibility = 'visible';
                         }
                     });
-                } else {
-                    // 単一選択: 元の動作
+                } else if (this.vobjDragState.currentElement) {
+                    // 単一選択: 元の動作（nullチェック追加）
                     this.vobjDragState.currentElement.style.left = this.vobjDragState.initialLeft + 'px';
                     this.vobjDragState.currentElement.style.top = this.vobjDragState.initialTop + 'px';
                     this.vobjDragState.currentElement.style.visibility = 'visible';
@@ -1329,7 +1341,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 this.copySelectedVirtualObject();
                 break;
             case 'paste':
-                this.pasteVirtualObject();
+                this.pasteVirtualObject().catch(err => {
+                    logger.error('[VirtualObjectList] ペーストエラー:', err);
+                });
                 break;
             case 'cut':
                 this.cutSelectedVirtualObject();
@@ -1344,7 +1358,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 this.moveSelectedVirtualObjectToBack();
                 break;
             case 'arrange-virtual-objects':
-                this.showArrangeDialog();
+                this.showArrangeDialog().catch(err => {
+                    logger.error('[VirtualObjectList] 整頓ダイアログエラー:', err);
+                });
                 break;
             case 'protect-fix':
                 this.applyProtection('fixed');
@@ -1484,9 +1500,8 @@ class VirtualObjectListApp extends window.PluginBase {
         // XMLの順序を更新
         this.reorderVirtualObjectsInXml();
 
-        // z-indexとインデックスを更新（インクリメンタル更新：iframeを破棄しない）
-        this.updateVobjIndices();
-        this.updateVirtualObjectElementZIndex();
+        // 完全に再描画（z-indexとDOM順序を正しく設定）
+        this.renderVirtualObjects();
 
         // 保存通知
         this.notifyXmlDataChanged();
@@ -1533,9 +1548,8 @@ class VirtualObjectListApp extends window.PluginBase {
         // XMLの順序を更新
         this.reorderVirtualObjectsInXml();
 
-        // z-indexとインデックスを更新（インクリメンタル更新：iframeを破棄しない）
-        this.updateVobjIndices();
-        this.updateVirtualObjectElementZIndex();
+        // 完全に再描画（z-indexとDOM順序を正しく設定）
+        this.renderVirtualObjects();
 
         // 保存通知
         this.notifyXmlDataChanged();
@@ -1560,6 +1574,11 @@ class VirtualObjectListApp extends window.PluginBase {
                 vobjtop: 100, // 既存の仮身の下に配置
                 vobjright: 250,
                 vobjbottom: 130,
+                // original*はXMLに書き込む座標と同じ値を設定（updateVirtualObjectPositionでの検索用）
+                originalLeft: 100,
+                originalTop: 100,
+                originalRight: 250,
+                originalBottom: 130,
                 width: 100,
                 heightPx: 50,
                 chsz: 16,           // デフォルトフォントサイズ
@@ -1683,13 +1702,20 @@ class VirtualObjectListApp extends window.PluginBase {
                 logger.debug('[VirtualObjectList] 新たな実身への保存成功:', result.newRealId, '名前:', result.newName);
 
                 // 新しい仮身を元の仮身の下に配置
+                const newTop = selectedVobj.vobjbottom + 10;
+                const newBottom = selectedVobj.vobjbottom + 10 + (selectedVobj.vobjbottom - selectedVobj.vobjtop);
                 const newVirtualObj = {
                     link_id: result.newRealId,
                     link_name: result.newName,
                     vobjleft: selectedVobj.vobjleft,
-                    vobjtop: selectedVobj.vobjbottom + 10, // 元の仮身の下に配置
+                    vobjtop: newTop, // 元の仮身の下に配置
                     vobjright: selectedVobj.vobjright,
-                    vobjbottom: selectedVobj.vobjbottom + 10 + (selectedVobj.vobjbottom - selectedVobj.vobjtop),
+                    vobjbottom: newBottom,
+                    // original*はXMLに書き込む座標と同じ値を設定（updateVirtualObjectPositionでの検索用）
+                    originalLeft: selectedVobj.vobjleft,
+                    originalTop: newTop,
+                    originalRight: selectedVobj.vobjright,
+                    originalBottom: newBottom,
                     width: selectedVobj.width,
                     heightPx: selectedVobj.heightPx,
                     chsz: selectedVobj.chsz || 14,
@@ -1728,65 +1754,86 @@ class VirtualObjectListApp extends window.PluginBase {
     // requestCloseWindow() は基底クラス PluginBase で定義
 
     /**
-     * 選択中の仮身をコピー
+     * 選択中の仮身をコピー（複数選択対応）
      */
     copySelectedVirtualObject() {
-        const selectedVirtualObject = this.getSelectedVirtualObject();
-        if (!selectedVirtualObject) {
+        const selectedObjects = this.getSelectedVirtualObjects();
+        if (selectedObjects.length === 0) {
             logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
-        // クリップボードに仮身データをコピー（実身IDを保持）
-        const clipboardData = JSON.parse(JSON.stringify(selectedVirtualObject));
+        // クリップボードに仮身データをコピー（複数対応）
+        const clipboardData = selectedObjects.map(obj => JSON.parse(JSON.stringify(obj)));
 
         // 親ウィンドウのグローバルクリップボードに設定
         this.messageBus.send('set-clipboard', {
-            clipboardData: clipboardData
+            clipboardData: clipboardData,
+            dataType: 'virtual-objects'  // 複数形式を示すタイプ（typeはMessageBus予約語）
         });
 
-        logger.debug('[VirtualObjectList] 仮身をクリップボードにコピー:', clipboardData.link_name, 'realId:', clipboardData.link_id);
+        logger.debug('[VirtualObjectList] 仮身をクリップボードにコピー:', clipboardData.length, '件');
     }
 
     /**
-     * 選択中の仮身をカット
+     * 選択中の仮身をカット（複数選択対応）
      */
     cutSelectedVirtualObject() {
-        const selectedVirtualObject = this.getSelectedVirtualObject();
-        if (!selectedVirtualObject) {
+        const selectedObjects = this.getSelectedVirtualObjects();
+        if (selectedObjects.length === 0) {
             logger.warn('[VirtualObjectList] 選択中の仮身がありません');
             return;
         }
 
-        // クリップボードにコピー
-        const clipboardData = JSON.parse(JSON.stringify(selectedVirtualObject));
+        // 保護されていない仮身のみをカット対象とする
+        const cuttableObjects = selectedObjects.filter(obj => !obj.isFixed && !obj.isBackground);
+        if (cuttableObjects.length === 0) {
+            logger.warn('[VirtualObjectList] カット可能な仮身がありません（全て保護中）');
+            return;
+        }
+
+        // クリップボードにコピー（複数対応）
+        const clipboardData = cuttableObjects.map(obj => JSON.parse(JSON.stringify(obj)));
 
         // 親ウィンドウのグローバルクリップボードに設定
         this.messageBus.send('set-clipboard', {
-            clipboardData: clipboardData
+            clipboardData: clipboardData,
+            dataType: 'virtual-objects'  // typeはMessageBus予約語のためdataTypeを使用
         });
 
-        // 元の仮身を削除
-        const index = this.virtualObjects.findIndex(obj => obj === selectedVirtualObject);
-        if (index !== -1) {
-            // DOM要素を削除（インクリメンタル更新：他のiframeを破棄しない）
-            this.removeVirtualObjectElement(index);
+        // オブジェクト参照を使用して削除（インデックスのずれを防ぐ）
+        for (const obj of cuttableObjects) {
+            const currentIndex = this.virtualObjects.indexOf(obj);
+            if (currentIndex !== -1) {
+                // xmlTADから削除
+                this.removeVirtualObjectFromXml(obj, currentIndex);
 
-            // 配列から削除
-            this.virtualObjects.splice(index, 1);
-            this.selectedVirtualObjects.clear();
+                // DOM要素を削除
+                this.removeVirtualObjectElement(currentIndex);
 
-            // インデックスを再計算
-            this.updateVobjIndices();
-            this.updateCanvasSize();
+                // 配列から削除
+                this.virtualObjects.splice(currentIndex, 1);
 
-            // refCount-1（カット = ドキュメントから参照が削除される）
-            this.requestDeleteVirtualObject(selectedVirtualObject.link_id);
+                // refCount-1
+                this.requestDeleteVirtualObject(obj.link_id);
+            }
         }
+
+        // 選択状態をクリア
+        this.selectedVirtualObjects.clear();
+
+        // インデックスを再計算
+        this.updateVobjIndices();
+        this.updateCanvasSize();
+
+        // 状態同期
+        this.synchronizeAfterArrayChange();
+
+        logger.debug('[VirtualObjectList] 仮身をカット:', cuttableObjects.length, '件');
     }
 
     /**
-     * クリップボードから仮身をペースト
+     * クリップボードから仮身をペースト（複数選択対応）
      */
     async pasteVirtualObject() {
         // 親ウィンドウからクリップボードを取得
@@ -1797,31 +1844,58 @@ class VirtualObjectListApp extends window.PluginBase {
             return;
         }
 
-        // 新しい仮身オブジェクトを作成（位置を少しずらす）
-        const newVirtualObj = JSON.parse(JSON.stringify(clipboard));
-        newVirtualObj.vobjleft += 20;
-        newVirtualObj.vobjtop += 20;
-        newVirtualObj.vobjright += 20;
-        newVirtualObj.vobjbottom += 20;
+        // 配列形式に正規化（単一オブジェクトの場合も配列に）
+        const sourceObjects = Array.isArray(clipboard) ? clipboard : [clipboard];
+        const newIndices = [];
 
-        // 実身IDはそのまま使用（仮身の複製なので実身は共有）
-        const realId = newVirtualObj.link_id;
+        for (let i = 0; i < sourceObjects.length; i++) {
+            const sourceObj = sourceObjects[i];
 
-        // 仮身リストに追加
-        this.virtualObjects.push(newVirtualObj);
+            // 新しい仮身オブジェクトを作成（位置を少しずらす）
+            const newVirtualObj = JSON.parse(JSON.stringify(sourceObj));
+            const offset = 20 + (i * 10);  // 複数ペースト時は段階的にオフセット
+            newVirtualObj.vobjleft += offset;
+            newVirtualObj.vobjtop += offset;
+            newVirtualObj.vobjright += offset;
+            newVirtualObj.vobjbottom += offset;
 
-        // xmlTADに追加
-        this.addVirtualObjectToXml(newVirtualObj);
+            // original*もXMLに書き込む座標と同じ値に更新
+            newVirtualObj.originalLeft = newVirtualObj.vobjleft;
+            newVirtualObj.originalTop = newVirtualObj.vobjtop;
+            newVirtualObj.originalRight = newVirtualObj.vobjright;
+            newVirtualObj.originalBottom = newVirtualObj.vobjbottom;
 
-        // インクリメンタル追加（DOM再構築なし、フラッシュ防止）
-        const insertAt = this.virtualObjects.length - 1;
-        await this.addVirtualObjectElement(newVirtualObj, insertAt);
+            // 実身IDはそのまま使用（仮身の複製なので実身は共有）
+            const realId = newVirtualObj.link_id;
+
+            // 仮身リストに追加
+            this.virtualObjects.push(newVirtualObj);
+
+            // xmlTADに追加
+            this.addVirtualObjectToXml(newVirtualObj);
+
+            // メタデータを読み込み
+            await this.loadVirtualObjectMetadata(newVirtualObj);
+
+            // 新規インデックスを記録
+            newIndices.push(this.virtualObjects.length - 1);
+
+            // 親ウィンドウに仮身コピーを通知してrefCountを+1
+            this.requestCopyVirtualObject(realId);
+        }
+
+        // ペースト後に新規仮身を選択状態にする
+        this.selectedVirtualObjects.clear();
+        newIndices.forEach(idx => this.selectedVirtualObjects.add(idx));
+
+        // 保存処理を実行
+        this.notifyXmlDataChanged();
+
+        // DOM再描画
+        this.renderVirtualObjects();
         this.updateCanvasSize();
 
-        // 親ウィンドウに仮身コピーを通知してrefCountを+1
-        this.requestCopyVirtualObject(realId);
-
-        logger.debug('[VirtualObjectList] 仮身をペースト:', newVirtualObj.link_name, 'realId:', realId);
+        logger.debug('[VirtualObjectList] 仮身をペースト:', newIndices.length, '件');
     }
 
     // getClipboard() は基底クラス PluginBase で定義
@@ -1865,8 +1939,8 @@ class VirtualObjectListApp extends window.PluginBase {
         // 選択解除
         this.selectedVirtualObjects.clear();
 
-        // インデックスを再計算
-        this.updateVobjIndices();
+        // 状態同期（インデックス再計算含む）
+        this.synchronizeAfterArrayChange();
         this.updateCanvasSize();
 
         // 親ウィンドウに仮身削除を通知してrefCount-1
@@ -1978,6 +2052,11 @@ class VirtualObjectListApp extends window.PluginBase {
                         vobjtop: selectedVirtualObject.vobjtop + 30,
                         vobjright: selectedVirtualObject.vobjright + 20,
                         vobjbottom: selectedVirtualObject.vobjbottom + 30,
+                        // original*はXMLに書き込む座標と同じ値を設定（updateVirtualObjectPositionでの検索用）
+                        originalLeft: selectedVirtualObject.vobjleft + 20,
+                        originalTop: selectedVirtualObject.vobjtop + 30,
+                        originalRight: selectedVirtualObject.vobjright + 20,
+                        originalBottom: selectedVirtualObject.vobjbottom + 30,
                         width: selectedVirtualObject.width,
                         heightPx: selectedVirtualObject.heightPx,
                         chsz: selectedVirtualObject.chsz,
@@ -2319,7 +2398,11 @@ class VirtualObjectListApp extends window.PluginBase {
             virtualObj: selectedVirtualObject
         };
 
-        await window.RealObjectSystem.changeVirtualObjectAttributes(this);
+        try {
+            await window.RealObjectSystem.changeVirtualObjectAttributes(this);
+        } catch (error) {
+            logger.error('[VirtualObjectList] 仮身属性変更エラー:', error);
+        }
 
         // contextMenuVirtualObjectをクリア
         this.contextMenuVirtualObject = null;
@@ -2346,7 +2429,12 @@ class VirtualObjectListApp extends window.PluginBase {
         };
 
         // 親クラスのsetRelationship()を呼び出す（metadata更新とフック呼び出しを含む）
-        const result = await super.setRelationship();
+        let result = { success: false };
+        try {
+            result = await super.setRelationship();
+        } catch (error) {
+            logger.error('[VirtualObjectList] 続柄設定エラー:', error);
+        }
 
         // contextMenuVirtualObjectをクリア
         this.contextMenuVirtualObject = null;
@@ -2989,6 +3077,9 @@ class VirtualObjectListApp extends window.PluginBase {
         // 背景化の場合、z-indexを最小に設定して最背面に移動
         if (protectionType === 'background') {
             this.moveSelectedVirtualObjectsToBackground();
+            // 配列並び替え後、XMLの順序も更新（配列とXMLの同期を維持）
+            this.reorderVirtualObjectsInXml();
+            this.notifyXmlDataChanged();
         }
 
         // 再描画
@@ -3255,6 +3346,30 @@ class VirtualObjectListApp extends window.PluginBase {
     }
 
     /**
+     * XMLを整形してシリアライズする共通関数
+     * 空行の蓄積を防ぎ、一貫したフォーマットで出力する
+     * @param {Document} xmlDoc - XMLドキュメント
+     * @returns {string} 整形されたXML文字列
+     */
+    serializeXmlDocument(xmlDoc) {
+        const serializer = new XMLSerializer();
+        let xmlString = serializer.serializeToString(xmlDoc);
+
+        // 1. <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一）
+        // [\s\S]*? は改行を含むテキストにもマッチ（[^<]*より堅牢）
+        xmlString = xmlString.replace(/<link([^>]*)>[\s\S]*?<\/link>/g, '<link$1/>');
+
+        // 2. 全てのタグ間を改行で区切る（空白有無に関わらず）
+        xmlString = xmlString.replace(/></g, '>\r\n<');
+
+        // 3. 連続する空行を確実に除去
+        // 「改行 + (空白のみの行)の1回以上の繰り返し」を1つの改行に置換
+        xmlString = xmlString.replace(/(\r\n)(\s*\r\n)+/g, '\r\n');
+
+        return xmlString;
+    }
+
+    /**
      * xmlTADに仮身を追加
      * @param {Object} virtualObj - 追加する仮身オブジェクト
      */
@@ -3327,14 +3442,14 @@ class VirtualObjectListApp extends window.PluginBase {
                 logger.debug('[VirtualObjectList] <figure>がないためルート要素に仮身を追加');
             }
 
-            // XMLを文字列に戻す
-            const serializer = new XMLSerializer();
-            let xmlString = serializer.serializeToString(xmlDoc);
-            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
-            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
-            this.xmlData = xmlString;
+            // _xmlIndexを設定（XMLの末尾に追加されるので、現在のlink要素数-1）
+            const linkElements = xmlDoc.getElementsByTagName('link');
+            virtualObj._xmlIndex = linkElements.length - 1;
 
-            logger.debug('[VirtualObjectList] xmlTADに仮身を追加:', virtualObj.link_id);
+            // XMLを整形して文字列に戻す
+            this.xmlData = this.serializeXmlDocument(xmlDoc);
+
+            logger.debug('[VirtualObjectList] xmlTADに仮身を追加:', virtualObj.link_id, '_xmlIndex:', virtualObj._xmlIndex);
 
             // 自動保存
             this.notifyXmlDataChanged();
@@ -3372,15 +3487,13 @@ class VirtualObjectListApp extends window.PluginBase {
                 linkElement.parentNode.removeChild(linkElement);
                 logger.debug('[VirtualObjectList] <link>要素を削除: index=', xmlIndex, 'link_id=', virtualObj.link_id);
             } else {
-                logger.warn('[VirtualObjectList] 削除対象のインデックスが無効:', xmlIndex);
+                // インデックスが無効な場合はXMLを更新せずに終了（データ整合性を維持）
+                logger.warn('[VirtualObjectList] 削除対象のインデックスが無効:', xmlIndex, 'link_id:', virtualObj.link_id);
+                return;
             }
 
-            // XMLを文字列に戻す
-            const serializer = new XMLSerializer();
-            let xmlString = serializer.serializeToString(xmlDoc);
-            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
-            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
-            this.xmlData = xmlString;
+            // XMLを整形して文字列に戻す
+            this.xmlData = this.serializeXmlDocument(xmlDoc);
 
             logger.debug('[VirtualObjectList] xmlTADから仮身を削除:', virtualObj.link_id);
 
@@ -3406,12 +3519,43 @@ class VirtualObjectListApp extends window.PluginBase {
             const parser = new DOMParser();
             const xmlDoc = parser.parseFromString(this.xmlData, 'text/xml');
 
-            // 配列内のインデックスでXML要素を特定（配列とXMLの順序は同期している前提）
+            // _xmlIndexを使用してXML要素を特定（配列とXMLの順序が異なる場合に対応）
             const linkElements = xmlDoc.getElementsByTagName('link');
-            const xmlIndex = this.virtualObjects.indexOf(virtualObj);
+            let linkElement = null;
 
-            if (xmlIndex >= 0 && xmlIndex < linkElements.length) {
-                const linkElement = linkElements[xmlIndex];
+            // _xmlIndexがあればそれを使用
+            if (virtualObj._xmlIndex !== undefined && virtualObj._xmlIndex < linkElements.length) {
+                linkElement = linkElements[virtualObj._xmlIndex];
+            } else {
+                // フォールバック: link_idと座標で検索
+                for (let i = 0; i < linkElements.length; i++) {
+                    const link = linkElements[i];
+                    const linkId = link.getAttribute('id');
+                    const linkLeft = parseInt(link.getAttribute('vobjleft')) || 0;
+                    const linkTop = parseInt(link.getAttribute('vobjtop')) || 0;
+
+                    if (linkId === virtualObj.link_id &&
+                        linkLeft === (virtualObj.originalLeft ?? virtualObj.vobjleft) &&
+                        linkTop === (virtualObj.originalTop ?? virtualObj.vobjtop)) {
+                        linkElement = link;
+                        // _xmlIndexを設定
+                        virtualObj._xmlIndex = i;
+                        break;
+                    }
+                }
+                // 座標一致がない場合はlink_idのみで検索（最終フォールバック）
+                if (!linkElement) {
+                    for (let i = 0; i < linkElements.length; i++) {
+                        if (linkElements[i].getAttribute('id') === virtualObj.link_id) {
+                            linkElement = linkElements[i];
+                            virtualObj._xmlIndex = i;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (linkElement) {
 
                 // 属性を更新
                 linkElement.setAttribute('vobjleft', virtualObj.vobjleft.toString());
@@ -3469,7 +3613,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
                 // テキスト内容は書き込まない（自己閉じタグ形式）
                 // link_nameはJSONから取得する方式に統一
-                logger.debug('[VirtualObjectList] <link>要素を更新: index=', xmlIndex, 'link_id=', virtualObj.link_id);
+                logger.debug('[VirtualObjectList] <link>要素を更新: _xmlIndex=', virtualObj._xmlIndex, 'link_id=', virtualObj.link_id);
 
                 // 元の位置情報を更新（次回の移動時に正しく識別できるように）
                 virtualObj.originalLeft = virtualObj.vobjleft;
@@ -3477,15 +3621,11 @@ class VirtualObjectListApp extends window.PluginBase {
                 virtualObj.originalRight = virtualObj.vobjright;
                 virtualObj.originalBottom = virtualObj.vobjbottom;
             } else {
-                logger.warn('[VirtualObjectList] 更新対象のインデックスが無効:', xmlIndex);
+                logger.warn('[VirtualObjectList] 更新対象のlink要素が見つかりません: link_id=', virtualObj.link_id);
             }
 
-            // XMLを文字列に戻す
-            const serializer = new XMLSerializer();
-            let xmlString = serializer.serializeToString(xmlDoc);
-            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
-            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
-            this.xmlData = xmlString;
+            // XMLを整形して文字列に戻す
+            this.xmlData = this.serializeXmlDocument(xmlDoc);
 
             logger.debug('[VirtualObjectList] xmlTADの仮身を更新:', virtualObj.link_id);
 
@@ -3530,24 +3670,57 @@ class VirtualObjectListApp extends window.PluginBase {
                 linkElements[i].parentNode.removeChild(linkElements[i]);
             }
 
+            // テキストノード（改行）も削除して空行蓄積を防止
+            const textNodes = [];
+            for (let i = 0; i < parentElement.childNodes.length; i++) {
+                const node = parentElement.childNodes[i];
+                if (node.nodeType === Node.TEXT_NODE) {
+                    textNodes.push(node);
+                }
+            }
+            for (const textNode of textNodes) {
+                parentElement.removeChild(textNode);
+            }
+
             // this.virtualObjects配列の順序に従って<link>要素を再追加
             // 使用済みフラグで同じlink_idの要素を区別
             const usedIndices = new Set();
 
             for (const virtualObj of this.virtualObjects) {
-                // _xmlIndexがあればそれを使用、なければlink_idで検索
+                // _xmlIndexがあればそれを使用、なければlink_idと座標で検索
                 let linkElement = null;
 
                 if (virtualObj._xmlIndex !== undefined && virtualObj._xmlIndex < linkArray.length && !usedIndices.has(virtualObj._xmlIndex)) {
                     linkElement = linkArray[virtualObj._xmlIndex];
                     usedIndices.add(virtualObj._xmlIndex);
                 } else {
-                    // link_idで検索（同じlink_idが複数ある場合は未使用のものを探す）
+                    // link_idと座標で検索（同じlink_idの仮身を正しく区別）
                     for (let i = 0; i < linkArray.length; i++) {
-                        if (!usedIndices.has(i) && linkArray[i].getAttribute('id') === virtualObj.link_id) {
-                            linkElement = linkArray[i];
-                            usedIndices.add(i);
-                            break;
+                        if (!usedIndices.has(i)) {
+                            const link = linkArray[i];
+                            const linkId = link.getAttribute('id');
+                            const linkLeft = parseInt(link.getAttribute('vobjleft')) || 0;
+                            const linkTop = parseInt(link.getAttribute('vobjtop')) || 0;
+
+                            // link_idと座標で一致を確認
+                            if (linkId === virtualObj.link_id &&
+                                linkLeft === (virtualObj.originalLeft ?? virtualObj.vobjleft) &&
+                                linkTop === (virtualObj.originalTop ?? virtualObj.vobjtop)) {
+                                linkElement = link;
+                                usedIndices.add(i);
+                                break;
+                            }
+                        }
+                    }
+
+                    // 座標一致がない場合はlink_idのみで検索（フォールバック）
+                    if (!linkElement) {
+                        for (let i = 0; i < linkArray.length; i++) {
+                            if (!usedIndices.has(i) && linkArray[i].getAttribute('id') === virtualObj.link_id) {
+                                linkElement = linkArray[i];
+                                usedIndices.add(i);
+                                break;
+                            }
                         }
                     }
                 }
@@ -3557,16 +3730,12 @@ class VirtualObjectListApp extends window.PluginBase {
                 }
             }
 
-            // XMLを文字列に戻す
-            const serializer = new XMLSerializer();
-            let xmlString = serializer.serializeToString(xmlDoc);
-            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
-            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
-            this.xmlData = xmlString;
+            // XMLを整形して文字列に戻す
+            this.xmlData = this.serializeXmlDocument(xmlDoc);
 
-            // _xmlIndexをリセット（次回の並び替えのため、現在の配列順がXML順になる）
+            // _xmlIndexを更新（並び替え後、配列順がXML順になる）
             for (let i = 0; i < this.virtualObjects.length; i++) {
-                delete this.virtualObjects[i]._xmlIndex;
+                this.virtualObjects[i]._xmlIndex = i;
             }
 
             logger.debug('[VirtualObjectList] xmlTADの仮身順序を更新');
@@ -3632,6 +3801,9 @@ class VirtualObjectListApp extends window.PluginBase {
 
     setupWindowActivation() {
         document.addEventListener('mousedown', () => {
+            // コンテキストメニューを閉じる（mousedownはclickより先に発火するため確実に閉じる）
+            this.closeContextMenu();
+
             this.messageBus.send('activate-window');
 
             // キーボードショートカットが動作するようにbodyにフォーカスを設定
@@ -3680,6 +3852,23 @@ class VirtualObjectListApp extends window.PluginBase {
             else if (e.ctrlKey && e.key === 'a') {
                 e.preventDefault();
                 this.selectAllVirtualObjects();
+            }
+            // Ctrl+C: コピー
+            else if (e.ctrlKey && e.key === 'c') {
+                e.preventDefault();
+                this.copySelectedVirtualObject();
+            }
+            // Ctrl+V: ペースト
+            else if (e.ctrlKey && e.key === 'v') {
+                e.preventDefault();
+                this.pasteVirtualObject().catch(err => {
+                    logger.error('[VirtualObjectList] ペーストエラー:', err);
+                });
+            }
+            // Ctrl+X: カット
+            else if (e.ctrlKey && e.key === 'x') {
+                e.preventDefault();
+                this.cutSelectedVirtualObject();
             }
         });
     }
@@ -3978,23 +4167,24 @@ class VirtualObjectListApp extends window.PluginBase {
             if (this.virtualObjectDragState.dragMode === 'move' && this.vobjDragState.selectedObjects) {
                 logger.debug('[VirtualObjectList] moveモード: 元ウィンドウから仮身を削除', this.vobjDragState.selectedObjects.length, '個');
 
-                // selectedObjectsのvobjIndexを降順にソート（後ろから削除するため）
-                const sortedIndexes = this.vobjDragState.selectedObjects
-                    .map(item => item.vobjIndex)
-                    .sort((a, b) => b - a);
+                // オブジェクト参照を保持（削除前に取得、インデックスではなくオブジェクト参照で識別）
+                const objectsToDelete = this.vobjDragState.selectedObjects
+                    .map(item => this.virtualObjects[item.vobjIndex])
+                    .filter(vobj => vobj !== undefined);
 
-                sortedIndexes.forEach(vobjIndex => {
-                    const vobj = this.virtualObjects[vobjIndex];
-                    if (vobj) {
-                        logger.debug('[VirtualObjectList] 仮身を削除:', vobj.link_name, 'vobjIndex:', vobjIndex);
-                        // XMLから削除（配列から削除する前にインデックスを渡す）
-                        this.removeVirtualObjectFromXml(vobj, vobjIndex);
+                // 各オブジェクトを削除（毎回最新のインデックスを取得して削除）
+                for (const vobj of objectsToDelete) {
+                    const currentIndex = this.virtualObjects.indexOf(vobj);
+                    if (currentIndex !== -1) {
+                        logger.debug('[VirtualObjectList] 仮身を削除:', vobj.link_name, 'currentIndex:', currentIndex);
+                        // XMLから削除（現在の正確なインデックスを使用）
+                        this.removeVirtualObjectFromXml(vobj, currentIndex);
                         // DOM要素を削除（インクリメンタル削除、フラッシュ防止）
-                        this.removeVirtualObjectElement(vobjIndex);
+                        this.removeVirtualObjectElement(currentIndex);
                         // 配列から削除
-                        this.virtualObjects.splice(vobjIndex, 1);
+                        this.virtualObjects.splice(currentIndex, 1);
                     }
-                });
+                }
 
                 // インデックスとキャンバスサイズを更新（DOM再構築なし）
                 this.updateVobjIndices();
@@ -4039,15 +4229,24 @@ class VirtualObjectListApp extends window.PluginBase {
                 // dragイベントで更新された style.left/top を使用（従来の方法）
                 const newLeft = parseInt(vobjElement.style.left);
                 const newTop = parseInt(vobjElement.style.top);
-                deltaX = newLeft - this.vobjDragState.initialLeft;
-                deltaY = newTop - this.vobjDragState.initialTop;
-                logger.debug('[VirtualObjectList] style.left/topを使用:', newLeft, newTop, 'delta:', deltaX, deltaY);
+                // NaN検証: 無効な座標値の場合は移動量を0とする
+                if (Number.isNaN(newLeft) || Number.isNaN(newTop)) {
+                    logger.warn('[VirtualObjectList] 無効な座標値:', vobjElement.style.left, vobjElement.style.top);
+                    deltaX = 0;
+                    deltaY = 0;
+                } else {
+                    deltaX = newLeft - this.vobjDragState.initialLeft;
+                    deltaY = newTop - this.vobjDragState.initialTop;
+                    logger.debug('[VirtualObjectList] style.left/topを使用:', newLeft, newTop, 'delta:', deltaX, deltaY);
+                }
             }
 
             // 複数選択時は全ての選択仮身を移動、それ以外は単一の仮身を移動
+            // 注意: selectedObjectsは既にmousedown時点でフィルタリング済み（保護された仮身は除外済み）
+            // ここで再度フィルタリングするとselectedObjectsInitialPositionsとインデックスがずれる可能性がある
             const objectsToMove = this.vobjDragState.selectedObjects
                 ? this.vobjDragState.selectedObjects.map(item => item.obj)
-                : [obj];
+                : (obj && !obj.isFixed && !obj.isBackground ? [obj] : []);
 
             if (this.virtualObjectDragState.dragMode === 'copy') {
                 // コピーモード: 元の仮身を元の位置に戻し、新しい仮身を作成
@@ -4796,12 +4995,16 @@ class VirtualObjectListApp extends window.PluginBase {
             const linkElements = xmlDoc.getElementsByTagName('link');
 
             // 1. まずすべてのvirtualObjを同期的にパース（順序を維持）
+            // XMLインデックスを設定して、同じlink_idの仮身を正しく区別
             const parsedObjects = [];
+            let xmlIndex = 0;
             for (const link of linkElements) {
                 const virtualObj = this.parseLinkElement(link);
                 if (virtualObj) {
+                    virtualObj._xmlIndex = xmlIndex;
                     parsedObjects.push(virtualObj);
                 }
+                xmlIndex++;
             }
 
             // 2. メタデータ読み込みを並列実行（高速化）
@@ -5204,21 +5407,15 @@ class VirtualObjectListApp extends window.PluginBase {
 
         listElement.innerHTML = '';
 
-        // 仮身の最大の右端・下端位置を計算
-        let maxRight = 0;
-        let maxBottom = 0;
+        // 全コンテンツ（仮身・図形要素）の境界を計算
+        const bounds = window.calculateFigureContentBounds(this.xmlData);
+        const margin = 10;  // マージンを10pxに削減
 
-        this.virtualObjects.forEach((obj) => {
-            const right = obj.vobjright || (obj.vobjleft + (obj.width || 100));
-            const bottom = obj.vobjbottom || (obj.vobjtop + (obj.heightPx || 100));
+        // コンテンツ境界にマージンを加算
+        const contentRight = bounds.right + margin;
+        const contentBottom = bounds.bottom + margin;
 
-            maxRight = Math.max(maxRight, right);
-            maxBottom = Math.max(maxBottom, bottom);
-        });
-
-        // 実際のコンテンツサイズにマージンを追加し、小さな最小値を設定
-        maxRight = Math.max(maxRight + 50, 300);  // 最小300px
-        maxBottom = Math.max(maxBottom + 50, 200); // 最小200px
+        logger.debug('[VirtualObjectList] コンテンツ境界:', bounds, 'マージン後:', contentRight, 'x', contentBottom);
 
         // 仮身を配置するためのキャンバスを作成
         const canvas = document.createElement('div');
@@ -5227,12 +5424,12 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // ウィンドウサイズを取得
         const pluginContent = document.querySelector('.plugin-content');
-        const windowWidth = pluginContent ? pluginContent.clientWidth : 300;
-        const windowHeight = pluginContent ? pluginContent.clientHeight : 200;
+        const windowWidth = pluginContent ? pluginContent.clientWidth : 0;
+        const windowHeight = pluginContent ? pluginContent.clientHeight : 0;
 
         // コンテンツサイズとウィンドウサイズの大きい方を採用
-        const finalWidth = Math.max(maxRight, windowWidth);
-        const finalHeight = Math.max(maxBottom, windowHeight);
+        const finalWidth = Math.max(contentRight, windowWidth);
+        const finalHeight = Math.max(contentBottom, windowHeight);
 
         canvas.style.width = finalWidth + 'px';   // 動的に幅を設定
         canvas.style.height = finalHeight + 'px'; // 動的に高さを設定
@@ -5248,6 +5445,12 @@ class VirtualObjectListApp extends window.PluginBase {
                 const result = this.renderFigureElements(xmlDoc, canvas);
                 if (result.elementCount > 0) {
                     logger.debug('[VirtualObjectList] 図形要素を描画:', result.elementCount, '個');
+                }
+                // figureContainerのサイズをコンテンツ境界に合わせて調整
+                // （renderFigureElementsはfigView値をそのまま使用するため上書きが必要）
+                if (result.figureContainer) {
+                    result.figureContainer.style.width = finalWidth + 'px';
+                    result.figureContainer.style.height = finalHeight + 'px';
                 }
             } catch (figureError) {
                 logger.error('[VirtualObjectList] 図形描画エラー:', figureError);
@@ -5275,7 +5478,8 @@ class VirtualObjectListApp extends window.PluginBase {
             const minOpenHeight = textHeight + 28; // タイトルバー + 区切り線 + コンテンツ最小
             const isOpenVirtualObj = vobjHeight >= minOpenHeight;
 
-            // 閉じた仮身の場合、サイズを正しい値に調整
+            // 閉じた仮身の場合、サイズを正しい値に調整（表示用のみ）
+            // originalBottomはXMLの元の値を維持（updateVirtualObjectPositionでの検索に使用）
             if (!isOpenVirtualObj) {
                 obj.vobjbottom = obj.vobjtop + titleHeight;
                 logger.debug('[VirtualObjectList] 閉じた仮身のサイズ調整:', obj.link_name, '高さ:', titleHeight);
@@ -5377,6 +5581,9 @@ class VirtualObjectListApp extends window.PluginBase {
     attachVirtualObjectEventListeners(vobj, obj) {
         // 仮身全体のクリックで選択
         vobj.addEventListener('click', (e) => {
+            // コンテキストメニューを閉じる（stopPropagationの前に実行）
+            this.closeContextMenu();
+
             // 仮身をクリックした場合は必ずイベント伝播を止める
             e.stopPropagation();
 
@@ -5627,6 +5834,9 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // 仮身全体のクリックで選択
         vobj.addEventListener('click', (e) => {
+            // コンテキストメニューを閉じる（stopPropagationの前に実行）
+            this.closeContextMenu();
+
             // 仮身をクリックした場合は必ずイベント伝播を止める
             e.stopPropagation();
 
@@ -5730,6 +5940,51 @@ class VirtualObjectListApp extends window.PluginBase {
     }
 
     /**
+     * 選択中の全仮身を取得（複数選択対応）
+     * @returns {Array<Object>} 選択中の仮身オブジェクト配列
+     */
+    getSelectedVirtualObjects() {
+        return Array.from(this.selectedVirtualObjects)
+            .map(index => this.virtualObjects[index])
+            .filter(obj => obj !== undefined);
+    }
+
+    /**
+     * 配列変更後の状態同期処理
+     * - _xmlIndexの再計算
+     * - DOMインデックスの更新
+     * - selectedVirtualObjectsの無効インデックス除去
+     * - expandedIframesの孤立参照除去
+     */
+    synchronizeAfterArrayChange() {
+        // 1. _xmlIndexを再計算
+        for (let i = 0; i < this.virtualObjects.length; i++) {
+            this.virtualObjects[i]._xmlIndex = i;
+        }
+
+        // 2. DOMインデックスを更新
+        this.updateVobjIndices();
+
+        // 3. selectedVirtualObjectsの無効なインデックスを除去
+        const validIndices = new Set();
+        this.selectedVirtualObjects.forEach(idx => {
+            if (idx >= 0 && idx < this.virtualObjects.length) {
+                validIndices.add(idx);
+            }
+        });
+        this.selectedVirtualObjects = validIndices;
+
+        // 4. expandedIframesの孤立参照を除去
+        const validIframes = new Set();
+        this.expandedIframes.forEach(iframe => {
+            if (document.body.contains(iframe)) {
+                validIframes.add(iframe);
+            }
+        });
+        this.expandedIframes = validIframes;
+    }
+
+    /**
      * 指定した矩形範囲内にある仮身のインデックスを取得
      * @param {Object} bounds - 矩形範囲 { left, top, right, bottom }
      * @returns {Array<number>} 範囲内の仮身インデックス配列
@@ -5801,18 +6056,31 @@ class VirtualObjectListApp extends window.PluginBase {
      * @param {Function} operation - 配列を変更する操作（関数）
      */
     preserveSelection(operation) {
-        // 変更前: 選択中のvobjIndexから対応するlink_idリストを保存
-        const selectedLinkIds = Array.from(this.selectedVirtualObjects).map(vobjIndex => {
-            return this.virtualObjects[vobjIndex]?.link_id;
+        // 変更前: 選択中のvobjIndexから対応するlink_idと座標を保存
+        // （同一link_idの仮身を区別するため座標も使用）
+        const selectedIdentifiers = Array.from(this.selectedVirtualObjects).map(vobjIndex => {
+            const vobj = this.virtualObjects[vobjIndex];
+            if (vobj) {
+                return {
+                    link_id: vobj.link_id,
+                    vobjleft: vobj.vobjleft,
+                    vobjtop: vobj.vobjtop
+                };
+            }
+            return null;
         }).filter(id => id);
 
         // 配列操作を実行
         operation();
 
-        // 変更後: link_idから新しいvobjIndexを再計算
+        // 変更後: link_idと座標から新しいvobjIndexを再計算
         this.selectedVirtualObjects.clear();
-        selectedLinkIds.forEach(linkId => {
-            const newIndex = this.virtualObjects.findIndex(v => v.link_id === linkId);
+        selectedIdentifiers.forEach(identifier => {
+            const newIndex = this.virtualObjects.findIndex(v =>
+                v.link_id === identifier.link_id &&
+                v.vobjleft === identifier.vobjleft &&
+                v.vobjtop === identifier.vobjtop
+            );
             if (newIndex !== -1) {
                 this.selectedVirtualObjects.add(newIndex);
             }
@@ -6080,7 +6348,12 @@ class VirtualObjectListApp extends window.PluginBase {
             // 複数選択時は全ての選択仮身を視覚的に移動
             if (this.vobjDragState.selectedObjects && this.vobjDragState.selectedObjectsInitialPositions) {
                 this.vobjDragState.selectedObjects.forEach((item, index) => {
+                    // 境界チェック: 初期位置配列の範囲外アクセスを防止
+                    if (index >= this.vobjDragState.selectedObjectsInitialPositions.length) {
+                        return;
+                    }
                     const initialPos = this.vobjDragState.selectedObjectsInitialPositions[index];
+                    if (!initialPos) return;
                     const newLeft = initialPos.left + deltaX;
                     const newTop = initialPos.top + deltaY;
 
@@ -6297,14 +6570,14 @@ class VirtualObjectListApp extends window.PluginBase {
                         };
                     }
                     return null;
-                }).filter(v => v !== null);
+                }).filter(v => v !== null && !v.obj.isFixed && !v.obj.isBackground);  // 保護された仮身を除外
 
                 this.vobjDragState.selectedObjectsInitialPositions = this.vobjDragState.selectedObjects.map(v => ({
                     left: v.obj.vobjleft,
                     top: v.obj.vobjtop
                 }));
 
-                logger.debug('[VirtualObjectList] mousedown: 複数選択ドラッグ準備完了', this.vobjDragState.selectedObjects.length, '個の仮身');
+                logger.debug('[VirtualObjectList] mousedown: 複数選択ドラッグ準備完了', this.vobjDragState.selectedObjects.length, '個の仮身（保護された仮身は除外）');
             } else {
                 // ドラッグする仮身が未選択の場合、まず選択状態にする
                 logger.debug('[VirtualObjectList] mousedown: 未選択の仮身をドラッグ開始 → まず選択');
@@ -6323,14 +6596,14 @@ class VirtualObjectListApp extends window.PluginBase {
                         };
                     }
                     return null;
-                }).filter(v => v !== null);
+                }).filter(v => v !== null && !v.obj.isFixed && !v.obj.isBackground);  // 保護された仮身を除外
 
                 this.vobjDragState.selectedObjectsInitialPositions = this.vobjDragState.selectedObjects.map(v => ({
                     left: v.obj.vobjleft,
                     top: v.obj.vobjtop
                 }));
 
-                logger.debug('[VirtualObjectList] mousedown: ドラッグ準備完了 isDragging=true 選択数:', this.vobjDragState.selectedObjects.length, obj.link_name);
+                logger.debug('[VirtualObjectList] mousedown: ドラッグ準備完了 isDragging=true 選択数:', this.vobjDragState.selectedObjects.length, obj.link_name, '（保護された仮身は除外）');
             }
         }, { capture: true });
     }
@@ -6698,12 +6971,8 @@ class VirtualObjectListApp extends window.PluginBase {
             obj.originalRight = obj.vobjright;
             obj.originalBottom = obj.vobjbottom;
 
-            // XMLを文字列に戻す
-            const serializer = new XMLSerializer();
-            let xmlString = serializer.serializeToString(xmlDoc);
-            // <link ...>テキスト</link>を<link .../>に変換（自己閉じタグ形式に統一、改行付き）
-            xmlString = xmlString.replace(/<link([^>]*)>[^<]*<\/link>/g, '<link$1/>\r\n');
-            this.xmlData = xmlString;
+            // XMLを整形して文字列に戻す
+            this.xmlData = this.serializeXmlDocument(xmlDoc);
 
             logger.debug('[VirtualObjectList] xmlTAD更新完了:', obj.link_id, '新しい位置:', obj.vobjleft, obj.vobjtop);
 
@@ -6728,40 +6997,28 @@ class VirtualObjectListApp extends window.PluginBase {
             return;
         }
 
-        // 全ての仮身の最大位置を計算（virtualObjects配列から）
-        let maxRight = 0;
-        let maxBottom = 0;
+        // 全コンテンツ（仮身・図形要素）の境界を計算
+        const bounds = window.calculateFigureContentBounds(this.xmlData);
+        const margin = 10;  // マージンを10pxに削減
 
-        logger.debug('[VirtualObjectList] 仮身数:', this.virtualObjects.length);
-
-        this.virtualObjects.forEach((obj, index) => {
-            const right = obj.vobjright || (obj.vobjleft + (obj.width || 100));
-            const bottom = obj.vobjbottom || (obj.vobjtop + (obj.heightPx || 100));
-
-            logger.debug(`[VirtualObjectList] 仮身${index} (${obj.link_name}): left=${obj.vobjleft}, top=${obj.vobjtop}, right=${right}, bottom=${bottom}`);
-
-            maxRight = Math.max(maxRight, right);
-            maxBottom = Math.max(maxBottom, bottom);
-        });
-
-        // マージンを追加
-        maxRight += 50;
-        maxBottom += 50;
+        // コンテンツ境界にマージンを加算
+        const contentRight = bounds.right + margin;
+        const contentBottom = bounds.bottom + margin;
 
         // .plugin-contentの現在のサイズ（ウィンドウの表示域）を取得
         const pluginContent = document.querySelector('.plugin-content');
-        const windowWidth = pluginContent ? pluginContent.clientWidth : 300;
-        const windowHeight = pluginContent ? pluginContent.clientHeight : 200;
+        const windowWidth = pluginContent ? pluginContent.clientWidth : 0;
+        const windowHeight = pluginContent ? pluginContent.clientHeight : 0;
 
         // コンテンツサイズとウィンドウサイズの大きい方を採用
-        const finalWidth = Math.max(maxRight, windowWidth, 300);  // 最小300px
-        const finalHeight = Math.max(maxBottom, windowHeight, 200); // 最小200px
+        const finalWidth = Math.max(contentRight, windowWidth);
+        const finalHeight = Math.max(contentBottom, windowHeight);
 
         // キャンバスのwidthとheightを設定（灰色の領域を防ぐ）
         canvas.style.width = finalWidth + 'px';
         canvas.style.height = finalHeight + 'px';
 
-        logger.debug('[VirtualObjectList] キャンバスサイズ更新:', finalWidth, 'x', finalHeight, '(コンテンツ:', maxRight, 'x', maxBottom, ', ウィンドウ:', windowWidth, 'x', windowHeight, ')');
+        logger.debug('[VirtualObjectList] キャンバスサイズ更新:', finalWidth, 'x', finalHeight, '(コンテンツ:', contentRight, 'x', contentBottom, ', ウィンドウ:', windowWidth, 'x', windowHeight, ')');
 
         // スクロールバー更新を通知（MessageBus経由）
         this.notifyScrollChange();
@@ -6778,32 +7035,24 @@ class VirtualObjectListApp extends window.PluginBase {
             return;
         }
 
-        // 全ての仮身の最大位置を計算
-        let maxRight = 0;
-        let maxBottom = 0;
+        // 全コンテンツ（仮身・図形要素）の境界を計算
+        const bounds = window.calculateFigureContentBounds(this.xmlData);
+        const margin = 10;  // マージンを10pxに削減
 
-        this.virtualObjects.forEach((obj) => {
-            const right = obj.vobjright || (obj.vobjleft + (obj.width || 100));
-            const bottom = obj.vobjbottom || (obj.vobjtop + (obj.heightPx || 100));
-
-            maxRight = Math.max(maxRight, right);
-            maxBottom = Math.max(maxBottom, bottom);
-        });
-
-        // マージンを追加
-        maxRight += 50;
-        maxBottom += 50;
+        // コンテンツ境界にマージンを加算
+        const contentRight = bounds.right + margin;
+        const contentBottom = bounds.bottom + margin;
 
         // .plugin-contentの現在のサイズ（ウィンドウの表示域）を取得
         const pluginContent = document.querySelector('.plugin-content');
-        const windowWidth = pluginContent ? pluginContent.clientWidth : 300;
-        const windowHeight = pluginContent ? pluginContent.clientHeight : 200;
+        const windowWidth = pluginContent ? pluginContent.clientWidth : 0;
+        const windowHeight = pluginContent ? pluginContent.clientHeight : 0;
 
-        logger.debug('[VirtualObjectList] shrinkCanvasIfNeeded - コンテンツ:', maxRight, 'x', maxBottom, ', ウィンドウ:', windowWidth, 'x', windowHeight);
+        logger.debug('[VirtualObjectList] shrinkCanvasIfNeeded - コンテンツ:', contentRight, 'x', contentBottom, ', ウィンドウ:', windowWidth, 'x', windowHeight);
 
         // コンテンツがウィンドウより小さければウィンドウサイズに縮小、大きければコンテンツサイズを維持
-        const finalWidth = Math.max(maxRight, windowWidth);
-        const finalHeight = Math.max(maxBottom, windowHeight);
+        const finalWidth = Math.max(contentRight, windowWidth);
+        const finalHeight = Math.max(contentBottom, windowHeight);
 
         // キャンバスのwidthとheightを設定
         canvas.style.width = finalWidth + 'px';

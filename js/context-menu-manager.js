@@ -110,9 +110,7 @@ export class ContextMenuManager {
 
         // close-context-menu: コンテキストメニューを閉じる
         this.parentMessageBus.on('close-context-menu', (_data) => {
-            if (this.contextMenu) {
-                this.contextMenu.style.display = 'none';
-            }
+            this.hideContextMenu();
         });
 
         logger.debug('MessageBus handlers registered');
@@ -168,8 +166,9 @@ export class ContextMenuManager {
                     { text: 'プロパティ', action: 'window-properties' }
                 );
             } else {
-                // プラグインウィンドウかどうかを確認
-                const iframe = windowElement.querySelector('iframe[data-plugin-id]');
+                // プラグインウィンドウまたはiframeウィンドウかどうかを確認
+                const iframe = windowElement.querySelector('iframe[data-plugin-id]') ||
+                               windowElement.querySelector('iframe[data-iframe-src]');
                 if (iframe && iframe.contentWindow) {
                     // 共通メニュー項目を追加
                     items.push(...this.generateCommonWindowMenuItems(windowId));

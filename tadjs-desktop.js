@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.33
+ * TADjs Ver 0.34
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -515,6 +515,24 @@ class TADjsDesktop {
             }
         });
 
+        // relay-to-window: プラグイン間メッセージ中継
+        // プラグインから別のプラグインウィンドウにメッセージを転送する
+        this.parentMessageBus.on('relay-to-window', (data) => {
+            if (data.targetWindowId && data.messageType) {
+                this.parentMessageBus.sendToWindow(
+                    data.targetWindowId,
+                    data.messageType,
+                    data.messageData || {}
+                );
+            }
+        });
+
+        // track-changed: トラック変更通知をブロードキャスト
+        // basic-playerからのトラック変更をプレイリストウィンドウなど他のウィンドウに転送
+        this.parentMessageBus.on('track-changed', (data) => {
+            this.parentMessageBus.broadcast('track-changed', data);
+        });
+
         // child-drag-position: 子iframeからのドラッグ位置通知
         // ドラッグ中の表示/非表示制御のため、マウスがどのウィンドウ上にあるかを通知
         // z-index判定は行わず、単純な座標判定のみ（効率化のため）
@@ -811,35 +829,6 @@ class TADjsDesktop {
         }
         logger.warn('[TADjs] FileManagerが利用できません');
         return false;
-    }
-
-    /**
-     * プラグインマネージャーの初期化を待ってから初期ウィンドウを作成
-     */
-    waitForPluginManagerAndCreateWindow() {
-        // プラグインマネージャーの初期化完了イベントを待つ
-        window.addEventListener('plugin-manager-ready', (e) => {
-            if (this.initialWindowCreated) {
-                logger.info('[TADjs] 初期ウィンドウは既に作成済みです');
-                return;
-            }
-            logger.info('[TADjs] プラグインマネージャー初期化完了:', e.detail.pluginCount, '個のプラグイン登録');
-            this.initialWindowCreated = true;
-            this.createInitialWindow();
-        }, { once: true });
-
-        // タイムアウト処理（10秒待ってもイベントが来ない場合）
-        setTimeout(() => {
-            if (this.initialWindowCreated) {
-                logger.info('[TADjs] 初期ウィンドウは既に作成済みです（タイムアウト処理）');
-                return;
-            }
-            if (window.pluginManager && window.pluginManager.plugins.size > 0) {
-                logger.warn('[TADjs] プラグインマネージャーイベントを待機中にタイムアウト、強制実行します');
-                this.initialWindowCreated = true;
-                this.createInitialWindow();
-            }
-        }, window.DIALOG_TIMEOUT_MS);
     }
 
     /**
@@ -1328,89 +1317,6 @@ class TADjsDesktop {
         }
 
         return null;
-    }
-
-    /**
-     * ドラッグ中のマウス位置を追跡し、どのiframeの上にあるかを各iframeに通知
-     * @deprecated 頻繁な呼び出しは非効率なため、dragend時のgetWindowAtPosition()を使用すること
-     * @param {number} clientX - マウスのX座標（親ウィンドウ座標系）
-     * @param {number} clientY - マウスのY座標（親ウィンドウ座標系）
-     */
-    trackDragOverIframes(clientX, clientY) {
-        // まず、現在マウスがどのウィンドウ上にあるかを特定
-        // ウィンドウが重なっている場合は、z-indexが最も高い（最前面の）ウィンドウを選択
-        let currentMouseOverWindowId = null;
-        let candidateWindows = [];
-
-        for (const [id, childInfo] of this.parentMessageBus.children.entries()) {
-            try {
-                const iframe = childInfo.iframe;
-                if (!iframe) continue;
-
-                const rect = iframe.getBoundingClientRect();
-                const isOverThisIframe = (
-                    clientX >= rect.left && clientX <= rect.right &&
-                    clientY >= rect.top && clientY <= rect.bottom
-                );
-
-                if (isOverThisIframe && childInfo.windowId) {
-                    // ウィンドウ要素を取得してz-indexを確認
-                    const windowElement = iframe.closest('.window');
-                    const zIndex = windowElement ? (parseInt(getComputedStyle(windowElement).zIndex) || 0) : 0;
-
-                    candidateWindows.push({
-                        windowId: childInfo.windowId,
-                        zIndex: zIndex
-                    });
-                }
-            } catch (error) {
-                // エラーはスキップ
-            }
-        }
-
-        // z-indexが最も高いウィンドウを選択（降順ソート）
-        if (candidateWindows.length > 0) {
-            candidateWindows.sort((a, b) => b.zIndex - a.zIndex);
-            currentMouseOverWindowId = candidateWindows[0].windowId;
-
-            // デバッグ: 複数のウィンドウが重なっている場合のみログ出力
-            if (candidateWindows.length > 1) {
-                logger.debug('[TADjs] 複数ウィンドウが重なっています:', candidateWindows.map(w => `${w.windowId}(z:${w.zIndex})`).join(', '), '選択:', currentMouseOverWindowId);
-            }
-        }
-
-        // MessageBusに登録された各子iframeに通知
-        for (const [id, childInfo] of this.parentMessageBus.children.entries()) {
-            try {
-                const iframe = childInfo.iframe;
-                if (!iframe) continue;
-
-                // iframeの位置とサイズを取得（親ウィンドウ座標系）
-                const rect = iframe.getBoundingClientRect();
-
-                // マウスがこのiframeの上にあるかチェック
-                const isOverThisIframe = (
-                    clientX >= rect.left && clientX <= rect.right &&
-                    clientY >= rect.top && clientY <= rect.bottom
-                );
-
-                // iframe内の相対座標を計算
-                const relativeX = clientX - rect.left;
-                const relativeY = clientY - rect.top;
-
-                // 各iframeに個別のデータを送信（現在マウスがあるウィンドウIDも含める）
-                this.parentMessageBus.sendToChild(id, 'parent-drag-position', {
-                    isOverThisWindow: isOverThisIframe,
-                    currentMouseOverWindowId: currentMouseOverWindowId,  // 追加: 現在マウスがあるウィンドウID
-                    clientX: clientX,
-                    clientY: clientY,
-                    relativeX: relativeX,
-                    relativeY: relativeY
-                });
-            } catch (error) {
-                // エラーはスキップ
-            }
-        }
     }
 
     /**
@@ -2555,6 +2461,71 @@ ${url}
     }
 
     /**
+     * iframeを含むウィンドウを作成（プラグイン非依存）
+     * @param {string} iframeSrc - iframeのソースパス（plugins/basic-player/playlist/index.html等）
+     * @param {string} title - ウィンドウタイトル
+     * @param {Object} initData - 初期化データ（initメッセージで送信）
+     * @param {Object} options - ウィンドウオプション
+     * @returns {string} ウィンドウID
+     */
+    createIframeWindow(iframeSrc, title, initData = {}, options = {}) {
+        const iframeId = `iframe-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+        const iframeHtml = `
+            <iframe id="${iframeId}"
+                    style="width: 100%; height: 100%; border: none;"
+                    tabindex="0"
+                    data-iframe-src="${iframeSrc}">
+            </iframe>
+        `;
+
+        const windowOptions = {
+            width: options.width || 280,
+            height: options.height || 350,
+            x: options.x || 100,
+            y: options.y || 100,
+            resizable: options.resizable !== undefined ? options.resizable : true,
+            scrollable: options.scrollable !== undefined ? options.scrollable : true,
+            customScrollbar: options.customScrollbar !== undefined ? options.customScrollbar : true
+        };
+
+        const windowId = this.createWindow(title, iframeHtml, windowOptions);
+
+        // iframeのsrcを設定し、ready信号を待ってからinitメッセージを送信
+        setTimeout(() => {
+            const iframe = document.getElementById(iframeId);
+            if (iframe) {
+                iframe.src = iframeSrc;
+
+                // iframe-ready信号を受信したらinitを送信
+                const readyHandler = (event) => {
+                    if (event.data && event.data.type === 'iframe-ready' &&
+                        event.source === iframe.contentWindow) {
+                        window.removeEventListener('message', readyHandler);
+
+                        // 親MessageBusに子を登録
+                        if (this.parentMessageBus && iframe.contentWindow) {
+                            this.parentMessageBus.registerChild(windowId, iframe, {
+                                windowId: windowId
+                            });
+                        }
+
+                        // initメッセージを送信
+                        iframe.contentWindow.postMessage({
+                            type: 'init',
+                            windowId: windowId,
+                            fileData: initData
+                        }, '*');
+                    }
+                };
+                window.addEventListener('message', readyHandler);
+            }
+        }, 0);
+
+        return windowId;
+    }
+
+    /**
      * TADファイル用のウインドウを作成
      * @param {string} filename - ファイル名
      * @param {Object} data - TADデータ
@@ -2602,76 +2573,6 @@ ${url}
             logger.error('[tadjs-desktop.js] PluginManager not initialized');
             return null;
         }
-    }
-
-    /**
-     * 実行機能レコードからウインドウ位置情報を取得
-     * @param {number} fileIndex - ファイルインデックス
-     * @returns {Object|null} 位置情報 {x, y, width, height}
-     */
-    getWindowPositionFromExecFunc(fileIndex) {
-        // tad.jsのexecFuncRecordListにアクセス
-        if (typeof execFuncRecordList !== 'undefined' && execFuncRecordList[fileIndex] && execFuncRecordList[fileIndex].length > 0) {
-            const execFunc = execFuncRecordList[fileIndex][0]; // 最初の実行機能付箋レコードを使用
-            
-            // window_viewが有効な場合はそれを優先使用
-            if (execFunc.window_view && (execFunc.window_view.left || execFunc.window_view.top || execFunc.window_view.right || execFunc.window_view.bottom)) {
-                const width = execFunc.window_view.right - execFunc.window_view.left;
-                const height = execFunc.window_view.bottom - execFunc.window_view.top;
-                
-                // 有効なサイズの場合のみ使用
-                if (width > 50 && height > 50) {
-                    return {
-                        x: execFunc.window_view.left,
-                        y: execFunc.window_view.top,
-                        width: width,
-                        height: height,
-                        source: 'window_view'
-                    };
-                }
-            }
-            
-            // window_viewが無効な場合は元のviewを使用
-            if (execFunc.view && (execFunc.view.left || execFunc.view.top || execFunc.view.right || execFunc.view.bottom)) {
-                const width = execFunc.view.right - execFunc.view.left;
-                const height = execFunc.view.bottom - execFunc.view.top;
-                
-                // 有効なサイズの場合のみ使用
-                if (width > 50 && height > 50) {
-                    return {
-                        x: execFunc.view.left,
-                        y: execFunc.view.top,
-                        width: width,
-                        height: height,
-                        source: 'view'
-                    };
-                }
-            }
-        }
-        return null;
-    }
-
-    /**
-     * TADデータをCanvasに描画
-     * @param {Object} data - TADデータ
-     * @param {string} canvasId - Canvas要素のID
-     * @param {string|null} originalLinkId - リンク元のID
-     */
-    /**
-     * TADデータをプラグイン経由でレンダリング
-     * 注: 現在はcreatePluginWindow経由で処理されるため、この関数は使用されていません
-     * @deprecated プラグインシステム経由で直接ウィンドウが作成されるため不要
-     * @param {Uint8Array} data - TADファイルのバイナリデータ
-     * @param {string} canvasId - レンダリング先のcanvas ID（非推奨）
-     * @param {number|null} originalLinkId - 元のリンクID（セカンダリウィンドウの場合）
-     */
-    async renderTADData(data, canvasId, originalLinkId = null) {
-        logger.warn('[tadjs-desktop.js] renderTADData is deprecated - use createTADWindow instead');
-        logger.info('[tadjs-desktop.js] Parameters:', { dataLength: data.length, canvasId, originalLinkId });
-
-        // createTADWindowにリダイレクト
-        const filename = `canvas-${canvasId}.tad`;
-        return await this.createTADWindow(filename, data, canvasId, originalLinkId);
     }
 
     /**
@@ -3756,12 +3657,22 @@ ${url}
             windowCorner.style.display = 'none';
         }
 
-        // 内部ウィンドウを最大化
+        // 内部ウィンドウを最大化（アニメーション無し・即座に）
         const windowInfo = this.windowManager?.windows?.get(windowId);
         if (windowInfo) {
             this.presentationModeState[windowId].wasMaximized = windowInfo.isMaximized;
             if (!windowInfo.isMaximized) {
+                // CSSトランジションを一時的に無効化して即座に最大化
+                const originalTransition = windowElement.style.transition;
+                windowElement.style.transition = 'none';
+
                 this.toggleMaximizeWindow(windowId);
+
+                // 強制リフローでスタイル変更を即座に適用
+                void windowElement.offsetHeight;
+
+                // トランジションを復元（次回の操作用）
+                windowElement.style.transition = originalTransition;
             }
         }
 
@@ -3773,6 +3684,15 @@ ${url}
         }
 
         logger.info('[TADjs] プレゼンテーションモード開始:', windowId);
+
+        // 完了メッセージを送信（即座に）
+        // アニメーションを無効化しているため、requestAnimationFrameで次フレーム待機のみ
+        requestAnimationFrame(() => {
+            this.parentMessageBus.sendToWindow(windowId, 'enter-presentation-mode-complete', {
+                windowId: windowId,
+                messageId: data.messageId  // 呼び出し元で照合用
+            });
+        });
     }
 
     /**
@@ -4392,6 +4312,18 @@ ${url}
 
             // 実身ID.jsonを読み込む
             const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(realId);
+            const xtadFileName = `${realId}_0.xtad`;
+
+            // キャッシュをクリアして最新のファイルを読み込む
+            if (this.fileObjects[jsonFileName]) {
+                delete this.fileObjects[jsonFileName];
+                logger.debug('[TADjs] JSONファイルキャッシュをクリア（再読み込み）:', jsonFileName);
+            }
+            if (this.fileObjects[xtadFileName]) {
+                delete this.fileObjects[xtadFileName];
+                logger.debug('[TADjs] XTADファイルキャッシュをクリア（再読み込み）:', xtadFileName);
+            }
+
             let jsonFile = this.fileObjects[jsonFileName];
 
             if (!jsonFile) {
@@ -4421,7 +4353,6 @@ ${url}
             }
 
             // デフォルトレコード（0番）のXTADファイルを読み込む
-            const xtadFileName = `${realId}_0.xtad`;
             let xtadFile = this.fileObjects[xtadFileName];
 
             if (!xtadFile) {
@@ -6505,7 +6436,16 @@ ${url}
      * @returns {Promise<void>}
      */
     async handleListImageFiles(data, event) {
-        const files = this.realObjectSystem.listImageFiles(data.realId, data.recordNo);
+        // listMediaFilesを使用して全メディアファイルを取得（音声/動画も含む）
+        const mediaFiles = this.realObjectSystem.listMediaFiles(data.realId, data.recordNo);
+
+        // 後方互換性のため、imageNoプロパティも追加
+        const files = mediaFiles.map(f => ({
+            fileName: f.fileName,
+            imageNo: f.resourceNo,  // 後方互換のエイリアス
+            resourceNo: f.resourceNo,
+            ext: f.ext
+        }));
 
         if (event.source && data.messageId) {
             this.parentMessageBus.respondTo(event.source, 'list-image-files-result', {
@@ -6776,11 +6716,11 @@ ${url}
             }
 
             try {
-                // 次のリソース番号を取得
-                const existingFiles = this.realObjectSystem.listImageFiles(baseId, 0);
+                // 次のリソース番号を取得（全メディアファイル対象）
+                const existingFiles = this.realObjectSystem.listMediaFiles(baseId, 0);
                 let nextNo = 0;
                 if (existingFiles && existingFiles.length > 0) {
-                    const maxNo = Math.max(...existingFiles.map(f => f.imageNo || 0));
+                    const maxNo = Math.max(...existingFiles.map(f => f.resourceNo || 0));
                     nextNo = maxNo + 1;
                 }
 
@@ -6794,10 +6734,81 @@ ${url}
 
                 logger.info('[TADjs] メディアファイルコピー成功:', saveFileName);
 
+                // 音声ファイルの場合、ID3タグを抽出
+                let id3Tags = { title: null, artist: null, album: null, trackNumber: null };
+                if (mediaType === 'audio' && typeof jsmediatags !== 'undefined') {
+                    try {
+                        // ファイルをArrayBufferに変換してBlobとして渡す（Electron環境対応）
+                        let arrayBuffer;
+                        if (file.arrayBuffer) {
+                            arrayBuffer = await file.arrayBuffer();
+                        } else if (filePath && this.realObjectSystem && this.realObjectSystem.fs) {
+                            const buffer = this.realObjectSystem.fs.readFileSync(filePath);
+                            arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+                        }
+
+                        if (arrayBuffer) {
+                            // ID3タグ文字列のエンコーディング修正用ヘルパー
+                            const fixEncoding = (str) => {
+                                if (!str) return str;
+                                // 既に正常な日本語文字が含まれていれば変換不要
+                                if (/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/.test(str)) return str;
+                                // Latin-1範囲の文字があるか確認
+                                let hasHighBytes = false;
+                                for (let i = 0; i < str.length; i++) {
+                                    if (str.charCodeAt(i) >= 0x80 && str.charCodeAt(i) <= 0xFF) {
+                                        hasHighBytes = true;
+                                        break;
+                                    }
+                                }
+                                if (!hasHighBytes || typeof Encoding === 'undefined') return str;
+                                try {
+                                    const bytes = [];
+                                    for (let i = 0; i < str.length; i++) bytes.push(str.charCodeAt(i) & 0xFF);
+                                    const detected = Encoding.detect(bytes);
+                                    if (detected && detected !== 'ASCII' && detected !== 'UNICODE') {
+                                        const unicodeArray = Encoding.convert(bytes, { to: 'UNICODE', from: detected });
+                                        return Encoding.codeToString(unicodeArray);
+                                    }
+                                } catch (e) { /* 変換失敗時は元の文字列 */ }
+                                return str;
+                            };
+
+                            id3Tags = await new Promise((resolve) => {
+                                jsmediatags.read(new Blob([arrayBuffer]), {
+                                    onSuccess: (tag) => {
+                                        const tags = tag.tags || {};
+                                        let trackNumber = null;
+                                        if (tags.track) {
+                                            const trackStr = String(tags.track);
+                                            const trackMatch = trackStr.match(/^(\d+)/);
+                                            if (trackMatch) {
+                                                trackNumber = parseInt(trackMatch[1], 10);
+                                            }
+                                        }
+                                        resolve({
+                                            title: fixEncoding(tags.title) || null,
+                                            artist: fixEncoding(tags.artist) || null,
+                                            album: fixEncoding(tags.album) || null,
+                                            trackNumber: trackNumber
+                                        });
+                                    },
+                                    onError: () => {
+                                        resolve({ title: null, artist: null, album: null, trackNumber: null });
+                                    }
+                                });
+                            });
+                        }
+                    } catch (e) {
+                        logger.warn('[TADjs] ID3タグ抽出エラー:', e);
+                    }
+                }
+
                 addedMedia.push({
                     fileName: saveFileName,
                     mediaType: mediaType,
-                    format: ext
+                    format: ext,
+                    id3Tags: id3Tags
                 });
             } catch (error) {
                 logger.error('[TADjs] メディアファイルコピーエラー:', error);
@@ -7789,6 +7800,7 @@ ${url}
         if (event.source) {
             this.parentMessageBus.respondTo(event.source, 'clipboard-data', {
                 messageId: data.messageId,
+                windowId: data.windowId,
                 clipboardData: this.clipboard
             });
         }
@@ -9326,8 +9338,8 @@ ${url}
      * }
      */
     generateRealFileIdSet(recordCount = 1) {
-        // tad.jsのgenerateUUIDv7()を使用してファイルIDを生成
-        const fileId = typeof generateUUIDv7 === 'function' ? generateUUIDv7() : this.generateUUIDv7Fallback();
+        // uuid-v7.jsのgenerateUUIDv7()を使用してファイルIDを生成
+        const fileId = generateUUIDv7();
 
         // JSONファイル名: fileid.json
         const jsonFile = `${fileId}.json`;
@@ -9346,37 +9358,6 @@ ${url}
 
         logger.info('[TADjs] 実身ファイルIDセットを生成:', fileIdSet);
         return fileIdSet;
-    }
-
-    /**
-     * UUID v7フォールバック生成（tad.jsが利用できない場合）
-     * @returns {string} UUID v7文字列
-     */
-    generateUUIDv7Fallback() {
-        const timestamp = Date.now();
-        const randomBytes = new Uint8Array(10);
-
-        if (typeof window !== 'undefined' && window.crypto) {
-            window.crypto.getRandomValues(randomBytes);
-        } else {
-            for (let i = 0; i < randomBytes.length; i++) {
-                randomBytes[i] = Math.floor(Math.random() * 256);
-            }
-        }
-
-        const timestampHex = timestamp.toString(16).padStart(12, '0');
-        const randomHex = Array.from(randomBytes)
-            .map(b => b.toString(16).padStart(2, '0'))
-            .join('');
-
-        const timeLow = timestampHex;
-        const timeHiAndVersion = '7' + randomHex.substring(0, 3);
-        const clockSeqByte = parseInt(randomHex.substring(3, 5), 16);
-        const clockSeqHi = ((clockSeqByte & 0x3F) | 0x80).toString(16).padStart(2, '0');
-        const clockSeqLow = randomHex.substring(5, 7);
-        const node = randomHex.substring(7, 19);
-
-        return `${timeLow.substring(0, 8)}-${timeLow.substring(8, 12)}-${timeHiAndVersion}-${clockSeqHi}${clockSeqLow}-${node}`;
     }
 
     /**
@@ -10262,7 +10243,7 @@ ${url}
             const newName = result.value;
 
             // 新しい実身IDを生成
-            const newRealId = this.realObjectSystem.generateUUIDv7();
+            const newRealId = generateUUIDv7();
             logger.info('[TADjs] 仮身化: 新実身ID生成:', newRealId);
 
             // 画像ファイルのコピーとXTAD内参照の置換

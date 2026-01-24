@@ -670,9 +670,10 @@ class PluginManager {
                         if (!existingChild || existingChild.iframe !== iframe) {
                             window.tadjsDesktop.parentMessageBus.registerChild(windowId, iframe, {
                                 windowId: windowId,
-                                pluginId: plugin.id
+                                pluginId: plugin.id,
+                                realId: fileData?.realId || null
                             });
-                            console.log(`[PluginManager] 子を登録 windowId=${windowId}, pluginId=${plugin.id}`);
+                            console.log(`[PluginManager] 子を登録 windowId=${windowId}, pluginId=${plugin.id}, realId=${fileData?.realId}`);
                         }
                     }
                 };

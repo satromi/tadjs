@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body tabindex="0">
-    <div class="plugin-content">
+    <div class="plugin-content" id="pluginContent">
         <!-- 検索条件表示 -->
         <div class="search-info" id="search-info"></div>
 
@@ -19,7 +19,7 @@
 
     <!-- ロガーをグローバル変数として読み込み -->
     <script type="module">
-        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        import { getLogger, LogLevel, logManager } from '../../../js/logger.js';
         window.getLogger = getLogger;
         window.LogLevel = LogLevel;
         window.logManager = logManager;
@@ -28,34 +28,29 @@
     <script type="module">
         import {
             DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS
-        } from '../../js/util.js';
+        } from '../../../js/util.js';
         window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
         window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
     </script>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">
-        import { MessageBus } from '../../js/message-bus.js';
+        import { MessageBus } from '../../../js/message-bus.js';
         window.MessageBus = MessageBus;
     </script>
     <!-- 実身仮身システムをグローバル変数として読み込み -->
     <script type="module">
-        import { RealObjectSystem } from '../../js/real-object-system.js';
+        import { RealObjectSystem } from '../../../js/real-object-system.js';
         window.RealObjectSystem = RealObjectSystem;
     </script>
     <!-- アイコンキャッシュマネージャー -->
     <script type="module">
-        import { IconCacheManager } from '../../js/icon-cache-manager.js';
+        import { IconCacheManager } from '../../../js/icon-cache-manager.js';
         window.IconCacheManager = IconCacheManager;
     </script>
     <!-- VirtualObjectRendererをグローバル変数として読み込み -->
     <script type="module">
-        import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
+        import { VirtualObjectRenderer } from '../../../js/virtual-object-renderer.js';
         window.VirtualObjectRenderer = VirtualObjectRenderer;
-    </script>
-    <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
-    <script type="module">
-        import { PluginBase } from '../../js/plugin-base.js';
-        window.PluginBase = PluginBase;
     </script>
     <script type="module" src="app.js"></script>
 </body>

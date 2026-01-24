@@ -15,8 +15,29 @@
         <div class="no-media-message" id="noMediaMessage">
             メディアファイルがありません
         </div>
+        <!-- シークバーコントロール -->
+        <div class="seekbar-container" id="seekbarContainer">
+            <!-- コントロールボタン -->
+            <div class="seekbar-controls">
+                <button class="seekbar-btn" id="btnShuffle" title="シャッフル">🔀</button>
+                <button class="seekbar-btn" id="btnPrevious" title="前のトラック">|◀</button>
+                <button class="seekbar-btn" id="btnPlayPause" title="再生/一時停止">▶</button>
+                <button class="seekbar-btn" id="btnNext" title="次のトラック">▶|</button>
+                <button class="seekbar-btn" id="btnRepeat" title="リピート">🔁</button>
+            </div>
+            <div class="seekbar-time" id="currentTime">00:00:00</div>
+            <div class="seekbar-track" id="seekbarTrack">
+                <div class="seekbar-progress" id="seekbarProgress"></div>
+                <input type="range" class="seekbar-slider" id="seekbarSlider" min="0" max="100" value="0">
+            </div>
+            <div class="seekbar-time" id="totalTime">00:00:00</div>
+        </div>
+        <!-- ホバー検出エリア（下部10%） -->
+        <div class="seekbar-hover-area" id="seekbarHoverArea"></div>
     </div>
 
+    <!-- jsmediatags: ID3タグ解析ライブラリ -->
+    <script src="../../lib/jsmediatags/jsmediatags.min.js"></script>
     <!-- ロガーをグローバル変数として読み込み -->
     <script type="module">
         import { getLogger, LogLevel, logManager } from '../../js/logger.js';

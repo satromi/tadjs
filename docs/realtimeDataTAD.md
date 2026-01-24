@@ -86,7 +86,7 @@ xmlTADでは実時間データ用の新しい文書タイプを定義します�
 | 実時間制御セグメント | 0xD0～0xDF | 各種制御要素 |
 | グループセグメント | TS_RGRP (0xD0) | `<realGroup type="parallel\|serial">` |
 | 時間設定セグメント | TS_RTIME (0xD1) | `<timeDelta>`, `<timeAbsolute>` |
-| 分岐/繰り返しセグメント | TS_BRLP (0xD2) | `<label>`, `<jump>`, `<if>`, `<while>`, `<assign>` |
+| 分岐/繰り返しセグメント | TS_BRLP (0xD2) | `<label>`, `<jump>`, `<if>`, `<while>`, `<assign>`, `<random>` |
 | 補間セグメント | TS_RGRD (0xD3) | `<interpolate>` |
 | 実時間データ開始 | TS_REAL (0xEA) | `<realData>` 開始タグ |
 | 実時間データ終了 | TS_REALEND (0xEB) | `</realData>` 終了タグ |
@@ -523,6 +523,54 @@ xmlTADでは実時間データ用の新しい文書タイプを定義します�
 
 **注**: 変数のスコープは同一実時間データ内（実時間データ開始セグメントと終了セグメントで囲まれた範囲）です。
 
+### 6.8 `<random>` - ランダム選択
+
+`<random>`要素は子要素からランダムに1つを選択して実行します。プレイリストのシャッフル再生などに使用します。
+
+```xml
+<random exclude="last">
+    <audio id="track1" href="{realId}_0_0.mp3" trigger="manual"/>
+    <audio id="track2" href="{realId}_0_1.mp3" trigger="manual"/>
+    <audio id="track3" href="{realId}_0_2.mp3" trigger="manual"/>
+</random>
+```
+
+| 属性 | 説明 | デフォルト値 |
+|------|------|-------------|
+| exclude | 選択から除外する要素 | "none" |
+
+**exclude属性値**:
+
+| 値 | 説明 |
+|----|------|
+| none | 除外なし（全要素から選択） |
+| last | 直前に選択された要素を除外（同じ曲の連続再生を防ぐ） |
+
+**セマンティクス**:
+- `<random>`内の子要素からランダムに1つを選択
+- 選択された要素のみが実行される（他の要素はスキップ）
+- `<while>`と組み合わせることでシャッフル再生を実現
+- 子要素には`<audio>`, `<video>`, `<realGroup>`などを含められる
+
+**使用例**（シャッフル再生）:
+
+```xml
+<while>
+    <!-- 無限ループ（停止は外部制御） -->
+    <do>
+        <random exclude="last">
+            <audio id="track1" href="{realId}_0_0.mp3"
+                   autoplay="true" onended="jump:loop_end"/>
+            <audio id="track2" href="{realId}_0_1.mp3"
+                   autoplay="true" onended="jump:loop_end"/>
+            <audio id="track3" href="{realId}_0_2.mp3"
+                   autoplay="true" onended="jump:loop_end"/>
+        </random>
+        <label id="loop_end"/>
+    </do>
+</while>
+```
+
 ---
 
 ## 7. 補間セグメント
@@ -816,6 +864,15 @@ MIDIセグメントは原則的にMIDIメッセージをそのまま記録しま
 | bitDepth | ビット深度（8, 16, 24, 32） | - |
 | totalDuration | ファイル全体の長さ（単位系依存） | - |
 
+#### トラック情報属性（プレイリスト用）
+
+| 属性 | 説明 | デフォルト値 |
+|------|------|-------------|
+| title | トラックタイトル（UI表示用） | - |
+| artist | アーティスト名 | - |
+| album | アルバム名 | - |
+| trackNumber | トラック番号 | - |
+
 #### 自動再生・プリロード属性
 
 | 属性 | 説明 | デフォルト値 |
@@ -846,6 +903,33 @@ MIDIセグメントは原則的にMIDIメッセージをそのまま記録しま
 | loopEnd | ループ終了位置（0=最後） | "0" |
 | fadeIn | フェードイン時間 | "0" |
 | fadeOut | フェードアウト時間 | "0" |
+
+#### 再生完了時アクション属性
+
+| 属性 | 説明 | デフォルト値 |
+|------|------|-------------|
+| onended | 再生完了時に実行するアクション | - |
+
+**onended属性の構文**:
+
+```
+onended ::= action ":" target
+action  ::= "play" | "stop" | "pause" | "next" | "jump"
+target  ::= id | "first" | "last" | "next" | "random"
+```
+
+**アクション一覧**:
+
+| アクション | 説明 | 例 |
+|-----------|------|-----|
+| `play:id` | 指定IDのメディアを再生開始 | `play:track2` |
+| `play:next` | 次のメディア要素を再生 | `play:next` |
+| `play:first` | 最初のメディア要素を再生 | `play:first` |
+| `play:random` | ランダムに選択して再生 | `play:random` |
+| `stop` | 再生停止 | `stop` |
+| `jump:label` | 指定ラベルにジャンプ | `jump:intro` |
+
+**注**: `onended`属性は再生完了時のアクションを明示的に指定します。`<while>`と組み合わせることでリピート再生を、`<random>`と組み合わせることでシャッフル再生を実現できます。
 
 **対応フォーマット（推奨）**:
 
@@ -949,6 +1033,15 @@ MIDIセグメントは原則的にMIDIメッセージをそのまま記録しま
 | videoCodec | 映像コーデック（情報用） | - |
 | audioCodec | 音声コーデック（情報用） | - |
 
+#### トラック情報属性（プレイリスト用）
+
+| 属性 | 説明 | デフォルト値 |
+|------|------|-------------|
+| title | トラックタイトル（UI表示用） | - |
+| artist | アーティスト名/制作者 | - |
+| album | アルバム名/シリーズ名 | - |
+| trackNumber | トラック番号 | - |
+
 #### 自動再生・プリロード属性
 
 | 属性 | 説明 | デフォルト値 |
@@ -980,6 +1073,14 @@ MIDIセグメントは原則的にMIDIメッセージをそのまま記録しま
 | loopEnd | ループ終了位置（0=最後） | "0" |
 | muted | 音声をミュートするか | "false" |
 | audioTrack | 音声トラック番号（複数トラック時） | "0" |
+
+#### 再生完了時アクション属性
+
+| 属性 | 説明 | デフォルト値 |
+|------|------|-------------|
+| onended | 再生完了時に実行するアクション | - |
+
+`onended`属性の構文は`<audio>`要素と同一です。詳細は「9.5 `<audio>` - 音声ファイル参照」の「再生完了時アクション属性」を参照してください。
 
 **対応フォーマット（推奨）**:
 
@@ -1464,6 +1565,121 @@ MIDIセグメントは原則的にMIDIメッセージをそのまま記録しま
 </tad>
 ```
 
+### 10.5 音声プレイリスト（順次再生）
+
+複数の音声ファイルを順次再生するプレイリスト形式の例です。`onended`属性でチェーンを構成し、`<while>`でリピートを実現します。
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<tad version="1.0" encoding="UTF-8">
+<realtime autoplay="false" preload="metadata" loop="false">
+    <realData autoplay="inherit" startDelay="0">
+        <stream number="1">
+            <deviceName>audio:</deviceName>
+        </stream>
+
+        <!-- 全体リピートのためのwhileループ -->
+        <while>
+            <do>
+                <!-- track1 → track2 → track3 の順に再生 -->
+                <audio id="track1"
+                       href="{realId}_0_0.mp3"
+                       format="mp3"
+                       title="Morning Glory"
+                       artist="Oasis"
+                       album="(What's the Story) Morning Glory?"
+                       trackNumber="1"
+                       autoplay="true"
+                       onended="play:track2"/>
+
+                <audio id="track2"
+                       href="{realId}_0_1.mp3"
+                       format="mp3"
+                       title="Wonderwall"
+                       artist="Oasis"
+                       album="(What's the Story) Morning Glory?"
+                       trackNumber="2"
+                       trigger="manual"
+                       onended="play:track3"/>
+
+                <audio id="track3"
+                       href="{realId}_0_2.mp3"
+                       format="mp3"
+                       title="Don't Look Back in Anger"
+                       artist="Oasis"
+                       album="(What's the Story) Morning Glory?"
+                       trackNumber="3"
+                       trigger="manual"
+                       onended="jump:loop_end"/>
+
+                <label id="loop_end"/>
+            </do>
+        </while>
+    </realData>
+</realtime>
+</tad>
+```
+
+**動作説明**:
+- 最初のトラックのみ`autoplay="true"`で自動開始
+- `onended="play:trackN"`で次のトラックを再生
+- 最後のトラックは`onended="jump:loop_end"`でループ終了点にジャンプ
+- `<while>`で囲むことで全体リピートを実現（リピートなしの場合は`<while>`を削除）
+
+### 10.6 シャッフル再生（random + while方式）
+
+`<random>`と`<while>`を組み合わせてシャッフル再生を実現する例です。
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<tad version="1.0" encoding="UTF-8">
+<realtime autoplay="false" preload="metadata" loop="false">
+    <realData autoplay="inherit" startDelay="0">
+        <stream number="1">
+            <deviceName>audio:</deviceName>
+        </stream>
+
+        <!-- シャッフルリピート再生 -->
+        <while>
+            <do>
+                <!-- ランダムに1曲選択して再生 -->
+                <random exclude="last">
+                    <audio id="track1"
+                           href="{realId}_0_0.mp3"
+                           title="Morning Glory"
+                           artist="Oasis"
+                           autoplay="true"
+                           onended="jump:loop_end"/>
+
+                    <audio id="track2"
+                           href="{realId}_0_1.mp3"
+                           title="Wonderwall"
+                           artist="Oasis"
+                           autoplay="true"
+                           onended="jump:loop_end"/>
+
+                    <audio id="track3"
+                           href="{realId}_0_2.mp3"
+                           title="Don't Look Back in Anger"
+                           artist="Oasis"
+                           autoplay="true"
+                           onended="jump:loop_end"/>
+                </random>
+
+                <label id="loop_end"/>
+            </do>
+        </while>
+    </realData>
+</realtime>
+</tad>
+```
+
+**動作説明**:
+- `<random exclude="last">`でランダムに1曲選択（直前の曲は除外）
+- 各トラックは`autoplay="true"`で選択時に即再生
+- `onended="jump:loop_end"`で再生完了後にループ終了点へ
+- `<while>`で繰り返し、次のランダム選択へ
+
 ---
 
 ## 11. バイナリとの対応表
@@ -1474,7 +1690,7 @@ MIDIセグメントは原則的にMIDIメッセージをそのまま記録しま
 |---------|------------|------|-----------|
 | 実時間制御 | 0xD0 | TS_RGRP | `<realGroup type="parallel\|serial">` |
 | 実時間制御 | 0xD1 | TS_RTIME | `<timeDelta>`, `<timeAbsolute>` |
-| 実時間制御 | 0xD2 | TS_BRLP | `<label>`, `<jump>`, `<if>`, `<while>`, `<assign>` |
+| 実時間制御 | 0xD2 | TS_BRLP | `<label>`, `<jump>`, `<if>`, `<while>`, `<assign>`, `<random>` |
 | 実時間制御 | 0xD3 | TS_RGRD | `<interpolate>` |
 | 管理 | 0xEA | TS_REAL | `<realData>` 開始タグ |
 | 管理 | 0xEB | TS_REALEND | `</realData>` 終了タグ |
@@ -1513,6 +1729,8 @@ MIDIセグメントは原則的にMIDIメッセージをそのまま記録しま
 | 5 | 繰り返し開始付箋 | `<while>` |
 | 6 | 繰り返し終了付箋 | `</while>` |
 | 7 | 変数代入付箋 | `<assign>` |
+| 8 | ランダム選択開始 | `<random>` |
+| 9 | ランダム選択終了 | `</random>` |
 
 #### TS_RGRD (0xD3)
 
@@ -1596,4 +1814,6 @@ MIDIセグメントは原則的にMIDIメッセージをそのまま記録しま
 | 2026-01-16 | 1.3 | `<audio>`, `<video>`要素を拡張（メタデータ属性、id属性追加） |
 | 2026-01-16 | 1.4 | メディア制御要素追加: `<audioControl>`, `<videoControl>`, `<imageControl>` |
 | 2026-01-16 | 1.5 | 自動再生対応: `<realtime>`, `<realData>`, `<audio>`, `<video>`にautoplay/preload/trigger属性追加 |
+| 2026-01-22 | 1.6 | プレイリスト機能追加: `<audio>/<video>`にトラック情報属性（title/artist/album/trackNumber）とonended属性追加 |
+| 2026-01-24 | 1.7 | `<random>`セグメント追加（シャッフル再生用）、`<realData>`のcontinuous/shuffle/repeat属性を削除し`<while>`+`<random>`+`onended`による制御に変更 |
 

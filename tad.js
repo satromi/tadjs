@@ -1555,68 +1555,6 @@ function getBottomUBinUH(UH) {
 }
 
 /**
- * UUID v7を生成する（RFC 9562準拠）
- * タイムスタンプベースの時系列順UUID
- * @returns {string} UUID v7文字列（8-4-4-4-12形式）
- */
-function generateUUIDv7() {
-    // 現在時刻のミリ秒タイムスタンプ（48ビット使用）
-    const timestamp = Date.now();
-
-    // 暗号学的に安全な乱数を生成（10バイト = 80ビット、うち74ビット使用）
-    const randomBytes = new Uint8Array(10);
-    // ブラウザ環境とNode.js環境の両方に対応
-    if (typeof window !== 'undefined' && window.crypto) {
-        window.crypto.getRandomValues(randomBytes);
-    } else if (typeof globalThis !== 'undefined' && globalThis.crypto) {
-        globalThis.crypto.getRandomValues(randomBytes);
-    } else {
-        // フォールバック: Math.randomを使用（非推奨だが互換性のため）
-        for (let i = 0; i < randomBytes.length; i++) {
-            randomBytes[i] = Math.floor(Math.random() * 256);
-        }
-    }
-
-    // UUID v7の構造 (RFC 9562準拠):
-    // - 48ビット: unix_ts_ms (Unixエポックからのミリ秒タイムスタンプ)
-    // - 4ビット: version (0111 = 7)
-    // - 12ビット: rand_a (ランダムビット)
-    // - 2ビット: variant (10)
-    // - 62ビット: rand_b (ランダムビット)
-    // 合計ランダムビット: 74ビット (12 + 62)
-
-    // タイムスタンプを16進数文字列に変換（12桁）
-    const timestampHex = timestamp.toString(16).padStart(12, '0');
-
-    // ランダムバイトを16進数に変換
-    const randomHex = Array.from(randomBytes)
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-
-    // UUID v7フォーマットに組み立て
-    // time_high (32ビット) + time_mid (16ビット)
-    const timeLow = timestampHex;
-
-    // time_hi_and_version: ランダム12ビット + バージョン4ビット(0111)
-    const timeHiAndVersion = '7' + randomHex.substring(0, 3);
-
-    // clock_seq_hi_and_reserved: バリアント2ビット(10) + ランダム6ビット
-    const clockSeqByte = parseInt(randomHex.substring(3, 5), 16);
-    const clockSeqHi = ((clockSeqByte & 0x3F) | 0x80).toString(16).padStart(2, '0');
-
-    // clock_seq_low: ランダム8ビット
-    const clockSeqLow = randomHex.substring(5, 7);
-
-    // node: ランダム48ビット
-    const node = randomHex.substring(7, 19);
-
-    // 8-4-4-4-12フォーマットで結合
-    return `${timeLow.substring(0, 8)}-${timeLow.substring(8, 12)}-${timeHiAndVersion}-${clockSeqHi}${clockSeqLow}-${node}`;
-}
-
-
-
-/**
  * カラーを取得
  * @param {*} raw 32bit値
  * @param {*} offset

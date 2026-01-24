@@ -824,6 +824,10 @@ class BasicFigureEditor extends window.PluginBase {
 
         // ドラッグオーバー
         this.canvas.addEventListener('dragover', (e) => {
+            // 読み取り専用モードではドラッグ&ドロップを無効化
+            if (this.readonly) {
+                return;
+            }
             e.preventDefault();
             // ドラッグ移動を検出（hasMovedフラグ設定）
             this.detectVirtualObjectDragMove(e);
@@ -1381,6 +1385,11 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     handleMouseDown(e) {
+        // 読み取り専用モードの場合は操作を無効化
+        if (this.readonly) {
+            return;
+        }
+
         const rect = this.canvas.getBoundingClientRect();
         let x = e.clientX - rect.left;
         let y = e.clientY - rect.top;
@@ -2177,6 +2186,8 @@ class BasicFigureEditor extends window.PluginBase {
     handleDoubleClick(e) {
         // 多角形描画中のダブルクリック：多角形を確定
         if (this.currentTool === 'polygon' && this.currentShape) {
+            // 読み取り専用モードでは多角形描画自体ができないのでここには来ない
+            if (this.readonly) return;
             this.finishPolygon();
             return;
         }
@@ -2189,17 +2200,21 @@ class BasicFigureEditor extends window.PluginBase {
         for (let i = this.shapes.length - 1; i >= 0; i--) {
             const shape = this.shapes[i];
             if (shape.type === 'document' && this.isPointInShape(x, y, shape)) {
+                // 読み取り専用モードでは文字枠編集を無効化
+                if (this.readonly) return;
                 // 文字枠の編集モードに入る
                 this.enterTextEditMode(shape);
                 return;
             } else if (shape.type === 'pixelmap' && this.isPointInShape(x, y, shape)) {
+                // 読み取り専用モードではピクセルマップ編集を無効化
+                if (this.readonly) return;
                 // ピクセルマップ枠の編集モードに入る（既にモード中でない場合のみ）
                 if (!this.isPixelmapMode) {
                     this.enterPixelmapMode(shape);
                 }
                 return;
             } else if (shape.type === 'vobj' && this.isPointInShape(x, y, shape)) {
-                // 仮身をダブルクリック：defaultOpenプラグインで実身を開く
+                // 仮身をダブルクリック：defaultOpenプラグインで実身を開く（読み取り専用でも許可）
                 // 選択状態にしてから開く
                 if (!this.selectedShapes.includes(shape)) {
                     this.selectedShapes = [shape];
@@ -4122,31 +4137,38 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     handleKeyboardShortcuts(e) {
-        // Ctrl+S: 保存
+        // Ctrl+S: 保存（読み取り専用モードでは何もしない）
         if (e.ctrlKey && e.key === 's') {
             e.preventDefault();
-            this.saveFile();
+            if (!this.readonly) {
+                this.saveFile();
+            }
             return;
         }
 
-        // Ctrl+E: ウィンドウを閉じる
+        // Ctrl+E: ウィンドウを閉じる（読み取り専用でも許可）
         if (e.ctrlKey && e.key === 'e') {
             e.preventDefault();
             this.requestCloseWindow();
             return;
         }
 
-        // Ctrl+O: 選択中の仮身をdefaultOpenアプリで開く
+        // Ctrl+O: 選択中の仮身をdefaultOpenアプリで開く（読み取り専用でも許可）
         if (e.ctrlKey && e.key === 'o') {
             e.preventDefault();
             this.openRealObjectWithDefaultApp();
             return;
         }
 
-        // Ctrl+L: 全画面表示オンオフ
+        // Ctrl+L: 全画面表示オンオフ（読み取り専用でも許可）
         if (e.ctrlKey && e.key === 'l') {
             e.preventDefault();
             this.toggleFullscreen();
+            return;
+        }
+
+        // 以下、読み取り専用モードでは無効化
+        if (this.readonly) {
             return;
         }
 
@@ -4514,7 +4536,7 @@ class BasicFigureEditor extends window.PluginBase {
         });
     }
 
-    // getNextImageNumber は PluginBase の共通実装を使用
+    // getNextImageNumber, getNextResourceNumber は PluginBase の共通実装を使用
 
     /**
      * メモリ上の最大画像番号を取得（PluginBase.getNextImageNumber から呼ばれる）
@@ -4530,26 +4552,26 @@ class BasicFigureEditor extends window.PluginBase {
         return maxImgNo;
     }
 
-    async getNextPixelmapNumber() {
-        // メモリ上の最大値を取得
+    /**
+     * メモリ上の最大pixelmap番号を取得
+     * @returns {number} 最大pixelmap番号（-1でpixelmapなし）
+     */
+    getMemoryMaxPixelmapNumber() {
         let maxPixelmapNo = -1;
         this.shapes.forEach(shape => {
             if (shape.type === 'pixelmap' && shape.pixelmapNo !== undefined) {
                 maxPixelmapNo = Math.max(maxPixelmapNo, shape.pixelmapNo);
             }
         });
+        return maxPixelmapNo;
+    }
 
-        // ディスク上の最大値も取得
-        if (this.realId) {
-            try {
-                const diskNextNo = await this.getNextImageFileNumber(this.realId, 0);
-                maxPixelmapNo = Math.max(maxPixelmapNo, diskNextNo - 1);
-            } catch (error) {
-                // ディスク取得失敗時はメモリのみで判断
-            }
-        }
-
-        return maxPixelmapNo + 1;
+    /**
+     * 次のpixelmap番号を取得（メモリ+ディスク両方を考慮）
+     * @returns {Promise<number>} 次のpixelmap番号
+     */
+    async getNextPixelmapNumber() {
+        return this.getNextResourceNumber(() => this.getMemoryMaxPixelmapNumber());
     }
 
     // saveImageFile, deleteImageFile, savePixelmapImageFile, saveImageFromElement は

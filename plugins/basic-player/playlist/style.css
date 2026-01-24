@@ -1,0 +1,116 @@
+html {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 11px;
+    background: #dedede;
+    overflow: hidden;
+    height: 100%;
+}
+
+.plugin-content {
+    overflow: auto;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* カスタムスクロールバー対応 */
+.plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.plugin-content {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+/* ヘッダー */
+.playlist-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding: 6px 8px;
+    background: #e0e0e0;
+    border-bottom: 1px solid #808080;
+    font-size: 11px;
+    color: #404040;
+}
+
+/* コンテナ */
+.playlist-container {
+    padding: 4px 8px 16px 8px;  /* 下部にスクロールバー分のマージン追加 */
+    background: #f0f0f0;
+    min-height: calc(100% - 32px);
+}
+
+/* リスト */
+.playlist-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* トラック行 */
+.track-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    cursor: pointer;
+    border-radius: 2px;
+}
+
+.track-row:hover {
+    background: #e0e0e0;
+}
+
+.track-row.selected {
+    background: #c0c0e0;
+}
+
+/* 再生中のトラック */
+.track-row.playing {
+    font-weight: bold;
+}
+
+.track-row.playing::before {
+    content: "\25b6";
+    font-size: 9px;
+    color: #006600;
+    margin-right: 4px;
+}
+
+/* トラック番号 */
+.track-number {
+    min-width: 20px;
+    text-align: right;
+    color: #808080;
+    font-size: 10px;
+}
+
+/* トラック名 */
+.track-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 空メッセージ */
+.empty-message {
+    text-align: center;
+    color: #808080;
+    padding: 20px;
+    font-size: 11px;
+}

@@ -402,6 +402,24 @@ ipcMain.handle('delete-file', async (event, filePath) => {
     }
 });
 
+// IPC通信: フルスクリーン開始
+ipcMain.handle('enter-fullscreen', async () => {
+    if (mainWindow && !mainWindow.isFullScreen()) {
+        mainWindow.setFullScreen(true);
+        return { success: true };
+    }
+    return { success: false };
+});
+
+// IPC通信: フルスクリーン終了
+ipcMain.handle('exit-fullscreen', async () => {
+    if (mainWindow && mainWindow.isFullScreen()) {
+        mainWindow.setFullScreen(false);
+        return { success: true };
+    }
+    return { success: false };
+});
+
 // IPC通信: メニューバーの表示/非表示
 ipcMain.on('set-menu-bar-visibility', (event, visible) => {
     if (mainWindow) {

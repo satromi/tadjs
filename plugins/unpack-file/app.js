@@ -140,38 +140,6 @@ class UnpackFileManager extends window.PluginBase {
     }
 
     /**
-     * UUID v7を生成（tadjs-desktop.jsから移植）
-     */
-    generateUUIDv7() {
-        const timestamp = Date.now();
-        const randomBytes = new Uint8Array(10);
-
-        if (typeof window !== 'undefined' && window.crypto) {
-            window.crypto.getRandomValues(randomBytes);
-        } else if (typeof globalThis !== 'undefined' && globalThis.crypto) {
-            globalThis.crypto.getRandomValues(randomBytes);
-        } else {
-            for (let i = 0; i < randomBytes.length; i++) {
-                randomBytes[i] = Math.floor(Math.random() * 256);
-            }
-        }
-
-        const timestampHex = timestamp.toString(16).padStart(12, '0');
-        const randomHex = Array.from(randomBytes)
-            .map(b => b.toString(16).padStart(2, '0'))
-            .join('');
-
-        const timeLow = timestampHex;
-        const timeHiAndVersion = '7' + randomHex.substring(0, 3);
-        const clockSeqByte = parseInt(randomHex.substring(3, 5), 16);
-        const clockSeqHi = ((clockSeqByte & 0x3F) | 0x80).toString(16).padStart(2, '0');
-        const clockSeqLow = randomHex.substring(5, 7);
-        const node = randomHex.substring(7, 19);
-
-        return `${timeLow.substring(0, 8)}-${timeLow.substring(8, 12)}-${timeHiAndVersion}-${clockSeqHi}${clockSeqLow}-${node}`;
-    }
-
-    /**
      * BPKファイルのヘッダー情報のみを読み込み（解凍は行わない）
      * @param {Uint8Array} rawData - BPKファイルの生データ
      * @param {string} fileName - BPKファイル名
@@ -188,7 +156,7 @@ class UnpackFileManager extends window.PluginBase {
             }
 
             const rootFile = {
-                fileId: this.generateUUIDv7(),
+                fileId: generateUUIDv7(),
                 name: baseName,
                 isRoot: true
             };

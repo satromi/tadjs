@@ -3,6 +3,8 @@ const logger = window.getLogger('FileImportManager');
 /**
  * ファイルインポート管理クラス
  * 外部ファイルを実身オブジェクトとして登録する機能を提供
+ * @class
+ * 
  */
 class FileImportManager {
     /**
@@ -24,6 +26,155 @@ class FileImportManager {
     }
 
     /**
+     * 動画ファイル拡張子かどうかをチェック
+     * @param {string} ext - 拡張子（小文字）
+     * @returns {boolean}
+     */
+    isVideoExtension(ext) {
+        const videoExtensions = ['mp4', 'm4v', 'webm', 'ogv', 'mov'];
+        return videoExtensions.includes(ext);
+    }
+
+    /**
+     * 音声ファイル拡張子かどうかをチェック
+     * @param {string} ext - 拡張子（小文字）
+     * @returns {boolean}
+     */
+    isAudioExtension(ext) {
+        const audioExtensions = ['mp3', 'wav', 'aac', 'm4a', 'ogg', 'oga', 'flac'];
+        return audioExtensions.includes(ext);
+    }
+
+    /**
+     * ID3タグ文字列のエンコーディングを修正
+     * Latin-1として読み込まれた日本語テキストをShift_JISとして再解釈
+     * @param {string} str - 文字列
+     * @returns {string} 修正後の文字列
+     */
+    _fixId3TagEncoding(str) {
+        if (!str) return str;
+
+        // 既に正常なUTF-8/ASCII文字列かチェック
+        // 日本語文字（ひらがな、カタカナ、漢字）が含まれていれば正常
+        if (/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/.test(str)) {
+            return str;
+        }
+
+        // Latin-1として誤解釈された可能性がある場合（0x80-0xFF範囲の文字が多い）
+        let hasHighBytes = false;
+        for (let i = 0; i < str.length; i++) {
+            const code = str.charCodeAt(i);
+            if (code >= 0x80 && code <= 0xFF) {
+                hasHighBytes = true;
+                break;
+            }
+        }
+
+        if (!hasHighBytes) {
+            return str; // ASCII文字のみなので変換不要
+        }
+
+        // Encodingライブラリが利用可能か確認
+        if (typeof Encoding === 'undefined') {
+            return str;
+        }
+
+        try {
+            // Latin-1文字列をバイト配列に変換
+            const bytes = [];
+            for (let i = 0; i < str.length; i++) {
+                bytes.push(str.charCodeAt(i) & 0xFF);
+            }
+
+            // エンコーディングを検出してUnicodeに変換
+            const detected = Encoding.detect(bytes);
+            if (detected && detected !== 'ASCII' && detected !== 'UNICODE') {
+                const unicodeArray = Encoding.convert(bytes, {
+                    to: 'UNICODE',
+                    from: detected
+                });
+                return Encoding.codeToString(unicodeArray);
+            }
+        } catch (e) {
+            // 変換失敗時は元の文字列を返す
+        }
+
+        return str;
+    }
+
+    /**
+     * 音声ファイルからID3タグを抽出
+     * @param {File|Object} file - 音声ファイル（Fileオブジェクトまたはbase64Dataを持つオブジェクト）
+     * @returns {Promise<{title: string|null, artist: string|null, album: string|null, trackNumber: number|null}>}
+     */
+    async _extractId3Tags(file) {
+        const nullResult = { title: null, artist: null, album: null, trackNumber: null };
+
+        // jsmediatagsがグローバルに存在しない場合はnull値を返す
+        if (typeof jsmediatags === 'undefined') {
+            return nullResult;
+        }
+
+        try {
+            // ファイルをArrayBufferに変換（複数のソースに対応）
+            let arrayBuffer;
+
+            if (file.base64Data) {
+                // base64Dataを持つオブジェクト（ファイル取込プラグインから）
+                const base64 = file.base64Data.includes(',')
+                    ? file.base64Data.split(',')[1]
+                    : file.base64Data;
+                const binaryString = atob(base64);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                arrayBuffer = bytes.buffer;
+            } else if (typeof file.arrayBuffer === 'function') {
+                // Fileオブジェクト（ドラッグ＆ドロップから）
+                arrayBuffer = await file.arrayBuffer();
+            } else if (file.path && this.tadjs.isElectronEnv) {
+                // Electron環境でpathがある場合はfsで読み込み
+                const fs = require('fs');
+                const buffer = fs.readFileSync(file.path);
+                arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+            } else {
+                return nullResult;
+            }
+
+            return new Promise((resolve) => {
+                jsmediatags.read(new Blob([arrayBuffer]), {
+                    onSuccess: (tag) => {
+                        const tags = tag.tags || {};
+                        let trackNumber = null;
+                        if (tags.track) {
+                            // trackは"1/10"形式の場合があるため数値部分を抽出
+                            const trackStr = String(tags.track);
+                            const trackMatch = trackStr.match(/^(\d+)/);
+                            if (trackMatch) {
+                                trackNumber = parseInt(trackMatch[1], 10);
+                            }
+                        }
+                        // エンコーディング修正を適用
+                        resolve({
+                            title: this._fixId3TagEncoding(tags.title) || null,
+                            artist: this._fixId3TagEncoding(tags.artist) || null,
+                            album: this._fixId3TagEncoding(tags.album) || null,
+                            trackNumber: trackNumber
+                        });
+                    },
+                    onError: () => {
+                        resolve(nullResult);
+                    }
+                });
+            });
+        } catch (error) {
+            logger.warn('ID3タグ抽出エラー:', error);
+            return nullResult;
+        }
+    }
+
+    /**
      * インポートされたファイルから実身オブジェクトを作成
      * @param {File} file - インポートされたファイル
      * @returns {Promise<{realId: string, name: string, applist: object}|null>} 作成された実身の情報、またはnull（エラー時）
@@ -38,6 +189,16 @@ class FileImportManager {
         // 画像ファイルの場合は専用処理
         if (this.isImageExtension(fileExt)) {
             return await this.createImageRealObject(file, fileExt);
+        }
+
+        // 動画ファイルの場合は専用処理
+        if (this.isVideoExtension(fileExt)) {
+            return await this.createVideoRealObject(file, fileExt);
+        }
+
+        // 音声ファイルの場合は専用処理
+        if (this.isAudioExtension(fileExt)) {
+            return await this.createAudioRealObject(file, fileExt);
         }
 
         // 拡張子に応じて使用する原紙を決定
@@ -418,6 +579,742 @@ class FileImportManager {
     }
 
     /**
+     * 動画ファイルから実身オブジェクトを作成（basic-player用）
+     * @param {File} file - 動画ファイル
+     * @param {string} fileExt - ファイル拡張子
+     * @returns {Promise<{realId: string, name: string, applist: object}|null>}
+     */
+    async createVideoRealObject(file, fileExt) {
+        logger.info('createVideoRealObject開始:', file.name);
+
+        // basic-playerプラグインの原紙情報
+        const pluginId = 'basic-player';
+        const baseFileId = '019bc56c-5692-774c-84fe-7911f25adabf';
+
+        // 実身名はファイル名から拡張子を除いたものを使用
+        const newName = file.name.replace(/\.[^.]+$/, '');
+        logger.debug('新しい実身名:', newName);
+
+        // 新しい実身IDを生成
+        const newRealId = typeof generateUUIDv7 === 'function' ? generateUUIDv7() : this.tadjs.generateRealFileIdSet(1).fileId;
+        logger.debug('新しい実身ID:', newRealId);
+
+        // 原紙のJSONとXTADを読み込む
+        let basefileJson = null;
+        let basefileXtad = null;
+        const basefileIcoName = `${baseFileId}.ico`;
+
+        try {
+            const jsonPath = `plugins/${pluginId}/${baseFileId}.json`;
+            const xtadPath = `plugins/${pluginId}/${baseFileId}_0.xtad`;
+
+            // JSONファイルを読み込む
+            const jsonResponse = await fetch(jsonPath);
+            if (jsonResponse.ok) {
+                basefileJson = await jsonResponse.json();
+                logger.debug('原紙 JSON読み込み完了');
+            } else {
+                logger.error('原紙 JSON読み込み失敗');
+                return null;
+            }
+
+            // XTADファイルを読み込む
+            const xtadResponse = await fetch(xtadPath);
+            if (xtadResponse.ok) {
+                basefileXtad = await xtadResponse.text();
+                logger.debug('原紙 XTAD読み込み完了');
+            } else {
+                logger.error('原紙 XTAD読み込み失敗');
+                return null;
+            }
+        } catch (error) {
+            logger.error('原紙読み込みエラー:', error);
+            return null;
+        }
+
+        // basic-player用のJSON作成
+        const currentDateTime = new Date().toISOString();
+        const newRealJson = {
+            ...basefileJson,
+            name: newName,
+            makeDate: currentDateTime,
+            updateDate: currentDateTime,
+            accessDate: currentDateTime,
+            refCount: 1
+        };
+
+        // 動画ファイル名（basic-playerの形式: realId_0_resourceNo.ext）
+        const mediaFileName = `${newRealId}_0_0.${fileExt}`;
+
+        // 原紙XTADをパースしてvideo要素を追加
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(basefileXtad, 'text/xml');
+
+        // realData要素を取得
+        let realDataEl = doc.querySelector('realData');
+        if (!realDataEl) {
+            // realData要素がない場合は作成
+            let realtimeEl = doc.querySelector('realtime');
+            if (!realtimeEl) {
+                const tadEl = doc.querySelector('tad');
+                if (!tadEl) {
+                    logger.error('tad要素が見つかりません');
+                    return null;
+                }
+                realtimeEl = doc.createElement('realtime');
+                realtimeEl.setAttribute('autoplay', 'false');
+                realtimeEl.setAttribute('preload', 'metadata');
+                realtimeEl.setAttribute('loop', 'false');
+                tadEl.appendChild(realtimeEl);
+            }
+            realDataEl = doc.createElement('realData');
+            realDataEl.setAttribute('autoplay', 'inherit');
+            realDataEl.setAttribute('startDelay', '0');
+            realtimeEl.appendChild(realDataEl);
+        }
+
+        // video要素を作成して追加
+        const mediaId = `video-${Date.now()}`;
+        const videoEl = doc.createElement('video');
+        videoEl.setAttribute('id', mediaId);
+        videoEl.setAttribute('href', mediaFileName);
+        videoEl.setAttribute('format', fileExt);
+        videoEl.setAttribute('autoplay', 'false');
+        videoEl.setAttribute('preload', 'auto');
+        videoEl.setAttribute('left', '0');
+        videoEl.setAttribute('top', '0');
+        videoEl.setAttribute('right', '0');
+        videoEl.setAttribute('bottom', '0');
+        videoEl.setAttribute('volume', '1.0');
+        videoEl.setAttribute('playbackRate', '1.0');
+        realDataEl.appendChild(videoEl);
+
+        // XMLをシリアライズ
+        const serializer = new XMLSerializer();
+        let newRealXtad = serializer.serializeToString(doc);
+        // <?xml...?>宣言を削除（xmlTAD仕様では不要）
+        newRealXtad = newRealXtad.replace(/<\?xml[^?]*\?>\s*/g, '');
+
+        // RealObjectSystemに実身を登録
+        if (this.tadjs.realObjectSystem) {
+            try {
+                const metadata = {
+                    realId: newRealId,
+                    name: newName,
+                    recordCount: 1,
+                    refCount: 1,
+                    createdAt: currentDateTime,
+                    modifiedAt: currentDateTime
+                };
+
+                const realObject = {
+                    metadata: metadata,
+                    records: [{ xtad: newRealXtad, images: [mediaFileName] }]
+                };
+
+                await this.tadjs.realObjectSystem.saveRealObject(newRealId, realObject);
+                logger.debug('実身をRealObjectSystemに保存:', newRealId, newName);
+            } catch (error) {
+                logger.error('実身保存エラー:', error);
+            }
+        }
+
+        // JSONとXTADファイルを保存
+        const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(newRealId);
+        const xtadFileName = `${newRealId}_0.xtad`;
+
+        const jsonSaved = await this.tadjs.saveDataFile(jsonFileName, JSON.stringify(newRealJson, null, 2));
+        const xtadSaved = await this.tadjs.saveDataFile(xtadFileName, newRealXtad);
+
+        if (jsonSaved && xtadSaved) {
+            logger.info('動画実身をファイルシステムに保存:', jsonFileName, xtadFileName);
+        } else {
+            logger.warn('ファイルシステムへの保存に失敗');
+            return null;
+        }
+
+        // アイコンファイルをコピー（basic-playerのアイコンを使用）
+        if (this.tadjs.isElectronEnv) {
+            try {
+                const baseIconPath = `plugins/${pluginId}/${basefileIcoName}`;
+                const iconResponse = await fetch(baseIconPath);
+                if (iconResponse.ok) {
+                    const iconData = await iconResponse.arrayBuffer();
+                    const newIconFileName = `${newRealId}.ico`;
+                    await this.tadjs.saveDataFile(newIconFileName, iconData);
+                    logger.debug('アイコンファイルをコピー:', newIconFileName);
+                }
+            } catch (error) {
+                logger.warn('アイコンファイルコピー中のエラー:', error.message);
+            }
+        }
+
+        // 動画ファイルを保存
+        try {
+            let uint8Array;
+
+            if (file.base64Data) {
+                const binary = atob(file.base64Data);
+                const len = binary.length;
+                uint8Array = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    uint8Array[i] = binary.charCodeAt(i);
+                }
+            } else if (file.path && this.tadjs.isElectronEnv) {
+                const fs = require('fs');
+                const buffer = fs.readFileSync(file.path);
+                uint8Array = new Uint8Array(buffer);
+            } else if (typeof file.arrayBuffer === 'function') {
+                const arrayBuffer = await file.arrayBuffer();
+                uint8Array = new Uint8Array(arrayBuffer);
+            } else {
+                logger.warn('ファイル内容を取得できません');
+                return {
+                    realId: newRealId,
+                    name: newName,
+                    applist: newRealJson.applist || {}
+                };
+            }
+
+            await this.tadjs.saveDataFile(mediaFileName, uint8Array);
+        } catch (error) {
+            logger.error('動画ファイル保存エラー:', error);
+            return null;
+        }
+
+        logger.info('動画実身オブジェクト作成完了:', newRealId, newName);
+        return {
+            realId: newRealId,
+            name: newName,
+            applist: newRealJson.applist || {}
+        };
+    }
+
+    /**
+     * 音声ファイルから実身オブジェクトを作成（basic-player用）
+     * @param {File} file - 音声ファイル
+     * @param {string} fileExt - ファイル拡張子
+     * @returns {Promise<{realId: string, name: string, applist: object}|null>}
+     */
+    async createAudioRealObject(file, fileExt) {
+        logger.info('createAudioRealObject開始:', file.name);
+
+        // basic-playerプラグインの原紙情報
+        const pluginId = 'basic-player';
+        const baseFileId = '019bc56c-5692-774c-84fe-7911f25adabf';
+
+        // 実身名はファイル名から拡張子を除いたものを使用
+        const newName = file.name.replace(/\.[^.]+$/, '');
+        logger.debug('新しい実身名:', newName);
+
+        // 新しい実身IDを生成
+        const newRealId = typeof generateUUIDv7 === 'function' ? generateUUIDv7() : this.tadjs.generateRealFileIdSet(1).fileId;
+        logger.debug('新しい実身ID:', newRealId);
+
+        // 原紙のJSONとXTADを読み込む
+        let basefileJson = null;
+        let basefileXtad = null;
+        const basefileIcoName = `${baseFileId}.ico`;
+
+        try {
+            const jsonPath = `plugins/${pluginId}/${baseFileId}.json`;
+            const xtadPath = `plugins/${pluginId}/${baseFileId}_0.xtad`;
+
+            // JSONファイルを読み込む
+            const jsonResponse = await fetch(jsonPath);
+            if (jsonResponse.ok) {
+                basefileJson = await jsonResponse.json();
+                logger.debug('原紙 JSON読み込み完了');
+            } else {
+                logger.error('原紙 JSON読み込み失敗');
+                return null;
+            }
+
+            // XTADファイルを読み込む
+            const xtadResponse = await fetch(xtadPath);
+            if (xtadResponse.ok) {
+                basefileXtad = await xtadResponse.text();
+                logger.debug('原紙 XTAD読み込み完了');
+            } else {
+                logger.error('原紙 XTAD読み込み失敗');
+                return null;
+            }
+        } catch (error) {
+            logger.error('原紙読み込みエラー:', error);
+            return null;
+        }
+
+        // basic-player用のJSON作成
+        const currentDateTime = new Date().toISOString();
+        const newRealJson = {
+            ...basefileJson,
+            name: newName,
+            makeDate: currentDateTime,
+            updateDate: currentDateTime,
+            accessDate: currentDateTime,
+            refCount: 1
+        };
+
+        // 音声ファイル名（basic-playerの形式: realId_0_resourceNo.ext）
+        const mediaFileName = `${newRealId}_0_0.${fileExt}`;
+
+        // ID3タグを抽出
+        const id3Tags = await this._extractId3Tags(file);
+
+        // 原紙XTADをパースしてaudio要素を追加
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(basefileXtad, 'text/xml');
+
+        // realData要素を取得
+        let realDataEl = doc.querySelector('realData');
+        if (!realDataEl) {
+            // realData要素がない場合は作成
+            let realtimeEl = doc.querySelector('realtime');
+            if (!realtimeEl) {
+                const tadEl = doc.querySelector('tad');
+                if (!tadEl) {
+                    logger.error('tad要素が見つかりません');
+                    return null;
+                }
+                realtimeEl = doc.createElement('realtime');
+                realtimeEl.setAttribute('autoplay', 'false');
+                realtimeEl.setAttribute('preload', 'metadata');
+                realtimeEl.setAttribute('loop', 'false');
+                tadEl.appendChild(realtimeEl);
+            }
+            realDataEl = doc.createElement('realData');
+            realDataEl.setAttribute('autoplay', 'inherit');
+            realDataEl.setAttribute('startDelay', '0');
+            realtimeEl.appendChild(realDataEl);
+        }
+
+        // audio要素を作成して追加
+        const mediaId = `audio-${Date.now()}`;
+        const audioEl = doc.createElement('audio');
+        audioEl.setAttribute('id', mediaId);
+        audioEl.setAttribute('href', mediaFileName);
+        audioEl.setAttribute('format', fileExt);
+        audioEl.setAttribute('autoplay', 'false');
+        audioEl.setAttribute('preload', 'auto');
+        audioEl.setAttribute('volume', '1.0');
+        audioEl.setAttribute('pan', '0.0');
+        audioEl.setAttribute('playbackRate', '1.0');
+        // ID3タグから取得したトラック情報属性を設定
+        if (id3Tags.title) {
+            audioEl.setAttribute('title', id3Tags.title);
+        }
+        if (id3Tags.artist) {
+            audioEl.setAttribute('artist', id3Tags.artist);
+        }
+        if (id3Tags.album) {
+            audioEl.setAttribute('album', id3Tags.album);
+        }
+        if (id3Tags.trackNumber !== null) {
+            audioEl.setAttribute('trackNumber', String(id3Tags.trackNumber));
+        }
+        realDataEl.appendChild(audioEl);
+
+        // XMLをシリアライズ
+        const serializer = new XMLSerializer();
+        let newRealXtad = serializer.serializeToString(doc);
+        // <?xml...?>宣言を削除（xmlTAD仕様では不要）
+        newRealXtad = newRealXtad.replace(/<\?xml[^?]*\?>\s*/g, '');
+
+        // RealObjectSystemに実身を登録
+        if (this.tadjs.realObjectSystem) {
+            try {
+                const metadata = {
+                    realId: newRealId,
+                    name: newName,
+                    recordCount: 1,
+                    refCount: 1,
+                    createdAt: currentDateTime,
+                    modifiedAt: currentDateTime
+                };
+
+                const realObject = {
+                    metadata: metadata,
+                    records: [{ xtad: newRealXtad, images: [mediaFileName] }]
+                };
+
+                await this.tadjs.realObjectSystem.saveRealObject(newRealId, realObject);
+                logger.debug('実身をRealObjectSystemに保存:', newRealId, newName);
+            } catch (error) {
+                logger.error('実身保存エラー:', error);
+            }
+        }
+
+        // JSONとXTADファイルを保存
+        const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(newRealId);
+        const xtadFileName = `${newRealId}_0.xtad`;
+
+        const jsonSaved = await this.tadjs.saveDataFile(jsonFileName, JSON.stringify(newRealJson, null, 2));
+        const xtadSaved = await this.tadjs.saveDataFile(xtadFileName, newRealXtad);
+
+        if (jsonSaved && xtadSaved) {
+            logger.info('音声実身をファイルシステムに保存:', jsonFileName, xtadFileName);
+        } else {
+            logger.warn('ファイルシステムへの保存に失敗');
+            return null;
+        }
+
+        // アイコンファイルをコピー（basic-playerのアイコンを使用）
+        if (this.tadjs.isElectronEnv) {
+            try {
+                const baseIconPath = `plugins/${pluginId}/${basefileIcoName}`;
+                const iconResponse = await fetch(baseIconPath);
+                if (iconResponse.ok) {
+                    const iconData = await iconResponse.arrayBuffer();
+                    const newIconFileName = `${newRealId}.ico`;
+                    await this.tadjs.saveDataFile(newIconFileName, iconData);
+                    logger.debug('アイコンファイルをコピー:', newIconFileName);
+                }
+            } catch (error) {
+                logger.warn('アイコンファイルコピー中のエラー:', error.message);
+            }
+        }
+
+        // 音声ファイルを保存
+        try {
+            let uint8Array;
+
+            if (file.base64Data) {
+                const binary = atob(file.base64Data);
+                const len = binary.length;
+                uint8Array = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    uint8Array[i] = binary.charCodeAt(i);
+                }
+            } else if (file.path && this.tadjs.isElectronEnv) {
+                const fs = require('fs');
+                const buffer = fs.readFileSync(file.path);
+                uint8Array = new Uint8Array(buffer);
+            } else if (typeof file.arrayBuffer === 'function') {
+                const arrayBuffer = await file.arrayBuffer();
+                uint8Array = new Uint8Array(arrayBuffer);
+            } else {
+                logger.warn('ファイル内容を取得できません');
+                return {
+                    realId: newRealId,
+                    name: newName,
+                    applist: newRealJson.applist || {}
+                };
+            }
+
+            await this.tadjs.saveDataFile(mediaFileName, uint8Array);
+        } catch (error) {
+            logger.error('音声ファイル保存エラー:', error);
+            return null;
+        }
+
+        logger.info('音声実身オブジェクト作成完了:', newRealId, newName);
+        return {
+            realId: newRealId,
+            name: newName,
+            applist: newRealJson.applist || {}
+        };
+    }
+
+    /**
+     * 複数メディアファイルからプレイリスト実身を作成
+     * @param {Array<File>} mediaFiles - メディアファイルの配列
+     * @returns {Promise<{realId: string, name: string, applist: object}|null>}
+     */
+    async createPlaylistRealObject(mediaFiles) {
+        logger.info('createPlaylistRealObject開始:', mediaFiles.length, 'files');
+
+        // basic-playerプラグインの原紙情報
+        const pluginId = 'basic-player';
+        const baseFileId = '019bc56c-5692-774c-84fe-7911f25adabf';
+
+        // 実身名を決定（アルバム名があればそれを使用、なければ最初のファイル名）
+        const firstFile = mediaFiles[0];
+        let newName = firstFile.name.replace(/\.[^.]+$/, '');
+
+        // 最初のファイルが音声ファイルの場合、ID3タグからアルバム名を取得
+        const firstFileExt = firstFile.name.split('.').pop().toLowerCase();
+        if (this.isAudioExtension(firstFileExt)) {
+            const firstId3Tags = await this._extractId3Tags(firstFile);
+            if (firstId3Tags.album) {
+                newName = firstId3Tags.album;
+                logger.debug('アルバム名を実身名として使用:', newName);
+            }
+        }
+        logger.debug('新しい実身名:', newName);
+
+        // 新しい実身IDを生成
+        const newRealId = typeof generateUUIDv7 === 'function' ? generateUUIDv7() : this.tadjs.generateRealFileIdSet(1).fileId;
+        logger.debug('新しい実身ID:', newRealId);
+
+        // 原紙のJSONとXTADを読み込む
+        let basefileJson = null;
+        let basefileXtad = null;
+        const basefileIcoName = `${baseFileId}.ico`;
+
+        try {
+            const jsonPath = `plugins/${pluginId}/${baseFileId}.json`;
+            const xtadPath = `plugins/${pluginId}/${baseFileId}_0.xtad`;
+
+            const jsonResponse = await fetch(jsonPath);
+            if (jsonResponse.ok) {
+                basefileJson = await jsonResponse.json();
+                logger.debug('原紙 JSON読み込み完了');
+            } else {
+                logger.error('原紙 JSON読み込み失敗');
+                return null;
+            }
+
+            const xtadResponse = await fetch(xtadPath);
+            if (xtadResponse.ok) {
+                basefileXtad = await xtadResponse.text();
+                logger.debug('原紙 XTAD読み込み完了');
+            } else {
+                logger.error('原紙 XTAD読み込み失敗');
+                return null;
+            }
+        } catch (error) {
+            logger.error('原紙読み込みエラー:', error);
+            return null;
+        }
+
+        // basic-player用のJSON作成
+        const currentDateTime = new Date().toISOString();
+        const newRealJson = {
+            ...basefileJson,
+            name: newName,
+            makeDate: currentDateTime,
+            updateDate: currentDateTime,
+            accessDate: currentDateTime,
+            refCount: 1
+        };
+
+        // 原紙XTADをパースしてメディア要素を追加
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(basefileXtad, 'text/xml');
+
+        // realData要素を取得
+        let realDataEl = doc.querySelector('realData');
+        if (!realDataEl) {
+            let realtimeEl = doc.querySelector('realtime');
+            if (!realtimeEl) {
+                const tadEl = doc.querySelector('tad');
+                if (!tadEl) {
+                    logger.error('tad要素が見つかりません');
+                    return null;
+                }
+                realtimeEl = doc.createElement('realtime');
+                realtimeEl.setAttribute('autoplay', 'false');
+                realtimeEl.setAttribute('preload', 'metadata');
+                realtimeEl.setAttribute('loop', 'false');
+                tadEl.appendChild(realtimeEl);
+            }
+            realDataEl = doc.createElement('realData');
+            realDataEl.setAttribute('autoplay', 'inherit');
+            realDataEl.setAttribute('startDelay', '0');
+            realtimeEl.appendChild(realDataEl);
+        }
+
+        // 各メディアファイルを処理
+        const mediaIds = [];
+        const mediaFileNames = [];
+
+        for (let i = 0; i < mediaFiles.length; i++) {
+            const file = mediaFiles[i];
+            const fileExt = file.name.split('.').pop().toLowerCase();
+            const mediaType = this.isVideoExtension(fileExt) ? 'video' : 'audio';
+            const mediaFileName = `${newRealId}_0_${i}.${fileExt}`;
+            const mediaId = `${mediaType}-${Date.now()}-${i}`;
+
+            // 音声ファイルの場合、ID3タグを抽出
+            let id3Tags = { title: null, artist: null, album: null, trackNumber: null };
+            if (mediaType === 'audio') {
+                id3Tags = await this._extractId3Tags(file);
+            }
+
+            // メディア要素を作成
+            const mediaEl = doc.createElement(mediaType);
+            mediaEl.setAttribute('id', mediaId);
+            mediaEl.setAttribute('href', mediaFileName);
+            mediaEl.setAttribute('format', fileExt);
+            mediaEl.setAttribute('preload', 'auto');
+
+            if (i === 0) {
+                mediaEl.setAttribute('autoplay', 'false');
+            } else {
+                mediaEl.setAttribute('trigger', 'manual');
+            }
+
+            if (mediaType === 'video') {
+                mediaEl.setAttribute('left', '0');
+                mediaEl.setAttribute('top', '0');
+                mediaEl.setAttribute('right', '0');
+                mediaEl.setAttribute('bottom', '0');
+            }
+
+            mediaEl.setAttribute('volume', '1.0');
+            if (mediaType === 'audio') {
+                mediaEl.setAttribute('pan', '0.0');
+            }
+            mediaEl.setAttribute('playbackRate', '1.0');
+
+            // ID3タグから取得したトラック情報属性を設定
+            if (id3Tags.title) {
+                mediaEl.setAttribute('title', id3Tags.title);
+            }
+            if (id3Tags.artist) {
+                mediaEl.setAttribute('artist', id3Tags.artist);
+            }
+            if (id3Tags.album) {
+                mediaEl.setAttribute('album', id3Tags.album);
+            }
+            if (id3Tags.trackNumber !== null) {
+                mediaEl.setAttribute('trackNumber', String(id3Tags.trackNumber));
+            }
+
+            realDataEl.appendChild(mediaEl);
+            mediaIds.push(mediaId);
+            mediaFileNames.push(mediaFileName);
+        }
+
+        // onended属性を設定（連鎖再生）
+        const mediaElements = realDataEl.querySelectorAll('audio, video');
+        for (let i = 0; i < mediaElements.length - 1; i++) {
+            mediaElements[i].setAttribute('onended', `play:${mediaIds[i + 1]}`);
+        }
+
+        // XMLをシリアライズ
+        const serializer = new XMLSerializer();
+        let newRealXtad = serializer.serializeToString(doc);
+        newRealXtad = newRealXtad.replace(/<\?xml[^?]*\?>\s*/g, '');
+
+        // XML整形（各要素を改行で区切る）
+        newRealXtad = this._formatXtadOutput(newRealXtad);
+
+        // RealObjectSystemに実身を登録
+        if (this.tadjs.realObjectSystem) {
+            try {
+                const metadata = {
+                    realId: newRealId,
+                    name: newName,
+                    recordCount: 1,
+                    refCount: 1,
+                    createdAt: currentDateTime,
+                    modifiedAt: currentDateTime
+                };
+
+                const realObject = {
+                    metadata: metadata,
+                    records: [{ xtad: newRealXtad, images: mediaFileNames }]
+                };
+
+                await this.tadjs.realObjectSystem.saveRealObject(newRealId, realObject);
+                logger.debug('実身をRealObjectSystemに保存:', newRealId, newName);
+            } catch (error) {
+                logger.error('実身保存エラー:', error);
+            }
+        }
+
+        // JSONとXTADファイルを保存
+        const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(newRealId);
+        const xtadFileName = `${newRealId}_0.xtad`;
+
+        const jsonSaved = await this.tadjs.saveDataFile(jsonFileName, JSON.stringify(newRealJson, null, 2));
+        const xtadSaved = await this.tadjs.saveDataFile(xtadFileName, newRealXtad);
+
+        if (jsonSaved && xtadSaved) {
+            logger.info('プレイリスト実身をファイルシステムに保存:', jsonFileName, xtadFileName);
+        } else {
+            logger.warn('ファイルシステムへの保存に失敗');
+            return null;
+        }
+
+        // アイコンファイルをコピー
+        if (this.tadjs.isElectronEnv) {
+            try {
+                const baseIconPath = `plugins/${pluginId}/${basefileIcoName}`;
+                const iconResponse = await fetch(baseIconPath);
+                if (iconResponse.ok) {
+                    const iconData = await iconResponse.arrayBuffer();
+                    const newIconFileName = `${newRealId}.ico`;
+                    await this.tadjs.saveDataFile(newIconFileName, iconData);
+                    logger.debug('アイコンファイルをコピー:', newIconFileName);
+                }
+            } catch (error) {
+                logger.warn('アイコンファイルコピー中のエラー:', error.message);
+            }
+        }
+
+        // 各メディアファイルを保存
+        for (let i = 0; i < mediaFiles.length; i++) {
+            const file = mediaFiles[i];
+            const mediaFileName = mediaFileNames[i];
+
+            try {
+                let uint8Array;
+
+                if (file.base64Data) {
+                    const binary = atob(file.base64Data);
+                    const len = binary.length;
+                    uint8Array = new Uint8Array(len);
+                    for (let j = 0; j < len; j++) {
+                        uint8Array[j] = binary.charCodeAt(j);
+                    }
+                } else if (file.path && this.tadjs.isElectronEnv) {
+                    const fs = require('fs');
+                    const buffer = fs.readFileSync(file.path);
+                    uint8Array = new Uint8Array(buffer);
+                } else if (typeof file.arrayBuffer === 'function') {
+                    const arrayBuffer = await file.arrayBuffer();
+                    uint8Array = new Uint8Array(arrayBuffer);
+                } else {
+                    logger.warn('ファイル内容を取得できません:', file.name);
+                    continue;
+                }
+
+                await this.tadjs.saveDataFile(mediaFileName, uint8Array);
+                logger.debug('メディアファイル保存:', mediaFileName);
+            } catch (error) {
+                logger.error('メディアファイル保存エラー:', file.name, error);
+                return null;
+            }
+        }
+
+        logger.info('プレイリスト実身オブジェクト作成完了:', newRealId, newName, mediaFiles.length, 'files');
+        return {
+            realId: newRealId,
+            name: newName,
+            applist: newRealJson.applist || {}
+        };
+    }
+
+    /**
+     * xmlTAD出力を整形（改行のみ、インデントなし）
+     * @param {string} xml - 整形前のXML文字列
+     * @returns {string} 整形後のXML文字列
+     */
+    _formatXtadOutput(xml) {
+        return xml
+            // 開始タグの後に改行
+            .replace(/(<(tad|realtime|realData)[^>]*>)(?![\r\n])/g, '$1\n')
+            // 終了タグの前に改行
+            .replace(/([^\r\n])(<\/(tad|realtime|realData)>)/g, '$1\n$2')
+            // 終了タグの後に改行
+            .replace(/(<\/(tad|realtime|realData)>)(?![\r\n])/g, '$1\n')
+            // stream開始タグの後に改行
+            .replace(/(<stream[^>]*>)(?![\r\n])/g, '$1\n')
+            // stream終了タグの前後に改行
+            .replace(/([^\r\n])(<\/stream>)/g, '$1\n$2')
+            .replace(/(<\/stream>)(?![\r\n])/g, '$1\n')
+            // audio/video要素を個別の行に
+            .replace(/(<(audio|video)[^>]*\/>)/g, '\n$1')
+            // 連続する改行を1つに
+            .replace(/\n{2,}/g, '\n')
+            // 先頭・末尾の改行を削除
+            .replace(/^\n+/, '')
+            .replace(/\n+$/, '');
+    }
+
+    /**
      * 画像のサイズを取得
      * @param {File|Object} file - 画像ファイルまたはBase64データを含むオブジェクト
      * @returns {Promise<{width: number, height: number}>}
@@ -559,7 +1456,43 @@ class FileImportManager {
     async handleFilesImport(files, iframe) {
         logger.info('handleFilesImport開始:', files.length, 'files');
 
-        // 各ファイルを処理（非同期処理を順番に実行）
+        // 全てがメディアファイル（動画/音声）かチェック
+        const allMedia = files.every(file => {
+            const ext = file.name.split('.').pop().toLowerCase();
+            return this.isVideoExtension(ext) || this.isAudioExtension(ext);
+        });
+
+        // 複数ファイルかつ全てメディアの場合、プレイリスト実身として作成
+        if (files.length > 1 && allMedia) {
+            logger.info('複数メディアファイルをプレイリスト実身として作成');
+            const realObjectInfo = await this.createPlaylistRealObject(files);
+            if (realObjectInfo) {
+                // プラグインに仮身追加メッセージを送信（1回のみ）
+                const windowId = this.tadjs.parentMessageBus.getWindowIdFromIframe(iframe);
+                if (windowId) {
+                    this.tadjs.parentMessageBus.sendToWindow(windowId, 'add-virtual-object-from-base', {
+                        realId: realObjectInfo.realId,
+                        name: realObjectInfo.name,
+                        applist: realObjectInfo.applist
+                    });
+                } else {
+                    iframe.contentWindow.postMessage({
+                        type: 'add-virtual-object-from-base',
+                        realId: realObjectInfo.realId,
+                        name: realObjectInfo.name,
+                        applist: realObjectInfo.applist
+                    }, '*');
+                }
+                this.tadjs.setStatusMessage(`プレイリスト実身「${realObjectInfo.name}」を作成しました（${files.length}ファイル）`);
+            } else {
+                logger.warn('プレイリスト実身の作成に失敗しました');
+                this.tadjs.setStatusMessage('プレイリスト実身の作成に失敗しました');
+            }
+            logger.info('handleFilesImport完了');
+            return;
+        }
+
+        // 従来通りの個別処理
         for (const file of files) {
             logger.debug('ファイルを処理:', file.name);
 

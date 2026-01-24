@@ -18,6 +18,13 @@ body {
     align-items: center;
     background: #000;
     overflow: hidden;
+    /* 初期状態では非表示（全画面化完了後にJSで表示） */
+    visibility: hidden;
+}
+
+/* 全画面化完了後に表示 */
+#slide-wrapper.ready {
+    visibility: visible;
 }
 
 /* plugin-contentのスクロールを無効化 */
@@ -39,6 +46,9 @@ body {
     box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
     margin: 0;
     padding: 0;
+    /* 基本文章編集のmin-height: 100%を無効化（JavaScript側で高さを制御） */
+    min-height: auto;
+    height: auto;
 }
 
 /* エディタ本体 */
@@ -46,7 +56,8 @@ body {
     background: #fff;
     cursor: default;
     user-select: none;
-    min-height: 100%;
+    /* 基本文章編集のmin-height: 100%を無効化 */
+    min-height: auto;
 }
 
 /* 編集不可時のカーソル */
