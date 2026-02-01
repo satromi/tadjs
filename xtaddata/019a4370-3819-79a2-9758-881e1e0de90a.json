@@ -1,12 +1,15 @@
 {
   "name": "仮身サンプル",
   "relationship": [],
+  "linktype": false,
   "makeDate": "2025-10-13T00:00:00Z",
-  "updateDate": "2026-01-02T00:39:59.535Z",
-  "accessDate": "2026-01-02T00:39:44.081Z",
+  "updateDate": "2026-01-25T04:43:22.199Z",
+  "accessDate": "2026-01-25T04:43:14.581Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TADjs User",
   "window": {
@@ -14,8 +17,8 @@
       "x": 0,
       "y": 227
     },
-    "width": 734,
-    "height": 448,
+    "width": 729,
+    "height": 485,
     "minWidth": 200,
     "minHeight": 200,
     "resizable": true,

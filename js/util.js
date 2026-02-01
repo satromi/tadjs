@@ -149,6 +149,19 @@ export const DEFAULT_BGCOL = '#ffffff';
 export const DEFAULT_LINE_HEIGHT = 1.2;
 
 /**
+ * 仮身枠のボーダー幅（上下合計、ピクセル）
+ * DOM要素の高さ（box-sizing: border-box）にはborderが含まれるが、
+ * TADファイルのheight属性はborderを含まない値を保存する
+ */
+export const VOBJ_BORDER_WIDTH = 2;
+
+/**
+ * 閉じた仮身のデフォルト高さ（ピクセル）
+ * chsz=14pt時のgetMinClosedHeight()計算結果: contentHeight(23) + padding(8) = 31
+ */
+export const DEFAULT_VOBJ_HEIGHT = 31;
+
+/**
  * デフォルトフォントサイズ（ピクセル）
  */
 export const DEFAULT_FONT_SIZE = 14;
@@ -157,6 +170,26 @@ export const DEFAULT_FONT_SIZE = 14;
  * デフォルトフォントファミリー（仮身名表示用）
  */
 export const DEFAULT_FONT_FAMILY = "'Noto Sans JP', sans-serif";
+
+/**
+ * デフォルトフォントスタイル（normal/italic/oblique）
+ */
+export const DEFAULT_FONT_STYLE = 'normal';
+
+/**
+ * デフォルトフォントウェイト（400 = normal）
+ */
+export const DEFAULT_FONT_WEIGHT = '400';
+
+/**
+ * デフォルトフォントストレッチ（normal/condensed/expanded等）
+ */
+export const DEFAULT_FONT_STRETCH = 'normal';
+
+/**
+ * デフォルト文字間隔（letter-spacing）
+ */
+export const DEFAULT_LETTER_SPACING = '0';
 
 /**
  * デフォルト入力欄の幅（文字数）
@@ -205,6 +238,56 @@ export const DIALOG_BG_COLOR = '#f0f0f0';
  * ボーダー色
  */
 export const BORDER_COLOR = '#cccccc';
+
+/**
+ * グレー色（無効状態、非アクティブ表示用）
+ */
+export const GRAY_COLOR = '#808080';
+
+/**
+ * 日曜・祝日用の赤色
+ */
+export const SUNDAY_COLOR = '#ee0000';
+
+/**
+ * 土曜日用の青色
+ */
+export const SATURDAY_COLOR = '#0000cc';
+
+/**
+ * 今日のセル背景色（カレンダー用）
+ */
+export const TODAY_CELL_COLOR = '#ffffd0';
+
+/**
+ * 選択枠色（ネイビー）
+ */
+export const SELECTION_COLOR = '#000080';
+
+/**
+ * カレンダー仮身の背景色（水色系）
+ */
+export const CALENDAR_VOBJ_BGCOL = '#e8f4ff';
+
+/**
+ * カレンダー仮身のボーダー色（グレー系）
+ */
+export const CALENDAR_VOBJ_FRCOL = '#b0c0d0';
+
+/**
+ * 仮身選択時の枠色（明るい青）
+ */
+export const VOBJ_SELECTION_COLOR = '#007bff';
+
+/**
+ * リスト選択時の背景色（薄い水色）
+ */
+export const LIST_SELECTED_BG_COLOR = '#e8f4f8';
+
+/**
+ * プレビュー枠線色（Windows青）
+ */
+export const PREVIEW_BORDER_COLOR = '#0078d4';
 
 // ========================================
 // ユーティリティ関数

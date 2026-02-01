@@ -20,6 +20,57 @@ xmlTADは、BTRONの標準データフォーマットであるTAD (Text And Draw
 | `{realId}_0.xtad` | XML | 実身の内容（xmlTADデータ） |
 | `{realId}.ico` | ICO | アイコン画像（オプション） |
 
+### 1.4 メタデータJSON（{realId}.json）の構造
+
+実身メタデータJSONは、実身の管理情報を格納します。以下に全フィールドを示します。
+
+**トップレベルフィールド**:
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `name` | string | 実身の表示名称 |
+| `relationship` | array | 実身の続柄タグ配列。`[タグ]`で入力→実身用（括弧除去して保存、例: `["会議", "重要"]`）。`タグ`で入力→仮身用（link要素側に保存） |
+| `linktype` | boolean | リンク実身フラグ |
+| `makeDate` | string | 作成日時（ISO 8601形式） |
+| `updateDate` | string | 更新日時（メタデータまたはXTAD変更時に自動更新） |
+| `accessDate` | string | アクセス日時 |
+| `periodDate` | string\|null | 期限日（未設定時`null`） |
+| `refCount` | number | 参照カウント（この実身を指す仮身の数） |
+| `recordCount` | number | レコード数（`_0.xtad`, `_1.xtad`...のファイル数） |
+| `editable` | boolean | 編集可能フラグ |
+| `deletable` | boolean | 削除可能フラグ |
+| `readable` | boolean | 読み込み可能フラグ |
+| `maker` | string | 作成者/最終更新者名 |
+| `window` | object | ウィンドウ設定（位置、サイズ、各種フラグ） |
+| `applist` | object | 起動可能プラグイン一覧 |
+
+**windowオブジェクト**:
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `pos` | object | ウィンドウ位置（`{x, y}`） |
+| `width` / `height` | number | ウィンドウサイズ（ピクセル） |
+| `minWidth` / `minHeight` | number | リサイズ時の最小サイズ |
+| `resizable` | boolean | リサイズ可能フラグ |
+| `scrollable` | boolean | スクロールバー表示フラグ |
+| `maximize` | boolean | 最大化状態フラグ |
+| `maximizable` / `minimizable` / `closable` | boolean | ウィンドウボタンの表示制御 |
+| `alwaysOnTop` | boolean | 常に最前面フラグ |
+| `wordWrap` | boolean | テキスト折り返し設定 |
+| `skipTaskbar` | boolean | タスクバー非表示フラグ |
+| `frame` | boolean | ウィンドウフレーム表示 |
+| `transparent` | boolean | 背景透明化フラグ |
+| `backgroundColor` | string | 背景色（16進カラーコード） |
+| `panel` | boolean | 道具パネル表示フラグ（オプション） |
+| `panelpos` | object | 道具パネル位置（`{x, y}`、オプション） |
+| `scrollPos` | object | スクロール位置（`{x, y}`、ランタイム保存用） |
+
+**applistオブジェクト**:
+
+キーがプラグインID、値が `{name: string, defaultOpen: boolean}` の構造です。`defaultOpen: true`のプラグインが仮身ダブルクリック時にデフォルトで起動します。
+
+> 各フィールドのデフォルト値や詳細な使用方法は、[PLUGIN_DEVELOPMENT_GUIDE.md](PLUGIN_DEVELOPMENT_GUIDE.md) の11.2章を参照してください。
+
 ---
 
 ## 2. xmlTAD基本構造
@@ -59,10 +110,10 @@ xmlTADには3種類の文書タイプがあります：
 ```xml
 <tad version="1.0" encoding="UTF-8">
 <document>
-    <paper type="doc" length="1403" width="992" ... />
-    <docmargin top="94" bottom="94" left="94" right="47" />
-    <p>段落内容</p>
-    <p>段落内容</p>
+<paper type="doc" length="1403" width="992" ... />
+<docmargin top="94" bottom="94" left="94" right="47" />
+<p>段落内容</p>
+<p>段落内容</p>
 </document>
 </tad>
 ```
@@ -641,18 +692,18 @@ l_atr = (lineType << 8) | lineWidth
 
 ```xml
 <figure>
-    <document>
-        <docView viewleft="175" viewtop="65" viewright="471" viewbottom="126"/>
-        <docDraw drawleft="175" drawtop="65" drawright="471" drawbottom="126"/>
-        <docScale hunit="-72" vunit="-72"/>
-        <text lang="0" bpat="0" zIndex="4"/>
-        <font size="16"/>
-        <font face="sans-serif"/>
-        <font color="#000000"/>
-        <text align="center"/>
-        テキスト内容<br/>
-        2行目
-    </document>
+<document>
+<docView viewleft="175" viewtop="65" viewright="471" viewbottom="126"/>
+<docDraw drawleft="175" drawtop="65" drawright="471" drawbottom="126"/>
+<docScale hunit="-72" vunit="-72"/>
+<text lang="0" bpat="0" zIndex="4"/>
+<font size="16"/>
+<font face="sans-serif"/>
+<font color="#000000"/>
+<text align="center"/>
+テキスト内容<br/>
+2行目
+</document>
 </figure>
 ```
 
@@ -838,8 +889,11 @@ Base64エンコードされたデータ...
       dlen="0" chsz="14"
       framedisp="true" namedisp="true" pictdisp="true"
       roledisp="false" typedisp="false" updatedisp="false"
-      autoopen="false" applist="{}">表示名</link>
+      autoopen="false" applist="{}"
+      relationship="">表示名</link>
 ```
+
+> **`relationship`属性**: 仮身固有の続柄を設定する属性です（詳細は5.2「仮身固有の続柄属性」参照）。続柄設定ダイアログで`タグ`形式（括弧なし）で入力した値がスペース区切りで保存されます。`[タグ]`形式で入力した値は実身JSON側に保存されます。
 
 ### 5.2 仮身属性一覧
 
@@ -909,14 +963,14 @@ Base64エンコードされたデータ...
 | relationship | 仮身固有の続柄（スペース区切りで複数可） | "" |
 
 **続柄の二重管理について**:
-- **実身JSON（`{realId}.json`）の`relationship`配列**: 実身に紐づく続柄。続柄設定ダイアログで`[タグ]`形式で入力された値が保存される。
+- **実身JSON（`{realId}.json`）の`relationship`配列**: 実身に紐づく続柄。続柄設定ダイアログで`[タグ]`形式で入力すると実身用として括弧を除去しタグ名のみ保存される（例: 入力`[会議]` → 保存`"会議"`）。
 - **link要素の`relationship`属性**: 仮身（link）に固有の続柄。続柄設定ダイアログで`タグ`形式（`[]`なし）で入力された値が保存される。
 
 **表示ルール**:
 - `roledisp="true"`の場合、両方の続柄を連結表示
 - 実身JSONの続柄は`[タグ]`形式で表示
 - link要素の続柄はそのまま表示
-- 例: JSON `["親"]` + link `"子1 子2"` → 表示 `[親] 子1 子2`
+- 例: JSON `["会議"]` + link `"議事録 資料"` → 表示 `[会議] 議事録 資料`
 
 **検索対応**:
 - 続柄検索時、実身JSONとlink要素のrelationship属性の両方が検索対象
@@ -1024,145 +1078,205 @@ Base64エンコードされたデータ...
 
 #### XMLパース/シリアライズ
 
+> **注意**: 以下の`parseXmlTad`、`serializeXmlTad`はPluginBaseの共通メソッドとしては未実装です。各プラグインがDOMParser/XMLSerializerを直接使用しています。参考実装として記載します。
+
 ```javascript
-// PluginBaseに追加予定
+// 参考実装（PluginBase未実装 - 各プラグインが直接使用）
+
+/**
+ * xmlTADをパースしてDOMを返す
+ * @param {string} xmlData - xmlTAD文字列
+ * @returns {{success: boolean, doc?: Document, error?: string}}
+ */
+parseXmlTad(xmlData) {
+    try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(xmlData, 'text/xml');
+
+        // パースエラーチェック
+        const parseError = doc.querySelector('parsererror');
+        if (parseError) {
+            return { success: false, error: parseError.textContent };
+        }
+
+        return { success: true, doc };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
+/**
+ * DOMをxmlTAD文字列に変換
+ * @param {Document} doc - XMLドキュメント
+ * @returns {string}
+ */
+serializeXmlTad(doc) {
+    const serializer = new XMLSerializer();
+    return serializer.serializeToString(doc);
+}
+```
+
+#### link要素パース（PluginBase実装済み）
+
+以下は`js/plugin-base.js`に実装されている実コードです。
+
+```javascript
+// js/plugin-base.js より（実装済み）
 class PluginBase {
     /**
-     * xmlTADをパースしてDOMを返す
-     * @param {string} xmlData - xmlTAD文字列
-     * @returns {{success: boolean, doc?: Document, error?: string}}
+     * link要素から仮身オブジェクトを生成
+     * @param {Element} linkElement - link要素
+     * @returns {Object|null} 仮身オブジェクト
      */
-    parseXmlTad(xmlData) {
+    parseLinkElement(linkElement) {
+        if (!linkElement) return null;
+
         try {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(xmlData, 'text/xml');
+            const vobjleft = parseInt(linkElement.getAttribute('vobjleft')) || 0;
+            const vobjtop = parseInt(linkElement.getAttribute('vobjtop')) || 0;
+            const vobjright = parseInt(linkElement.getAttribute('vobjright')) || 0;
+            const vobjbottom = parseInt(linkElement.getAttribute('vobjbottom')) || 0;
 
-            // パースエラーチェック
-            const parseError = doc.querySelector('parsererror');
-            if (parseError) {
-                return { success: false, error: parseError.textContent };
-            }
-
-            return { success: true, doc };
+            return {
+                // 識別属性
+                link_id: linkElement.getAttribute('id') || '',
+                link_name: linkElement.textContent?.trim() || '',
+                // 座標属性
+                vobjleft: vobjleft,
+                vobjtop: vobjtop,
+                vobjright: vobjright,
+                vobjbottom: vobjbottom,
+                width: vobjright - vobjleft,
+                heightPx: vobjbottom - vobjtop,
+                height: parseInt(linkElement.getAttribute('height')) || 0,
+                // スタイル属性
+                chsz: parseInt(linkElement.getAttribute('chsz')) || DEFAULT_FONT_SIZE,
+                frcol: linkElement.getAttribute('frcol') || DEFAULT_FRCOL,
+                chcol: linkElement.getAttribute('chcol') || DEFAULT_CHCOL,
+                tbcol: linkElement.getAttribute('tbcol') || DEFAULT_TBCOL,
+                bgcol: linkElement.getAttribute('bgcol') || DEFAULT_BGCOL,
+                dlen: parseInt(linkElement.getAttribute('dlen')) || 0,
+                // 表示属性（文字列として保持）
+                pictdisp: linkElement.getAttribute('pictdisp') || 'true',
+                namedisp: linkElement.getAttribute('namedisp') || 'true',
+                roledisp: linkElement.getAttribute('roledisp') || 'false',
+                typedisp: linkElement.getAttribute('typedisp') || 'false',
+                updatedisp: linkElement.getAttribute('updatedisp') || 'false',
+                framedisp: linkElement.getAttribute('framedisp') || 'true',
+                autoopen: linkElement.getAttribute('autoopen') || 'false',
+                // 仮身固有の続柄（link要素のrelationship属性）
+                linkRelationship: this.parseLinkRelationship(linkElement)
+            };
         } catch (error) {
-            return { success: false, error: error.message };
+            return null;
         }
     }
 
     /**
-     * DOMをxmlTAD文字列に変換
-     * @param {Document} doc - XMLドキュメント
-     * @returns {string}
+     * link要素のrelationship属性をパース
+     * @param {Element} linkElement - link要素
+     * @returns {string[]} 続柄タグ配列
      */
-    serializeXmlTad(doc) {
-        const serializer = new XMLSerializer();
-        return serializer.serializeToString(doc);
+    parseLinkRelationship(linkElement) {
+        if (!linkElement) return [];
+        const relationshipAttr = linkElement.getAttribute('relationship');
+        if (!relationshipAttr || relationshipAttr.trim() === '') {
+            return [];
+        }
+        return relationshipAttr.split(/\s+/).filter(s => s.trim() !== '');
     }
 }
 ```
 
-#### link要素操作
+> **実コードとの差異に注意**:
+> - プロパティ名は`name`ではなく`link_name`（textContentから取得）
+> - 表示フラグ（`framedisp`等）はbooleanではなく文字列`'true'`/`'false'`で保持
+> - デフォルト値はハードコードではなく`js/util.js`のDEFAULT_*定数を使用
+> - `width`, `heightPx`は座標から自動計算
+> - `dlen`, `roledisp`, `typedisp`, `updatedisp`が追加で含まれる
+
+#### link要素書き込み（参考実装）
+
+> **注意**: 以下の`getLinkElements`、`setLinkElementAttributes`、`addLinkElement`、`removeLinkElement`はPluginBaseの共通メソッドとしては未実装です。link要素の書き込みは各プラグインが個別に実装しています。参考実装として記載します。
 
 ```javascript
-// PluginBaseに追加予定
-class PluginBase {
-    /**
-     * xmlTAD内のlink要素を取得
-     * @param {Document} doc - XMLドキュメント
-     * @param {string} [linkId] - 特定のlinkIdを指定（省略時は全件）
-     * @returns {Element[]}
-     */
-    getLinkElements(doc, linkId = null) {
-        const links = Array.from(doc.getElementsByTagName('link'));
-        if (linkId) {
-            return links.filter(link => link.getAttribute('id') === linkId);
-        }
-        return links;
+// 参考実装（PluginBase未実装 - 各プラグインが個別に実装）
+
+/**
+ * xmlTAD内のlink要素を取得
+ * @param {Document} doc - XMLドキュメント
+ * @param {string} [linkId] - 特定のlinkIdを指定（省略時は全件）
+ * @returns {Element[]}
+ */
+getLinkElements(doc, linkId = null) {
+    const links = Array.from(doc.getElementsByTagName('link'));
+    if (linkId) {
+        return links.filter(link => link.getAttribute('id') === linkId);
     }
+    return links;
+}
 
-    /**
-     * link要素から仮身オブジェクトを生成
-     * @param {Element} linkElement - link要素
-     * @returns {Object} 仮身オブジェクト
-     */
-    parseLinkElement(linkElement) {
-        return {
-            link_id: linkElement.getAttribute('id'),
-            name: linkElement.getAttribute('name') || linkElement.textContent,
-            vobjleft: parseInt(linkElement.getAttribute('vobjleft') || '0', 10),
-            vobjtop: parseInt(linkElement.getAttribute('vobjtop') || '0', 10),
-            vobjright: parseInt(linkElement.getAttribute('vobjright') || '100', 10),
-            vobjbottom: parseInt(linkElement.getAttribute('vobjbottom') || '30', 10),
-            tbcol: linkElement.getAttribute('tbcol') || '#ffffff',
-            frcol: linkElement.getAttribute('frcol') || '#000000',
-            chcol: linkElement.getAttribute('chcol') || '#000000',
-            bgcol: linkElement.getAttribute('bgcol') || '#ffffff',
-            chsz: parseInt(linkElement.getAttribute('chsz') || '14', 10),
-            framedisp: linkElement.getAttribute('framedisp') !== 'false',
-            namedisp: linkElement.getAttribute('namedisp') !== 'false',
-            pictdisp: linkElement.getAttribute('pictdisp') !== 'false',
-            autoopen: linkElement.getAttribute('autoopen') === 'true',
-            fixed: linkElement.getAttribute('fixed') === 'true',
-            zIndex: parseInt(linkElement.getAttribute('zIndex') || '0', 10),
-        };
+/**
+ * 仮身オブジェクトからlink要素の属性を設定
+ * @param {Element} linkElement - link要素
+ * @param {Object} virtualObj - 仮身オブジェクト
+ */
+setLinkElementAttributes(linkElement, virtualObj) {
+    if (virtualObj.link_id) linkElement.setAttribute('id', virtualObj.link_id);
+    if (virtualObj.link_name) linkElement.setAttribute('name', virtualObj.link_name);
+    if (virtualObj.vobjleft !== undefined) linkElement.setAttribute('vobjleft', virtualObj.vobjleft);
+    if (virtualObj.vobjtop !== undefined) linkElement.setAttribute('vobjtop', virtualObj.vobjtop);
+    if (virtualObj.vobjright !== undefined) linkElement.setAttribute('vobjright', virtualObj.vobjright);
+    if (virtualObj.vobjbottom !== undefined) linkElement.setAttribute('vobjbottom', virtualObj.vobjbottom);
+    if (virtualObj.tbcol) linkElement.setAttribute('tbcol', virtualObj.tbcol);
+    if (virtualObj.frcol) linkElement.setAttribute('frcol', virtualObj.frcol);
+    if (virtualObj.chcol) linkElement.setAttribute('chcol', virtualObj.chcol);
+    if (virtualObj.bgcol) linkElement.setAttribute('bgcol', virtualObj.bgcol);
+    if (virtualObj.chsz) linkElement.setAttribute('chsz', virtualObj.chsz);
+    if (virtualObj.dlen !== undefined) linkElement.setAttribute('dlen', virtualObj.dlen);
+    linkElement.setAttribute('framedisp', virtualObj.framedisp || 'true');
+    linkElement.setAttribute('namedisp', virtualObj.namedisp || 'true');
+    linkElement.setAttribute('pictdisp', virtualObj.pictdisp || 'true');
+    linkElement.setAttribute('roledisp', virtualObj.roledisp || 'false');
+    linkElement.setAttribute('typedisp', virtualObj.typedisp || 'false');
+    linkElement.setAttribute('updatedisp', virtualObj.updatedisp || 'false');
+    linkElement.setAttribute('autoopen', virtualObj.autoopen || 'false');
+    // 仮身固有の続柄
+    if (virtualObj.linkRelationship && virtualObj.linkRelationship.length > 0) {
+        linkElement.setAttribute('relationship', virtualObj.linkRelationship.join(' '));
     }
+}
 
-    /**
-     * 仮身オブジェクトからlink要素の属性を設定
-     * @param {Element} linkElement - link要素
-     * @param {Object} virtualObj - 仮身オブジェクト
-     */
-    setLinkElementAttributes(linkElement, virtualObj) {
-        if (virtualObj.link_id) linkElement.setAttribute('id', virtualObj.link_id);
-        if (virtualObj.name) linkElement.setAttribute('name', virtualObj.name);
-        if (virtualObj.vobjleft !== undefined) linkElement.setAttribute('vobjleft', virtualObj.vobjleft);
-        if (virtualObj.vobjtop !== undefined) linkElement.setAttribute('vobjtop', virtualObj.vobjtop);
-        if (virtualObj.vobjright !== undefined) linkElement.setAttribute('vobjright', virtualObj.vobjright);
-        if (virtualObj.vobjbottom !== undefined) linkElement.setAttribute('vobjbottom', virtualObj.vobjbottom);
-        if (virtualObj.tbcol) linkElement.setAttribute('tbcol', virtualObj.tbcol);
-        if (virtualObj.frcol) linkElement.setAttribute('frcol', virtualObj.frcol);
-        if (virtualObj.chcol) linkElement.setAttribute('chcol', virtualObj.chcol);
-        if (virtualObj.bgcol) linkElement.setAttribute('bgcol', virtualObj.bgcol);
-        if (virtualObj.chsz) linkElement.setAttribute('chsz', virtualObj.chsz);
-        linkElement.setAttribute('framedisp', virtualObj.framedisp ? 'true' : 'false');
-        linkElement.setAttribute('namedisp', virtualObj.namedisp ? 'true' : 'false');
-        linkElement.setAttribute('pictdisp', virtualObj.pictdisp ? 'true' : 'false');
-        linkElement.setAttribute('autoopen', virtualObj.autoopen ? 'true' : 'false');
-        if (virtualObj.fixed !== undefined) linkElement.setAttribute('fixed', virtualObj.fixed ? 'true' : 'false');
-        if (virtualObj.zIndex !== undefined) linkElement.setAttribute('zIndex', virtualObj.zIndex);
-    }
+/**
+ * xmlTADに新しいlink要素を追加
+ * @param {Document} doc - XMLドキュメント
+ * @param {Object} virtualObj - 仮身オブジェクト
+ * @param {string} parentTagName - 親要素名（'figure' または 'document'）
+ * @returns {Element} 追加したlink要素
+ */
+addLinkElement(doc, virtualObj, parentTagName = 'figure') {
+    const parent = doc.querySelector(parentTagName);
+    if (!parent) return null;
 
-    /**
-     * xmlTADに新しいlink要素を追加
-     * @param {Document} doc - XMLドキュメント
-     * @param {Object} virtualObj - 仮身オブジェクト
-     * @param {string} parentTagName - 親要素名（'figure' または 'document'）
-     * @returns {Element} 追加したlink要素
-     */
-    addLinkElement(doc, virtualObj, parentTagName = 'figure') {
-        const parent = doc.querySelector(parentTagName);
-        if (!parent) return null;
+    const linkElement = doc.createElement('link');
+    this.setLinkElementAttributes(linkElement, virtualObj);
+    linkElement.textContent = virtualObj.link_name || '';
+    parent.appendChild(linkElement);
+    return linkElement;
+}
 
-        const linkElement = doc.createElement('link');
-        this.setLinkElementAttributes(linkElement, virtualObj);
-        linkElement.textContent = virtualObj.name || '';
-        parent.appendChild(linkElement);
-        return linkElement;
-    }
+/**
+ * xmlTADからlink要素を削除
+ * @param {Document} doc - XMLドキュメント
+ * @param {string} linkId - 削除するlinkのID
+ * @returns {boolean} 成功時true
+ */
+removeLinkElement(doc, linkId) {
+    const links = this.getLinkElements(doc, linkId);
+    if (links.length === 0) return false;
 
-    /**
-     * xmlTADからlink要素を削除
-     * @param {Document} doc - XMLドキュメント
-     * @param {string} linkId - 削除するlinkのID
-     * @returns {boolean} 成功時true
-     */
-    removeLinkElement(doc, linkId) {
-        const links = this.getLinkElements(doc, linkId);
-        if (links.length === 0) return false;
-
-        links[0].parentNode.removeChild(links[0]);
-        return true;
-    }
+    links[0].parentNode.removeChild(links[0]);
+    return true;
 }
 ```
 
@@ -1192,10 +1306,11 @@ class PluginBase {
 1. `parseXmlTad(xmlData)` - XMLパース
 2. `serializeXmlTad(doc)` - XMLシリアライズ
 3. `getLinkElements(doc, linkId)` - link要素取得
-4. `parseLinkElement(linkElement)` - link要素パース
-5. `setLinkElementAttributes(linkElement, virtualObj)` - link属性設定
-6. `addLinkElement(doc, virtualObj, parentTagName)` - link追加
-7. `removeLinkElement(doc, linkId)` - link削除
+4. `parseLinkElement(linkElement)` - link要素パース（linkRelationship含む）
+5. `parseLinkRelationship(linkElement)` - relationship属性パース
+6. `setLinkElementAttributes(linkElement, virtualObj)` - link属性設定（relationship含む）
+7. `addLinkElement(doc, virtualObj, parentTagName)` - link追加
+8. `removeLinkElement(doc, linkId)` - link削除
 
 **改造箇所リスト**:
 | No | ファイル | 行番号 | 内容 |

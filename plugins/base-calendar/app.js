@@ -278,7 +278,7 @@ class BaseCalendarApp extends window.PluginBase {
                 const newLeft = parseFloat(element.style.left) || 0;
                 const newTop = parseFloat(element.style.top) || 0;
                 const width = (vobj.vobjright - vobj.vobjleft) || 150;
-                const height = (vobj.vobjbottom - vobj.vobjtop) || 30;
+                const height = (vobj.vobjbottom - vobj.vobjtop) || DEFAULT_VOBJ_HEIGHT;
 
                 vobj.vobjleft = newLeft;
                 vobj.vobjtop = newTop;
@@ -429,8 +429,8 @@ class BaseCalendarApp extends window.PluginBase {
             vobjleft: 0,
             vobjtop: 0,
             vobjright: 150,
-            vobjbottom: 30,
-            heightPx: 30,
+            vobjbottom: DEFAULT_VOBJ_HEIGHT,
+            heightPx: DEFAULT_VOBJ_HEIGHT,
             chsz: 14,
             pictdisp: 'true',
             namedisp: 'true',
@@ -797,14 +797,14 @@ class BaseCalendarApp extends window.PluginBase {
      */
     buildHolidayNameDocument(holidayName, position, zIndex) {
         return `<document>
-  <docView viewleft="${position.left}" viewtop="${position.top}" viewright="${position.right}" viewbottom="${position.bottom}"/>
-  <docDraw drawleft="${position.left}" drawtop="${position.top}" drawright="${position.right}" drawbottom="${position.bottom}"/>
-  <docScale hunit="-72" vunit="-72"/>
-  <text zIndex="${zIndex}"/>
-  <font size="10"/>
-  <font color="#ff0000"/>
-  <text align="left"/>
-  <docmemo text="holiday"/>${holidayName}
+<docView viewleft="${position.left}" viewtop="${position.top}" viewright="${position.right}" viewbottom="${position.bottom}"/>
+<docDraw drawleft="${position.left}" drawtop="${position.top}" drawright="${position.right}" drawbottom="${position.bottom}"/>
+<docScale hunit="-72" vunit="-72"/>
+<text zIndex="${zIndex}"/>
+<font size="10"/>
+<font color="${SUNDAY_COLOR}"/>
+<text align="left"/>
+<docmemo text="holiday"/>${holidayName}
 </document>
 `;
     }
@@ -971,7 +971,7 @@ class BaseCalendarApp extends window.PluginBase {
         const CELL_WIDTH = Math.floor(BASE_WIDTH / 7); // 114
         const CELL_HEIGHT = Math.floor(GRID_HEIGHT / 6); // 88
         const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
-        const WEEKDAY_COLORS = ['#cc0000', '#000000', '#000000', '#000000', '#000000', '#000000', '#0000cc'];
+        const WEEKDAY_COLORS = [SUNDAY_COLOR, DEFAULT_FRCOL, DEFAULT_FRCOL, DEFAULT_FRCOL, DEFAULT_FRCOL, DEFAULT_FRCOL, SATURDAY_COLOR];
 
         // 月の最初の日と最終日
         const firstDay = new Date(year, month - 1, 1);
@@ -993,25 +993,21 @@ class BaseCalendarApp extends window.PluginBase {
 <figView top="0" left="0" right="${BASE_WIDTH}" bottom="${BASE_HEIGHT}"/>
 <figDraw top="0" left="0" right="${BASE_WIDTH}" bottom="${BASE_HEIGHT}"/>
 <figScale hunit="-72" vunit="-72"/>
-
 <!-- ナビゲーションバー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="#e0e0e0" strokeColor="#808080" left="0" top="0" right="${BASE_WIDTH}" bottom="${NAV_HEIGHT}" zIndex="1"/>
-
+<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${HOVER_BG_COLOR}" strokeColor="${GRAY_COLOR}" left="0" top="0" right="${BASE_WIDTH}" bottom="${NAV_HEIGHT}" zIndex="1"/>
 <!-- 年月表示テキスト -->
 <document>
-  <docView viewleft="350" viewtop="5" viewright="450" viewbottom="35"/>
-  <docDraw drawleft="350" drawtop="5" drawright="450" drawbottom="35"/>
-  <docScale hunit="-72" vunit="-72"/>
-  <text zIndex="2"/>
-  <font size="16"/>
-  <font color="#000000"/>
-  <text align="center"/>
-  ${monthName}
+<docView viewleft="350" viewtop="5" viewright="450" viewbottom="35"/>
+<docDraw drawleft="350" drawtop="5" drawright="450" drawbottom="35"/>
+<docScale hunit="-72" vunit="-72"/>
+<text zIndex="2"/>
+<font size="16"/>
+<font color="${DEFAULT_CHCOL}"/>
+<text align="center"/>
+${monthName}
 </document>
-
 <!-- 曜日ヘッダー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="#e0e0e0" strokeColor="#808080" left="0" top="${NAV_HEIGHT}" right="${BASE_WIDTH}" bottom="${GRID_TOP}" zIndex="3"/>
-
+<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${HOVER_BG_COLOR}" strokeColor="${GRAY_COLOR}" left="0" top="${NAV_HEIGHT}" right="${BASE_WIDTH}" bottom="${GRID_TOP}" zIndex="3"/>
 `;
 
         // 曜日ヘッダーテキスト
@@ -1021,16 +1017,15 @@ class BaseCalendarApp extends window.PluginBase {
             const right = (i + 1) * CELL_WIDTH;
             xmlTAD += `<!-- 曜日: ${WEEKDAYS[i]} -->
 <document>
-  <docView viewleft="${left}" viewtop="${NAV_HEIGHT}" viewright="${right}" viewbottom="${GRID_TOP}"/>
-  <docDraw drawleft="${left}" drawtop="${NAV_HEIGHT}" drawright="${right}" drawbottom="${GRID_TOP}"/>
-  <docScale hunit="-72" vunit="-72"/>
-  <text zIndex="${zIndex}"/>
-  <font size="12"/>
-  <font color="${WEEKDAY_COLORS[i]}"/>
-  <text align="center"/>
-  ${WEEKDAYS[i]}
+<docView viewleft="${left}" viewtop="${NAV_HEIGHT}" viewright="${right}" viewbottom="${GRID_TOP}"/>
+<docDraw drawleft="${left}" drawtop="${NAV_HEIGHT}" drawright="${right}" drawbottom="${GRID_TOP}"/>
+<docScale hunit="-72" vunit="-72"/>
+<text zIndex="${zIndex}"/>
+<font size="12"/>
+<font color="${WEEKDAY_COLORS[i]}"/>
+<text align="center"/>
+${WEEKDAYS[i]}
 </document>
-
 `;
             zIndex++;
         }
@@ -1049,8 +1044,8 @@ class BaseCalendarApp extends window.PluginBase {
                 const bottom = GRID_TOP + (row + 1) * CELL_HEIGHT;
 
                 let dayText = '';
-                let dayColor = '#000000';
-                let cellColor = '#ffffff';
+                let dayColor = DEFAULT_CHCOL;
+                let cellColor = DEFAULT_BGCOL;
                 let isOtherMonth = false;
                 let currentDay = null;  // 休日チェック用
 
@@ -1058,38 +1053,38 @@ class BaseCalendarApp extends window.PluginBase {
                     // 前月
                     const day = daysInPrevMonth - startDayOfWeek + cellIndex + 1;
                     dayText = String(day);
-                    dayColor = '#808080';
-                    cellColor = '#f0f0f0';
+                    dayColor = GRAY_COLOR;
+                    cellColor = DIALOG_BG_COLOR;
                     isOtherMonth = true;
                 } else if (dayCounter <= daysInMonth) {
                     // 当月
                     currentDay = dayCounter;  // 休日チェック用に保持
                     dayText = String(dayCounter);
                     if (col === 0) {
-                        dayColor = '#cc0000'; // 日曜
+                        dayColor = SUNDAY_COLOR; // 日曜
                     } else if (col === 6) {
-                        dayColor = '#0000cc'; // 土曜
+                        dayColor = SATURDAY_COLOR; // 土曜
                     }
                     // 休日の場合は色を赤に変更
                     const holidayName = this.getHolidayName(year, month, dayCounter);
                     if (holidayName) {
-                        dayColor = '#ff0000';
+                        dayColor = SUNDAY_COLOR;
                     }
                     if (isCurrentMonth && dayCounter === todayDate) {
-                        cellColor = '#ffffd0'; // 今日
+                        cellColor = TODAY_CELL_COLOR; // 今日
                     }
                     dayCounter++;
                 } else {
                     // 翌月
                     dayText = String(nextMonthDay);
-                    dayColor = '#808080';
-                    cellColor = '#f0f0f0';
+                    dayColor = GRAY_COLOR;
+                    cellColor = DIALOG_BG_COLOR;
                     isOtherMonth = true;
                     nextMonthDay++;
                 }
 
                 // セル背景
-                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${cellColor}" strokeColor="#c0c0c0" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`;
+                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${cellColor}" strokeColor="${DESKTOP_BG_COLOR}" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`;
                 zIndex++;
 
                 // 日付テキスト（左上に配置）
@@ -1098,14 +1093,14 @@ class BaseCalendarApp extends window.PluginBase {
                 const textRight = left + 30;
                 const textBottom = top + 18;
                 xmlTAD += `<document>
-  <docView viewleft="${textLeft}" viewtop="${textTop}" viewright="${textRight}" viewbottom="${textBottom}"/>
-  <docDraw drawleft="${textLeft}" drawtop="${textTop}" drawright="${textRight}" drawbottom="${textBottom}"/>
-  <docScale hunit="-72" vunit="-72"/>
-  <text zIndex="${zIndex}"/>
-  <font size="12"/>
-  <font color="${dayColor}"/>
-  <text align="left"/>
-  ${dayText}
+<docView viewleft="${textLeft}" viewtop="${textTop}" viewright="${textRight}" viewbottom="${textBottom}"/>
+<docDraw drawleft="${textLeft}" drawtop="${textTop}" drawright="${textRight}" drawbottom="${textBottom}"/>
+<docScale hunit="-72" vunit="-72"/>
+<text zIndex="${zIndex}"/>
+<font size="12"/>
+<font color="${dayColor}"/>
+<text align="left"/>
+${dayText}
 </document>
 `;
                 zIndex++;
@@ -1219,7 +1214,7 @@ class BaseCalendarApp extends window.PluginBase {
         const monthStr = String(this.currentMonth).padStart(2, '0');
         const monthName = `${this.currentYear}/${monthStr}`;
         const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
-        const WEEKDAY_COLORS = ['#cc0000', '#000000', '#000000', '#000000', '#000000', '#000000', '#0000cc'];
+        const WEEKDAY_COLORS = [SUNDAY_COLOR, DEFAULT_FRCOL, DEFAULT_FRCOL, DEFAULT_FRCOL, DEFAULT_FRCOL, DEFAULT_FRCOL, SATURDAY_COLOR];
 
         // 月の情報
         const firstDay = new Date(this.currentYear, this.currentMonth - 1, 1);
@@ -1237,24 +1232,22 @@ class BaseCalendarApp extends window.PluginBase {
 <figView top="0" left="0" right="${layout.BASE_WIDTH}" bottom="${layout.BASE_HEIGHT}"/>
 <figDraw top="0" left="0" right="${layout.BASE_WIDTH}" bottom="${layout.BASE_HEIGHT}"/>
 <figScale hunit="-72" vunit="-72"/>
-
 <!-- ナビゲーションバー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="#e0e0e0" strokeColor="#808080" left="0" top="0" right="${layout.BASE_WIDTH}" bottom="${layout.NAV_HEIGHT}" zIndex="1"/>
-
+<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${HOVER_BG_COLOR}" strokeColor="${GRAY_COLOR}" left="0" top="0" right="${layout.BASE_WIDTH}" bottom="${layout.NAV_HEIGHT}" zIndex="1"/>
 <!-- 年月表示テキスト -->
 <document>
-  <docView viewleft="350" viewtop="5" viewright="450" viewbottom="35"/>
-  <docDraw drawleft="350" drawtop="5" drawright="450" drawbottom="35"/>
-  <docScale hunit="-72" vunit="-72"/>
-  <text zIndex="2"/>
-  <font size="16"/>
-  <font color="#000000"/>
-  <text align="center"/>
-  ${monthName}
+<docView viewleft="350" viewtop="5" viewright="450" viewbottom="35"/>
+<docDraw drawleft="350" drawtop="5" drawright="450" drawbottom="35"/>
+<docScale hunit="-72" vunit="-72"/>
+<text zIndex="2"/>
+<font size="16"/>
+<font color="${DEFAULT_CHCOL}"/>
+<text align="center"/>
+${monthName}
 </document>
 
 <!-- 曜日ヘッダー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="#e0e0e0" strokeColor="#808080" left="0" top="${layout.NAV_HEIGHT}" right="${layout.BASE_WIDTH}" bottom="${layout.GRID_TOP}" zIndex="3"/>
+<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${HOVER_BG_COLOR}" strokeColor="${GRAY_COLOR}" left="0" top="${layout.NAV_HEIGHT}" right="${layout.BASE_WIDTH}" bottom="${layout.GRID_TOP}" zIndex="3"/>
 
 `;
 
@@ -1265,14 +1258,14 @@ class BaseCalendarApp extends window.PluginBase {
             const right = (i + 1) * layout.CELL_WIDTH;
             xmlTAD += `<!-- 曜日: ${WEEKDAYS[i]} -->
 <document>
-  <docView viewleft="${left}" viewtop="${layout.NAV_HEIGHT}" viewright="${right}" viewbottom="${layout.GRID_TOP}"/>
-  <docDraw drawleft="${left}" drawtop="${layout.NAV_HEIGHT}" drawright="${right}" drawbottom="${layout.GRID_TOP}"/>
-  <docScale hunit="-72" vunit="-72"/>
-  <text zIndex="${zIndex}"/>
-  <font size="12"/>
-  <font color="${WEEKDAY_COLORS[i]}"/>
-  <text align="center"/>
-  ${WEEKDAYS[i]}
+<docView viewleft="${left}" viewtop="${layout.NAV_HEIGHT}" viewright="${right}" viewbottom="${layout.GRID_TOP}"/>
+<docDraw drawleft="${left}" drawtop="${layout.NAV_HEIGHT}" drawright="${right}" drawbottom="${layout.GRID_TOP}"/>
+<docScale hunit="-72" vunit="-72"/>
+<text zIndex="${zIndex}"/>
+<font size="12"/>
+<font color="${WEEKDAY_COLORS[i]}"/>
+<text align="center"/>
+${WEEKDAYS[i]}
 </document>
 
 `;
@@ -1293,44 +1286,44 @@ class BaseCalendarApp extends window.PluginBase {
                 const bottom = layout.GRID_TOP + (row + 1) * layout.CELL_HEIGHT;
 
                 let dayText = '';
-                let dayColor = '#000000';
-                let cellColor = '#ffffff';
+                let dayColor = DEFAULT_CHCOL;
+                let cellColor = DEFAULT_BGCOL;
                 let isOtherMonth = false;
                 let currentDay = null;  // 休日チェック用
 
                 if (cellIndex < startDayOfWeek) {
                     const day = daysInPrevMonth - startDayOfWeek + cellIndex + 1;
                     dayText = String(day);
-                    dayColor = '#808080';
-                    cellColor = '#f0f0f0';
+                    dayColor = GRAY_COLOR;
+                    cellColor = DIALOG_BG_COLOR;
                     isOtherMonth = true;
                 } else if (dayCounter <= daysInMonth) {
                     currentDay = dayCounter;  // 休日チェック用に保持
                     dayText = String(dayCounter);
                     if (col === 0) {
-                        dayColor = '#cc0000';
+                        dayColor = SUNDAY_COLOR;
                     } else if (col === 6) {
-                        dayColor = '#0000cc';
+                        dayColor = SATURDAY_COLOR;
                     }
                     // 休日の場合は色を赤に変更
                     const holidayName = this.getHolidayName(this.currentYear, this.currentMonth, dayCounter);
                     if (holidayName) {
-                        dayColor = '#ff0000';
+                        dayColor = SUNDAY_COLOR;
                     }
                     if (isCurrentMonth && dayCounter === todayDate) {
-                        cellColor = '#ffffd0';
+                        cellColor = TODAY_CELL_COLOR;
                     }
                     dayCounter++;
                 } else {
                     dayText = String(nextMonthDay);
-                    dayColor = '#808080';
-                    cellColor = '#f0f0f0';
+                    dayColor = GRAY_COLOR;
+                    cellColor = DIALOG_BG_COLOR;
                     isOtherMonth = true;
                     nextMonthDay++;
                 }
 
                 // セル背景
-                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${cellColor}" strokeColor="#c0c0c0" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`;
+                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${cellColor}" strokeColor="${DESKTOP_BG_COLOR}" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`;
                 zIndex++;
 
                 // 日付テキスト
@@ -1339,14 +1332,14 @@ class BaseCalendarApp extends window.PluginBase {
                 const textRight = left + 30;
                 const textBottom = top + 18;
                 xmlTAD += `<document>
-  <docView viewleft="${textLeft}" viewtop="${textTop}" viewright="${textRight}" viewbottom="${textBottom}"/>
-  <docDraw drawleft="${textLeft}" drawtop="${textTop}" drawright="${textRight}" drawbottom="${textBottom}"/>
-  <docScale hunit="-72" vunit="-72"/>
-  <text zIndex="${zIndex}"/>
-  <font size="12"/>
-  <font color="${dayColor}"/>
-  <text align="left"/>
-  ${dayText}
+<docView viewleft="${textLeft}" viewtop="${textTop}" viewright="${textRight}" viewbottom="${textBottom}"/>
+<docDraw drawleft="${textLeft}" drawtop="${textTop}" drawright="${textRight}" drawbottom="${textBottom}"/>
+<docScale hunit="-72" vunit="-72"/>
+<text zIndex="${zIndex}"/>
+<font size="12"/>
+<font color="${dayColor}"/>
+<text align="left"/>
+${dayText}
 </document>
 `;
                 zIndex++;
@@ -1407,11 +1400,11 @@ class BaseCalendarApp extends window.PluginBase {
                 left = vobj.vobjleft || 0;
                 top = vobj.vobjtop || 0;
                 right = vobj.vobjright || (left + 150);
-                bottom = vobj.vobjbottom || (top + 30);
+                bottom = vobj.vobjbottom || (top + DEFAULT_VOBJ_HEIGHT);
             }
 
             // link要素を生成（自己閉じタグ形式、link_nameはJSONから取得する方式に統一）
-            xmlTAD += `<link id="${vobj.link_id}" vobjleft="${left}" vobjtop="${top}" vobjright="${right}" vobjbottom="${bottom}" height="${bottom - top}" chsz="${vobj.chsz || 10}" frcol="${vobj.frcol || '#b0c0d0'}" chcol="${vobj.chcol || '#000000'}" tbcol="${vobj.tbcol || '#e8f4ff'}" bgcol="${vobj.bgcol || '#e8f4ff'}" dlen="0" pictdisp="${vobj.pictdisp !== undefined ? vobj.pictdisp : 'true'}" namedisp="${vobj.namedisp !== undefined ? vobj.namedisp : 'true'}" roledisp="${vobj.roledisp !== undefined ? vobj.roledisp : 'false'}" typedisp="${vobj.typedisp !== undefined ? vobj.typedisp : 'false'}" updatedisp="${vobj.updatedisp !== undefined ? vobj.updatedisp : 'false'}" framedisp="${vobj.framedisp !== undefined ? vobj.framedisp : 'true'}" autoopen="${vobj.autoopen !== undefined ? vobj.autoopen : 'false'}" zIndex="${zIndex}"/>\r\n`;
+            xmlTAD += `<link id="${vobj.link_id}" vobjleft="${left}" vobjtop="${top}" vobjright="${right}" vobjbottom="${bottom}" height="${bottom - top}" chsz="${vobj.chsz || 10}" frcol="${vobj.frcol || CALENDAR_VOBJ_FRCOL}" chcol="${vobj.chcol || DEFAULT_CHCOL}" tbcol="${vobj.tbcol || CALENDAR_VOBJ_BGCOL}" bgcol="${vobj.bgcol || CALENDAR_VOBJ_BGCOL}" dlen="0" pictdisp="${vobj.pictdisp !== undefined ? vobj.pictdisp : 'true'}" namedisp="${vobj.namedisp !== undefined ? vobj.namedisp : 'true'}" roledisp="${vobj.roledisp !== undefined ? vobj.roledisp : 'false'}" typedisp="${vobj.typedisp !== undefined ? vobj.typedisp : 'false'}" updatedisp="${vobj.updatedisp !== undefined ? vobj.updatedisp : 'false'}" framedisp="${vobj.framedisp !== undefined ? vobj.framedisp : 'true'}" autoopen="${vobj.autoopen !== undefined ? vobj.autoopen : 'false'}" zIndex="${zIndex}"/>\r\n`;
             zIndex++;
         }
 
@@ -1510,8 +1503,8 @@ class BaseCalendarApp extends window.PluginBase {
                 vobjleft: 10,
                 vobjtop: yOffset,
                 vobjright: 160,
-                vobjbottom: yOffset + 30,
-                heightPx: 30
+                vobjbottom: yOffset + DEFAULT_VOBJ_HEIGHT,
+                heightPx: DEFAULT_VOBJ_HEIGHT
             });
 
             // 新しいlink要素を作成（共通メソッドを使用）
@@ -1536,9 +1529,9 @@ class BaseCalendarApp extends window.PluginBase {
                 vobjleft: 10,
                 vobjtop: yOffset,
                 vobjright: 160,
-                vobjbottom: yOffset + 30,
+                vobjbottom: yOffset + DEFAULT_VOBJ_HEIGHT,
                 width: 150,
-                heightPx: 30,
+                heightPx: DEFAULT_VOBJ_HEIGHT,
                 chsz: virtualObj.chsz,
                 frcol: virtualObj.frcol,
                 chcol: virtualObj.chcol,
@@ -1875,7 +1868,7 @@ class BaseCalendarApp extends window.PluginBase {
             const index = parseInt(el.dataset.vobjIndex);
             if (this.selectedVirtualObjects.has(index)) {
                 el.classList.add('selected');
-                el.style.outline = '2px solid #000080';
+                el.style.outline = '2px solid ${SELECTION_COLOR}';
             } else {
                 el.classList.remove('selected');
                 el.style.outline = '';
@@ -1952,8 +1945,8 @@ class BaseCalendarApp extends window.PluginBase {
             element.style.top = `${vobj.vobjtop || 0}px`;
             element.style.width = `${(vobj.vobjright - vobj.vobjleft) || 150}px`;
             element.textContent = vobj.link_name || '(名前なし)';
-            element.style.background = vobj.bgcol || '#e8f4ff';
-            element.style.border = `1px solid ${vobj.frcol || '#b0c0d0'}`;
+            element.style.background = vobj.bgcol || CALENDAR_VOBJ_BGCOL;
+            element.style.border = `1px solid ${vobj.frcol || CALENDAR_VOBJ_FRCOL}`;
             element.style.padding = '2px 4px';
             element.style.fontSize = '10px';
             element.style.overflow = 'hidden';
@@ -1968,7 +1961,7 @@ class BaseCalendarApp extends window.PluginBase {
         // 選択状態を反映
         if (this.selectedVirtualObjects.has(vobjIndex)) {
             element.classList.add('selected');
-            element.style.outline = '2px solid #000080';
+            element.style.outline = '2px solid ${SELECTION_COLOR}';
         }
 
         // マウスハンドラを設定
@@ -2153,13 +2146,10 @@ class BaseCalendarApp extends window.PluginBase {
             const startHeight = rect.height;
             const minWidth = 50;
 
-            // chszベースの最小高さを計算
-            const chsz = Math.round(obj.chsz || 14);
-            const lineHeight = 1.2;
-            const chszPx = window.convertPtToPx(chsz);
-            const textHeight = Math.ceil(chszPx * lineHeight);
-            const minClosedHeight = textHeight + 8; // 閉じた仮身の最小高さ
-            const minOpenHeight = textHeight + 30; // 開いた仮身の最小高さ（閾値）
+            // VirtualObjectRendererのユーティリティメソッドを使用して最小高さを計算
+            const chsz = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
+            const minClosedHeight = this.virtualObjectRenderer.getMinClosedHeight(chsz);
+            const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chsz);
 
             // DOMから実際のコンテンツエリアの有無で開閉状態を判定
             const hasContentArea = vobjElement.querySelector('.virtual-object-content-area') !== null ||
@@ -2247,10 +2237,13 @@ class BaseCalendarApp extends window.PluginBase {
                 vobjElement.style.height = `${finalHeight}px`;
 
                 // 仮身オブジェクトのサイズを更新
+                // 注: DOM要素の高さ（finalHeight）はborderを含む（box-sizing: border-box）
+                // TADファイルのheight属性はborderを含まない値を保存する
+                const heightForSave = finalHeight - VOBJ_BORDER_WIDTH;
                 obj.width = finalWidth;
-                obj.heightPx = finalHeight;
+                obj.heightPx = heightForSave;
                 obj.vobjright = obj.vobjleft + finalWidth;
-                obj.vobjbottom = obj.vobjtop + finalHeight;
+                obj.vobjbottom = obj.vobjtop + heightForSave;
 
                 console.log('[BaseCalendar] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
 
@@ -2259,14 +2252,12 @@ class BaseCalendarApp extends window.PluginBase {
                 this.isModified = true;
 
                 // 開いた仮身と閉じた仮身の判定が変わったかチェック
-                const chsz_resize = Math.round(obj.chsz || 14);
-                const lineHeight_resize = 1.2;
-                const chszPx_resize = window.convertPtToPx(chsz_resize);
-                const textHeight_resize = Math.ceil(chszPx_resize * lineHeight_resize);
-                const minClosedHeight_resize = textHeight_resize + 8;
-                const minOpenHeight_resize = textHeight_resize + 30;
+                // VirtualObjectRendererのユーティリティメソッドを使用
+                const chsz_resize = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
+                const minClosedHeight_resize = this.virtualObjectRenderer.getMinClosedHeight(chsz_resize);
                 const wasOpen = hasContentArea;
-                const isNowOpen = finalHeight >= minOpenHeight_resize;
+                // VirtualObjectRendererと同じ閾値を使用: height > minClosedHeight
+                const isNowOpen = finalHeight > minClosedHeight_resize;
 
                 if (wasOpen !== isNowOpen) {
                     console.log('[BaseCalendar] 開いた仮身/閉じた仮身の判定が変わりました。再描画します。');
@@ -2440,7 +2431,7 @@ class BaseCalendarApp extends window.PluginBase {
 
             // 仮身のサイズ
             const width = (virtualObj.vobjright - virtualObj.vobjleft) || 150;
-            const height = (virtualObj.vobjbottom - virtualObj.vobjtop) || 30;
+            const height = (virtualObj.vobjbottom - virtualObj.vobjtop) || DEFAULT_VOBJ_HEIGHT;
 
             // 元の仮身から属性を引き継ぐ（共通メソッドを使用）
             const newVirtualObj = this.createVirtualObjectData({
@@ -2572,10 +2563,10 @@ class BaseCalendarApp extends window.PluginBase {
                     // カレンダー表示スタイルに合わせたデフォルト属性
                     attributes: {
                         chsz: 10,              // font-size: 10px
-                        tbcol: '#e8f4ff',      // background: #e8f4ff
-                        frcol: '#b0c0d0',      // border: #b0c0d0
-                        chcol: '#000000',      // text color: black
-                        bgcol: '#e8f4ff',      // background: #e8f4ff
+                        tbcol: CALENDAR_VOBJ_BGCOL,      // background: #e8f4ff
+                        frcol: CALENDAR_VOBJ_FRCOL,      // border: #b0c0d0
+                        chcol: DEFAULT_CHCOL,      // text color: black
+                        bgcol: CALENDAR_VOBJ_BGCOL,      // background: #e8f4ff
                         pictdisp: true,
                         namedisp: true,
                         framedisp: true,
@@ -3126,7 +3117,7 @@ class BaseCalendarApp extends window.PluginBase {
      * 背景色を変更
      */
     async changeBgColor() {
-        const currentColor = document.body.style.backgroundColor || '#ffffff';
+        const currentColor = document.body.style.backgroundColor || DEFAULT_BGCOL;
         const result = await this.showInputDialog(
             '背景色を入力してください（例: #ffffff, rgb(255,255,255)）',
             currentColor,

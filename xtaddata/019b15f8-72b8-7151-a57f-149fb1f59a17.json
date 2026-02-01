@@ -1,12 +1,15 @@
 {
   "name": "基本表計算",
+  "relationship": [],
   "linktype": false,
   "makeDate": "2025-12-13T04:29:22.503Z",
   "updateDate": "2026-01-02T00:38:15.345Z",
   "accessDate": "2026-01-02T00:38:02.016Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TADjs User",
   "window": {

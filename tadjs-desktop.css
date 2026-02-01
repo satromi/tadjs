@@ -1684,6 +1684,95 @@ input[type="text"], input[type="password"], textarea, .config-input {
     border-color: #808080;
 }
 
+/* ======================================
+   カスタムチェックボックス（標準UIコンポーネント）
+   ====================================== */
+
+/* チェックボックスグループコンテナ（横方向） */
+.checkbox-group-inline {
+    display: inline-flex;
+    gap: 0;
+    background: #dedede;
+    border: 1px outset #c0c0c0;
+    border-radius: 3px;
+    vertical-align: middle;
+    margin-right: 8px;
+}
+
+/* チェックボックスラベル */
+.checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    padding: 2px 6px;
+    font-family: 'MS Sans Serif', sans-serif;
+    font-size: 11px;
+}
+
+/* 実際のチェックボックスは非表示 */
+.checkbox-label input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+}
+
+/* カスタムチェックボックスインジケーター */
+.checkbox-indicator {
+    display: inline-block;
+    width: 15px;
+    height: 8px;
+    border: 1px dotted #808080;
+    border-radius: 2px;
+    background: transparent;
+    flex-shrink: 0;
+    transition: background-color 0.1s, border-color 0.1s;
+}
+
+/* 選択状態のインジケーター */
+.checkbox-label input[type="checkbox"]:checked + .checkbox-indicator {
+    background: #48cf5a;
+    border: 1px solid #3ab34a;
+}
+
+/* フォーカス状態 */
+.checkbox-label input[type="checkbox"]:focus + .checkbox-indicator {
+    outline: 1px dotted #000;
+    outline-offset: 1px;
+}
+
+/* ホバー状態 */
+.checkbox-label:hover .checkbox-indicator {
+    border-color: #606060;
+}
+
+/* 無効状態のインジケーター */
+.checkbox-label input[type="checkbox"]:disabled + .checkbox-indicator {
+    background: #808080;
+    border: 1px solid #808080;
+}
+
+/* 無効状態のラベル */
+.checkbox-label.disabled {
+    cursor: not-allowed;
+    color: #808080;
+}
+
+.checkbox-label.disabled:hover .checkbox-indicator {
+    border-color: #808080;
+}
+
+/* 仮身属性変更ダイアログ用チェックボックス調整 */
+.vobj-attr-checkbox {
+    display: flex;
+    padding: 2px 0 2px 5px;
+    margin-bottom: 0px;
+    margin-top: 0px;
+    line-height: 1.1;
+}
+
 /* ========================================
    範囲選択（矩形選択）枠
    ======================================== */

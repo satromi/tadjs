@@ -8,6 +8,9 @@
  */
 const logger = window.getLogger('VirtualObjectList');
 
+// 選択表示用の定数（VOBJ_SELECTION_COLORはutil.jsから読み込み）
+const SELECTION_BOX_SHADOW = `0 0 0 2px ${VOBJ_SELECTION_COLOR}`;  // 選択時のbox-shadow
+
 class VirtualObjectListApp extends window.PluginBase {
     constructor() {
         // 基底クラスのコンストラクタを呼び出し
@@ -39,7 +42,14 @@ class VirtualObjectListApp extends window.PluginBase {
             dropClientY: 0,              // ドロップ位置Y（同一ウィンドウ内ドロップ用）
             selectedObjects: null,       // ドラッグ中の選択仮身配列（finishDrag用）
             currentDeltaX: 0,            // 現在のドラッグ移動量X
-            currentDeltaY: 0             // 現在のドラッグ移動量Y
+            currentDeltaY: 0,            // 現在のドラッグ移動量Y
+            startScrollLeft: 0,          // ドラッグ開始時のスクロール位置X
+            startScrollTop: 0            // ドラッグ開始時のスクロール位置Y
+        };
+
+        // エッジスクロール用の状態管理
+        this.edgeScrollState = {
+            isScrolling: false           // スクロール中フラグ
         };
 
         // ダブルクリック+ドラッグ（実身複製）用の状態管理
@@ -149,7 +159,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 e.dataTransfer.dropEffect = 'copy';
             }
 
-            listElement.style.backgroundColor = '#e8f4f8';
+            listElement.style.backgroundColor = LIST_SELECTED_BG_COLOR;
 
             // ドラッグ先のウィンドウを判定：別ウィンドウからのドラッグの場合のみ、このウィンドウで仮身を表示
             // このウィンドウがドラッグ元でない場合（別ウィンドウからドラッグされている）、仮身を表示する
@@ -272,20 +282,22 @@ class VirtualObjectListApp extends window.PluginBase {
         const y = clientY - rect.top;
 
         // 仮身オブジェクトを作成
+        const halfHeight = Math.floor(DEFAULT_VOBJ_HEIGHT / 2);
+        const vobjTop = Math.max(0, y - halfHeight);
         const virtualObj = {
             link_id: baseFile.pluginId,
             link_name: baseFile.displayName,
             vobjleft: Math.max(0, x - 75), // 中央に配置
-            vobjtop: Math.max(0, y - 15),
+            vobjtop: vobjTop,
             vobjright: Math.max(0, x + 75),
-            vobjbottom: Math.max(0, y + 15),
+            vobjbottom: vobjTop + DEFAULT_VOBJ_HEIGHT,
             width: 150,
-            heightPx: 30,
-            chsz: 14,
-            frcol: '#000000',
-            chcol: '#000000',
-            tbcol: '#ffffff',
-            bgcol: '#ffffff',
+            heightPx: DEFAULT_VOBJ_HEIGHT,
+            chsz: DEFAULT_FONT_SIZE,
+            frcol: DEFAULT_FRCOL,
+            chcol: DEFAULT_CHCOL,
+            tbcol: DEFAULT_TBCOL,
+            bgcol: DEFAULT_BGCOL,
             dlen: 0
         };
 
@@ -442,7 +454,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 const vobjbottom = parseInt(virtualObjectData.link_vobjbottom) || 0;
 
                 width = width || (vobjright - vobjleft) || 150; // デフォルト150px
-                heightPx = heightPx || (vobjbottom - vobjtop) || 31; // デフォルト31px（閉じた仮身の標準高さ）
+                heightPx = heightPx || (vobjbottom - vobjtop) || DEFAULT_VOBJ_HEIGHT; // デフォルト（閉じた仮身の標準高さ）
             }
 
             // 仮身オブジェクトを作成
@@ -525,27 +537,29 @@ class VirtualObjectListApp extends window.PluginBase {
         logger.debug('[VirtualObjectList] rootFileData.applist:', rootFileData.applist);
 
         // 仮身オブジェクトを作成
+        const halfHeight = Math.floor(DEFAULT_VOBJ_HEIGHT / 2);
+        const vobjTop = Math.max(0, y - halfHeight);
         const virtualObj = {
             link_id: rootFileData.fileId,
             link_name: rootFileData.name,
             vobjleft: Math.max(0, x - 75),
-            vobjtop: Math.max(0, y - 15),
+            vobjtop: vobjTop,
             vobjright: Math.max(0, x + 75),
-            vobjbottom: Math.max(0, y + 15),
+            vobjbottom: vobjTop + DEFAULT_VOBJ_HEIGHT,
             width: 150,
-            heightPx: 30,
-            chsz: 14,
-            frcol: '#000000',
-            chcol: '#000000',
-            tbcol: '#ffffff',
-            bgcol: '#ffffff',
+            heightPx: DEFAULT_VOBJ_HEIGHT,
+            chsz: DEFAULT_FONT_SIZE,
+            frcol: DEFAULT_FRCOL,
+            chcol: DEFAULT_CHCOL,
+            tbcol: DEFAULT_TBCOL,
+            bgcol: DEFAULT_BGCOL,
             dlen: 0,
             applist: rootFileData.applist || {},  // applist情報を設定
             // 新しく作成された仮身なので、元の位置は現在の位置と同じ
             originalLeft: Math.max(0, x - 75),
-            originalTop: Math.max(0, y - 15),
+            originalTop: vobjTop,
             originalRight: Math.max(0, x + 75),
-            originalBottom: Math.max(0, y + 15)
+            originalBottom: vobjTop + DEFAULT_VOBJ_HEIGHT
         };
 
         // 仮身リストに追加
@@ -602,27 +616,29 @@ class VirtualObjectListApp extends window.PluginBase {
         const attrs = linkAttributes || {};
 
         // 仮身オブジェクトを作成（ドロップ位置に配置）
+        const halfHeight = Math.floor(DEFAULT_VOBJ_HEIGHT / 2);
+        const vobjTop = Math.max(0, y - halfHeight);
         const virtualObj = {
             link_id: `${realId}_0.xtad`,
             link_name: name,
             vobjleft: Math.max(0, x - 75), // 中央に配置
-            vobjtop: Math.max(0, y - 15),
+            vobjtop: vobjTop,
             vobjright: Math.max(0, x + 75),
-            vobjbottom: Math.max(0, y + 15),
+            vobjbottom: vobjTop + DEFAULT_VOBJ_HEIGHT,
             width: 150,
-            heightPx: 30,
-            chsz: attrs.chsz || 14,
-            frcol: attrs.frcol || '#000000',
-            chcol: attrs.chcol || '#000000',
-            tbcol: attrs.tbcol || '#ffffff',
-            bgcol: attrs.bgcol || '#ffffff',
+            heightPx: DEFAULT_VOBJ_HEIGHT,
+            chsz: attrs.chsz || DEFAULT_FONT_SIZE,
+            frcol: attrs.frcol || DEFAULT_FRCOL,
+            chcol: attrs.chcol || DEFAULT_CHCOL,
+            tbcol: attrs.tbcol || DEFAULT_TBCOL,
+            bgcol: attrs.bgcol || DEFAULT_BGCOL,
             dlen: 0,
             applist: applist || {},  // 親ウィンドウから渡されたapplist情報を使用
             // 新しく作成された仮身なので、元の位置は現在の位置と同じ
             originalLeft: Math.max(0, x - 75),
-            originalTop: Math.max(0, y - 15),
+            originalTop: vobjTop,
             originalRight: Math.max(0, x + 75),
-            originalBottom: Math.max(0, y + 15)
+            originalBottom: vobjTop + DEFAULT_VOBJ_HEIGHT
         };
 
         // 仮身リストに追加
@@ -1582,10 +1598,10 @@ class VirtualObjectListApp extends window.PluginBase {
                 width: 100,
                 heightPx: 50,
                 chsz: 16,           // デフォルトフォントサイズ
-                frcol: '#000000',   // デフォルト枠色
-                chcol: '#000000',   // デフォルト文字色
-                tbcol: '#ffffff',   // デフォルト背景色
-                bgcol: '#ffffff',   // デフォルト開いた仮身の背景色
+                frcol: DEFAULT_FRCOL,   // デフォルト枠色
+                chcol: DEFAULT_CHCOL,   // デフォルト文字色
+                tbcol: DEFAULT_TBCOL,   // デフォルト背景色
+                bgcol: DEFAULT_BGCOL,   // デフォルト開いた仮身の背景色
                 applist: {}, // メタデータは後で読み込み
                 metadata: null
             };
@@ -1718,11 +1734,11 @@ class VirtualObjectListApp extends window.PluginBase {
                     originalBottom: newBottom,
                     width: selectedVobj.width,
                     heightPx: selectedVobj.heightPx,
-                    chsz: selectedVobj.chsz || 14,
-                    frcol: selectedVobj.frcol || '#000000',
-                    chcol: selectedVobj.chcol || '#000000',
-                    tbcol: selectedVobj.tbcol || '#ffffff',
-                    bgcol: selectedVobj.bgcol || '#ffffff',
+                    chsz: selectedVobj.chsz || DEFAULT_FONT_SIZE,
+                    frcol: selectedVobj.frcol || DEFAULT_FRCOL,
+                    chcol: selectedVobj.chcol || DEFAULT_CHCOL,
+                    tbcol: selectedVobj.tbcol || DEFAULT_TBCOL,
+                    bgcol: selectedVobj.bgcol || DEFAULT_BGCOL,
                     dlen: selectedVobj.dlen || 0,
                     applist: selectedVobj.applist || {},
                     // 表示属性もコピー
@@ -2180,11 +2196,11 @@ class VirtualObjectListApp extends window.PluginBase {
         // 元の仮身のサイズと属性を保存
         const width = obj.width || (obj.vobjright - obj.vobjleft) || 100;
         const height = obj.heightPx || (obj.vobjbottom - obj.vobjtop) || 32;
-        const chsz = obj.chsz || 14;
-        const frcol = obj.frcol || '#000000';
-        const chcol = obj.chcol || '#000000';
-        const tbcol = obj.tbcol || '#ffffff';
-        const bgcol = obj.bgcol || '#ffffff';
+        const chsz = obj.chsz || DEFAULT_FONT_SIZE;
+        const frcol = obj.frcol || DEFAULT_FRCOL;
+        const chcol = obj.chcol || DEFAULT_CHCOL;
+        const tbcol = obj.tbcol || DEFAULT_TBCOL;
+        const bgcol = obj.bgcol || DEFAULT_BGCOL;
         const dlen = obj.dlen || 0;
         const applist = obj.applist || {};
         // 表示属性も保存
@@ -2482,7 +2498,7 @@ class VirtualObjectListApp extends window.PluginBase {
         const vobjIndex = this.virtualObjects.indexOf(vobj);
 
         // chsz変更前の値を保存（サイズ調整用）
-        const oldChsz = parseInt(vobj.chsz) || 14;
+        const oldChsz = parseInt(vobj.chsz) || DEFAULT_FONT_SIZE;
 
         // PluginBaseの共通メソッドで属性を適用し、変更を取得
         const changes = this._applyVobjAttrs(vobj, attrs);
@@ -2563,7 +2579,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 // 閉じた仮身の場合、アイコン表示/非表示に関わらず高さは一定
                 // chszはポイント（pt）なのでピクセル（px）に変換
                 const currentHeight = vobj.vobjbottom - vobj.vobjtop;
-                const chsz = parseInt(vobj.chsz) || 14;
+                const chsz = parseInt(vobj.chsz) || DEFAULT_FONT_SIZE;
                 const lineHeight = 1.2;
                 const chszPx = window.convertPtToPx(chsz);
                 const textHeight = Math.ceil(chszPx * lineHeight);
@@ -2987,7 +3003,7 @@ class VirtualObjectListApp extends window.PluginBase {
      * 表示項目に応じて必要な幅を計算
      */
     calculateRequiredWidth(obj, lengthType, ctx) {
-        const chszPx = (obj.chsz || 14) * 96 / 72; // ポイントをピクセルに変換
+        const chszPx = (obj.chsz || DEFAULT_FONT_SIZE) * 96 / 72; // ポイントをピクセルに変換
         ctx.font = `${chszPx}px sans-serif`;
 
         // パディングとギャップ
@@ -3390,12 +3406,12 @@ class VirtualObjectListApp extends window.PluginBase {
             linkElement.setAttribute('vobjtop', virtualObj.vobjtop.toString());
             linkElement.setAttribute('vobjright', virtualObj.vobjright.toString());
             linkElement.setAttribute('vobjbottom', virtualObj.vobjbottom.toString());
-            linkElement.setAttribute('height', (virtualObj.heightPx || 30).toString());
-            linkElement.setAttribute('chsz', (virtualObj.chsz || 14).toString());
-            linkElement.setAttribute('frcol', virtualObj.frcol || '#000000');
-            linkElement.setAttribute('chcol', virtualObj.chcol || '#000000');
-            linkElement.setAttribute('tbcol', virtualObj.tbcol || '#ffffff');
-            linkElement.setAttribute('bgcol', virtualObj.bgcol || '#ffffff');
+            linkElement.setAttribute('height', (virtualObj.heightPx || DEFAULT_VOBJ_HEIGHT).toString());
+            linkElement.setAttribute('chsz', (virtualObj.chsz || DEFAULT_FONT_SIZE).toString());
+            linkElement.setAttribute('frcol', virtualObj.frcol || DEFAULT_FRCOL);
+            linkElement.setAttribute('chcol', virtualObj.chcol || DEFAULT_CHCOL);
+            linkElement.setAttribute('tbcol', virtualObj.tbcol || DEFAULT_TBCOL);
+            linkElement.setAttribute('bgcol', virtualObj.bgcol || DEFAULT_BGCOL);
             linkElement.setAttribute('dlen', (virtualObj.dlen || 0).toString());
             // テキスト内容は書き込まない（自己閉じタグ形式）
             // link_nameはJSONから取得する方式に統一
@@ -3562,12 +3578,12 @@ class VirtualObjectListApp extends window.PluginBase {
                 linkElement.setAttribute('vobjtop', virtualObj.vobjtop.toString());
                 linkElement.setAttribute('vobjright', virtualObj.vobjright.toString());
                 linkElement.setAttribute('vobjbottom', virtualObj.vobjbottom.toString());
-                linkElement.setAttribute('height', (virtualObj.heightPx || 30).toString());
-                linkElement.setAttribute('chsz', (virtualObj.chsz || 14).toString());
-                linkElement.setAttribute('frcol', virtualObj.frcol || '#000000');
-                linkElement.setAttribute('chcol', virtualObj.chcol || '#000000');
-                linkElement.setAttribute('tbcol', virtualObj.tbcol || '#ffffff');
-                linkElement.setAttribute('bgcol', virtualObj.bgcol || '#ffffff');
+                linkElement.setAttribute('height', (virtualObj.heightPx || DEFAULT_VOBJ_HEIGHT).toString());
+                linkElement.setAttribute('chsz', (virtualObj.chsz || DEFAULT_FONT_SIZE).toString());
+                linkElement.setAttribute('frcol', virtualObj.frcol || DEFAULT_FRCOL);
+                linkElement.setAttribute('chcol', virtualObj.chcol || DEFAULT_CHCOL);
+                linkElement.setAttribute('tbcol', virtualObj.tbcol || DEFAULT_TBCOL);
+                linkElement.setAttribute('bgcol', virtualObj.bgcol || DEFAULT_BGCOL);
                 linkElement.setAttribute('dlen', (virtualObj.dlen || 0).toString());
 
                 // 表示属性（あれば設定）
@@ -3789,10 +3805,10 @@ class VirtualObjectListApp extends window.PluginBase {
             // 仮身以外の領域をクリックしたら選択解除
             // 仮身をクリックした場合は e.stopPropagation() により伝播しないため、ここには来ない
             if (!this.isReadonly && this.selectedVirtualObjects.size > 0) {
-                // 選択中の全ての仮身のアウトラインを解除
+                // 選択中の全ての仮身の選択表示を解除
                 const allVirtualObjects = document.querySelectorAll('.virtual-object');
                 allVirtualObjects.forEach(el => {
-                    el.style.outline = '';
+                    el.style.boxShadow = '';
                 });
                 this.selectedVirtualObjects.clear();
             }
@@ -3905,7 +3921,7 @@ class VirtualObjectListApp extends window.PluginBase {
                 const preview = document.createElement('div');
                 preview.className = 'dblclick-drag-preview';
                 preview.style.position = 'absolute';
-                preview.style.border = '2px solid #0078d4';
+                preview.style.border = `2px solid ${PREVIEW_BORDER_COLOR}`;
                 preview.style.backgroundColor = 'rgba(0, 120, 212, 0.1)';
                 preview.style.pointerEvents = 'none';
                 preview.style.zIndex = '10000';
@@ -4027,7 +4043,7 @@ class VirtualObjectListApp extends window.PluginBase {
                     this.selectedVirtualObjects.clear();
                     const allVobjElements = document.querySelectorAll('.virtual-object');
                     allVobjElements.forEach(el => {
-                        el.style.outline = '';
+                        el.style.boxShadow = '';
                     });
                 }
 
@@ -4154,6 +4170,82 @@ class VirtualObjectListApp extends window.PluginBase {
     }
 
     /**
+     * ドラッグ中のエッジスクロールを実行
+     * マウスがウィンドウ端（10px以内）にある場合、その方向にスクロール
+     * @param {DragEvent} e - ドラッグイベント
+     */
+    performEdgeScroll(e) {
+        const pluginContent = document.querySelector('.plugin-content');
+        const canvas = document.querySelector('.virtual-canvas');
+        if (!pluginContent || !canvas) return;
+
+        // ウィンドウ（iframe）の実際のサイズを使用
+        // pluginContentのrectではなくウィンドウ境界でエッジ判定を行う
+        const windowWidth = window.innerWidth;
+        const windowHeight = window.innerHeight;
+        const threshold = 30;  // エッジ検出閾値（px）- ウィンドウ枠との重なりを考慮して広めに設定
+        const scrollSpeed = 8; // スクロール速度（px/frame）
+
+        let scrollX = 0;
+        let scrollY = 0;
+
+        // 右端判定（ウィンドウ右端±threshold以内）
+        // 端を少し超えてもスクロール継続、ただし大きく超えた場合は発動しない
+        if (e.clientX > windowWidth - threshold && e.clientX <= windowWidth + threshold) {
+            scrollX = scrollSpeed;
+            this.expandCanvasIfNeeded('right', canvas, pluginContent);
+        }
+        // 左端判定（ウィンドウ左端±threshold以内）
+        else if (e.clientX >= -threshold && e.clientX < threshold) {
+            scrollX = -scrollSpeed;
+        }
+
+        // 下端判定（ウィンドウ下端±threshold以内）
+        // 端を少し超えてもスクロール継続、ただし大きく超えた場合は発動しない
+        if (e.clientY > windowHeight - threshold && e.clientY <= windowHeight + threshold) {
+            scrollY = scrollSpeed;
+            this.expandCanvasIfNeeded('bottom', canvas, pluginContent);
+        }
+        // 上端判定（ウィンドウ上端±threshold以内）
+        else if (e.clientY >= -threshold && e.clientY < threshold) {
+            scrollY = -scrollSpeed;
+        }
+
+        // スクロール実行
+        if (scrollX !== 0 || scrollY !== 0) {
+            pluginContent.scrollLeft += scrollX;
+            pluginContent.scrollTop += scrollY;
+            this.edgeScrollState.isScrolling = true;
+        } else {
+            this.edgeScrollState.isScrolling = false;
+        }
+    }
+
+    /**
+     * 必要に応じてキャンバスサイズを拡大
+     * @param {string} direction - 'right' または 'bottom'
+     * @param {HTMLElement} canvas - キャンバス要素
+     * @param {HTMLElement} container - スクロールコンテナ
+     */
+    expandCanvasIfNeeded(direction, canvas, container) {
+        const expandMargin = 50;
+
+        if (direction === 'right') {
+            const currentWidth = parseInt(canvas.style.width) || canvas.offsetWidth;
+            const maxScrollLeft = canvas.scrollWidth - container.clientWidth;
+            if (container.scrollLeft >= maxScrollLeft - 10) {
+                canvas.style.width = (currentWidth + expandMargin) + 'px';
+            }
+        } else if (direction === 'bottom') {
+            const currentHeight = parseInt(canvas.style.height) || canvas.offsetHeight;
+            const maxScrollTop = canvas.scrollHeight - container.clientHeight;
+            if (container.scrollTop >= maxScrollTop - 10) {
+                canvas.style.height = (currentHeight + expandMargin) + 'px';
+            }
+        }
+    }
+
+    /**
      * ドラッグ完了処理（位置の確定、仮身のコピー/移動）
      */
     finishDrag() {
@@ -4218,15 +4310,23 @@ class VirtualObjectListApp extends window.PluginBase {
             // ドラッグで移動した場合
             let deltaX, deltaY;
 
+            // エッジスクロールによるスクロール差分を計算
+            const pluginContent = document.querySelector('.plugin-content');
+            const scrollDeltaX = pluginContent ? pluginContent.scrollLeft - this.vobjDragState.startScrollLeft : 0;
+            const scrollDeltaY = pluginContent ? pluginContent.scrollTop - this.vobjDragState.startScrollTop : 0;
+
             // dropイベントで座標が保存されている場合はそれを使用
             if (this.vobjDragState.dropClientX !== undefined && this.vobjDragState.dropClientY !== undefined) {
-                deltaX = this.vobjDragState.dropClientX - this.virtualObjectDragState.startX;
-                deltaY = this.vobjDragState.dropClientY - this.virtualObjectDragState.startY;
+                // マウス移動量 + スクロール差分 = キャンバス上の実際の移動量
+                deltaX = (this.vobjDragState.dropClientX - this.virtualObjectDragState.startX) + scrollDeltaX;
+                deltaY = (this.vobjDragState.dropClientY - this.virtualObjectDragState.startY) + scrollDeltaY;
                 logger.debug('[VirtualObjectList] dropイベントの座標を使用:',
                     'drop:', this.vobjDragState.dropClientX, this.vobjDragState.dropClientY,
+                    'scrollDelta:', scrollDeltaX, scrollDeltaY,
                     'delta:', deltaX, deltaY);
             } else {
                 // dragイベントで更新された style.left/top を使用（従来の方法）
+                // この場合、style.left/topには既にスクロール差分が含まれている
                 const newLeft = parseInt(vobjElement.style.left);
                 const newTop = parseInt(vobjElement.style.top);
                 // NaN検証: 無効な座標値の場合は移動量を0とする
@@ -4273,11 +4373,11 @@ class VirtualObjectListApp extends window.PluginBase {
                         vobjbottom: newTop + height,
                         width: width,
                         heightPx: height,
-                        chsz: sourceObj.chsz || 14,
-                        frcol: sourceObj.frcol || '#000000',
-                        chcol: sourceObj.chcol || '#000000',
-                        tbcol: sourceObj.tbcol || '#ffffff',
-                        bgcol: sourceObj.bgcol || '#ffffff',
+                        chsz: sourceObj.chsz || DEFAULT_FONT_SIZE,
+                        frcol: sourceObj.frcol || DEFAULT_FRCOL,
+                        chcol: sourceObj.chcol || DEFAULT_CHCOL,
+                        tbcol: sourceObj.tbcol || DEFAULT_TBCOL,
+                        bgcol: sourceObj.bgcol || DEFAULT_BGCOL,
                         dlen: sourceObj.dlen || 0,
                         applist: sourceObj.applist || {},
                         // 表示属性もコピー
@@ -4326,10 +4426,11 @@ class VirtualObjectListApp extends window.PluginBase {
                     const newLeft = initialLeft + deltaX;
                     const newTop = initialTop + deltaY;
 
-                    targetObj.vobjleft = newLeft;
-                    targetObj.vobjtop = newTop;
-                    targetObj.vobjright = newLeft + width;
-                    targetObj.vobjbottom = newTop + height;
+                    // 座標を整数に丸める（小数点を防止）
+                    targetObj.vobjleft = Math.round(newLeft);
+                    targetObj.vobjtop = Math.round(newTop);
+                    targetObj.vobjright = Math.round(newLeft + width);
+                    targetObj.vobjbottom = Math.round(newTop + height);
 
                     logger.debug('[VirtualObjectList] 移動:', targetObj.link_name, {
                         left: targetObj.vobjleft,
@@ -4621,7 +4722,7 @@ class VirtualObjectListApp extends window.PluginBase {
         html = html.replace(/<subscript>(.*?)<\/subscript>/gi, '<sub>$1</sub>');
         html = html.replace(/<bagchar>(.*?)<\/bagchar>/gi, '<span style="-webkit-text-stroke: 1px currentColor; paint-order: stroke fill;">$1</span>');
         html = html.replace(/<box>(.*?)<\/box>/gi, '<span style="border: 1px solid currentColor; padding: 0 2px;">$1</span>');
-        html = html.replace(/<invert>(.*?)<\/invert>/gi, '<span style="background-color: currentColor; color: #ffffff; padding: 0 2px;">$1</span>');
+        html = html.replace(/<invert>(.*?)<\/invert>/gi, `<span style="background-color: currentColor; color: ${DEFAULT_BGCOL}; padding: 0 2px;">$1</span>`);
         html = html.replace(/<mesh>(.*?)<\/mesh>/gi, '<span style="background-image: repeating-linear-gradient(45deg, transparent, transparent 2px, #00000019 2px, #00000019 4px);">$1</span>');
         html = html.replace(/<noprint>(.*?)<\/noprint>/gi, '<span style="opacity: 0.3;" data-noprint="true">$1</span>');
 
@@ -4774,11 +4875,11 @@ class VirtualObjectListApp extends window.PluginBase {
     /**
      * 要素からTAD XMLタグを抽出（基本文章編集から移植）
      */
-    extractTADXMLFromElement(element, xmlParts, fontState = { size: '14', color: '#000000', face: '' }) {
+    extractTADXMLFromElement(element, xmlParts, fontState = { size: String(DEFAULT_FONT_SIZE), color: DEFAULT_CHCOL, face: '' }) {
         // 後方互換性サポート: 第2引数が配列でない場合は旧形式の呼び出し
         const isOldStyle = !Array.isArray(xmlParts);
         if (isOldStyle) {
-            fontState = xmlParts || { size: '14', color: '#000000', face: '' };
+            fontState = xmlParts || { size: String(DEFAULT_FONT_SIZE), color: DEFAULT_CHCOL, face: '' };
             xmlParts = [];
         }
 
@@ -4819,8 +4920,8 @@ class VirtualObjectListApp extends window.PluginBase {
 
                     // 色はペアタグ方式: <font color="...">content</font>
                     // サイズ・フェイスは自己閉じタグ方式を維持
-                    // 黒色（#000000）はデフォルト色なので出力不要
-                    if (color && color !== '#000000' && color !== fontState.color) {
+                    // 黒色（DEFAULT_CHCOL）はデフォルト色なので出力不要
+                    if (color && color !== DEFAULT_CHCOL && color !== fontState.color) {
                         xml += `<font color="${color}">`;
                         colorTagOpened = true;
                         newState.color = color;
@@ -5032,34 +5133,7 @@ class VirtualObjectListApp extends window.PluginBase {
         }
     }
 
-    /**
-     * 親ウィンドウにファイル読み込みを依頼
-     */
-    async loadDataFileFromParent(fileName) {
-        const messageId = this.generateMessageId('load');
-
-        // MessageBusでload-data-file-requestを送信
-        this.messageBus.send('load-data-file-request', {
-            messageId: messageId,
-            fileName: fileName
-        });
-
-        try {
-            // レスポンスを待つ（5秒タイムアウト）
-            const result = await this.messageBus.waitFor('load-data-file-response', window.DEFAULT_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-
-            if (result.success) {
-                return result.data;
-            } else {
-                throw new Error(result.error || 'ファイル読み込み失敗');
-            }
-        } catch (error) {
-            logger.error('[VirtualObjectList] ファイル読み込みエラー:', error);
-            throw error;
-        }
-    }
+    // loadDataFileFromParent() は PluginBase のキュー管理付きメソッドを使用
 
     /**
      * 仮身のメタデータ（applist等）をJSONファイルから読み込む
@@ -5263,17 +5337,34 @@ class VirtualObjectListApp extends window.PluginBase {
 
     /**
      * 仮身が「開いた仮身」かどうかを判定
+     * VirtualObjectRenderer.isOpenedVirtualObject() に委譲
      * @param {Object} obj - 仮身オブジェクト
      * @returns {boolean} 開いた仮身ならtrue
      */
     isOpenVirtualObject(obj) {
+        if (this.virtualObjectRenderer) {
+            return this.virtualObjectRenderer.isOpenedVirtualObject(obj);
+        }
+        // フォールバック: VirtualObjectRenderer未初期化時
+        if (obj.opened !== undefined) {
+            return obj.opened === true;
+        }
+        if (!obj.vobjbottom || !obj.vobjtop) {
+            return false;
+        }
         const vobjHeight = obj.vobjbottom - obj.vobjtop;
-        const chsz = Math.round(obj.chsz || 14);
-        const lineHeight = 1.2;
-        const chszPx = window.convertPtToPx(chsz);
-        const textHeight = Math.ceil(chszPx * lineHeight);
-        const minOpenHeight = textHeight + 28; // タイトルバー + 区切り線 + コンテンツ最小
-        return vobjHeight >= minOpenHeight;
+        const minClosedHeight = this._getMinClosedHeightFallback(obj.chsz);
+        return vobjHeight > minClosedHeight;
+    }
+
+    /**
+     * 閉じた仮身の最小高さを取得（フォールバック用）
+     * @private
+     */
+    _getMinClosedHeightFallback(chsz) {
+        const chszPx = window.convertPtToPx(parseFloat(chsz) || DEFAULT_FONT_SIZE);
+        const textHeight = Math.ceil(chszPx * 1.2);
+        return textHeight + 8;
     }
 
     /**
@@ -5466,17 +5557,16 @@ class VirtualObjectListApp extends window.PluginBase {
         const allObjectsInOrder = [...backgroundObjects, ...normalObjects];
 
         allObjectsInOrder.forEach((obj, index) => {
-            // 開いた仮身と閉じた仮身を判定するための計算
-            const vobjHeight = obj.vobjbottom - obj.vobjtop;
-            const chsz = Math.round(obj.chsz || 14); // 浮動小数点誤差を防ぐ
-            const lineHeight = 1.2;
+            // 開いた仮身と閉じた仮身を判定：VirtualObjectRendererに委譲
+            const chsz = parseFloat(obj.chsz) || DEFAULT_FONT_SIZE;
             const chszPx = window.convertPtToPx(chsz);
-            const textHeight = Math.ceil(chszPx * lineHeight);
             const iconSize = window.convertPtToPx(chsz);
+            const textHeight = Math.ceil(chszPx * 1.2);
             const contentHeight = Math.max(iconSize, textHeight);
-            const titleHeight = contentHeight + 8; // 閉じた仮身の正しい高さ
-            const minOpenHeight = textHeight + 28; // タイトルバー + 区切り線 + コンテンツ最小
-            const isOpenVirtualObj = vobjHeight >= minOpenHeight;
+            const titleHeight = contentHeight + 8; // 閉じた仮身の高さ（表示用）
+
+            // VirtualObjectRendererに委譲して判定
+            const isOpenVirtualObj = this.isOpenVirtualObject(obj);
 
             // 閉じた仮身の場合、サイズを正しい値に調整（表示用のみ）
             // originalBottomはXMLの元の値を維持（updateVirtualObjectPositionでの検索に使用）
@@ -5531,7 +5621,7 @@ class VirtualObjectListApp extends window.PluginBase {
             this.selectedVirtualObjects.forEach(vobjIndex => {
                 const vobjElement = canvas.querySelector(`[data-vobj-index="${vobjIndex}"]`);
                 if (vobjElement) {
-                    vobjElement.style.outline = '2px solid #007bff';
+                    vobjElement.style.boxShadow = SELECTION_BOX_SHADOW;
                 }
             });
             logger.debug('[VirtualObjectList] 選択状態を復元:', this.selectedVirtualObjects.size, '個');
@@ -5600,6 +5690,10 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // data-vobj-index属性からインデックスを取得（indexOf回避）
             const vobjIndex = parseInt(vobj.getAttribute('data-vobj-index'));
+            // data-vobj-indexが取得できない場合は処理をスキップ（開いた仮身のiframe領域クリック時など）
+            if (isNaN(vobjIndex)) {
+                return;
+            }
             this.selectVirtualObject(obj, vobj, e, vobjIndex);
         });
 
@@ -5901,12 +5995,12 @@ class VirtualObjectListApp extends window.PluginBase {
             if (this.selectedVirtualObjects.has(vobjIndex)) {
                 // 既に選択されている場合は解除
                 this.selectedVirtualObjects.delete(vobjIndex);
-                element.style.outline = '';
+                element.style.boxShadow = '';
                 logger.debug('[VirtualObjectList] 仮身の選択を解除:', obj.link_name, 'vobjIndex:', vobjIndex);
             } else {
                 // 選択されていない場合は追加
                 this.selectedVirtualObjects.add(vobjIndex);
-                element.style.outline = '2px solid #007bff';
+                element.style.boxShadow = SELECTION_BOX_SHADOW;
                 logger.debug('[VirtualObjectList] 仮身を選択（複数選択）:', obj.link_name, 'vobjIndex:', vobjIndex);
             }
         } else {
@@ -5914,13 +6008,13 @@ class VirtualObjectListApp extends window.PluginBase {
             // 以前の選択を全て解除
             const allVirtualObjects = document.querySelectorAll('.virtual-object');
             allVirtualObjects.forEach(el => {
-                el.style.outline = '';
+                el.style.boxShadow = '';
             });
             this.selectedVirtualObjects.clear();
 
             // 新しい選択
             this.selectedVirtualObjects.add(vobjIndex);
-            element.style.outline = '2px solid #007bff';
+            element.style.boxShadow = SELECTION_BOX_SHADOW;
 
             logger.debug('[VirtualObjectList] 仮身を選択:', obj.link_name, 'vobjIndex:', vobjIndex);
         }
@@ -6032,20 +6126,20 @@ class VirtualObjectListApp extends window.PluginBase {
      * selectedVirtualObjectsの状態に基づいてDOM要素のアウトラインを更新
      */
     updateSelectionDisplay() {
-        // 全ての仮身要素のアウトラインをクリア
+        // 全ての仮身要素の選択表示をクリア
         const allVobjElements = document.querySelectorAll('.virtual-object');
         allVobjElements.forEach(el => {
-            el.style.outline = '';
+            el.style.boxShadow = '';
         });
 
-        // 選択中の仮身にアウトラインを設定
+        // 選択中の仮身に選択表示を設定
         this.selectedVirtualObjects.forEach(vobjIndex => {
             const obj = this.virtualObjects[vobjIndex];
             if (obj) {
                 // data-vobj-index属性で要素を検索
                 const element = document.querySelector(`.virtual-object[data-vobj-index="${vobjIndex}"]`);
                 if (element) {
-                    element.style.outline = '2px solid #000080';
+                    element.style.boxShadow = SELECTION_BOX_SHADOW;
                 }
             }
         });
@@ -6145,7 +6239,7 @@ class VirtualObjectListApp extends window.PluginBase {
             }
 
             // 仮身の色属性を取得
-            const bgcol = virtualObject.bgcol || '#ffffff';
+            const bgcol = virtualObject.bgcol || DEFAULT_BGCOL;
 
             // 4. プラグインをiframeで読み込む（プラグインが描画する）
             const iframe = document.createElement('iframe');
@@ -6247,6 +6341,9 @@ class VirtualObjectListApp extends window.PluginBase {
             // ドラッグ中はスクロールを無効化
             const pluginContent = document.querySelector('.plugin-content');
             if (pluginContent) {
+                // エッジスクロール用に初期スクロール位置を保存
+                this.vobjDragState.startScrollLeft = pluginContent.scrollLeft;
+                this.vobjDragState.startScrollTop = pluginContent.scrollTop;
                 pluginContent.style.overflow = 'hidden';
                 logger.debug('[VirtualObjectList] ドラッグ中: スクロールを無効化');
             }
@@ -6267,12 +6364,12 @@ class VirtualObjectListApp extends window.PluginBase {
                         link_id: vobj.link_id,
                         link_name: vobj.link_name,
                         width: vobj.width || 150,
-                        heightPx: vobj.heightPx || 30,
-                        chsz: vobj.chsz || 14,
-                        frcol: vobj.frcol || '#000000',
-                        chcol: vobj.chcol || '#000000',
-                        tbcol: vobj.tbcol || '#ffffff',
-                        bgcol: vobj.bgcol || '#ffffff',
+                        heightPx: vobj.heightPx || DEFAULT_VOBJ_HEIGHT,
+                        chsz: vobj.chsz || DEFAULT_FONT_SIZE,
+                        frcol: vobj.frcol || DEFAULT_FRCOL,
+                        chcol: vobj.chcol || DEFAULT_CHCOL,
+                        tbcol: vobj.tbcol || DEFAULT_TBCOL,
+                        bgcol: vobj.bgcol || DEFAULT_BGCOL,
                         dlen: vobj.dlen || 0,
                         applist: vobj.applist || {},
                         // 元の絶対位置（同じlink_idの仮身を区別するため）
@@ -6290,12 +6387,12 @@ class VirtualObjectListApp extends window.PluginBase {
                     link_id: obj.link_id,
                     link_name: obj.link_name,
                     width: obj.width || 150,
-                    heightPx: obj.heightPx || 30,
-                    chsz: obj.chsz || 14,
-                    frcol: obj.frcol || '#000000',
-                    chcol: obj.chcol || '#000000',
-                    tbcol: obj.tbcol || '#ffffff',
-                    bgcol: obj.bgcol || '#ffffff',
+                    heightPx: obj.heightPx || DEFAULT_VOBJ_HEIGHT,
+                    chsz: obj.chsz || DEFAULT_FONT_SIZE,
+                    frcol: obj.frcol || DEFAULT_FRCOL,
+                    chcol: obj.chcol || DEFAULT_CHCOL,
+                    tbcol: obj.tbcol || DEFAULT_TBCOL,
+                    bgcol: obj.bgcol || DEFAULT_BGCOL,
                     dlen: obj.dlen || 0,
                     applist: obj.applist || {},
                     // 単一選択時のオフセットは0
@@ -6345,6 +6442,11 @@ class VirtualObjectListApp extends window.PluginBase {
             const deltaX = e.clientX - this.virtualObjectDragState.startX;
             const deltaY = e.clientY - this.virtualObjectDragState.startY;
 
+            // エッジスクロールによるスクロール差分を計算
+            const pluginContent = document.querySelector('.plugin-content');
+            const scrollDeltaX = pluginContent ? pluginContent.scrollLeft - this.vobjDragState.startScrollLeft : 0;
+            const scrollDeltaY = pluginContent ? pluginContent.scrollTop - this.vobjDragState.startScrollTop : 0;
+
             // 複数選択時は全ての選択仮身を視覚的に移動
             if (this.vobjDragState.selectedObjects && this.vobjDragState.selectedObjectsInitialPositions) {
                 this.vobjDragState.selectedObjects.forEach((item, index) => {
@@ -6354,8 +6456,9 @@ class VirtualObjectListApp extends window.PluginBase {
                     }
                     const initialPos = this.vobjDragState.selectedObjectsInitialPositions[index];
                     if (!initialPos) return;
-                    const newLeft = initialPos.left + deltaX;
-                    const newTop = initialPos.top + deltaY;
+                    // スクロール差分を加算して、カーソルに追従させる
+                    const newLeft = initialPos.left + deltaX + scrollDeltaX;
+                    const newTop = initialPos.top + deltaY + scrollDeltaY;
 
                     // data-vobj-indexを使って特定の仮身要素を取得
                     const element = document.querySelector(`[data-vobj-index="${item.vobjIndex}"]`);
@@ -6384,6 +6487,9 @@ class VirtualObjectListApp extends window.PluginBase {
                 });
             }
 
+            // エッジスクロール処理（同じウィンドウ内のドラッグ時のみ）
+            this.performEdgeScroll(e);
+
             // 次のdragoverイベントまでフラグをfalseにリセット
             // マウスがウィンドウ内にいる場合、dragover→dragの順で発火するため、
             // dragイベント処理中はisMouseInThisWindowがtrueのまま
@@ -6405,6 +6511,9 @@ class VirtualObjectListApp extends window.PluginBase {
 
             // ドラッグ終了時にすべてのiframeのpointer-eventsを再有効化            this.enableIframePointerEvents();
 
+            // エッジスクロール状態をリセット
+            this.edgeScrollState.isScrolling = false;
+
             logger.debug('[VirtualObjectList] ========== dragend開始 ==========');
             logger.debug('[VirtualObjectList] dragend: オブジェクト:', obj.link_name);
             logger.debug('[VirtualObjectList] dragend: dropEffect:', e.dataTransfer.dropEffect);
@@ -6414,6 +6523,12 @@ class VirtualObjectListApp extends window.PluginBase {
             if (e.dataTransfer.dropEffect === 'none') {
                 // ドロップ失敗（キャンセル）: 元の位置に戻す
                 logger.debug('[VirtualObjectList] ドロップキャンセル: 元の位置に戻す');
+
+                // スクロール位置も元に戻す（エッジスクロールで変更された場合）
+                if (pluginContent) {
+                    pluginContent.scrollLeft = this.vobjDragState.startScrollLeft;
+                    pluginContent.scrollTop = this.vobjDragState.startScrollTop;
+                }
 
                 // 複数選択時はすべての選択仮身を元の位置に戻す
                 if (this.vobjDragState.selectedObjects && this.vobjDragState.selectedObjectsInitialPositions) {
@@ -6452,6 +6567,13 @@ class VirtualObjectListApp extends window.PluginBase {
                 this.vobjDragState.lastMouseOverWindowId = null;
             } else {
                 // drop成功（dropイベントで処理済み）
+                // dropイベントでdropClientX/Yが設定されていない場合、dragendの座標を使用
+                // （仮身の上でドロップした場合、dropイベントがvirtual-listに到達しない可能性がある）
+                if (this.vobjDragState.dropClientX === undefined && e.clientX !== 0 && e.clientY !== 0) {
+                    this.vobjDragState.dropClientX = e.clientX;
+                    this.vobjDragState.dropClientY = e.clientY;
+                    logger.debug('[VirtualObjectList] dragendの座標をdropClientX/Yに設定:', e.clientX, e.clientY);
+                }
                 // 50ms待ってから finishDrag() を実行（cross-window-drop-in-progress メッセージを受信する時間を確保）
                 logger.debug('[VirtualObjectList] drop成功: 50ms待機してからfinishDrag()実行');
                 setTimeout(() => {
@@ -6553,6 +6675,10 @@ class VirtualObjectListApp extends window.PluginBase {
             this.vobjDragState.currentObject = obj;
             this.vobjDragState.currentElement = vobjElement;
             this.vobjDragState.vobjIndex = parseInt(vobjElement.getAttribute('data-vobj-index')); // 一意のインデックスを保存
+            // data-vobj-indexが取得できない場合は処理をスキップ（開いた仮身のiframe領域クリック時など）
+            if (isNaN(this.vobjDragState.vobjIndex)) {
+                return;
+            }
             this.vobjDragState.initialLeft = obj.vobjleft;
             this.vobjDragState.initialTop = obj.vobjtop;
             // 詳細な初期化（dragMode, hasMoved, isDragging, startX/Y）はdragstartで実行
@@ -6687,13 +6813,12 @@ class VirtualObjectListApp extends window.PluginBase {
             const startHeight = rect.height;
             const minWidth = 50;
 
-            // chszベースの最小高さを計算
-            const chsz = Math.round(obj.chsz || 14); // 浮動小数点誤差を防ぐ
-            const lineHeight = 1.2;
-            const chszPx = window.convertPtToPx(chsz);
-            const textHeight = Math.ceil(chszPx * lineHeight);
-            const minClosedHeight = textHeight + 8; // 閉じた仮身の最小高さ = タイトルエリアの高さ
-            const minOpenHeight = textHeight + 30; // 開いた仮身の最小高さ（閾値）= タイトルバー(textHeight+8) + 区切り線(2) + コンテンツ最小(20)
+            // VirtualObjectRendererのユーティリティメソッドを使用して最小高さを計算
+            // 注: getMinClosedHeight/getMinOpenHeightはborderなしのTAD保存値を返す
+            // プレビュー枠はDOM要素と同じborder込みの値を使う必要がある
+            const chsz = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
+            const minClosedHeight = this.virtualObjectRenderer.getMinClosedHeight(chsz) + VOBJ_BORDER_WIDTH;
+            const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chsz) + VOBJ_BORDER_WIDTH;
 
             // DOMから実際のコンテンツエリアの有無で開閉状態を判定
             const hasContentArea = vobjElement.querySelector('.virtual-object-content-area') !== null ||
@@ -6779,17 +6904,16 @@ class VirtualObjectListApp extends window.PluginBase {
                     previewBox.parentNode.removeChild(previewBox);
                 }
 
-                // iframeのpointer-eventsを元に戻す
-                if (iframe) {
-                    iframe.style.pointerEvents = 'auto';
-                }
+                // 開いた仮身のiframeは常に無効化されたままにするため、再有効化しない
+                // リサイズ開始時に設定された pointer-events: none はそのまま維持
 
                 // カーソルを元に戻す
                 vobjElement.style.cursor = 'pointer';
 
                 // 最終的なサイズを取得（プレビュー枠のサイズを使用）
                 const finalWidth = Math.round(currentWidth);
-                const finalHeight = Math.round(currentHeight);
+                // 横幅のみリサイズ（縦方向のリサイズなし）の場合は、元の高さを維持
+                const finalHeight = isBottomEdge ? Math.round(currentHeight) : Math.round(startHeight);
 
                 // 実際の要素のサイズを更新
                 vobjElement.style.width = `${finalWidth}px`;
@@ -6799,10 +6923,13 @@ class VirtualObjectListApp extends window.PluginBase {
                 const oldWidth = obj.width;
 
                 // 仮身オブジェクトのサイズを更新
+                // 注: DOM要素の高さ（finalHeight）はborderを含む（box-sizing: border-box）
+                // TADファイルのheight属性はborderを含まない値を保存する
+                const heightForSave = finalHeight - VOBJ_BORDER_WIDTH;
                 obj.width = finalWidth;
-                obj.heightPx = finalHeight;
+                obj.heightPx = heightForSave;
                 obj.vobjright = obj.vobjleft + finalWidth;
-                obj.vobjbottom = obj.vobjtop + finalHeight;
+                obj.vobjbottom = obj.vobjtop + heightForSave;
 
                 logger.debug('[VirtualObjectList] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
 
@@ -6810,14 +6937,13 @@ class VirtualObjectListApp extends window.PluginBase {
                 this.updateVirtualObjectInXml(obj);
 
                 // 開いた仮身と閉じた仮身の判定が変わったかチェック
-                const chsz_resize = Math.round(obj.chsz || 14); // 浮動小数点誤差を防ぐ
-                const lineHeight_resize = 1.2;
-                const chszPx_resize = window.convertPtToPx(chsz_resize);
-                const textHeight_resize = Math.ceil(chszPx_resize * lineHeight_resize);
-                const minClosedHeight_resize = textHeight_resize + 8; // 閉じた仮身の高さ
-                const minOpenHeight_resize = textHeight_resize + 30; // タイトルバー(textHeight+8) + 区切り線(2) + コンテンツ最小(20)
+                // VirtualObjectRendererのユーティリティメソッドを使用
+                const chsz_resize = parseFloat(obj.chsz) || DEFAULT_FONT_SIZE;
+                const minClosedHeight_resize = this.virtualObjectRenderer.getMinClosedHeight(chsz_resize);
                 const wasOpen = hasContentArea; // DOMベースの判定を使用
-                const isNowOpen = finalHeight >= minOpenHeight_resize;
+                // DOM要素の高さ（border込み）と比較するため、閾値もborderを加える
+                // minClosedHeight_resizeはborderを含まない値（31px）、DOM要素はborder込み（33px）
+                const isNowOpen = finalHeight > minClosedHeight_resize + VOBJ_BORDER_WIDTH;
 
                 if (wasOpen !== isNowOpen) {
                     // 判定が変わった場合は、少し待ってから仮身要素を再作成
@@ -6845,6 +6971,13 @@ class VirtualObjectListApp extends window.PluginBase {
                     // 遅延して再作成（150ms後）
                     // 要素への参照をクロージャでキャプチャ
                     const elementToReplace = vobjElement;
+                    // 既存の要素からvobjIndexを取得（再作成時にイベントハンドラが正しく動作するために必要）
+                    let existingVobjIndex = parseInt(elementToReplace.getAttribute('data-vobj-index'));
+                    // NaNの場合は配列から再計算（フォールバック）
+                    if (isNaN(existingVobjIndex)) {
+                        existingVobjIndex = this.virtualObjects.indexOf(obj);
+                        logger.debug('[VirtualObjectList] vobjIndexを再計算:', existingVobjIndex);
+                    }
                     this.recreateVirtualObjectTimer = setTimeout(() => {
                         logger.debug('[VirtualObjectList] 仮身を再作成します。');
 
@@ -6858,8 +6991,16 @@ class VirtualObjectListApp extends window.PluginBase {
                         // 既存のiframeを保存（再利用のため）
                         const existingIframe = elementToReplace.querySelector('iframe');
 
-                        const newElement = this.createVirtualObjectElement(obj);
+                        // 元の要素のz-indexを保存（重なり順序を維持するため）
+                        const originalZIndex = elementToReplace.style.zIndex;
+
+                        const newElement = this.createVirtualObjectElement(obj, existingVobjIndex);
                         elementToReplace.replaceWith(newElement);
+
+                        // 元のz-indexを新しい要素に設定
+                        if (originalZIndex) {
+                            newElement.style.zIndex = originalZIndex;
+                        }
 
                         // 新しく開いた状態になった場合、コンテンツを展開
                         if (isNowOpen) {

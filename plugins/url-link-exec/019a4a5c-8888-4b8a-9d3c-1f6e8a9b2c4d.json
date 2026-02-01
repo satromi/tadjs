@@ -7,7 +7,9 @@
   "accessDate": "2025-11-02T00:00:00Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "satromi",
   "window": {

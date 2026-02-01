@@ -1,0 +1,24 @@
+{
+  "id": "generative-realobject-test",
+  "name": "生成的実身テスト",
+  "version": "1.0.0",
+  "type": "base",
+  "basefile": {
+    "json": "019c0288-ef63-7dc3-a0dc-a67a13ce9570.json",
+    "xmltad": "019c0288-ef63-7dc3-a0dc-a67a13ce9570_0.xtad",
+    "ico": "019c0288-ef63-7dc3-a0dc-a67a13ce9570.ico"
+  },
+  "description": "Claude Code CLI実行用ターミナル（生成的実身テスト）",
+  "icon": "🤖",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "scrollable": false,
+    "openable": true
+  },
+  "permissions": []
+}

@@ -629,10 +629,10 @@ class BasicTextEditor extends window.PluginBase {
                 e.dataTransfer.dropEffect = 'move';
             } else if (e.dataTransfer.effectAllowed === 'move' || e.dataTransfer.effectAllowed === 'copyMove') {
                 e.dataTransfer.dropEffect = 'move';
-                this.editor.style.backgroundColor = '#e8f4f8';
+                this.editor.style.backgroundColor = LIST_SELECTED_BG_COLOR;
             } else {
                 e.dataTransfer.dropEffect = 'copy';
-                this.editor.style.backgroundColor = '#e8f4f8';
+                this.editor.style.backgroundColor = LIST_SELECTED_BG_COLOR;
             }
         });
 
@@ -1139,8 +1139,8 @@ class BasicTextEditor extends window.PluginBase {
             vobjElement.textContent = virtualObject.link_name;
 
             // 最小限のスタイルを設定
-            const frcol = virtualObject.frcol || '#000000';
-            const tbcol = virtualObject.tbcol || '#ffffff';
+            const frcol = virtualObject.frcol || DEFAULT_FRCOL;
+            const tbcol = virtualObject.tbcol || DEFAULT_TBCOL;
             vobjElement.style.display = 'inline-block';
             vobjElement.style.padding = '4px 8px';
             vobjElement.style.margin = '0 2px';
@@ -1211,12 +1211,12 @@ class BasicTextEditor extends window.PluginBase {
             link_id: `${realId}_0.xtad`,
             link_name: name,
             width: 150,
-            heightPx: 30,
-            chsz: 14,
-            frcol: '#000000',
-            chcol: '#000000',
-            tbcol: '#ffffff',
-            bgcol: '#ffffff',
+            heightPx: DEFAULT_VOBJ_HEIGHT,
+            chsz: DEFAULT_FONT_SIZE,
+            frcol: DEFAULT_FRCOL,
+            chcol: DEFAULT_CHCOL,
+            tbcol: DEFAULT_TBCOL,
+            bgcol: DEFAULT_BGCOL,
             dlen: 0,
             applist: applist || {},
             // 表示属性のデフォルト値
@@ -1831,7 +1831,7 @@ class BasicTextEditor extends window.PluginBase {
                         newParagraphFontSize = this.calculateMaxFontSizeInContent(newP, 14);
                     } else if (needsInherit) {
                         // 空だがスタイル引き継ぎがある場合は引き継いだサイズを使用
-                        newParagraphFontSize = parseFloat(caretStyle.fontSize) || 14;
+                        newParagraphFontSize = parseFloat(caretStyle.fontSize) || DEFAULT_FONT_SIZE;
                     }
                     const lineHeight = this.calculateLineHeight(newParagraphFontSize);
                     newP.style.lineHeight = `${lineHeight}px`;
@@ -1878,7 +1878,7 @@ class BasicTextEditor extends window.PluginBase {
                     // line-height設定（スタイル引き継ぎがある場合はそのサイズを使用）
                     let altFontSize = 14;
                     if (needsInherit) {
-                        altFontSize = parseFloat(caretStyle.fontSize) || 14;
+                        altFontSize = parseFloat(caretStyle.fontSize) || DEFAULT_FONT_SIZE;
                     }
                     const lineHeight = this.calculateLineHeight(altFontSize);
                     p.style.lineHeight = `${lineHeight}px`;
@@ -2310,11 +2310,12 @@ class BasicTextEditor extends window.PluginBase {
             return;
         }
 
-        // Ctrl+V: ペースト（pasteイベントハンドラーで処理）
-        // keydownでpreventDefaultしないと、pasteイベント内のclipboardDataが取得できない場合がある
-        // 処理はpasteイベントハンドラー(handlePaste)に任せる
+        // Ctrl+V: ペースト（右クリックメニューと同じ処理フローを使用）
+        // フォーカスがエディタにない場合（仮身/画像選択時等）もペーストできるよう
+        // executeMenuAction経由で処理を共通化
         if (e.ctrlKey && e.key === 'v') {
-            // pasteイベントが発火するので、ここでは何もしない
+            e.preventDefault();
+            this.executeMenuAction('paste');
             return;
         }
 
@@ -2745,12 +2746,12 @@ class BasicTextEditor extends window.PluginBase {
                     link_id: attrMap.id,
                     link_name: displayName,
                     width: attrMap.width ? parseInt(attrMap.width) : 150,
-                    heightPx: attrMap.heightpx ? parseInt(attrMap.heightpx) : 30,
-                    frcol: attrMap.frcol || '#000000',
-                    chcol: attrMap.chcol || '#000000',
-                    tbcol: attrMap.tbcol || '#ffffff',
-                    bgcol: attrMap.bgcol || '#ffffff',
-                    chsz: attrMap.chsz ? parseFloat(attrMap.chsz) : 14,
+                    heightPx: attrMap.height ? parseInt(attrMap.height) : DEFAULT_VOBJ_HEIGHT,
+                    frcol: attrMap.frcol || DEFAULT_FRCOL,
+                    chcol: attrMap.chcol || DEFAULT_CHCOL,
+                    tbcol: attrMap.tbcol || DEFAULT_TBCOL,
+                    bgcol: attrMap.bgcol || DEFAULT_BGCOL,
+                    chsz: attrMap.chsz ? parseFloat(attrMap.chsz) : DEFAULT_FONT_SIZE,
                     dlen: attrMap.dlen ? parseInt(attrMap.dlen) : 0,
                     applist: this.parseApplist(attrMap.applist),
                     framedisp: attrMap.framedisp || 'true',
@@ -2829,9 +2830,9 @@ class BasicTextEditor extends window.PluginBase {
                 const realId = attrMap.id.replace(/_\d+\.xtad$/i, '');
                 // 実身名もJSONから取得したものを優先（自己閉じタグ対応）
                 const finalDisplayName = (metadataCache[realId]?.name) || displayName;
-                const frcol = attrMap.frcol || '#000000';
-                const chcol = attrMap.chcol || '#000000';
-                const tbcol = attrMap.tbcol || '#ffffff';
+                const frcol = attrMap.frcol || DEFAULT_FRCOL;
+                const chcol = attrMap.chcol || DEFAULT_CHCOL;
+                const tbcol = attrMap.tbcol || DEFAULT_TBCOL;
                 const chsz = attrMap.chsz ? parseFloat(attrMap.chsz) : null;
                 const fontSize = chsz ? `${window.convertPtToPx(chsz)}px` : '0.9em';  // ポイント値をピクセル値に変換
                 const style = `display: inline-block; padding: 4px 8px; margin: 0 2px; background: ${tbcol}; border: 1px solid ${frcol}; cursor: pointer; color: ${chcol}; font-size: ${fontSize}; line-height: 1; vertical-align: middle; user-select: none; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`;
@@ -2852,7 +2853,7 @@ class BasicTextEditor extends window.PluginBase {
         // 最初に<link>タグを仮身に変換（他の処理で消されないように先に処理）
         html = await this.convertLinkTagsToVirtualObjects(html);
 
-        // <image>タグを<img>タグに変換（TAD形式: 自己閉じタグ）
+        // <image>タグを<img>タグに変換（旧TAD形式: src/width/height/planes/pixbits属性）
         // zIndex等の追加属性がある場合も対応
         html = html.replace(/<image\s+src="([^"]*)"\s+width="([^"]*)"\s+height="([^"]*)"\s+planes="([^"]*)"\s+pixbits="([^"]*)"(?:\s+[^>]*)?\s*\/>/gi,
             (match, src, width, height, planes, pixbits) => {
@@ -2872,6 +2873,51 @@ class BasicTextEditor extends window.PluginBase {
 
                 // XMLのwidthとheightは表示サイズ（リサイズ後のサイズ）として使用
                 return `<img src="${imagePath}" data-saved-filename="${src}" data-planes="${planes}" data-pixbits="${pixbits}" data-img-no="${imgNo}" data-needs-load="true" style="width: ${width}px; height: ${height}px; display: inline-block; vertical-align: middle; margin: 4px;">`;
+            }
+        );
+
+        // <image>タグを<img>タグに変換（XTAD標準形式: href/left/top/right/bottom属性）
+        // 書庫解凍時に生成される形式に対応
+        // 属性の順序に依存しない柔軟なパターン
+        html = html.replace(/<image\s+([^>]*href="[^"]*"[^>]*)\/>/gi,
+            (match, attrs) => {
+                // 各属性を抽出（属性の順序に依存しない）
+                const leftMatch = attrs.match(/left="([^"]*)"/);
+                const topMatch = attrs.match(/top="([^"]*)"/);
+                const rightMatch = attrs.match(/right="([^"]*)"/);
+                const bottomMatch = attrs.match(/bottom="([^"]*)"/);
+                const hrefMatch = attrs.match(/href="([^"]*)"/);
+
+                // 旧形式（src/width/height）の場合はスキップ
+                if (!hrefMatch || attrs.includes('src=')) {
+                    return match;
+                }
+
+                const left = leftMatch ? parseInt(leftMatch[1], 10) : 0;
+                const top = topMatch ? parseInt(topMatch[1], 10) : 0;
+                const right = rightMatch ? parseInt(rightMatch[1], 10) : 0;
+                const bottom = bottomMatch ? parseInt(bottomMatch[1], 10) : 0;
+                const href = hrefMatch[1];
+
+                // left/top/right/bottomからwidth/heightを計算
+                const width = right - left;
+                const height = bottom - top;
+
+                // 画像は loadImagesFromParent() で正しいパスを設定するため、
+                // 初期srcは常に空にする（ブラウザの即時読み込みを防止）
+                let imagePath = '';
+
+                // data: URL の場合のみ直接設定
+                if (href.startsWith('data:')) {
+                    imagePath = href;
+                }
+
+                // data-img-noを抽出（ファイル名から）
+                const imgNoMatch = href.match(/_(\d+)\./);
+                const imgNo = imgNoMatch ? imgNoMatch[1] : '0';
+
+                // XTAD形式にはplanes/pixbitsがないため、デフォルト値を使用
+                return `<img src="${imagePath}" data-saved-filename="${href}" data-planes="1" data-pixbits="24" data-img-no="${imgNo}" data-needs-load="true" style="width: ${width}px; height: ${height}px; display: inline-block; vertical-align: middle; margin: 4px;">`;
             }
         );
 
@@ -3139,6 +3185,24 @@ class BasicTextEditor extends window.PluginBase {
         }
 
         try {
+            // XMLをパースしてrealtime要素を検出
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(tadXML, 'text/xml');
+
+            // パースエラーチェック
+            const parseError = xmlDoc.querySelector('parsererror');
+            if (parseError) {
+                this.editor.innerHTML = '<p>XMLパースエラー</p>';
+                return;
+            }
+
+            // <realtime>要素を検出した場合は専用処理
+            const realtimeEl = xmlDoc.querySelector('realtime');
+            if (realtimeEl) {
+                await this.renderRealtimeContent(realtimeEl, xmlDoc);
+                return;
+            }
+
             // <document>...</document>を抽出
             const docMatch = /<document[^>]*>([\s\S]*?)<\/document>/i.exec(tadXML);
             if (!docMatch) {
@@ -3171,10 +3235,6 @@ class BasicTextEditor extends window.PluginBase {
                     }
                 }
             }
-
-            // XMLをパース
-            const parser = new DOMParser();
-            const xmlDoc = parser.parseFromString(tadXML, 'text/xml');
 
             // <document>要素からh_unit/v_unitをパース
             const documentElement = xmlDoc.querySelector('document');
@@ -3503,6 +3563,46 @@ class BasicTextEditor extends window.PluginBase {
             logger.error('[EDITOR] XML描画エラー:', error);
             this.editor.innerHTML = '<p>XMLの描画に失敗しました</p><pre>' + this.escapeHtml(error.message) + '</pre>';
         }
+    }
+
+    /**
+     * <realtime>コンテンツをレンダリング
+     * <realtime>内の<figure>要素をPluginBase.renderFigureElements()で描画
+     * @param {Element} realtimeEl - realtime要素
+     * @param {Document} xmlDoc - XMLドキュメント
+     */
+    async renderRealtimeContent(realtimeEl, xmlDoc) {
+        // エディタをクリア
+        this.editor.innerHTML = '';
+
+        // <figure>要素を処理
+        const figureEl = realtimeEl.querySelector('figure');
+        if (figureEl) {
+            // figViewからサイズを取得
+            const figView = figureEl.querySelector('figView');
+            let figWidth = 800, figHeight = 600;
+            if (figView) {
+                figWidth = parseFloat(figView.getAttribute('right')) || 800;
+                figHeight = parseFloat(figView.getAttribute('bottom')) || 600;
+            }
+
+            // エディタのサイズを設定
+            this.editor.style.width = `${figWidth}px`;
+            this.editor.style.height = `${figHeight}px`;
+            this.editor.style.position = 'relative';
+            this.editor.style.overflow = 'hidden';
+
+            // PluginBaseのrenderFigureElementsを使用して図形を描画
+            // realtimeEl自体をxmlDocとして渡す（figure要素を含む）
+            const tempDoc = document.implementation.createDocument(null, 'root', null);
+            const importedFigure = tempDoc.importNode(figureEl, true);
+            tempDoc.documentElement.appendChild(importedFigure);
+
+            const result = this.renderFigureElements(tempDoc, this.editor);
+        }
+
+        // ビューモードを清書モードに設定
+        this.viewMode = 'formatted';
     }
 
     /**
@@ -3910,8 +4010,11 @@ class BasicTextEditor extends window.PluginBase {
                         const vobjtop = parseInt(vo.dataset.linkVobjtop) || 5;
 
                         // 新しい座標を計算
+                        // 注: DOM要素の高さ（currentHeight）はborderを含む（box-sizing: border-box）
+                        // TADファイルのheight属性はborderを含まない値を保存する
+                        const heightForSave = currentHeight - VOBJ_BORDER_WIDTH;
                         const vobjright = vobjleft + currentWidth;
-                        const vobjbottom = vobjtop + currentHeight;
+                        const vobjbottom = vobjtop + heightForSave;
 
                         // 座標属性を更新
                         vo.dataset.linkVobjleft = vobjleft.toString();
@@ -3928,12 +4031,12 @@ class BasicTextEditor extends window.PluginBase {
                             vobjright: vobjright,
                             vobjbottom: vobjbottom,
                             width: currentWidth,
-                            heightPx: currentHeight,
-                            chsz: parseFloat(vo.dataset.chsz) || 14,
-                            frcol: vo.dataset.frcol || '#000000',
-                            chcol: vo.dataset.chcol || '#000000',
-                            tbcol: vo.dataset.tbcol || '#ffffff',
-                            bgcol: vo.dataset.bgcol || '#ffffff',
+                            heightPx: heightForSave,
+                            chsz: parseFloat(vo.dataset.chsz) || DEFAULT_FONT_SIZE,
+                            frcol: vo.dataset.frcol || DEFAULT_FRCOL,
+                            chcol: vo.dataset.chcol || DEFAULT_CHCOL,
+                            tbcol: vo.dataset.tbcol || DEFAULT_TBCOL,
+                            bgcol: vo.dataset.bgcol || DEFAULT_BGCOL,
                             dlen: parseInt(vo.dataset.dlen) || 0,
                             pictdisp: vo.dataset.pictdisp,
                             namedisp: vo.dataset.namedisp,
@@ -4398,7 +4501,7 @@ class BasicTextEditor extends window.PluginBase {
      * @param {Object} fontState - 現在のフォント状態
      * @param {string|null} effectiveColor - 段落の有効色（ブラウザデフォルト黒色との区別用）
      */
-    extractTADXMLFromElement(element, xmlParts, fontState = { size: '14', color: '#000000', face: '' }, effectiveColor = null) {
+    extractTADXMLFromElement(element, xmlParts, fontState = { size: String(DEFAULT_FONT_SIZE), color: DEFAULT_CHCOL, face: '' }, effectiveColor = null) {
         // xmlPartsが配列でない場合（古い呼び出し方）は、配列を作成して戻り値を返す
         // 古いスタイル: extractTADXMLFromElement(element, fontState, effectiveColor)
         // 新しいスタイル: extractTADXMLFromElement(element, xmlPartsArray, fontState, effectiveColor)
@@ -4406,7 +4509,7 @@ class BasicTextEditor extends window.PluginBase {
         if (isOldStyle) {
             // 古いスタイルでは: xmlParts=fontState, fontState=effectiveColor
             const oldEffectiveColor = fontState;  // 3rd param was effectiveColor
-            fontState = xmlParts || { size: '14', color: '#000000', face: '' };
+            fontState = xmlParts || { size: String(DEFAULT_FONT_SIZE), color: DEFAULT_CHCOL, face: '' };
             xmlParts = [];
             effectiveColor = (typeof oldEffectiveColor === 'string' || oldEffectiveColor === null) ? oldEffectiveColor : null;
         }
@@ -4448,7 +4551,8 @@ class BasicTextEditor extends window.PluginBase {
                 const planes = parseInt(node.getAttribute('data-planes')) || 3;
                 const pixbits = parseInt(node.getAttribute('data-pixbits')) || 0x0818;
 
-                xml += `<image src="${this.escapeXml(savedFileName)}" width="${displayWidth}" height="${displayHeight}" planes="${planes}" pixbits="${pixbits}"/>`;
+                // xmlTAD標準形式で出力（href/left/top/right/bottom属性）
+                xml += `<image lineType="0" lineWidth="0" l_pat="0" f_pat="0" angle="0" rotation="0" flipH="false" flipV="false" left="0" top="0" right="${displayWidth}" bottom="${displayHeight}" href="${this.escapeXml(savedFileName)}"/>`;
             } else if (node.nodeType === Node.ELEMENT_NODE) {
                 const nodeName = node.nodeName.toLowerCase();
 
@@ -4489,8 +4593,8 @@ class BasicTextEditor extends window.PluginBase {
 
                     // フォント情報を出力
                     // 色・サイズ・フェイスすべてペアタグ方式: <font ...>content</font>
-                    // 黒色（#000000）はデフォルト色なので出力不要
-                    if (color && color !== '#000000' && color !== fontState.color) {
+                    // 黒色（DEFAULT_CHCOL）はデフォルト色なので出力不要
+                    if (color && color !== DEFAULT_CHCOL && color !== fontState.color) {
                         xml += `<font color="${color}">`;
                         colorTagOpened = true;
                         newState.color = color;
@@ -4734,9 +4838,9 @@ class BasicTextEditor extends window.PluginBase {
                                 }
                                 if (style.color) {
                                     const hexColor = this.rgbToHex(style.color);
-                                    const isDefaultBlack = hexColor === '#000000';
+                                    const isDefaultBlack = hexColor === DEFAULT_CHCOL;
                                     // ブラウザデフォルト黒色で有効色が非黒色の場合は状態を更新しない
-                                    if (!(isDefaultBlack && effectiveColor && effectiveColor !== '#000000')) {
+                                    if (!(isDefaultBlack && effectiveColor && effectiveColor !== DEFAULT_CHCOL)) {
                                         newState.color = hexColor;
                                     }
                                 }
@@ -5383,11 +5487,11 @@ class BasicTextEditor extends window.PluginBase {
                 // 既存の仮身から属性を取得（存在する場合）
                 const existingVobjs = this.editor.querySelectorAll('.virtual-object');
                 let vobjAttributes = {
-                    chsz: 14,
-                    frcol: '#ffffff',
-                    chcol: '#000000',
-                    tbcol: '#ffffff',
-                    bgcol: '#ffffff',
+                    chsz: DEFAULT_FONT_SIZE,
+                    frcol: DEFAULT_BGCOL,
+                    chcol: DEFAULT_CHCOL,
+                    tbcol: DEFAULT_TBCOL,
+                    bgcol: DEFAULT_BGCOL,
                     dlen: 0,
                     // 表示属性のデフォルト値
                     framedisp: 'true',
@@ -6536,11 +6640,11 @@ class BasicTextEditor extends window.PluginBase {
                 const virtualObject = {
                     link_id: `${result.newRealId}_0.xtad`,
                     link_name: result.newName,
-                    chsz: 14,
-                    frcol: '#000000',
-                    chcol: '#000000',
-                    tbcol: '#ffffff',
-                    bgcol: '#ffffff',
+                    chsz: DEFAULT_FONT_SIZE,
+                    frcol: DEFAULT_FRCOL,
+                    chcol: DEFAULT_CHCOL,
+                    tbcol: DEFAULT_TBCOL,
+                    bgcol: DEFAULT_BGCOL,
                     pictdisp: 'true',
                     namedisp: 'true',
                     framedisp: 'true'
@@ -6609,8 +6713,8 @@ class BasicTextEditor extends window.PluginBase {
 
         // フォント状態の初期値
         const fontState = {
-            size: '14',
-            color: '#000000',
+            size: String(DEFAULT_FONT_SIZE),
+            color: DEFAULT_CHCOL,
             face: ''
         };
 
@@ -6656,7 +6760,8 @@ class BasicTextEditor extends window.PluginBase {
                     displayHeight = parseInt(node.style.height);
                 }
 
-                xmlParts.push(`<image src="__IMAGE_${imageFiles.length - 1}__" width="${displayWidth}" height="${displayHeight}"/>`);
+                // xmlTAD標準形式で出力（href/left/top/right/bottom属性）
+                xmlParts.push(`<image lineType="0" lineWidth="0" l_pat="0" f_pat="0" angle="0" rotation="0" flipH="false" flipV="false" left="0" top="0" right="${displayWidth}" bottom="${displayHeight}" href="__IMAGE_${imageFiles.length - 1}__"/>`);
             } else if (node.classList && node.classList.contains('virtual-object')) {
                 // 仮身要素を処理
                 const linkId = node.dataset.linkId || '';
@@ -8342,7 +8447,7 @@ class BasicTextEditor extends window.PluginBase {
      * カスタム文字色
      */
     async customColor() {
-        const color = await this.showInputDialog('文字色を入力してください（例: #ff0000, #000000）', '#000000', 20, { colorPicker: true });
+        const color = await this.showInputDialog('文字色を入力してください（例: #ff0000, #000000）', DEFAULT_CHCOL, 20, { colorPicker: true });
         if (color) {
             this.applyFontColor(color);
             this.setStatus(`文字色: ${color}`);
@@ -8656,7 +8761,7 @@ class BasicTextEditor extends window.PluginBase {
         this.selectedImage = img;
 
         // 選択枠のスタイルを追加
-        img.style.outline = '2px solid #0078d4';
+        img.style.outline = '2px solid ${PREVIEW_BORDER_COLOR}';
         img.style.outlineOffset = '2px';
         img.style.position = 'relative';
         img.style.cursor = 'move';
@@ -8744,7 +8849,7 @@ class BasicTextEditor extends window.PluginBase {
         handle.style.position = 'absolute';
         handle.style.width = '10px';
         handle.style.height = '10px';
-        handle.style.backgroundColor = '#0078d4';
+        handle.style.backgroundColor = '${PREVIEW_BORDER_COLOR}';
         handle.style.border = '1px solid white';
         handle.style.cursor = 'nwse-resize';
         handle.style.zIndex = '1000';
@@ -8986,7 +9091,7 @@ class BasicTextEditor extends window.PluginBase {
             indicator.style.position = 'absolute';
             indicator.style.width = '2px';
             indicator.style.height = '1.2em';
-            indicator.style.backgroundColor = '#0078d4';
+            indicator.style.backgroundColor = '${PREVIEW_BORDER_COLOR}';
             indicator.style.pointerEvents = 'none';
             indicator.style.zIndex = '10000';
             indicator.style.transition = 'left 0.05s, top 0.05s';
@@ -9708,7 +9813,7 @@ class BasicTextEditor extends window.PluginBase {
             const iframe = vo.querySelector('.virtual-object-content');
             if (iframe) {
                 const titleBar = vo.querySelector('.virtual-object-titlebar');
-                const chsz = parseFloat(vo.dataset.linkChsz) || 14;
+                const chsz = parseFloat(vo.dataset.linkChsz) || DEFAULT_FONT_SIZE;
                 const titleBarHeight = titleBar ? (chsz + 16) : 0;  // タイトルバーがある場合のみ高さを計算
                 // vo要素自体のサイズを更新
                 vo.style.width = `${width}px`;
@@ -9778,11 +9883,11 @@ class BasicTextEditor extends window.PluginBase {
             const originalText = vo.textContent;
 
             // 仮身の色属性を取得
-            const frcol = vo.dataset.linkFrcol || '#000000';
-            const chcol = vo.dataset.linkChcol || '#000000';
-            const tbcol = vo.dataset.linkTbcol || '#ffffff';
-            const bgcol = vo.dataset.linkBgcol || '#ffffff';
-            const chsz = parseFloat(vo.dataset.linkChsz) || 14;
+            const frcol = vo.dataset.linkFrcol || DEFAULT_FRCOL;
+            const chcol = vo.dataset.linkChcol || DEFAULT_CHCOL;
+            const tbcol = vo.dataset.linkTbcol || DEFAULT_TBCOL;
+            const bgcol = vo.dataset.linkBgcol || DEFAULT_BGCOL;
+            const chsz = parseFloat(vo.dataset.linkChsz) || DEFAULT_FONT_SIZE;
 
             // 表示項目の設定を取得
             const showFrame = vo.dataset.linkFramedisp !== 'false'; // デフォルトは表示
@@ -10018,10 +10123,10 @@ class BasicTextEditor extends window.PluginBase {
         delete vo.dataset.linkVobjbottom;
 
         // 閉じた仮身のスタイルと内容を復元（VirtualObjectRendererと同じ構造）
-        const frcol = vo.dataset.linkFrcol || '#000000';
-        const chcol = vo.dataset.linkChcol || '#000000';
-        const tbcol = vo.dataset.linkTbcol || '#ffffff';
-        const chsz = parseFloat(vo.dataset.linkChsz) || 14;
+        const frcol = vo.dataset.linkFrcol || DEFAULT_FRCOL;
+        const chcol = vo.dataset.linkChcol || DEFAULT_CHCOL;
+        const tbcol = vo.dataset.linkTbcol || DEFAULT_TBCOL;
+        const chsz = parseFloat(vo.dataset.linkChsz) || DEFAULT_FONT_SIZE;
         const chszPx = window.convertPtToPx(chsz);
 
         // 表示設定を取得
@@ -10420,11 +10525,11 @@ class BasicTextEditor extends window.PluginBase {
         const framedispRaw = element.dataset.linkFramedisp !== undefined ? element.dataset.linkFramedisp : vobj.framedisp;
         const autoopenRaw = element.dataset.linkAutoopen !== undefined ? element.dataset.linkAutoopen : vobj.autoopen;
 
-        const frcol = element.dataset.linkFrcol || vobj.frcol || '#000000';
-        const chcol = element.dataset.linkChcol || vobj.chcol || '#000000';
-        const tbcol = element.dataset.linkTbcol || vobj.tbcol || '#ffffff';
-        const bgcol = element.dataset.linkBgcol || vobj.bgcol || '#ffffff';
-        const chsz = element.dataset.linkChsz ? parseFloat(element.dataset.linkChsz) : (parseFloat(vobj.chsz) || 14);
+        const frcol = element.dataset.linkFrcol || vobj.frcol || DEFAULT_FRCOL;
+        const chcol = element.dataset.linkChcol || vobj.chcol || DEFAULT_CHCOL;
+        const tbcol = element.dataset.linkTbcol || vobj.tbcol || DEFAULT_TBCOL;
+        const bgcol = element.dataset.linkBgcol || vobj.bgcol || DEFAULT_BGCOL;
+        const chsz = element.dataset.linkChsz ? parseFloat(element.dataset.linkChsz) : (parseFloat(vobj.chsz) || DEFAULT_FONT_SIZE);
 
         return {
             pictdisp: this.parseBooleanAttr(pictdispRaw, true),
@@ -10506,7 +10611,7 @@ class BasicTextEditor extends window.PluginBase {
             vobjleft: parseInt(element.dataset.linkVobjleft) || vobj.vobjleft || 5,
             vobjtop: parseInt(element.dataset.linkVobjtop) || vobj.vobjtop || 5,
             vobjright: parseInt(element.dataset.linkVobjright) || vobj.vobjright || 100,
-            vobjbottom: parseInt(element.dataset.linkVobjbottom) || vobj.vobjbottom || 30,
+            vobjbottom: parseInt(element.dataset.linkVobjbottom) || vobj.vobjbottom || DEFAULT_VOBJ_HEIGHT,
             width: parseInt(element.style.width) || vobj.width,
             heightPx: parseInt(element.style.height) || vobj.heightPx,
             chsz: vobj.chsz,
@@ -10724,12 +10829,12 @@ class BasicTextEditor extends window.PluginBase {
                     link_id: result.newRealId,
                     link_name: result.newName,
                     width: originalVobj.width || 150,
-                    heightPx: originalVobj.heightPx || 30,
-                    chsz: originalVobj.chsz || 14,
-                    frcol: originalVobj.frcol || '#000000',
-                    chcol: originalVobj.chcol || '#000000',
-                    tbcol: originalVobj.tbcol || '#ffffff',
-                    bgcol: originalVobj.bgcol || '#ffffff',
+                    heightPx: originalVobj.heightPx || DEFAULT_VOBJ_HEIGHT,
+                    chsz: originalVobj.chsz || DEFAULT_FONT_SIZE,
+                    frcol: originalVobj.frcol || DEFAULT_FRCOL,
+                    chcol: originalVobj.chcol || DEFAULT_CHCOL,
+                    tbcol: originalVobj.tbcol || DEFAULT_TBCOL,
+                    bgcol: originalVobj.bgcol || DEFAULT_BGCOL,
                     dlen: 0,
                     applist: originalVobj.applist || {},
                     pictdisp: originalVobj.pictdisp || 'true',
@@ -10820,12 +10925,12 @@ class BasicTextEditor extends window.PluginBase {
                     link_id: `${newRealId}_0.xtad`,
                     link_name: newName,
                     width: virtualObj.width || 150,
-                    heightPx: virtualObj.heightPx || 30,
-                    chsz: virtualObj.chsz || 14,
-                    frcol: virtualObj.frcol || '#000000',
-                    chcol: virtualObj.chcol || '#000000',
-                    tbcol: virtualObj.tbcol || '#ffffff',
-                    bgcol: virtualObj.bgcol || '#ffffff',
+                    heightPx: virtualObj.heightPx || DEFAULT_VOBJ_HEIGHT,
+                    chsz: virtualObj.chsz || DEFAULT_FONT_SIZE,
+                    frcol: virtualObj.frcol || DEFAULT_FRCOL,
+                    chcol: virtualObj.chcol || DEFAULT_CHCOL,
+                    tbcol: virtualObj.tbcol || DEFAULT_TBCOL,
+                    bgcol: virtualObj.bgcol || DEFAULT_BGCOL,
                     dlen: 0,
                     applist: virtualObj.applist || {},
                     pictdisp: virtualObj.pictdisp || 'true',

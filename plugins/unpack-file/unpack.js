@@ -1676,6 +1676,59 @@ function tsTextEnd(tadSeg) {
     if (isXmlDumpEnabled() && isInDocSegment) {
         console.debug('tsTextEnd: Adding </document> to xmlBuffer');
 
+        // 開いている装飾タグを閉じる（開いた順と逆順で閉じる）
+        // noprint → mesh → invert → box → strikethrough → overline → underline → strong → i → bagchar
+        if (textDecorations.noprint) {
+            console.debug('tsTextEnd: Closing open <noprint> tag');
+            xmlBuffer.push('</noprint>');
+            textDecorations.noprint = false;
+        }
+        if (textDecorations.mesh) {
+            console.debug('tsTextEnd: Closing open <mesh> tag');
+            xmlBuffer.push('</mesh>');
+            textDecorations.mesh = false;
+        }
+        if (textDecorations.invert) {
+            console.debug('tsTextEnd: Closing open <invert> tag');
+            xmlBuffer.push('</invert>');
+            textDecorations.invert = false;
+        }
+        if (textDecorations.box) {
+            console.debug('tsTextEnd: Closing open <box> tag');
+            xmlBuffer.push('</box>');
+            textDecorations.box = false;
+        }
+        if (textDecorations.strikethrough) {
+            console.debug('tsTextEnd: Closing open <strikethrough> tag');
+            xmlBuffer.push('</strikethrough>');
+            textDecorations.strikethrough = false;
+        }
+        if (textDecorations.overline) {
+            console.debug('tsTextEnd: Closing open <overline> tag');
+            xmlBuffer.push('</overline>');
+            textDecorations.overline = false;
+        }
+        if (textDecorations.underline) {
+            console.debug('tsTextEnd: Closing open <underline> tag');
+            xmlBuffer.push('</underline>');
+            textDecorations.underline = false;
+        }
+        if (textDecorations.bold) {
+            console.debug('tsTextEnd: Closing open <strong> tag');
+            xmlBuffer.push('</strong>');
+            textDecorations.bold = false;
+        }
+        if (textDecorations.italic) {
+            console.debug('tsTextEnd: Closing open <i> tag');
+            xmlBuffer.push('</i>');
+            textDecorations.italic = false;
+        }
+        if (textDecorations.bagChar) {
+            console.debug('tsTextEnd: Closing open <bagchar> tag');
+            xmlBuffer.push('</bagchar>');
+            textDecorations.bagChar = false;
+        }
+
         // 開いている段落タグがあれば閉じる
         if (isParagraphOpen) {
             console.debug('tsTextEnd: Closing open paragraph tag');
@@ -2371,11 +2424,14 @@ function tsFontTypeSetFusen(segLen, tadSeg) {
             textDecorations.bagChar = false;
     }
 
-    if (isXmlDumpEnabled && oldBagChar !== textDecorations.bagChar) {
-        if(!oldBagChar){
+    // bagCharタグの出力（null→false遷移ではタグを出力しない）
+    if (isXmlDumpEnabled()) {
+        if (textDecorations.bagChar && !oldBagChar) {
+            // null/false → true: 袋文字モードに入る
             console.debug("袋文字ON")
             xmlBuffer.push("<bagchar>");
-        } else {
+        } else if (!textDecorations.bagChar && oldBagChar) {
+            // true → null/false: 袋文字モードから出る
             console.debug("袋文字OFF");
             xmlBuffer.push("</bagchar>");
         }
@@ -2418,11 +2474,14 @@ function tsFontTypeSetFusen(segLen, tadSeg) {
             textDecorations.italic = false;
             break;
     }
-    if (isXmlDumpEnabled && oldItalic !== textDecorations.italic) {
-        if(!oldItalic){
+    // italicタグの出力（null→false遷移ではタグを出力しない）
+    if (isXmlDumpEnabled()) {
+        if (textDecorations.italic && !oldItalic) {
+            // null/false → true: 斜体モードに入る
             console.debug("斜体ON")
             xmlBuffer.push("<i>");
-        } else {
+        } else if (!textDecorations.italic && oldItalic) {
+            // true → null/false: 斜体モードから出る
             console.debug("斜体OFF");
             xmlBuffer.push("</i>");
         }
@@ -2461,11 +2520,14 @@ function tsFontTypeSetFusen(segLen, tadSeg) {
             textDecorations.bold = true;
             break;
     }
-    if (isXmlDumpEnabled && oldBold !== textDecorations.bold) {
-        if(!oldBold){
+    // boldタグの出力（null→false遷移ではタグを出力しない）
+    if (isXmlDumpEnabled()) {
+        if (textDecorations.bold && !oldBold) {
+            // null/false → true: 太字モードに入る
             console.debug("太字ON")
             xmlBuffer.push("<strong>");
-        } else {
+        } else if (!textDecorations.bold && oldBold) {
+            // true → null/false: 太字モードから出る
             console.debug("太字OFF");
             xmlBuffer.push("</strong>");
         }
@@ -3192,40 +3254,57 @@ function tadTextStyleLineStart(segLen, tadSeg, UB_SubID) {
  */
 function tadTextStyleLineEnd(segLen, tadSeg, UB_SubID) {
     // 装飾タイプを判定
+    // 閉じタグは開いている場合のみ出力する（null→false遷移ではタグを出力しない）
     let lineType = '';
     let xmlTag = null;
     if (UB_SubID === 0x01) {
         lineType = 'underline';
+        if (textDecorations.underline) {
+            xmlTag = "</underline>";
+        }
         textDecorations.underline = false;
-        xmlTag = "</underline>";
     } else if (UB_SubID === 0x03) {
         lineType = 'overline';
+        if (textDecorations.overline) {
+            xmlTag = "</overline>";
+        }
         textDecorations.overline = false;
-        xmlTag = "</overline>";
     } else if (UB_SubID === 0x05) {
         lineType = 'strikethrough';
+        if (textDecorations.strikethrough) {
+            xmlTag = "</strikethrough>";
+        }
         textDecorations.strikethrough = false;
-        xmlTag = "</strikethrough>";
     } else if (UB_SubID === 0x07) {
         lineType = 'box';
+        if (textDecorations.box) {
+            xmlTag = "</box>";
+        }
         textDecorations.box = false;
-        xmlTag = "</box>";
     } else if (UB_SubID === 0x0D) {
         lineType = 'invert';
+        if (textDecorations.invert) {
+            xmlTag = "</invert>";
+        }
         textDecorations.invert = false;
-        xmlTag = "</invert>";
     } else if (UB_SubID === 0x0F) {
         lineType = 'mesh';
+        if (textDecorations.mesh) {
+            xmlTag = "</mesh>";
+        }
         textDecorations.mesh = false;
-        xmlTag = "</mesh>";
     } else if (UB_SubID === 0x11) {
         lineType = 'background';
+        if (textDecorations.background) {
+            xmlTag = "</background>";
+        }
         textDecorations.background = false;
-        xmlTag = "</background>";
     } else if (UB_SubID === 0x13) {
         lineType = 'noprint';
+        if (textDecorations.noprint) {
+            xmlTag = "</noprint>";
+        }
         textDecorations.noprint = false;
-        xmlTag = "</noprint>";
     } else {
         return;
     }
@@ -3233,7 +3312,7 @@ function tadTextStyleLineEnd(segLen, tadSeg, UB_SubID) {
     if (isXmlDumpEnabled && xmlTag !== null && isInDocSegment) {
         xmlBuffer.push(`${xmlTag}`);
     }
-    
+
     textDecorations[lineType] = null;
 }
 
@@ -3573,6 +3652,21 @@ function tsFigStart(tadSeg) {
 
     // z-indexカウンタを初期化
     figureZIndexCounter = 0;
+
+    if (!startTadSegment) {
+        startTadSegment = true;
+        startByImageSegment = true;
+        const h_unit = units(uh2h(tadSeg[8]));
+        const v_unit = units(uh2h(tadSeg[9]));
+        if (h_unit < 0) {
+            tadDpiHFlag = true;
+        }
+        if (v_unit < 0) {
+            tadDpiVFlag = true;
+        }
+        tadDpiH = h_unit; // h_unit
+        tadDpiV = v_unit; // v_unit
+    }
 
     let figSeg = new STARTFIGSEG();
     figSeg.view.left = Number(uh2h(tadSeg[0]));
@@ -5478,7 +5572,75 @@ function tadRawArray(raw){
                     }
                     // 文章セグメント内であれば段落タグで区切る
                     if (isInDocSegment) {
+                        // 段落を閉じる前に装飾タグを閉じる（逆順）
+                        // noprint → mesh → invert → box → strikethrough → overline → underline → strong → i → bagchar
+                        if (textDecorations.noprint) {
+                            xmlBuffer.push('</noprint>');
+                        }
+                        if (textDecorations.mesh) {
+                            xmlBuffer.push('</mesh>');
+                        }
+                        if (textDecorations.invert) {
+                            xmlBuffer.push('</invert>');
+                        }
+                        if (textDecorations.box) {
+                            xmlBuffer.push('</box>');
+                        }
+                        if (textDecorations.strikethrough) {
+                            xmlBuffer.push('</strikethrough>');
+                        }
+                        if (textDecorations.overline) {
+                            xmlBuffer.push('</overline>');
+                        }
+                        if (textDecorations.underline) {
+                            xmlBuffer.push('</underline>');
+                        }
+                        if (textDecorations.bold) {
+                            xmlBuffer.push('</strong>');
+                        }
+                        if (textDecorations.italic) {
+                            xmlBuffer.push('</i>');
+                        }
+                        if (textDecorations.bagChar) {
+                            xmlBuffer.push('</bagchar>');
+                        }
+
+                        // 段落を閉じて新しい段落を開く
                         xmlBuffer.push('</p>\r\n<p>');
+
+                        // 新しい段落で装飾タグを再度開く（正順）
+                        // bagchar → i → strong → underline → overline → strikethrough → box → invert → mesh → noprint
+                        if (textDecorations.bagChar) {
+                            xmlBuffer.push('<bagchar>');
+                        }
+                        if (textDecorations.italic) {
+                            xmlBuffer.push('<i>');
+                        }
+                        if (textDecorations.bold) {
+                            xmlBuffer.push('<strong>');
+                        }
+                        if (textDecorations.underline) {
+                            xmlBuffer.push('<underline>');
+                        }
+                        if (textDecorations.overline) {
+                            xmlBuffer.push('<overline>');
+                        }
+                        if (textDecorations.strikethrough) {
+                            xmlBuffer.push('<strikethrough>');
+                        }
+                        if (textDecorations.box) {
+                            xmlBuffer.push('<box>');
+                        }
+                        if (textDecorations.invert) {
+                            xmlBuffer.push('<invert>');
+                        }
+                        if (textDecorations.mesh) {
+                            xmlBuffer.push('<mesh>');
+                        }
+                        if (textDecorations.noprint) {
+                            xmlBuffer.push('<noprint>');
+                        }
+
                         isParagraphOpen = true;  // 新しい段落が開始
                     }
                 } else {
@@ -5505,6 +5667,11 @@ function tadRawArray(raw){
         //const lastEntry = xmlBuffer[xmlBuffer.length - 1];
         if (isXmlTad) {
             console.debug('Adding closing </document> tag to xmlBuffer');
+            // 開いている段落タグがあれば閉じる
+            if (isParagraphOpen) {
+                xmlBuffer.push('</p>\r\n');
+                isParagraphOpen = false;
+            }
             xmlBuffer.push('</document>\r\n');
         }
         if (isXmlFig) {

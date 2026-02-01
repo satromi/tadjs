@@ -526,6 +526,11 @@ class BasicFigureEditor extends window.PluginBase {
                 logger.debug('[FIGURE EDITOR] [MessageBus] スクロールバー非表示モードを適用');
             }
 
+            // 背景色の設定
+            if (data.bgcol) {
+                this.applyBackgroundColor(data.bgcol);
+            }
+
             // 実身データを読み込む
             const realObject = data.realObject;
             if (realObject) {
@@ -1917,7 +1922,7 @@ class BasicFigureEditor extends window.PluginBase {
 
                 // 展開された仮身のiframe位置を更新
                 if (shape.type === 'vobj' && shape.expanded && shape.expandedElement) {
-                    const chsz = shape.virtualObject.chsz || 14;
+                    const chsz = shape.virtualObject.chsz || DEFAULT_FONT_SIZE;
                     const titleBarHeight = chsz + 16;
                     shape.expandedElement.style.left = `${shape.startX}px`;
                     shape.expandedElement.style.top = `${shape.startY + titleBarHeight}px`;
@@ -2920,7 +2925,7 @@ class BasicFigureEditor extends window.PluginBase {
                 // 折れ線描画（グラフからのコピーなど）
                 if (shape.points && shape.points.length > 1) {
                     this.ctx.beginPath();
-                    this.ctx.strokeStyle = shape.strokeColor || '#000000';
+                    this.ctx.strokeStyle = shape.strokeColor || DEFAULT_FRCOL;
                     this.ctx.lineWidth = shape.lineWidth || 2;
                     this.ctx.moveTo(shape.points[0].x, shape.points[0].y);
                     for (let i = 1; i < shape.points.length; i++) {
@@ -4108,7 +4113,7 @@ class BasicFigureEditor extends window.PluginBase {
             this.ctx.restore();
         } else {
             // ImageDataがない場合は背景色で塗りつぶし
-            this.ctx.fillStyle = shape.backgroundColor || '#ffffff';
+            this.ctx.fillStyle = shape.backgroundColor || DEFAULT_BGCOL;
             this.ctx.fillRect(minX, minY, width, height);
         }
 
@@ -4377,7 +4382,7 @@ class BasicFigureEditor extends window.PluginBase {
             height = virtualObject.heightPx;
         } else {
             // デフォルト値を計算
-            const chsz = virtualObject.chsz || 14;
+            const chsz = virtualObject.chsz || DEFAULT_FONT_SIZE;
             const chszPx = window.convertPtToPx(chsz);
             const lineHeight = 1.2;
             const textHeight = Math.ceil(chszPx * lineHeight);
@@ -4393,9 +4398,9 @@ class BasicFigureEditor extends window.PluginBase {
             endX: x + width,
             endY: y + height,
             virtualObject: virtualObject,
-            strokeColor: virtualObject.frcol || '#000000',
-            textColor: virtualObject.chcol || '#000000',
-            fillColor: virtualObject.tbcol || '#ffffff',
+            strokeColor: virtualObject.frcol || DEFAULT_FRCOL,
+            textColor: virtualObject.chcol || DEFAULT_FRCOL,
+            fillColor: virtualObject.tbcol || DEFAULT_BGCOL,
             lineWidth: 1,
             originalHeight: height,  // 元の高さを保存
             zIndex: this.getNextZIndex()
@@ -4432,12 +4437,12 @@ class BasicFigureEditor extends window.PluginBase {
             link_id: realId,
             link_name: name,
             width: 150,
-            heightPx: 30,
+            heightPx: DEFAULT_VOBJ_HEIGHT,
             chsz: chsz,  // メニュー文字サイズを使用
-            frcol: '#000000',
-            chcol: '#000000',
-            tbcol: '#ffffff',
-            bgcol: '#ffffff',
+            frcol: DEFAULT_FRCOL,
+            chcol: DEFAULT_CHCOL,
+            tbcol: DEFAULT_TBCOL,
+            bgcol: DEFAULT_BGCOL,
             dlen: 0,
             pictdisp: 'true',  // ピクトグラムを表示
             namedisp: 'true',  // 名称を表示
@@ -4786,13 +4791,35 @@ class BasicFigureEditor extends window.PluginBase {
         }
     }
 
+    /**
+     * 不正なXMLを修正する
+     * - 閉じられていない<p>タグを検出して</p>を挿入
+     * @param {string} xmlData - XMLデータ
+     * @returns {string} 修正されたXMLデータ
+     */
+    fixMalformedXml(xmlData) {
+        let fixed = xmlData;
+
+        // <p>タグが閉じられていないケースを修正
+        // パターン: <p>...（</p>がないまま）</document> または </figure> または </tad>
+        // 改行を含む複数行のケースに対応
+        fixed = fixed.replace(/<p>([^<]*(?:<(?!\/p>|\/document>|\/figure>|\/tad>)[^<]*)*?)(\s*<\/document>)/g, '<p>$1</p>$2');
+        fixed = fixed.replace(/<p>([^<]*(?:<(?!\/p>|\/document>|\/figure>|\/tad>)[^<]*)*?)(\s*<\/figure>)/g, '<p>$1</p>$2');
+        fixed = fixed.replace(/<p>([^<]*(?:<(?!\/p>|\/document>|\/figure>|\/tad>)[^<]*)*?)(\s*<\/tad>)/g, '<p>$1</p>$2');
+
+        return fixed;
+    }
+
     async parseXmlTadData(xmlData) {
         // XMLから図形情報を抽出
         this.log('XML解析:', xmlData);
 
         try {
+            // XMLパース前に不正なタグを修正
+            const fixedXmlData = this.fixMalformedXml(xmlData);
+
             const parser = new DOMParser();
-            const xmlDoc = parser.parseFromString(xmlData, 'text/xml');
+            const xmlDoc = parser.parseFromString(fixedXmlData, 'text/xml');
 
             // パースエラーチェック
             const parserError = xmlDoc.querySelector('parsererror');
@@ -5192,7 +5219,7 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         // 色情報を取得
-        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+        const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
         // 接続状態を取得 (0=両端接続無し, 1=開始点のみ接続, 2=終端点のみ接続, 3=両端接続)
         const conn_pat = parseInt(elem.getAttribute('conn_pat')) || 0;
@@ -5298,8 +5325,8 @@ class BasicFigureEditor extends window.PluginBase {
         const fillEnabled = f_pat === 0;
 
         // 色情報を取得
-        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
-        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+        const fillColor = elem.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
         // 文字枠の判定（新形式：属性としてfontSizeを持つ、または旧形式：documentを持つ）
         const hasFontSize = elem.hasAttribute('fontSize');
@@ -5322,7 +5349,7 @@ class BasicFigureEditor extends window.PluginBase {
                 // 新形式：属性から取得
                 fontSize = parseInt(elem.getAttribute('fontSize')) || 16;
                 fontFamily = elem.getAttribute('fontFamily') || 'sans-serif';
-                textColor = elem.getAttribute('textColor') || '#000000';
+                textColor = elem.getAttribute('textColor') || DEFAULT_FRCOL;
 
                 const decoration = elem.getAttribute('decoration') || '';
                 decorations.bold = decoration.includes('B');
@@ -5347,7 +5374,7 @@ class BasicFigureEditor extends window.PluginBase {
                         fontFamily = fontElem.getAttribute('face') || 'sans-serif';
                     }
                     if (fontElem.hasAttribute('color')) {
-                        textColor = fontElem.getAttribute('color') || '#000000';
+                        textColor = fontElem.getAttribute('color') || DEFAULT_FRCOL;
                     }
                 });
 
@@ -5456,8 +5483,8 @@ class BasicFigureEditor extends window.PluginBase {
         const fillEnabled = f_pat === 0;
 
         // 色情報を取得
-        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
-        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+        const fillColor = elem.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
@@ -5490,7 +5517,7 @@ class BasicFigureEditor extends window.PluginBase {
             startY: parseFloat(elem.getAttribute('y')) || 0,
             text: elem.textContent || '',
             fontSize: elem.getAttribute('size') || '16px sans-serif',
-            strokeColor: elem.getAttribute('color') || '#000000',
+            strokeColor: elem.getAttribute('color') || DEFAULT_FRCOL,
             fillColor: 'transparent',
             lineWidth: 1,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
@@ -5570,7 +5597,7 @@ class BasicFigureEditor extends window.PluginBase {
                             fontFamily = node.getAttribute('face') || 'sans-serif';
                         }
                         if (node.hasAttribute('color')) {
-                            textColor = node.getAttribute('color') || '#000000';
+                            textColor = node.getAttribute('color') || DEFAULT_FRCOL;
                         }
                     } else if (tagName === 'br') {
                         // 改行
@@ -5662,7 +5689,7 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         // 色情報を取得
-        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+        const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
@@ -5715,7 +5742,7 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         // 色情報を取得
-        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+        const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
         return {
             type: 'curve',
@@ -5768,8 +5795,8 @@ class BasicFigureEditor extends window.PluginBase {
         const fillEnabled = f_pat === 0;
 
         // 色情報を取得
-        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
-        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+        const fillColor = elem.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
@@ -5826,8 +5853,8 @@ class BasicFigureEditor extends window.PluginBase {
         const fillEnabled = f_pat === 0;
 
         // 色情報を取得
-        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
-        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+        const fillColor = elem.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
         // cornerRadius属性があれば使用、なければ0（後方互換性）
         const cornerRadius = elem.hasAttribute('cornerRadius')
@@ -5857,7 +5884,7 @@ class BasicFigureEditor extends window.PluginBase {
         const top = parseFloat(elem.getAttribute('vobjtop')) || 0;
         const right = parseFloat(elem.getAttribute('vobjright')) || 0;
         const bottom = parseFloat(elem.getAttribute('vobjbottom')) || 0;
-        const chsz = parseFloat(elem.getAttribute('chsz')) || 14;
+        const chsz = parseFloat(elem.getAttribute('chsz')) || DEFAULT_FONT_SIZE;
 
         // originalHeightを計算（chszはポイント値なのでピクセルに変換）
         const chszPx = window.convertPtToPx(chsz);
@@ -5878,10 +5905,10 @@ class BasicFigureEditor extends window.PluginBase {
                 link_id: elem.getAttribute('id') || '',
                 link_name: elem.textContent || '仮身',
                 chsz: chsz,
-                frcol: elem.getAttribute('frcol') || '#000000',
-                chcol: elem.getAttribute('chcol') || '#000000',
-                tbcol: elem.getAttribute('tbcol') || '#ffffff',
-                bgcol: elem.getAttribute('bgcol') || '#ffffff',
+                frcol: elem.getAttribute('frcol') || DEFAULT_FRCOL,
+                chcol: elem.getAttribute('chcol') || DEFAULT_FRCOL,
+                tbcol: elem.getAttribute('tbcol') || DEFAULT_BGCOL,
+                bgcol: elem.getAttribute('bgcol') || DEFAULT_BGCOL,
                 pictdisp: elem.getAttribute('pictdisp') || 'true',  // ピクトグラム表示
                 namedisp: elem.getAttribute('namedisp') || 'true',  // 名称表示
                 roledisp: elem.getAttribute('roledisp') || 'false',
@@ -5892,9 +5919,9 @@ class BasicFigureEditor extends window.PluginBase {
                 // 仮身固有の続柄（link要素のrelationship属性）
                 linkRelationship: elem.getAttribute('relationship') ? elem.getAttribute('relationship').split(/\s+/).filter(t => t) : []
             },
-            strokeColor: elem.getAttribute('frcol') || '#000000',
-            textColor: elem.getAttribute('chcol') || '#000000',
-            fillColor: elem.getAttribute('tbcol') || '#ffffff',
+            strokeColor: elem.getAttribute('frcol') || DEFAULT_FRCOL,
+            textColor: elem.getAttribute('chcol') || DEFAULT_FRCOL,
+            fillColor: elem.getAttribute('tbcol') || DEFAULT_BGCOL,
             lineWidth: 1,
             originalHeight: originalHeight,
             locked: elem.getAttribute('fixed') === 'true',  // 固定化
@@ -6001,7 +6028,7 @@ class BasicFigureEditor extends window.PluginBase {
         const top = parseFloat(elem.getAttribute('top')) || 0;
         const right = parseFloat(elem.getAttribute('right')) || 100;
         const bottom = parseFloat(elem.getAttribute('bottom')) || 100;
-        const backgroundColor = elem.getAttribute('bgcolor') || '#ffffff';
+        const backgroundColor = elem.getAttribute('bgcolor') || DEFAULT_BGCOL;
         const href = elem.getAttribute('href') || '';
 
         // ピクセルマップ番号を抽出
@@ -6181,8 +6208,8 @@ class BasicFigureEditor extends window.PluginBase {
         const fillEnabled = f_pat === 0;
 
         // 色情報を取得
-        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
-        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+        const fillColor = elem.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
@@ -6248,8 +6275,8 @@ class BasicFigureEditor extends window.PluginBase {
         const fillEnabled = f_pat === 0;
 
         // 色情報を取得
-        const fillColor = elem.getAttribute('fillColor') || '#ffffff';
-        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+        const fillColor = elem.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
@@ -6311,7 +6338,7 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         // 色情報を取得
-        const strokeColor = elem.getAttribute('strokeColor') || '#000000';
+        const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
@@ -6434,11 +6461,11 @@ class BasicFigureEditor extends window.PluginBase {
                 const newVirtualObject = {
                     link_id: `${result.newRealId}_0.xtad`,
                     link_name: result.newName,
-                    chsz: originalVobj.chsz || 14,
-                    frcol: originalVobj.frcol || '#000000',
-                    chcol: originalVobj.chcol || '#000000',
-                    tbcol: originalVobj.tbcol || '#ffffff',
-                    bgcol: originalVobj.bgcol || '#ffffff',
+                    chsz: originalVobj.chsz || DEFAULT_FONT_SIZE,
+                    frcol: originalVobj.frcol || DEFAULT_FRCOL,
+                    chcol: originalVobj.chcol || DEFAULT_FRCOL,
+                    tbcol: originalVobj.tbcol || DEFAULT_BGCOL,
+                    bgcol: originalVobj.bgcol || DEFAULT_BGCOL,
                     pictdisp: originalVobj.pictdisp || 'true',
                     namedisp: originalVobj.namedisp || 'true',
                     roledisp: originalVobj.roledisp || 'false',
@@ -6450,7 +6477,7 @@ class BasicFigureEditor extends window.PluginBase {
                 };
 
                 // 元の仮身の下に配置（10px下）
-                const chszPx = (newVirtualObject.chsz || 14) * (96 / 72);
+                const chszPx = (newVirtualObject.chsz || DEFAULT_FONT_SIZE) * (96 / 72);
                 const lineHeight = 1.2;
                 const textHeight = Math.ceil(chszPx * lineHeight);
                 const newHeight = textHeight + 8;
@@ -6560,8 +6587,8 @@ class BasicFigureEditor extends window.PluginBase {
         // 角度
         const angle = shape.angle || 0;
         // 色情報
-        const fillColor = shape.fillColor || '#ffffff';
-        const strokeColor = shape.strokeColor || '#000000';
+        const fillColor = shape.fillColor || DEFAULT_BGCOL;
+        const strokeColor = shape.strokeColor || DEFAULT_FRCOL;
 
         switch (shape.type) {
             case 'line':
@@ -6642,7 +6669,7 @@ class BasicFigureEditor extends window.PluginBase {
                     xmlParts.push(this.generateDocViewDrawScale(left, top, right, bottom));
                     xmlParts.push(this.generateTextElement({ zIndex: shape.zIndex }));
                     xmlParts.push(`<font size="${fontSize}"/>\r\n`);
-                    xmlParts.push(`<font color="${shape.strokeColor || '#000000'}"/>\r\n`);
+                    xmlParts.push(`<font color="${shape.strokeColor || DEFAULT_FRCOL}"/>\r\n`);
                     xmlParts.push(`${textContent}\r\n`);
                     xmlParts.push('</document>\r\n');
                 }
@@ -6742,7 +6769,7 @@ class BasicFigureEditor extends window.PluginBase {
                         ? ` relationship="${vo.linkRelationship.join(' ')}"`
                         : '';
                     // 自己閉じタグ形式（link_nameはJSONから取得する方式に統一）、dlen=0
-                    xmlParts.push(`<link id="${vo.link_id}" vobjleft="${shape.startX}" vobjtop="${shape.startY}" vobjright="${shape.endX}" vobjbottom="${shape.endY}" height="${height}" chsz="${vo.chsz || 14}" frcol="${vo.frcol || '#000000'}" chcol="${vo.chcol || '#000000'}" tbcol="${vo.tbcol || '#ffffff'}" bgcol="${vo.bgcol || '#ffffff'}" dlen="0" pictdisp="${vo.pictdisp || 'true'}" namedisp="${vo.namedisp || 'true'}" roledisp="${vo.roledisp || 'false'}" typedisp="${vo.typedisp || 'false'}" updatedisp="${vo.updatedisp || 'false'}" framedisp="${vo.framedisp || 'true'}" autoopen="${vo.autoopen || 'false'}"${relationshipAttr}${fixedAttr}${backgroundAttr}${zIndexAttr}/>\r\n`);
+                    xmlParts.push(`<link id="${vo.link_id}" vobjleft="${shape.startX}" vobjtop="${shape.startY}" vobjright="${shape.endX}" vobjbottom="${shape.endY}" height="${height}" chsz="${vo.chsz || DEFAULT_FONT_SIZE}" frcol="${vo.frcol || DEFAULT_FRCOL}" chcol="${vo.chcol || DEFAULT_FRCOL}" tbcol="${vo.tbcol || DEFAULT_BGCOL}" bgcol="${vo.bgcol || DEFAULT_BGCOL}" dlen="0" pictdisp="${vo.pictdisp || 'true'}" namedisp="${vo.namedisp || 'true'}" roledisp="${vo.roledisp || 'false'}" typedisp="${vo.typedisp || 'false'}" updatedisp="${vo.updatedisp || 'false'}" framedisp="${vo.framedisp || 'true'}" autoopen="${vo.autoopen || 'false'}"${relationshipAttr}${fixedAttr}${backgroundAttr}${zIndexAttr}/>\r\n`);
                 }
                 break;
 
@@ -6777,7 +6804,7 @@ class BasicFigureEditor extends window.PluginBase {
                     // 3. フォント設定
                     const fontSize = shape.fontSize || 16;
                     const fontFamily = shape.fontFamily || 'sans-serif';
-                    const textColor = shape.textColor || '#000000';
+                    const textColor = shape.textColor || DEFAULT_FRCOL;
                     xmlParts.push(`<font size="${fontSize}"/>\r\n`);
                     xmlParts.push(`<font face="${this.escapeXml(fontFamily)}"/>\r\n`);
                     xmlParts.push(`<font color="${this.escapeXml(textColor)}"/>\r\n`);
@@ -6846,14 +6873,14 @@ class BasicFigureEditor extends window.PluginBase {
                     const flipV = shape.flipV ? 'true' : 'false';
 
                     // pixelmap要素として保存（href属性でファイル名を指定）
-                    xmlParts.push(`<pixelmap left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" bgcolor="${shape.backgroundColor || '#ffffff'}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}" href="${this.escapeXml(pixelmapFileName)}"${pixelmapZIndexAttr}/>\r\n`);
+                    xmlParts.push(`<pixelmap left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" bgcolor="${shape.backgroundColor || DEFAULT_BGCOL}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}" href="${this.escapeXml(pixelmapFileName)}"${pixelmapZIndexAttr}/>\r\n`);
                 } else {
                     const rotation = shape.rotation || 0;
                     const flipH = shape.flipH ? 'true' : 'false';
                     const flipV = shape.flipV ? 'true' : 'false';
 
                     // ImageDataがない場合は空のピクセルマップとして保存
-                    xmlParts.push(`<pixelmap left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" bgcolor="${shape.backgroundColor || '#ffffff'}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}"${pixelmapZIndexAttr}/>\r\n`);
+                    xmlParts.push(`<pixelmap left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}" bgcolor="${shape.backgroundColor || DEFAULT_BGCOL}" rotation="${rotation}" flipH="${flipH}" flipV="${flipV}"${pixelmapZIndexAttr}/>\r\n`);
                 }
                 break;
 
@@ -8906,7 +8933,7 @@ class BasicFigureEditor extends window.PluginBase {
 
                 // 用紙境界（点線）
                 ctx.save();
-                ctx.strokeStyle = '#808080';
+                ctx.strokeStyle = GRAY_COLOR;
                 ctx.lineWidth = 1;
                 ctx.setLineDash([4, 4]);
                 ctx.strokeRect(offsetX, offsetY, paperWidthPx, paperHeightPx);
@@ -9294,11 +9321,11 @@ class BasicFigureEditor extends window.PluginBase {
                 const newVirtualObject = {
                     link_id: result.newRealId,
                     link_name: result.newName,
-                    chsz: originalVobj.chsz || 14,
-                    frcol: originalVobj.frcol || '#000000',
-                    chcol: originalVobj.chcol || '#000000',
-                    tbcol: originalVobj.tbcol || '#ffffff',
-                    bgcol: originalVobj.bgcol || '#ffffff',
+                    chsz: originalVobj.chsz || DEFAULT_FONT_SIZE,
+                    frcol: originalVobj.frcol || DEFAULT_FRCOL,
+                    chcol: originalVobj.chcol || DEFAULT_FRCOL,
+                    tbcol: originalVobj.tbcol || DEFAULT_BGCOL,
+                    bgcol: originalVobj.bgcol || DEFAULT_BGCOL,
                     pictdisp: originalVobj.pictdisp || 'true',
                     namedisp: originalVobj.namedisp || 'true',
                     roledisp: originalVobj.roledisp || 'false',
@@ -9310,7 +9337,7 @@ class BasicFigureEditor extends window.PluginBase {
                 };
 
                 // 元の仮身の下に配置（10px下）
-                const chszPx = (newVirtualObject.chsz || 14) * (96 / 72);
+                const chszPx = (newVirtualObject.chsz || DEFAULT_FONT_SIZE) * (96 / 72);
                 const lineHeight = 1.2;
                 const textHeight = Math.ceil(chszPx * lineHeight);
                 const newHeight = textHeight + 8;
@@ -9939,34 +9966,7 @@ class BasicFigureEditor extends window.PluginBase {
 
     // loadRealObjectData() は基底クラス PluginBase で定義
 
-    /**
-     * 親ウィンドウからファイルデータを読み込む
-     * @param {string} fileName - ファイル名
-     * @returns {Promise<Blob>} ファイルデータ
-     */
-    async loadDataFileFromParent(fileName) {
-        const messageId = this.generateMessageId('load');
-
-        if (this.messageBus) {
-            this.messageBus.send('load-data-file-request', {
-                messageId: messageId,
-                fileName: fileName
-            });
-        }
-
-        try {
-            const result = await this.messageBus.waitFor('load-data-file-response', window.DEFAULT_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-            if (result.success) {
-                return result.data;
-            } else {
-                throw new Error(result.error || 'ファイル読み込み失敗');
-            }
-        } catch (error) {
-            throw new Error('ファイル読み込みエラー: ' + error.message);
-        }
-    }
+    // loadDataFileFromParent() は PluginBase のキュー管理付きメソッドを使用
 
     /**
      * 仮身のメタデータ（applist等）をJSONファイルから読み込む
@@ -10138,7 +10138,7 @@ class BasicFigureEditor extends window.PluginBase {
             contentArea.setAttribute('draggable', 'false');
 
             // 仮身の色属性を取得
-            const bgcol = virtualObject.bgcol || '#ffffff';
+            const bgcol = virtualObject.bgcol || DEFAULT_BGCOL;
 
             // 4. プラグインをiframeで読み込む（プラグインが描画する）
             const iframe = document.createElement('iframe');
@@ -10389,6 +10389,9 @@ class BasicFigureEditor extends window.PluginBase {
                 logger.debug('[FIGURE EDITOR] 既存の仮身DOM要素を再利用:', shape.virtualObject.link_name, 'vobjElement:', !!shape.vobjElement, 'parentNode:', !!shape.vobjElement.parentNode);
                 const width = shape.endX - shape.startX;
                 const height = shape.endY - shape.startY;
+                // DOM要素はbox-sizing: border-boxなので、border込みの高さを設定する
+                // shape座標のheight（endY - startY）はborderを含まないTAD保存値
+                const domHeight = height + VOBJ_BORDER_WIDTH;
 
                 // 位置、サイズ、z-indexが変わっている場合は更新
                 const currentLeft = parseInt(shape.vobjElement.style.left) || 0;
@@ -10399,11 +10402,11 @@ class BasicFigureEditor extends window.PluginBase {
                 const newZIndex = shape.zIndex !== null && shape.zIndex !== undefined ? shape.zIndex : 0;
 
                 if (currentLeft !== shape.startX || currentTop !== shape.startY ||
-                    currentWidth !== width || currentHeight !== height || currentZIndex !== newZIndex) {
+                    currentWidth !== width || currentHeight !== domHeight || currentZIndex !== newZIndex) {
                     shape.vobjElement.style.left = shape.startX + 'px';
                     shape.vobjElement.style.top = shape.startY + 'px';
                     shape.vobjElement.style.width = width + 'px';
-                    shape.vobjElement.style.height = height + 'px';
+                    shape.vobjElement.style.height = domHeight + 'px';
                     shape.vobjElement.style.zIndex = String(newZIndex);
                 }
             } else {
@@ -10460,11 +10463,13 @@ class BasicFigureEditor extends window.PluginBase {
         vobjElement.classList.add('virtual-object-element');
 
         // 位置とサイズを設定
+        // DOM要素はbox-sizing: border-boxなので、border込みの高さを設定する
+        // shape座標のheight（endY - startY）はborderを含まないTAD保存値
         vobjElement.style.position = 'absolute';
         vobjElement.style.left = shape.startX + 'px';
         vobjElement.style.top = shape.startY + 'px';
         vobjElement.style.width = width + 'px';
-        vobjElement.style.height = height + 'px';
+        vobjElement.style.height = (height + VOBJ_BORDER_WIDTH) + 'px';
         vobjElement.style.cursor = 'move';
         // z-indexをshapeのzIndexプロパティから設定
         // Canvasのz-indexは0なので、負の値はCanvasより背面、正の値は前面になる
@@ -10800,11 +10805,11 @@ class BasicFigureEditor extends window.PluginBase {
                     link_name: vo.link_name,
                     width: vo.width || s.width,
                     heightPx: vo.heightPx || s.height,
-                    chsz: vo.chsz || 14,
-                    frcol: vo.frcol || '#000000',
-                    chcol: vo.chcol || '#000000',
-                    tbcol: vo.tbcol || '#ffffff',
-                    bgcol: vo.bgcol || '#ffffff',
+                    chsz: vo.chsz || DEFAULT_FONT_SIZE,
+                    frcol: vo.frcol || DEFAULT_FRCOL,
+                    chcol: vo.chcol || DEFAULT_FRCOL,
+                    tbcol: vo.tbcol || DEFAULT_BGCOL,
+                    bgcol: vo.bgcol || DEFAULT_BGCOL,
                     dlen: vo.dlen || 0,
                     applist: vo.applist || {},
                     offsetX: (s === shape) ? (this.draggingVirtualObjectOffsetX || 0) : 0,
@@ -11118,13 +11123,12 @@ class BasicFigureEditor extends window.PluginBase {
             const startHeight = rect.height;
             const minWidth = 50;
 
-            // chszベースの最小高さを計算
-            const chsz = Math.round(obj.chsz || 14); // 浮動小数点誤差を防ぐ
-            const lineHeight = 1.2;
-            const chszPx = window.convertPtToPx(chsz);
-            const textHeight = Math.ceil(chszPx * lineHeight);
-            const minClosedHeight = textHeight + 8; // 閉じた仮身の最小高さ = タイトルエリアの高さ
-            const minOpenHeight = textHeight + 30; // 開いた仮身の最小高さ（閾値）= タイトルバー(textHeight+8) + 区切り線(2) + コンテンツ最小(20)
+            // VirtualObjectRendererのユーティリティメソッドを使用して最小高さを計算
+            // 注: getMinClosedHeight/getMinOpenHeightはborderなしのTAD保存値を返す
+            // プレビュー枠はDOM要素と同じborder込みの値を使う必要がある
+            const chsz = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
+            const minClosedHeight = this.virtualObjectRenderer.getMinClosedHeight(chsz) + VOBJ_BORDER_WIDTH;
+            const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chsz) + VOBJ_BORDER_WIDTH;
 
             // DOMから実際のコンテンツエリアの有無で開閉状態を判定
             const hasContentArea = vobjElement.querySelector('.virtual-object-content-area') !== null ||
@@ -11214,23 +11218,25 @@ class BasicFigureEditor extends window.PluginBase {
                 const finalHeight = Math.round(currentHeight);
 
                 // shapeのサイズを更新
+                // 注: DOM要素の高さ（finalHeight）はborderを含む（box-sizing: border-box）
+                // TADファイルのheight属性はborderを含まない値を保存する
+                const heightForSave = finalHeight - VOBJ_BORDER_WIDTH;
                 shape.endX = shape.startX + finalWidth;
-                shape.endY = shape.startY + finalHeight;
+                shape.endY = shape.startY + heightForSave;
 
                 // 仮身オブジェクトのサイズを更新
                 obj.width = finalWidth;
-                obj.heightPx = finalHeight;
+                obj.heightPx = heightForSave;
 
                 logger.debug('[FIGURE EDITOR] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
 
                 // 開いた仮身と閉じた仮身の判定が変わったかチェック
-                const chsz_resize = Math.round(obj.chsz || 14);
-                const lineHeight_resize = 1.2;
-                const chszPx_resize = window.convertPtToPx(chsz_resize);
-                const textHeight_resize = Math.ceil(chszPx_resize * lineHeight_resize);
-                const minOpenHeight_resize = textHeight_resize + 30;
+                // VirtualObjectRendererのユーティリティメソッドを使用
+                const chsz_resize = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
+                const minClosedHeight_resize = this.virtualObjectRenderer.getMinClosedHeight(chsz_resize);
                 const wasOpen = hasContentArea; // DOMベースの判定を使用
-                const isNowOpen = finalHeight >= minOpenHeight_resize;
+                // VirtualObjectRendererと同じ閾値を使用: height > minClosedHeight
+                const isNowOpen = finalHeight > minClosedHeight_resize;
 
                 if (wasOpen !== isNowOpen) {
                     // 判定が変わった場合は、少し待ってから仮身要素を再作成
@@ -11331,11 +11337,11 @@ class BasicFigureEditor extends window.PluginBase {
         // 元の仮身のサイズと属性を保存
         const width = virtualObject.width || (shape.endX - shape.startX) || 100;
         const height = virtualObject.heightPx || (shape.endY - shape.startY) || 32;
-        const chsz = virtualObject.chsz || 14;
-        const frcol = virtualObject.frcol || '#000000';
-        const chcol = virtualObject.chcol || '#000000';
-        const tbcol = virtualObject.tbcol || '#ffffff';
-        const bgcol = virtualObject.bgcol || '#ffffff';
+        const chsz = virtualObject.chsz || DEFAULT_FONT_SIZE;
+        const frcol = virtualObject.frcol || DEFAULT_FRCOL;
+        const chcol = virtualObject.chcol || DEFAULT_FRCOL;
+        const tbcol = virtualObject.tbcol || DEFAULT_BGCOL;
+        const bgcol = virtualObject.bgcol || DEFAULT_BGCOL;
         const dlen = virtualObject.dlen || 0;
         const applist = virtualObject.applist || {};
 

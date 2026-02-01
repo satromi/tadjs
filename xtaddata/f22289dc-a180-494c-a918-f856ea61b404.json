@@ -1,18 +1,21 @@
 {
   "name": "原紙箱",
+  "relationship": [],
   "linktype": false,
   "makeDate": "2025-10-13T00:00:00Z",
-  "updateDate": "2025-12-21T00:36:00.699Z",
-  "accessDate": "2026-01-10T23:31:00.331Z",
+  "updateDate": "2026-01-25T04:24:27.374Z",
+  "accessDate": "2026-01-25T04:25:34.139Z",
   "periodDate": null,
   "refCount": 3,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TADjs User",
   "window": {
     "pos": {
-      "x": 814,
-      "y": 68
+      "x": 893,
+      "y": 35
     },
     "width": 200,
     "height": 600,

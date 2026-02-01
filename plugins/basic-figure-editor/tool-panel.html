@@ -94,6 +94,16 @@
         window.LogLevel = LogLevel;
         window.logManager = logManager;
     </script>
+    <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
+    <script type="module">
+        import {
+            DEFAULT_FRCOL, DEFAULT_CHCOL, DEFAULT_TBCOL, DEFAULT_BGCOL
+        } from '../../js/util.js';
+        window.DEFAULT_FRCOL = DEFAULT_FRCOL;
+        window.DEFAULT_CHCOL = DEFAULT_CHCOL;
+        window.DEFAULT_TBCOL = DEFAULT_TBCOL;
+        window.DEFAULT_BGCOL = DEFAULT_BGCOL;
+    </script>
     <script type="module" src="tool-panel.js?v=20251023"></script>
 </body>
 </html>

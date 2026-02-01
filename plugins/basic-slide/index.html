@@ -95,6 +95,13 @@
         window.getPaperSizeByName = getPaperSizeByName;
         window.getPaperSizeOptions = getPaperSizeOptions;
     </script>
+    <!-- 実時間制御TADパーサーとメディア管理をグローバル変数として読み込み -->
+    <script type="module">
+        import { RealtimeTadParser, SlideMediaManager, TimelineEngine } from '../../js/realtime-media.js';
+        window.RealtimeTadParser = RealtimeTadParser;
+        window.SlideMediaManager = SlideMediaManager;
+        window.TimelineEngine = TimelineEngine;
+    </script>
     <!-- 基本文章編集のeditor.jsを読み込み（グローバルにBasicTextEditorを定義） -->
     <script type="module" src="../basic-text-editor/editor.js"></script>
     <!-- スライド固有ロジック（BasicTextEditorを継承） -->

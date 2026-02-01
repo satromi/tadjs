@@ -143,12 +143,16 @@ export class MessageBus {
 
     /**
      * 親ウィンドウにメッセージを送信
+     * ネストされたiframe（開いた仮身内のプラグイン等）からも
+     * 最上位の親ウィンドウにメッセージが届くようwindow.topを使用
      *
      * @param {string} type - メッセージタイプ
      * @param {Object} data - 送信データ
      */
     send(type, data = {}) {
-        if (!window.parent || window.parent === window) {
+        // window.topを使用してネストされたiframeからも親ウィンドウに送信
+        const targetWindow = window.top;
+        if (!targetWindow || targetWindow === window) {
             this.warn('Parent window not available for sending:', type);
             return;
         }
@@ -159,7 +163,7 @@ export class MessageBus {
             if (this.mode === 'child' && this.windowId && !data.sourceWindowId) {
                 messageData.sourceWindowId = this.windowId;
             }
-            window.parent.postMessage(messageData, '*');
+            targetWindow.postMessage(messageData, '*');
             this.log(`Sent message: ${type}`, data);
         } catch (error) {
             this.error(`Failed to send message ${type}:`, error);
@@ -678,9 +682,24 @@ export class MessageBus {
         });
 
         if (windowId) {
-            // MessageBus経由で送信
-            this.sendToWindow(windowId, type, data);
-            this.logger.debug(`[respondTo] Response sent via MessageBus: ${type}, windowId=${windowId}`);
+            // windowIdが実際に登録されているか確認
+            const childId = this.windowToChild.get(windowId);
+            if (childId) {
+                // 登録されていれば MessageBus経由で送信
+                this.sendToWindow(windowId, type, data);
+                this.logger.debug(`[respondTo] Response sent via MessageBus: ${type}, windowId=${windowId}`);
+            } else if (source && source.postMessage) {
+                // 登録されていないがsourceがあれば直接postMessage
+                this.logger.info(`[respondTo] WindowId ${windowId} not registered, using fallback postMessage for ${type}, messageId=${data.messageId}`);
+                try {
+                    source.postMessage({ type, ...data }, '*');
+                    this.logger.info(`[respondTo] Sent via fallback postMessage: ${type}`);
+                } catch (error) {
+                    this.error(`[respondTo] Failed to send response via fallback: ${type}`, error);
+                }
+            } else {
+                this.logger.error(`[respondTo] FAILED: windowId ${windowId} not registered and no valid source for ${type}, messageId=${data.messageId}`);
+            }
         } else if (source && source.postMessage) {
             // フォールバック: 旧postMessage方式（openable: false のプラグインでは正常動作）
             this.logger.debug(`[respondTo] Using fallback postMessage (windowId not found)`);

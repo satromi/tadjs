@@ -3,6 +3,8 @@
  * アプリケーション全体の共通設定を管理
  */
 
+import { DEFAULT_FONT_SIZE } from './util.js';
+
 // グローバル設定オブジェクト
 window.TADjsConfig = {
     /**
@@ -54,13 +56,11 @@ window.TADjsConfig = {
      */
     ui: {
         // デフォルトのフォントサイズ（ポイント）
-        defaultFontSize: 14,
+        defaultFontSize: DEFAULT_FONT_SIZE,
         // デフォルトの線幅（ピクセル）
         defaultLineWidth: 1
     }
 };
-
-console.log('[Config] TADjs Desktop設定読み込み完了 (debug:', window.TADjsConfig.debug, ')');
 
 // ES6モジュールとしてエクスポート（Electron環境でのimport用）
 export const CONFIG = {

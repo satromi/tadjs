@@ -6,7 +6,10 @@ import {
     DEFAULT_BGCOL,
     DEFAULT_FONT_SIZE,
     DEFAULT_FONT_FAMILY,
-    DEFAULT_LINE_HEIGHT
+    DEFAULT_FONT_STYLE,
+    DEFAULT_FONT_WEIGHT,
+    DEFAULT_LINE_HEIGHT,
+    DEFAULT_VOBJ_HEIGHT
 } from './util.js';
 import { getLogger } from './logger.js';
 
@@ -75,7 +78,7 @@ export class VirtualObjectRenderer {
             return { width, height };
         }
 
-        return { width: 100, height: 30 };
+        return { width: 100, height: DEFAULT_VOBJ_HEIGHT };
     }
 
     /**
@@ -157,8 +160,8 @@ export class VirtualObjectRenderer {
             maxWidth: '100%',
             boxSizing: 'border-box',
             // 親要素からの文字修飾継承をリセット（仮身は常に通常表示）
-            fontStyle: 'normal',
-            fontWeight: 'normal',
+            fontStyle: DEFAULT_FONT_STYLE,
+            fontWeight: DEFAULT_FONT_WEIGHT,
             textDecoration: 'none',
             WebkitTextStroke: '0'
         });
@@ -312,12 +315,15 @@ export class VirtualObjectRenderer {
         // 閉じた仮身の最小高さを計算
         const lineHeight = DEFAULT_LINE_HEIGHT;
         const textHeight = Math.ceil(styles.chszPx * lineHeight);
+        const iconSize = Math.round(styles.chszPx * 1.0);
+        const contentHeight = Math.max(iconSize, textHeight);
         const borderWidth = 2; // 上下の border: 1px + 1px
         const paddingVertical = 8; // 上下の padding: 4px + 4px
-        const minClosedHeight = textHeight + paddingVertical + borderWidth;
+        // contentHeightを使用してtitleAreaと同じ高さになるようにする
+        const minClosedHeight = contentHeight + paddingVertical + borderWidth;
 
         // TADファイルから読み込まれた高さ
-        const tadHeight = (virtualObject.vobjbottom || 30) - (virtualObject.vobjtop || 0);
+        const tadHeight = (virtualObject.vobjbottom || DEFAULT_VOBJ_HEIGHT) - (virtualObject.vobjtop || 0);
 
         // 最小高さを適用
         const actualHeight = Math.max(minClosedHeight, tadHeight);
@@ -343,8 +349,7 @@ export class VirtualObjectRenderer {
         const showTitleArea = showPict || showName || showRole || showType || showUpdate;
 
         // タイトル領域の高さを計算（border-box なので border も含める）
-        const iconSize = Math.round(styles.chszPx * 1.0);
-        const contentHeight = Math.max(iconSize, textHeight);
+        // iconSize, contentHeightは上で計算済み
         const titleHeight = contentHeight + paddingVertical + borderWidth; // content + padding + border
 
         // タイトル領域
@@ -664,7 +669,7 @@ export class VirtualObjectRenderer {
             const titleTextSpan = document.createElement('span');
             titleTextSpan.style.color = styles.chcol;
             titleTextSpan.style.fontSize = styles.chszPx + 'px';
-            titleTextSpan.style.fontWeight = 'normal';
+            titleTextSpan.style.fontWeight = DEFAULT_FONT_WEIGHT;
             titleTextSpan.style.lineHeight = String(DEFAULT_LINE_HEIGHT);
             titleTextSpan.style.whiteSpace = 'nowrap';
             titleTextSpan.style.overflow = 'hidden';
@@ -1042,7 +1047,7 @@ export class VirtualObjectRenderer {
         }
 
         const vobjHeight = virtualObject.vobjbottom - virtualObject.vobjtop;
-        const chsz = parseFloat(virtualObject.chsz) || 14;
+        const chsz = parseFloat(virtualObject.chsz) || DEFAULT_FONT_SIZE;
 
         // 閉じた仮身の最小高さを計算（chszはポイント値なのでピクセルに変換）
         const chszPx = convertPtToPx(chsz);
@@ -1050,8 +1055,36 @@ export class VirtualObjectRenderer {
         const textHeight = Math.ceil(chszPx * lineHeight);
         const minClosedHeight = textHeight + 8;
 
-        // 閉じた仮身の高さより大きければ開いた仮身と判定
-        return vobjHeight > minClosedHeight;
+        // 閉じた仮身の高さより10px以上大きければ開いた仮身と判定
+        // （数ピクセルの誤差で表示が切り替わるのを防ぐ）
+        return vobjHeight > minClosedHeight + 10;
+    }
+
+    /**
+     * 閉じた仮身の最小高さを計算
+     * @param {number} chsz - 文字サイズ（ポイント）
+     * @returns {number} 最小高さ（ピクセル）
+     */
+    getMinClosedHeight(chsz = DEFAULT_FONT_SIZE) {
+        const chszPx = convertPtToPx(parseFloat(chsz) || DEFAULT_FONT_SIZE);
+        const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
+        const iconSize = Math.round(chszPx * 1.0);
+        const contentHeight = Math.max(iconSize, textHeight);
+        const paddingVertical = 8; // 上下の padding: 4px + 4px
+        // 注: TADファイルのheight属性はborderを含まない高さを表す
+        // DOM要素はbox-sizing: border-boxでborderを含むが、保存値は含まない
+        return contentHeight + paddingVertical;
+    }
+
+    /**
+     * 開いた仮身の最小高さを計算（リサイズ用閾値）
+     * @param {number} chsz - 文字サイズ（ポイント）
+     * @returns {number} 最小高さ（ピクセル）
+     */
+    getMinOpenHeight(chsz = DEFAULT_FONT_SIZE) {
+        const chszPx = convertPtToPx(parseFloat(chsz) || DEFAULT_FONT_SIZE);
+        const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
+        return textHeight + 30; // タイトルバー(+8) + 区切り線(+2) + コンテンツ最小(+20)
     }
 
     /**

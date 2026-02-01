@@ -90,13 +90,11 @@ class PluginManager {
                 const response = await fetch(`plugins/${dir}/plugin.json`);
                 if (response.ok) {
                     const pluginConfig = await response.json();
-                    console.log(`[PluginManager] plugin.json読み込み成功 (${dir}):`, pluginConfig);
                     // mainパスを補完
                     if (pluginConfig.main && !pluginConfig.main.startsWith('plugins/')) {
                         pluginConfig.main = `plugins/${dir}/${pluginConfig.main}`;
                     }
                     this.registerPlugin(pluginConfig);
-                    console.log(`[PluginManager] プラグイン登録完了: ${pluginConfig.name} (${pluginConfig.id}), type: ${pluginConfig.type}, basefile:`, pluginConfig.basefile);
                 } else {
                     console.warn(`[PluginManager] plugin.jsonが見つかりません: plugins/${dir}/plugin.json`);
                 }
@@ -335,7 +333,6 @@ class PluginManager {
             const existingWindow = this.findPluginWindow(pluginId);
             if (existingWindow) {
                 // 既存のウィンドウにフォーカスを移動
-                console.log(`[PluginManager] ${plugin.name} は既に起動しています。フォーカスを移動します。`);
                 if (window.tadjsDesktop) {
                     window.tadjsDesktop.setActiveWindow(existingWindow);
                 }
@@ -345,8 +342,6 @@ class PluginManager {
 
         // 小物アプリ（accessory）でbasefileが設定されている場合は読み込む
         if (plugin.type === 'accessory' && plugin.basefile && !fileData) {
-            console.log(`[PluginManager] 小物アプリ ${plugin.name} のbasefileを読み込みます:`, plugin.basefile);
-            console.log(`[PluginManager] plugin.main:`, plugin.main);
             try {
                 // 実身IDを取得（拡張子を除去）
                 const realId = plugin.basefile.json.replace(/\.json$/, '');
@@ -363,22 +358,14 @@ class PluginManager {
                         const jsonResult = await window.tadjsDesktop.loadDataFile(basePath, `${realId}.json`);
                         if (jsonResult.success) {
                             jsonData = JSON.parse(jsonResult.data);
-                            console.log(`[PluginManager] 保存されたJSONファイルを読み込み:`, jsonData.name);
-                            console.log(`[PluginManager] window設定:`, jsonData.window);
-                            console.log(`[PluginManager] pos:`, jsonData.window?.pos);
-                        } else {
-                            console.log(`[PluginManager] JSON読み込み失敗:`, jsonResult.error);
                         }
 
                         const xtadResult = await window.tadjsDesktop.loadDataFile(basePath, `${realId}_0.xtad`);
                         if (xtadResult.success) {
                             xmlData = xtadResult.data;
-                            console.log(`[PluginManager] 保存されたXTADファイルを読み込み: ${xmlData.length}文字`);
-                        } else {
-                            console.log(`[PluginManager] XTAD読み込み失敗:`, xtadResult.error);
                         }
                     } catch (error) {
-                        console.log(`[PluginManager] 保存されたファイル読み込みエラー:`, error);
+                        // 保存されたファイルの読み込みに失敗した場合は無視
                     }
                 }
 
@@ -386,23 +373,18 @@ class PluginManager {
                 if (!jsonData || !xmlData) {
                     // Windowsのバックスラッシュをスラッシュに変換
                     const normalizedMain = plugin.main.replace(/\\/g, '/');
-                    console.log(`[PluginManager] normalizedMain:`, normalizedMain);
 
                     // plugin.mainから相対パスを生成（例: plugins/system-config/index.html -> plugins/system-config）
                     let pluginDir = normalizedMain.substring(0, normalizedMain.lastIndexOf('/'));
-                    console.log(`[PluginManager] pluginDir (before):`, pluginDir);
 
                     // 絶対パスの場合は、pluginsディレクトリ以降を抽出
                     const pluginsIndex = pluginDir.indexOf('plugins/');
                     if (pluginsIndex !== -1) {
                         pluginDir = pluginDir.substring(pluginsIndex);
                     }
-                    console.log(`[PluginManager] pluginDir (after):`, pluginDir);
 
                     const jsonPath = `${pluginDir}/${plugin.basefile.json}`;
                     const xtadPath = `${pluginDir}/${plugin.basefile.xmltad}`;
-
-                    console.log(`[PluginManager] JSONパス: ${jsonPath}, XTADパス: ${xtadPath}`);
 
                     // JSONファイルを読み込む
                     if (!jsonData) {
@@ -411,7 +393,6 @@ class PluginManager {
                             throw new Error(`JSONファイルが見つかりません: ${jsonPath}`);
                         }
                         jsonData = await jsonResponse.json();
-                        console.log(`[PluginManager] デフォルトJSON読み込み完了:`, jsonData.name);
                     }
 
                     // XTADファイルを読み込む
@@ -421,7 +402,6 @@ class PluginManager {
                             throw new Error(`XTADファイルが見つかりません: ${xtadPath}`);
                         }
                         xmlData = await xtadResponse.text();
-                        console.log(`[PluginManager] デフォルトXTAD読み込み完了: ${xmlData.length}文字`);
                     }
                 }
 
@@ -434,9 +414,6 @@ class PluginManager {
                     xmlData: xmlData,
                     windowConfig: jsonData.window
                 };
-
-                console.log(`[PluginManager] 小物アプリのfileDataを作成:`, fileData);
-                console.log(`[PluginManager] windowConfig.pos:`, fileData.windowConfig?.pos);
             } catch (error) {
                 console.error(`[PluginManager] basefile読み込みエラー:`, error);
                 // エラーが発生してもウィンドウは開く（fileDataなし）
@@ -482,7 +459,6 @@ class PluginManager {
 
             // fileDataのwindowConfig設定を最優先で使用（実身のJSONファイル設定）
             if (fileData && fileData.windowConfig) {
-                console.log(`[PluginManager] 実身JSONファイルのwindow設定:`, fileData.windowConfig);
                 windowOptions = {
                     width: fileData.windowConfig.width || 800,
                     height: fileData.windowConfig.height || 600,
@@ -499,11 +475,9 @@ class PluginManager {
                     frame: fileData.windowConfig.frame !== undefined ? fileData.windowConfig.frame : true,
                     transparent: fileData.windowConfig.transparent !== undefined ? fileData.windowConfig.transparent : false
                 };
-                console.log(`[PluginManager] 適用するwindowOptions (実身設定):`, windowOptions);
             }
             // プラグインのwindow設定があれば使用
             else if (plugin.window) {
-                console.log(`[PluginManager] プラグイン "${plugin.name}" (${plugin.id}) のwindow設定:`, plugin.window);
                 windowOptions = {
                     width: plugin.window.width || 800,
                     height: plugin.window.height || 600,
@@ -520,7 +494,6 @@ class PluginManager {
                     frame: plugin.window.frame !== undefined ? plugin.window.frame : true,
                     transparent: plugin.window.transparent !== undefined ? plugin.window.transparent : false
                 };
-                console.log(`[PluginManager] 適用するwindowOptions (プラグイン設定):`, windowOptions);
             }
             // 小物プラグインでwindow設定がない場合はデフォルト
             else if (plugin.type === 'accessory') {
@@ -533,7 +506,7 @@ class PluginManager {
                 };
             }
             else {
-                console.log(`[PluginManager] プラグイン "${plugin.name}" (${plugin.id}) にはwindow設定がありません。デフォルトを使用します。`);
+                // window設定がない場合はデフォルトを使用
             }
 
             // openableフラグをチェック
@@ -541,7 +514,6 @@ class PluginManager {
 
             // openable: falseの場合は、ウィンドウを開かずにプラグインを実行
             if (!isOpenable) {
-                console.log(`[PluginManager] プラグイン "${plugin.name}" は openable: false のため、ウィンドウを開きません`);
 
                 // 非表示のiframeを作成してプラグインを実行
                 const hiddenIframeId = `plugin-iframe-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -556,8 +528,6 @@ class PluginManager {
 
                 // iframeが読み込まれたら、initメッセージを送信
                 hiddenIframe.addEventListener('load', () => {
-                    console.log(`[PluginManager] 非表示プラグイン読み込み完了: ${plugin.name}`);
-
                     const initData = {
                         type: 'init',
                         fileData: fileData || {},

@@ -1,12 +1,15 @@
 {
   "name": "TAD",
+  "relationship": [],
   "linktype": false,
   "makeDate": "2025-11-10T07:11:27.702Z",
   "updateDate": "2026-01-10T23:35:57.971Z",
   "accessDate": "2026-01-10T23:35:56.887Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TADjs User",
   "window": {

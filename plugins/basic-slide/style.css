@@ -41,6 +41,7 @@ body {
 
 /* エディタコンテナ（拡大縮小の対象） */
 #slide-wrapper .editor-container {
+    position: relative;  /* メディアコンテナのabsolute配置の基準 */
     background: #fff;
     overflow: hidden;
     box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
@@ -92,4 +93,31 @@ body {
 
 .color-item:hover {
     background: #e0e0e0;
+}
+
+/* ============================================================
+ * メディア要素の配置用スタイル
+ * ============================================================ */
+
+/* メディアコンテナ（エディタコンテナ内に配置） */
+.slide-media-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;  /* 下のコンテンツをクリック可能に */
+    z-index: 100;
+}
+
+/* メディア要素共通 */
+.slide-media-container video,
+.slide-media-container audio {
+    pointer-events: auto;  /* メディアコントロールは操作可能 */
+}
+
+/* 位置指定されたビデオ */
+.slide-media-container video.slide-media-positioned {
+    position: absolute;
+    object-fit: contain;
 }

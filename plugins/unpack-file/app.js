@@ -251,13 +251,16 @@ class UnpackFileManager extends window.PluginBase {
                 // JSONデータを生成（実身管理用セグメント構造）
                 const jsonData = {
                     name: realName,
+                    relationship: [],
                     linktype: false,
                     makeDate: now,
                     updateDate: now,
                     accessDate: now,
                     periodDate: null,
                     refCount: 1,
+                    recordCount: 1,
                     editable: true,
+                    deletable: false,
                     readable: true,
                     maker: "satromi",
                     window: {
@@ -370,12 +373,13 @@ class UnpackFileManager extends window.PluginBase {
         });
 
         // 確認ダイアログのメッセージを構築
+        // dragDataにはallFilesを含めなくなったため、インスタンス変数から取得
         const fileName = dragData.file.name || 'アーカイブ';
-        const fileCount = dragData.allFiles ? dragData.allFiles.length : 1;
+        const fileCount = this.archiveFiles ? this.archiveFiles.length : 1;
 
         let totalBytes = 0;
-        if (dragData.allFiles) {
-            dragData.allFiles.forEach(f => {
+        if (this.archiveFiles) {
+            this.archiveFiles.forEach(f => {
                 if (f.xmlData) {
                     totalBytes += f.xmlData.length;
                 }
@@ -573,22 +577,21 @@ class UnpackFileManager extends window.PluginBase {
     /**
      * ドラッグ開始処理
      */
-    async handleDragStart(event, file, index) {
-        // ドラッグデータを設定（ルート実身も含む）
+    handleDragStart(event, file, index) {
+        // ドラッグデータを設定
+        // rawData, allFiles, fileIdMapは巨大なデータになり得るため、dragDataには含めない
+        // これらはインスタンス変数(this.rawData, this.archiveFiles, this.fileIdMap)から取得可能
         const dragData = {
             type: 'archive-file-extract',
             source: 'unpack-file',
-            windowId: this.windowId, // unpack-fileのウィンドウIDを追加
+            windowId: this.windowId,
             file: {
                 fileId: file.fileId,
                 f_id: file.f_id,
                 name: file.name,
                 recordIndex: file.recordIndex,
-                xmlData: file.xmlData // XMLデータを追加
-            },
-            fileIdMap: Array.from(this.fileIdMap.entries()), // Map to Array for JSON
-            allFiles: this.archiveFiles, // 全ファイル情報を追加
-            rawData: this.rawData ? Array.from(this.rawData) : null // rawDataを配列として追加（JSON化のため）
+                xmlData: file.xmlData
+            }
         };
 
         event.dataTransfer.setData('text/plain', JSON.stringify(dragData));

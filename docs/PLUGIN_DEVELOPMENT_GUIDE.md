@@ -15,11 +15,12 @@ BTRON Desktopのプラグイン開発に関する総合ガイドです。
 7. [仮身/実身操作](#7-仮身実身操作)
 8. [ダイアログ表示](#8-ダイアログ表示)
 9. [ツールパネル（子ウィンドウ）](#9-ツールパネル子ウィンドウ)
-10. [実身のファイル構成と読み書き](#10-実身のファイル構成と読み書き)
-11. [参考実装](#11-参考実装)
-12. [トラブルシューティング](#12-トラブルシューティング)
-13. [CSSスタイルガイド](#13-cssスタイルガイド)
-14. [XTAD形式ガイド](#14-xtad形式ガイド)
+10. [複数ウィンドウアプリケーション](#10-複数ウィンドウアプリケーション)
+11. [実身のファイル構成と読み書き](#11-実身のファイル構成と読み書き)
+12. [参考実装](#12-参考実装)
+13. [トラブルシューティング](#13-トラブルシューティング)
+14. [CSSスタイルガイド](#14-cssスタイルガイド)
+15. [XTAD形式ガイド](#15-xtad形式ガイド)
 
 ---
 
@@ -174,10 +175,291 @@ document.addEventListener('DOMContentLoaded', () => {
 
 | タイプ | 説明 | 例 |
 |-------|------|-----|
-| `base` | 原紙タイプ（原紙箱に表示） | basic-text-editor, basic-figure-editor, basic-calc-editor |
+| `base` | 原紙タイプ（原紙箱に表示、新規実身を作成可能） | basic-text-editor, basic-figure-editor, tadjs-view |
 | `accessory` | 小物タイプ（アクセサリメニューから起動） | system-config, user-config, file-import |
-| `utility` | ユーティリティタイプ | trash-real-objects |
-| `genko` | 原稿タイプ | tadjs-view |
+| `utility` | ユーティリティタイプ（特殊用途） | trash-real-objects, real-object-search |
+
+
+#### 2.2.1 base（原紙タイプ）
+
+原紙箱に仮身として表示され、ドラッグ&ドロップで新規実身を作成できるプラグインです。
+
+**特徴**:
+- 原紙箱（base-file-manager）に仮身形式で表示される
+- ドラッグ&ドロップで新規実身を生成（テンプレートとして機能）
+- `plugin.json`に`basefile`セクションが必須
+- 実身のapplistに登録され、仮身から直接起動可能
+
+**plugin.jsonの必須プロパティ**:
+
+```json
+{
+  "type": "base",
+  "basefile": {
+    "json": "{UUID}.json",
+    "xmltad": "{UUID}_0.xtad",
+    "ico": "{UUID}.ico"
+  }
+}
+```
+
+**実例一覧**:
+
+| プラグインID | 表示名 | 用途 |
+|-------------|--------|------|
+| basic-text-editor | 基本文章編集 | リッチテキスト編集 |
+| basic-figure-editor | 基本図形編集 | Canvas描画・図形操作 |
+| basic-calc-editor | 基本表計算 | スプレッドシート・数式計算 |
+| basic-slide | 基本スライド | プレゼンテーション |
+| base-calendar | カレンダー | カレンダー表示 |
+| base-file-manager | 原紙箱管理 | 原紙の管理（特殊） |
+| virtual-object-list | 仮身一覧 | 仮身一覧表示 |
+| tadjs-view | TADjs表示 | TAD/BPKファイル表示 |
+| generative-realobject-test | 生成的実身テスト | Claude Code CLI実行 |
+
+#### 2.2.2 accessory（小物タイプ）
+
+アクセサリメニューから起動する設定・ツール系プラグインです。
+
+**特徴**:
+- メニューバーの「小物」メニューから起動
+- 独立したウィンドウで動作
+- `basefile`は任意（一部のプラグインは設定保存用に使用）
+- 新規実身の作成テンプレートとしては**機能しない**
+
+**basefile有無による違い**:
+
+| パターン | 例 | 説明 |
+|---------|-----|------|
+| basefile有り | system-config, user-config | 設定を実身として保存 |
+| basefile無し | file-import, realobject-config | 起動のみ、データ保存不要 |
+
+**plugin.json例**（basefile無し）:
+
+```json
+{
+  "id": "file-import",
+  "name": "ファイル取り込み",
+  "type": "accessory",
+  "main": "index.html",
+  "window": {
+    "width": 700,
+    "height": 500
+  }
+}
+```
+
+#### 2.2.3 utility（ユーティリティタイプ）
+
+特殊用途のプラグインで、原紙箱にもアクセサリメニューにも表示されない場合があります。
+
+**特徴**:
+- システム内部機能や特殊ツール
+- 独立した起動方法を持つ
+- basefileを持たないのが一般的
+
+**実例**:
+
+| プラグインID | 表示名 | 用途 |
+|-------------|--------|------|
+| trash-real-objects | ごみ箱 | refCount=0の屑実身管理 |
+| real-object-search | 実身/仮身検索 | 全文検索（複数ウィンドウ対応） |
+| realobject-config | 実身操作 | 実身メタデータ参照・編集 |
+
+### 2.3 原紙ファイル（basefile）の生成と管理
+
+#### 2.3.1 basefileのファイル構成
+
+baseタイプのプラグインは、3つのテンプレートファイルを`plugins/{pluginId}/`ディレクトリに配置します：
+
+| ファイル | 命名規則 | 役割 | 必須 |
+|---------|---------|------|:----:|
+| メタデータ | `{UUID}.json` | 実身の属性情報（名前、ウィンドウ設定、applist等） | ○ |
+| 文書データ | `{UUID}_0.xtad` | 原紙の初期コンテンツ（UTF-8 XML形式） | ○ |
+| アイコン | `{UUID}.ico` | 仮身表示・タイトルバー用アイコン | ○ |
+
+> **重要**: UUIDは`js/uuid-v7.js`で生成すること。
+
+#### 2.3.2 メタデータJSON（{UUID}.json）の構造
+
+```json
+{
+  "name": "プラグイン表示名",
+  "relationship": [],
+  "linktype": false,
+  "makeDate": "2025-01-28T00:00:00Z",
+  "updateDate": "2025-01-28T00:00:00Z",
+  "accessDate": "2025-01-28T00:00:00Z",
+  "periodDate": null,
+  "refCount": 1,
+  "recordCount": 1,
+  "editable": true,
+  "deletable": true,
+  "readable": true,
+  "maker": "TRON User",
+  "window": {
+    "pos": { "x": 100, "y": 100 },
+    "width": 800,
+    "height": 600,
+    "minWidth": 400,
+    "minHeight": 300,
+    "resizable": true,
+    "scrollable": true,
+    "maximize": false,
+    "maximizable": true,
+    "minimizable": true,
+    "closable": true,
+    "alwaysOnTop": false,
+    "wordWrap": true,
+    "skipTaskbar": false,
+    "frame": true,
+    "transparent": false,
+    "backgroundColor": "#ffffff"
+  },
+  "applist": {
+    "my-plugin": {
+      "name": "マイプラグイン",
+      "defaultOpen": true
+    },
+    "basic-text-editor": {
+      "name": "基本文章編集",
+      "defaultOpen": false
+    }
+  }
+}
+```
+
+**各フィールドの詳細**: 11.2章「メタデータJSON構造」にフィールド一覧表があります（11.2.1 トップレベルフィールド、11.2.2 windowオブジェクト、11.2.3 applistオブジェクト）。
+
+> **注意**: 上記JSONサンプルはbasefile（原紙テンプレート）用の典型的な構成です。`panel`/`panelpos`（道具パネル用）や`scrollPos`（スクロール位置保存用）はオプションで、必要なプラグインのみ設定します。
+
+**applistの重要ルール**:
+
+| プロパティ | 説明 |
+|-----------|------|
+| キー | プラグインID（フォルダ名と一致） |
+| `name` | メニュー表示名 |
+| `defaultOpen` | `true`: 仮身ダブルクリックで起動するデフォルトプラグイン |
+
+- **`defaultOpen: true`のプラグインは1つのみ**推奨
+- 複数プラグインを登録すると、コンテキストメニューの「開く」で選択可能
+- アイコンは`defaultOpen: true`のプラグインのbasefile.icoからコピーされる
+
+#### 2.3.3 初期コンテンツXTAD（{UUID}_0.xtad）の例
+
+**テキスト編集用**（空の段落）:
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<tad version="1.0" encoding="UTF-8" filename="基本文章編集">
+<document>
+<p></p>
+</document>
+</tad>
+```
+
+**図形編集用**（空のfigure領域）:
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<tad version="1.0" encoding="UTF-8" filename="画用紙">
+<figure>
+</figure>
+</tad>
+```
+
+#### 2.3.4 アイコン（{UUID}.ico）の仕様
+
+| 項目 | 仕様 |
+|------|------|
+| 形式 | MS Windows ICO形式（PNG埋め込み） |
+| サイズ | 32x32 pixels |
+| ビット深度 | 32 bits/pixel（RGBA） |
+| ファイルサイズ | 約4.2KB |
+
+**ICOファイルの構造**:
+
+```text
+[ICONDIR header: 6 bytes]
+  - Reserved: 0
+  - Image type: 1 (ICO)
+  - Number of images: 1
+
+[ICONDIRENTRY: 16 bytes]
+  - Width: 32, Height: 32
+  - Color palette: 0
+  - Color planes: 1
+  - Bits per pixel: 32
+  - Offset: 22
+
+[PNG image data]
+```
+
+> **ヒント**: 32x32のPNG画像を作成し、ICOヘッダを付与して生成できます。`scripts/create-folder-icon.js`にICOファイル生成の参考実装があります。
+
+#### 2.3.5 原紙箱からの新規実身作成フロー
+
+```text
+1. 原紙箱（base-file-manager）がプラグイン一覧を取得
+   ↓
+2. type="base" のプラグインを原紙として表示
+   ↓
+3. ユーザーが原紙の仮身をドラッグ&ドロップ
+   ↓
+4. ドロップ先で以下を実行:
+   a. 新しいUUID v7を生成（js/uuid-v7.js）
+   b. basefileのメタデータJSONをコピー（新UUIDで保存）
+   c. basefileのXTADをコピー（新UUIDで保存）
+   d. basefileのICOを新実身のアイコンとしてコピー
+   e. 日付を現在時刻に更新
+   ↓
+5. 新しい実身が作成され、仮身として挿入
+```
+
+**システム原紙 vs ユーザー原紙**:
+
+| 種類 | 保存場所 | 作成方法 | ドロップ時の処理 |
+|------|---------|---------|---------------|
+| システム原紙 | `plugins/{pluginId}/` | プラグイン開発者が作成 | メタデータ+XTAD+ICOを新UUIDでコピー |
+| ユーザー原紙 | `data/` | 実身を原紙箱にドロップ | `realObjectSystem.copyRealObject()`で再帰コピー |
+
+#### 2.3.6 新規baseプラグインの原紙作成手順
+
+1. **UUID v7を生成**: `js/uuid-v7.js`を使用（ブラウザコンソールまたはNode.jsで実行）
+2. **メタデータJSON作成**: 2.3.2の構造に従い`{UUID}.json`を作成
+3. **初期XTADコンテンツ作成**: プラグインに適した初期XMLを`{UUID}_0.xtad`として作成
+4. **アイコン作成**: 32x32のICOファイルを`{UUID}.ico`として作成
+5. **plugin.jsonに登録**: `basefile`セクションにファイル名を記載
+
+```json
+{
+  "id": "my-plugin",
+  "type": "base",
+  "basefile": {
+    "json": "{UUID}.json",
+    "xmltad": "{UUID}_0.xtad",
+    "ico": "{UUID}.ico"
+  }
+}
+```
+
+### 2.4 スクロールバーのランタイム制御
+
+原紙のメタデータJSONでは`scrollable: true`を設定し、プラグイン起動時に動的にスクロールバーを非表示にすることが可能です。
+
+```javascript
+// init時にスクロールバーを非表示にする例
+this.messageBus.on('init', (data) => {
+    this.onInit(data);
+    // スクロールバーを非表示にする（プレゼンテーションモードの副作用なし）
+    this.messageBus.send('set-scrollbar-visible', { visible: false });
+});
+```
+
+**`set-scrollbar-visible`メッセージ**:
+- `visible: true` - スクロールバーを表示（デフォルト）
+- `visible: false` - スクロールバーを非表示
+- プレゼンテーションモードとは異なり、**スクロールバーのみを制御**（タイトルバー・z-index・フルスクリーン化への副作用なし）
+
+**使用例**: generative-realobject-testプラグイン（ターミナルプラグインではスクロールバー不要だが、同じ実身を基本文章編集で開く場合はスクロールバー表示）
 
 ---
 
@@ -289,6 +571,10 @@ class MyPlugin extends window.PluginBase {
         // 共通イベントハンドラの設定
         this.setupWindowActivation();      // ウィンドウアクティベーション
         this.setupContextMenu();           // コンテキストメニュー
+        this.setupKeyboardShortcuts();     // キーボードショートカット
+        this.setupUIEventListeners();      // UIイベントリスナー
+        this.initScrollNotification();     // スクロール状態通知の初期化
+        this.setupDragAndDrop();           // ドラッグアンドドロップを設定
         this.setupVirtualObjectRightButtonHandlers(); // 仮身ドラッグ
 
         // MessageBusハンドラの設定
@@ -1417,6 +1703,160 @@ if (name) {
 }
 ```
 
+### 8.7 ダイアログシステムの内部アーキテクチャ
+
+ダイアログ表示は、プラグイン（iframe）→ MessageBus → tadjs-desktop.js → DialogManager という階層で処理されます。
+
+```text
+プラグイン（iframe）
+  │ this.showInputDialog('名前', '')
+  │   └── messageBus.sendWithCallback('show-input-dialog', ...)
+  ↓
+tadjs-desktop.js（MessageRouter）
+  │ 'show-input-dialog' → handleShowInputDialog()
+  │   └── showDialogAndRespond()
+  │       └── this.dialogManager.showInputDialog(...)
+  ↓
+DialogManager（js/dialog-manager.js）
+  │ showInputDialog()
+  │   ├── DOM操作: overlay表示、入力欄生成
+  │   ├── createDialogButtons(): ボタンDOM生成
+  │   ├── setupDialogKeyboardHandler(): Tab/Enterキー操作
+  │   ├── notifyDialogOpened(): 全プラグインに通知
+  │   └── Promise: ユーザー操作を待機
+  ↓
+ユーザー操作（ボタンクリック or Enter）
+  │
+  ↓
+DialogManager: resolve(result) → notifyDialogClosed()
+  │
+  ↓
+tadjs-desktop.js: プラグインにレスポンス送信
+  │
+  ↓
+プラグイン: sendWithCallback のコールバックが結果を受信
+```
+
+#### DialogManagerの主要内部メソッド
+
+| メソッド | 説明 |
+|---------|------|
+| `createDialogButtons(container, buttons, resolve, cleanup, defaultIdx)` | ボタンDOM生成・クリックハンドラ登録 |
+| `setupDialogKeyboardHandler(dialog, resolve, cleanup, defaultIdx)` | Tab/Enterキー操作設定 |
+| `notifyDialogOpened()` | `parent-dialog-opened`を全プラグインにブロードキャスト |
+| `notifyDialogClosed()` | `parent-dialog-closed`を全プラグインにブロードキャスト |
+
+#### ダイアログのキーボード操作
+
+| キー | 動作 |
+|------|------|
+| `Tab` | 次のボタンにフォーカス移動 |
+| `Shift+Tab` | 前のボタンにフォーカス移動 |
+| `Enter` | フォーカス中のボタンを確定 |
+| `Escape` | ダイアログをキャンセル（showInputDialogのみ） |
+
+#### ダイアログ表示中のプラグイン状態
+
+`parent-dialog-opened`/`parent-dialog-closed`メッセージにより、ダイアログ表示中はプラグイン側で`this.dialogVisible`が`true`に設定されます。これを利用してプラグイン側のUIを一時的に無効化できます。
+
+```javascript
+// PluginBase内部で自動処理される
+// プラグイン側でdialogVisible状態を利用する例:
+onWindowActivated() {
+    if (this.dialogVisible) {
+        return; // ダイアログ表示中はフォーカス復元しない
+    }
+    this.editor.focus();
+}
+```
+
+### 8.8 ダイアログウィンドウ（showCustomDialog高度な使用例）
+
+showCustomDialogは任意のHTMLを表示でき、フォームデータの自動収集機能があります。
+
+#### テキスト入力・ラジオボタン・チェックボックスの組み合わせ
+
+```javascript
+const result = await this.showCustomDialog({
+    title: '用紙設定',
+    dialogHtml: `
+        <div style="padding: 10px;">
+            <div style="margin-bottom: 10px;">
+                <label>用紙サイズ:</label>
+                <select id="paperSize">
+                    <option value="a4">A4</option>
+                    <option value="b5">B5</option>
+                    <option value="letter">レター</option>
+                </select>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <label>印刷方向:</label><br>
+                <label><input type="radio" name="orientation" value="portrait" checked> 縦</label>
+                <label><input type="radio" name="orientation" value="landscape"> 横</label>
+            </div>
+            <div>
+                <label><input type="checkbox" id="doubleSided"> 両面印刷</label>
+            </div>
+        </div>
+    `,
+    buttons: [
+        { label: 'キャンセル', value: 'cancel' },
+        { label: 'OK', value: 'ok' }
+    ],
+    defaultButton: 1,
+    width: 350,
+    radios: { orientation: 'orientation' }
+});
+
+if (result && result.button === 'ok') {
+    const paperSize = result.formData.paperSize;       // 'a4', 'b5', 'letter'
+    const orientation = result.formData.orientation;    // 'portrait', 'landscape'
+    const doubleSided = result.formData.doubleSided;    // true/false
+}
+```
+
+#### showCustomDialogの自動収集対象
+
+| 要素 | 収集方法 | formDataキー |
+|------|---------|-------------|
+| `<input id="xxx" type="text">` | `.value` | `xxx` |
+| `<input id="xxx" type="number">` | `.value` | `xxx` |
+| `<select id="xxx">` | `.value` | `xxx` |
+| `<input type="radio" name="yyy">` | checked要素の`.value` | `yyy` |
+| `<input id="xxx" type="checkbox">` | `.checked` | `xxx` |
+
+#### dialogHtml内でのスクリプト実行
+
+showCustomDialogのHTML内に`<script>`タグを含めると、DOM挿入後に自動実行されます。
+
+```javascript
+const result = await this.showCustomDialog({
+    title: 'フォント選択',
+    dialogHtml: `
+        <div id="font-list" style="max-height: 300px; overflow-y: auto;"></div>
+        <script>
+            // DOM挿入後に実行される
+            const list = document.getElementById('font-list');
+            fonts.forEach((font, i) => {
+                const item = document.createElement('div');
+                item.textContent = font.name;
+                item.onclick = () => {
+                    document.querySelectorAll('.font-item').forEach(el =>
+                        el.classList.remove('selected'));
+                    item.classList.add('selected');
+                };
+                list.appendChild(item);
+            });
+        </script>
+    `,
+    buttons: [
+        { label: 'キャンセル', value: 'cancel' },
+        { label: 'OK', value: 'ok' }
+    ],
+    defaultButton: 1
+});
+```
+
 ---
 
 ## 9. ツールパネル（子ウィンドウ）
@@ -1544,11 +1984,335 @@ const toolPanel = new ToolPanel();
 | 子→親 | `show-tool-panel-popup` | ポップアップメニュー表示要求 |
 | 子→親 | `start-drag-tool-panel` | ドラッグ開始通知 |
 
+### 9.5 ツールパネルからのポップアップ表示
+
+ツールパネル（子iframe）からポップアップを表示する場合、座標変換が必要です。
+
+```text
+ツールパネル（子iframe内座標）
+  │ ボタンをクリック → ポップアップ表示要求
+  │
+  ↓ 座標変換（iframe内座標 → 親ウィンドウ座標）
+エディタ（親iframe）
+  │ 'show-tool-panel-popup' メッセージ転送
+  │
+  ↓
+tadjs-desktop.js
+  │ handleShowToolPanelPopup() → ToolPanelManager
+  │
+  ↓
+ポップアップDOM表示（親ウィンドウ上）
+```
+
+**子iframe内での座標変換実装例**:
+
+```javascript
+showPopupInParent(buttonElement) {
+    const rect = buttonElement.getBoundingClientRect();
+    const iframeRect = window.frameElement.getBoundingClientRect();
+
+    // iframe内座標 → 親ウィンドウ座標に変換
+    const x = iframeRect.left + rect.left;
+    const y = iframeRect.top + rect.bottom + 5;
+
+    window.parent.postMessage({
+        type: 'show-tool-panel-popup',
+        popupType: 'color-palette',
+        htmlContent: '<div>パレットHTML...</div>',
+        x: x,
+        y: y
+    }, '*');
+}
+```
+
+### 9.6 ツールパネルの通信方式の注意点
+
+ツールパネルはPluginBaseを継承**しません**。以下の違いに注意してください：
+
+| 項目 | 通常のプラグイン | ツールパネル |
+|------|----------------|-------------|
+| 基底クラス | PluginBase | なし（独自実装） |
+| 通信方式 | MessageBus（自動初期化） | `window.parent.postMessage()`（手動） |
+| 初期化 | `init`メッセージ | `init-tool-panel`メッセージ |
+| メニュー | `getMenuDefinition()` | なし |
+| ダイアログ | `showInputDialog()`等 | 親への転送が必要 |
+
+ツールパネルから親のPluginBaseメソッド（ダイアログ表示等）を利用する場合は、`postMessage`で親エディタに要求を転送し、親が代わりに実行する必要があります。
+
 ---
 
-## 10. 実身のファイル構成と読み書き
+## 10. 複数ウィンドウアプリケーション
 
-### 10.1 実身ファイルの構成
+### 10.1 概要
+
+プラグインから別のウィンドウを開いて複数ウィンドウで動作するアプリケーションを実装できます。実身/仮身検索プラグイン（real-object-search）が代表的な実装例です。
+
+```text
+┌────────────────────────────────────────────────┐
+│           親ウィンドウ（tadjs-desktop.js）       │
+│                                                │
+│  ┌──────────────┐    ┌──────────────────┐      │
+│  │ 検索ウィンドウ │    │ 検索結果ウィンドウ │      │
+│  │(Plugin iframe)│    │ (別iframe)       │      │
+│  └──────────────┘    └──────────────────┘      │
+│       │                     ↑                  │
+│       │  createIframeWindow  │                  │
+│       └─────────────────────┘                  │
+│                                                │
+│       relay-to-window でウィンドウ間通信も可能    │
+└────────────────────────────────────────────────┘
+```
+
+### 10.2 別ウィンドウを開く（createIframeWindow）
+
+プラグインから`window.parent.tadjsDesktop.createIframeWindow()`を呼び出して、新しいウィンドウを開きます。
+
+```javascript
+openResultWindow(results) {
+    if (!window.parent || !window.parent.tadjsDesktop) {
+        logger.error('親ウィンドウが利用できません');
+        return;
+    }
+
+    // ウィンドウ位置を計算（自ウィンドウの右隣に配置）
+    let windowX = 100, windowY = 100;
+    const iframeElement = window.frameElement;
+    if (iframeElement) {
+        const windowElement = iframeElement.closest('.window');
+        if (windowElement) {
+            const rect = windowElement.getBoundingClientRect();
+            windowX = rect.right + 20;
+            windowY = rect.top;
+
+            // 画面外はみ出し調整
+            const screenWidth = window.parent.innerWidth || 1024;
+            if (windowX + 600 > screenWidth) {
+                windowX = Math.max(10, rect.left - 600 - 20);
+            }
+        }
+    }
+
+    // 新しいiframeウィンドウを開く
+    window.parent.tadjsDesktop.createIframeWindow(
+        'plugins/my-plugin/result/index.html',  // iframeのHTMLファイル
+        '検索結果',                               // ウィンドウタイトル
+        {                                         // initDataオブジェクト
+            searchResults: results,
+            parentWindowId: this.windowId
+        },
+        {                                         // ウィンドウオプション
+            width: 600,
+            height: 500,
+            resizable: true,
+            customScrollbar: true,
+            scrollable: true,
+            pos: { x: windowX, y: windowY }
+        }
+    );
+}
+```
+
+#### createIframeWindowの引数
+
+| 引数 | 型 | 説明 |
+|------|-----|------|
+| `iframeSrc` | string | iframeで表示するHTMLファイルのパス |
+| `title` | string | ウィンドウのタイトル |
+| `initData` | object | `init`メッセージで渡される初期データ |
+| `options` | object | ウィンドウオプション（幅、高さ、位置等） |
+
+#### ウィンドウオプション
+
+| プロパティ | 型 | デフォルト | 説明 |
+|-----------|-----|---------|------|
+| `width` | number | 600 | ウィンドウ幅 |
+| `height` | number | 500 | ウィンドウ高さ |
+| `resizable` | boolean | true | リサイズ可能か |
+| `customScrollbar` | boolean | true | カスタムスクロールバー使用 |
+| `scrollable` | boolean | true | スクロール可能か |
+| `pos` | object | null | 初期位置 `{ x, y }` |
+
+### 10.3 子ウィンドウ側の実装
+
+子ウィンドウもPluginBaseを継承して実装できます。`init`メッセージで親から渡されたデータを受け取ります。
+
+```javascript
+// result/app.js
+const logger = window.getLogger('SearchResult');
+
+class SearchResult extends window.PluginBase {
+    constructor() {
+        super('SearchResult');
+        this.searchResults = [];
+        this.parentWindowId = null;
+        this.init();
+    }
+
+    init() {
+        this.initializeCommonComponents('[SearchResult]');
+        this.setupMessageBusHandlers();
+        this.setupContextMenu();
+    }
+
+    setupMessageBusHandlers() {
+        this.setupCommonMessageBusHandlers();
+
+        this.messageBus.on('init', async (data) => {
+            this.onInit(data);
+
+            // 親から渡されたデータを取得
+            if (data.fileData) {
+                this.searchResults = data.fileData.searchResults || [];
+                this.parentWindowId = data.fileData.parentWindowId;
+            }
+
+            // 結果を描画
+            await this.renderResults();
+        });
+    }
+
+    async renderResults() {
+        const container = document.getElementById('pluginContent');
+        this.searchResults.forEach(result => {
+            const item = document.createElement('div');
+            item.textContent = result.name;
+            container.appendChild(item);
+        });
+
+        // スクロール状態を親に通知（カスタムスクロールバー連動）
+        this.notifyScrollChange();
+    }
+
+    getMenuDefinition() { return []; }
+    executeMenuAction(action) {}
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    window.searchResult = new SearchResult();
+});
+```
+
+### 10.4 プラグイン間通信（relay-to-window）
+
+異なるプラグインウィンドウ間でメッセージを送受信するには、`relay-to-window`メッセージを使用します。tadjs-desktop.jsがメッセージを中継します。
+
+```text
+プラグインA                 tadjs-desktop.js              プラグインB
+    │                           │                           │
+    │ relay-to-window           │                           │
+    │ (targetWindowId,          │                           │
+    │  messageType,             │                           │
+    │  messageData)             │                           │
+    │─────────────────────────→ │                           │
+    │                           │ sendToWindow()            │
+    │                           │ (targetWindowIdへ転送)     │
+    │                           │─────────────────────────→ │
+    │                           │                           │ messageType
+    │                           │                           │ で受信
+```
+
+**送信側（プラグインA）**:
+
+```javascript
+// 別のウィンドウにメッセージを送信
+this.messageBus.send('relay-to-window', {
+    targetWindowId: this.resultWindowId,  // 送信先ウィンドウID
+    messageType: 'update-results',        // 受信側で使うメッセージタイプ
+    messageData: {                        // 送信データ
+        newResults: updatedResults
+    }
+});
+```
+
+**受信側（プラグインB）**:
+
+```javascript
+// setupMessageBusHandlers() 内で受信ハンドラを登録
+this.messageBus.on('update-results', (data) => {
+    this.updateResultList(data.newResults);
+});
+```
+
+### 10.5 子ウィンドウのスクロールバー連携
+
+子ウィンドウでカスタムスクロールバーを使用する場合、スクロール状態を親ウィンドウに通知する必要があります。
+
+**PluginBaseのinitScrollNotification()を使用する場合**:
+
+```javascript
+init() {
+    this.initializeCommonComponents('[MY_RESULT]');
+    this.scrollContainerSelector = '#pluginContent';
+    this.initScrollNotification();
+    this.setupMessageBusHandlers();
+}
+```
+
+**手動でスクロール状態を通知する場合**:
+
+```javascript
+setupScrollbarIntegration() {
+    const container = document.getElementById('pluginContent');
+
+    const sendScrollState = () => {
+        this.messageBus.send('scroll-state-update', {
+            windowId: this.windowId,
+            scrollTop: container.scrollTop,
+            scrollHeight: container.scrollHeight,
+            clientHeight: container.clientHeight,
+            scrollLeft: container.scrollLeft,
+            scrollWidth: container.scrollWidth,
+            clientWidth: container.clientWidth
+        });
+    };
+
+    // 16ms(60fps)のスロットリングでスクロール状態を通知
+    let scrollTimer = null;
+    container.addEventListener('scroll', () => {
+        if (scrollTimer) return;
+        scrollTimer = setTimeout(() => {
+            scrollTimer = null;
+            sendScrollState();
+        }, 16);
+    });
+
+    // 初回通知
+    sendScrollState();
+}
+```
+
+### 10.6 子ウィンドウのディレクトリ構成
+
+複数ウィンドウアプリケーションの推奨ディレクトリ構成:
+
+```text
+plugins/
+└── my-plugin/
+    ├── plugin.json
+    ├── index.html          # メインウィンドウ
+    ├── app.js              # メインウィンドウのロジック
+    ├── style.css
+    └── result/             # 子ウィンドウ
+        ├── index.html      # 子ウィンドウのHTML
+        ├── app.js          # 子ウィンドウのロジック
+        └── style.css       # 子ウィンドウのスタイル
+```
+
+子ウィンドウの`index.html`でも、共通ライブラリは親ディレクトリからの相対パスで読み込みます:
+
+```html
+<!-- result/index.html -->
+<script src="../../../js/logger.js"></script>
+<script src="../../../js/util.js"></script>
+<script src="../../../js/message-bus-global.js"></script>
+<script src="../../../js/plugin-base-global.js"></script>
+```
+
+---
+
+## 11. 実身のファイル構成と読み書き
+
+### 11.1 実身ファイルの構成
 
 実身（Real Object）は以下のファイルで構成されます：
 
@@ -1561,19 +2325,23 @@ const toolPanel = new ToolPanel();
 | `{realId}_0_0.png` | ピクセルマップ画像（図形編集用） | - |
 
 **realId**: UUID v7形式（例: `019a1132-762b-7b02-ba2a-a918a9b37c39`）
+**需要:realIdは./js/uuid-v7.jsで絶対生成すること**
 
-### 10.2 メタデータJSON構造
+### 11.2 メタデータJSON構造
 
 ```json
 {
   "name": "基本文章編集",
+  "relationship": [],
   "linktype": false,
   "makeDate": "2025-11-09T00:00:00Z",
   "updateDate": "2025-11-09T00:00:00Z",
   "accessDate": "2025-11-09T00:00:00Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TRON User",
   "window": {
@@ -1589,6 +2357,7 @@ const toolPanel = new ToolPanel();
     "minimizable": true,
     "closable": true,
     "alwaysOnTop": false,
+    "wordWrap": true,
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
@@ -1607,9 +2376,78 @@ const toolPanel = new ToolPanel();
 }
 ```
 
-### 10.3 プラグインからの実身読み込み
+#### 11.2.1 トップレベルフィールド
 
-#### 10.3.1 init時の自動読み込み
+| フィールド | 型 | 必須 | デフォルト値 | 説明 |
+|-----------|-----|:---:|------------|------|
+| `name` | string | ○ | `"無題"` | 実身の表示名称 |
+| `relationship` | array | ○ | `[]` | 実身の続柄タグ配列。続柄設定で`[タグ]`形式で入力すると実身用として括弧を除去し保存（例: `["会議", "重要"]`）。`タグ`形式（括弧なし）は仮身用でlink要素側に保存 |
+| `linktype` | boolean | ○ | `false` | リンク実身フラグ。`true`の場合リンク型実身 |
+| `makeDate` | string | ○ | 現在時刻 | 作成日時（ISO 8601形式、例: `"2025-01-28T00:00:00Z"`） |
+| `updateDate` | string | ○ | 現在時刻 | 更新日時。メタデータまたはXTAD変更時に自動更新 |
+| `accessDate` | string | ○ | 現在時刻 | アクセス日時。実身を開いた時に更新される |
+| `periodDate` | string\|null | ○ | `null` | 期限日。未設定時は`null` |
+| `refCount` | number | ○ | `1` | 参照カウント。この実身を指す仮身の数。0になると削除対象候補 |
+| `recordCount` | number | ○ | `1` | レコード数。`{realId}_0.xtad`, `{realId}_1.xtad`...のファイル数と一致 |
+| `editable` | boolean | ○ | `true` | 編集可能フラグ |
+| `deletable` | boolean | ○ | `true` | 削除可能フラグ |
+| `readable` | boolean | ○ | `true` | 読み込み可能フラグ |
+| `maker` | string | ○ | `"TRON User"` | 作成者/最終更新者名。更新時にcurrentUserで上書きされる |
+| `window` | object | ○ | — | ウィンドウ設定（11.2.2参照） |
+| `applist` | object | ○ | — | 起動可能プラグイン一覧（11.2.3参照） |
+
+#### 11.2.2 windowオブジェクト
+
+| フィールド | 型 | 必須 | デフォルト値 | 説明 |
+|-----------|-----|:---:|------------|------|
+| `pos` | object | ○ | `{"x":100,"y":100}` | ウィンドウ位置 |
+| `pos.x` | number | ○ | `100` | X座標（ピクセル） |
+| `pos.y` | number | ○ | `100` | Y座標（ピクセル） |
+| `width` | number | ○ | `400` | ウィンドウ幅（ピクセル） |
+| `height` | number | ○ | `200` | ウィンドウ高さ（ピクセル） |
+| `minWidth` | number | ○ | `200` | リサイズ時の最小幅（ピクセル） |
+| `minHeight` | number | ○ | `200` | リサイズ時の最小高さ（ピクセル） |
+| `resizable` | boolean | ○ | `true` | リサイズ可能フラグ |
+| `scrollable` | boolean | ○ | `true` | スクロールバー表示フラグ |
+| `maximize` | boolean | ○ | `false` | 最大化状態フラグ（ランタイムで更新） |
+| `maximizable` | boolean | △ | `true` | 最大化ボタンの表示/非表示 |
+| `minimizable` | boolean | △ | `true` | 最小化ボタンの表示/非表示 |
+| `closable` | boolean | △ | `true` | 閉じるボタンの表示/非表示 |
+| `alwaysOnTop` | boolean | △ | `false` | 常に最前面に表示 |
+| `wordWrap` | boolean | △ | — | テキストの折り返し設定 |
+| `skipTaskbar` | boolean | △ | `false` | タスクバーに表示しない |
+| `frame` | boolean | ○ | `true` | ウィンドウフレーム（タイトルバー）の表示 |
+| `transparent` | boolean | ○ | `false` | ウィンドウ背景の透明化 |
+| `backgroundColor` | string | ○ | `"#ffffff"` | 背景色（16進カラーコード） |
+| `panel` | boolean | △ | — | 道具パネル表示フラグ（図形編集等で使用） |
+| `panelpos` | object | △ | `{"x":100,"y":90}` | 道具パネルの位置（`panel: true`時のみ有効） |
+| `panelpos.x` | number | — | `100` | パネルX座標 |
+| `panelpos.y` | number | — | `90` | パネルY座標 |
+| `scrollPos` | object | △ | `{"x":0,"y":0}` | スクロール位置（ランタイムで更新・復元） |
+| `scrollPos.x` | number | — | `0` | 横スクロール位置 |
+| `scrollPos.y` | number | — | `0` | 縦スクロール位置 |
+
+> **凡例**: ○=必須（basefileに含めるべき）、△=省略可能（省略時デフォルト値が適用）
+>
+> **注意**: `panel`/`panelpos`は道具パネルを持つプラグイン（basic-figure-editor等）でのみ使用します。`scrollPos`はランタイムでスクロール位置を保存・復元するためのフィールドで、basefile作成時には通常省略します。
+
+#### 11.2.3 applistオブジェクト
+
+`applist`は、この実身を開くことができるプラグインの一覧です。キーがプラグインID、値がプラグイン設定です。
+
+| プロパティ | 型 | 説明 |
+|-----------|-----|------|
+| キー | string | プラグインID（`plugins/`配下のフォルダ名と一致） |
+| `name` | string | メニューに表示されるプラグイン名 |
+| `defaultOpen` | boolean | `true`: 仮身ダブルクリック時にデフォルトで起動するプラグイン |
+
+- **`defaultOpen: true`は1つのみ**推奨
+- 複数プラグインを登録するとコンテキストメニューの「開く」で選択可能
+- アイコンは`defaultOpen: true`のプラグインのbasefile ICOからコピーされる
+
+### 11.3 プラグインからの実身読み込み
+
+#### 11.3.1 init時の自動読み込み
 
 プラグインは`init`メッセージで実身データを受け取ります：
 
@@ -1635,7 +2473,7 @@ this.messageBus.on('init', (data) => {
 });
 ```
 
-#### 10.3.2 loadRealObjectDataメソッドによる読み込み
+#### 11.3.2 loadRealObjectDataメソッドによる読み込み
 
 ```javascript
 // PluginBaseのメソッドを使用
@@ -1643,9 +2481,9 @@ const realObject = await this.loadRealObjectData(realId);
 // realObject = { metadata, records, applist }
 ```
 
-### 10.4 プラグインからの実身保存
+### 11.4 プラグインからの実身保存
 
-#### 10.4.1 xml-data-changedメッセージ（簡易保存）
+#### 11.4.1 xml-data-changedメッセージ（簡易保存）
 
 XTADコンテンツのみを更新する場合：
 
@@ -1656,7 +2494,7 @@ this.messageBus.send('xml-data-changed', {
 });
 ```
 
-### 10.5 link_idから実身IDを抽出
+### 11.5 link_idから実身IDを抽出
 
 仮身の`link_id`（例: `019a6c96-e262-7dfd-a3bc-1e85d495d60d_0.xtad`）から実身IDを抽出：
 
@@ -1668,9 +2506,9 @@ const realId = this.extractRealId(linkId);
 
 ---
 
-## 11. 参考実装
+## 12. 参考実装
 
-### 11.1 プラグイン別特徴
+### 12.1 プラグイン別特徴
 
 | プラグイン | 主な特徴 |
 |-----------|---------|
@@ -1680,7 +2518,7 @@ const realId = this.extractRealId(linkId);
 | **virtual-object-list** | 仮身一覧表示、ドラッグ&ドロップ |
 | **base-file-manager** | 原紙箱、ファイルコピー |
 
-### 11.2 実装パターン別索引
+### 12.2 実装パターン別索引
 
 | 実装パターン | 参考プラグイン |
 |-------------|---------------|
@@ -1693,9 +2531,9 @@ const realId = this.extractRealId(linkId);
 
 ---
 
-## 12. トラブルシューティング
+## 13. トラブルシューティング
 
-### 12.1 タイムアウトエラー
+### 13.1 タイムアウトエラー
 
 ```text
 Callback timeout for messageId: show-input-dialog_xxx (30000ms)
@@ -1717,7 +2555,7 @@ if (name) {
 }
 ```
 
-### 12.2 ダイアログの戻り値エラー
+### 13.2 ダイアログの戻り値エラー
 
 ```text
 TypeError: Cannot read property 'value' of undefined
@@ -1736,7 +2574,7 @@ const name = result.value;
 const name = await this.showInputDialog('名前', '');
 ```
 
-### 12.3 仮身コピーが動作しない
+### 13.3 仮身コピーが動作しない
 
 **原因**: `shouldMove`の判定が誤っている
 
@@ -1750,7 +2588,7 @@ const shouldMove = (effectiveMode === 'move') || !dragData?.isDuplicateDrag;
 const shouldMove = effectiveMode === 'move';
 ```
 
-### 12.4 クロスウィンドウドロップで元が消えない
+### 13.4 クロスウィンドウドロップで元が消えない
 
 **原因**: `onDeleteSourceVirtualObject`が実装されていない
 
@@ -1767,7 +2605,7 @@ onDeleteSourceVirtualObject(data) {
 }
 ```
 
-### 12.5 カーソル位置がリセットされる
+### 13.5 カーソル位置がリセットされる
 
 **原因**: ウィンドウアクティベーション時に`focus()`でスクロール位置がリセットされる
 
@@ -1782,7 +2620,7 @@ onWindowActivated() {
 }
 ```
 
-### 12.6 デバッグ方法
+### 13.6 デバッグ方法
 
 1. **開発者ツールを開く**: `Ctrl+Shift+I`
 
@@ -1853,9 +2691,9 @@ onWindowActivated() {
 
 ---
 
-## 13. CSSスタイルガイド
+## 14. CSSスタイルガイド
 
-### 13.1 ファイル構成と役割
+### 14.1 ファイル構成と役割
 
 プラグインのCSSは以下の2層構造で管理されます：
 
@@ -1871,7 +2709,7 @@ onWindowActivated() {
 <link rel="stylesheet" href="style.css">                 <!-- 後に読み込み -->
 ```
 
-### 13.2 共通スタイルクラス
+### 14.2 共通スタイルクラス
 
 `tadjs-desktop.css` で定義される共通クラス：
 
@@ -1884,7 +2722,7 @@ onWindowActivated() {
 | `.scroll-track` | スクロールバーのトラック |
 | `.scroll-thumb` | スクロールバーのツマミ |
 
-### 13.3 CSS詳細度の注意点
+### 14.3 CSS詳細度の注意点
 
 **重要**: `tadjs-desktop.css` にプラグイン固有セレクタ（例: `.system-config-dialog .tab-content`）が存在する場合、プラグインの `style.css` で上書きするには**同等以上の詳細度**が必要です。
 
@@ -1916,7 +2754,7 @@ onWindowActivated() {
 }
 ```
 
-### 13.4 BTRONカラーパレット
+### 14.4 BTRONカラーパレット
 
 BTRONスタイルで使用する標準色：
 
@@ -1931,7 +2769,103 @@ BTRONスタイルで使用する標準色：
 
 **注意**: `#f0f0f0` は旧スタイルとの互換のため残っていますが、新規実装では `#dedede` を使用してください。
 
-### 13.5 ダイアログ系プラグインの共通パターン
+上記のカラーパレットに加え、`js/util.js`にはUI色定数がエクスポートされています。CSS内で直接色コードを書く場合は上記パレットを参照し、JavaScript内で色を扱う場合は`js/util.js`の定数を使用してください（14.5参照）。
+
+### 14.5 共通定数リファレンス（js/util.js）
+
+`js/util.js`はプラグインおよびシステム全体で使用する共通定数と関数をエクスポートしています。マジックナンバーを避け、必ずこれらの定数を使用してください。
+
+```javascript
+// プラグインでの使用例（index.htmlでグローバル登録済み）
+import { DIALOG_TIMEOUT_MS, DEFAULT_BGCOL, DEFAULT_FONT_SIZE } from '../../js/util.js';
+```
+
+#### 14.5.1 タイムアウト定数
+
+| 定数名 | 値 | 用途 |
+|--------|-----|------|
+| `DIALOG_TIMEOUT_MS` | 10000 (10秒) | ダイアログのタイムアウト（保存確認、入力、メッセージ等） |
+| `DEFAULT_TIMEOUT_MS` | 5000 (5秒) | 一般操作のタイムアウト（clipboard-data, real-object-loaded等） |
+| `LONG_OPERATION_TIMEOUT_MS` | 30000 (30秒) | 長時間操作のタイムアウト（window-opened, save-as等） |
+| `ICON_LOAD_TIMEOUT_MS` | 3000 (3秒) | アイコン読み込みのタイムアウト |
+| `MENU_FETCH_TIMEOUT_MS` | 1000 (1秒) | プラグインからのメニュー定義取得 |
+| `LOAD_DATA_FILE_TIMEOUT_MS` | 10000 (10秒) | データファイル読み込みのタイムアウト |
+| `ERROR_CHECK_TIMEOUT_MS` | 100 (0.1秒) | エラーレスポンスの即座チェック |
+
+#### 14.5.2 UI遅延定数
+
+| 定数名 | 値 | 用途 |
+|--------|-----|------|
+| `UI_UPDATE_DELAY_MS` | 100 (0.1秒) | DOM操作後のレイアウト更新待ち |
+| `QUICK_UI_UPDATE_DELAY_MS` | 10 (0.01秒) | 即座のレンダリング更新待ち |
+| `ICON_SET_DELAY_MS` | 200 (0.2秒) | ウィンドウ作成後のアイコン設定待ち |
+| `SCROLL_UPDATE_DELAY_MS` | 300 (0.3秒) | リサイズ後のスクロールバー更新待ち |
+| `CLICK_DEBOUNCE_DELAY_MS` | 250 (0.25秒) | シングル/ダブルクリック判定待機 |
+| `DOUBLE_CLICK_TIME_MS` | 1000 (1秒) | ダブルクリック判定時間 |
+| `CONTEXT_MENU_FLAG_CLEAR_MS` | 100 (0.1秒) | コンテキストメニューフラグクリア遅延 |
+| `RETRY_DELAY_MS` | 50 (0.05秒) | 要素検出リトライ遅延 |
+| `WINDOW_CLOSE_CLEANUP_DELAY_MS` | 150 (0.15秒) | ウィンドウ削除後のクリーンアップ待ち |
+| `ANIMATION_COMPLETE_DELAY_MS` | 250 (0.25秒) | CSSアニメーション完了待ち |
+
+#### 14.5.3 ステータスバー定数
+
+| 定数名 | 値 | 用途 |
+|--------|-----|------|
+| `STATUS_UPDATE_INTERVAL_MS` | 1000 (1秒) | ステータスバー時刻表示の更新間隔 |
+| `STATUS_MESSAGE_DURATION_MS` | 5000 (5秒) | 一時的ステータスメッセージの表示時間 |
+
+#### 14.5.4 デフォルト色定数
+
+| 定数名 | 値 | 用途 |
+|--------|-----|------|
+| `DEFAULT_FRCOL` | `#000000` | デフォルト枠線色（黒） |
+| `DEFAULT_CHCOL` | `#000000` | デフォルト文字色（黒） |
+| `DEFAULT_TBCOL` | `#ffffff` | デフォルトタイトルバー背景色（白） |
+| `DEFAULT_BGCOL` | `#ffffff` | デフォルト背景色（白） |
+
+#### 14.5.5 UI色定数
+
+| 定数名 | 値 | 用途 |
+|--------|-----|------|
+| `DESKTOP_BG_COLOR` | `#c0c0c0` | デスクトップ背景色 |
+| `SCROLLBAR_THUMB_COLOR` | `#d0d0d0` | スクロールバーのサム色 |
+| `HOVER_BG_COLOR` | `#e0e0e0` | ホバー時の背景色 |
+| `DIALOG_BG_COLOR` | `#f0f0f0` | ダイアログ背景色 |
+| `BORDER_COLOR` | `#cccccc` | ボーダー色 |
+| `GRAY_COLOR` | `#808080` | 無効状態・非アクティブ表示色 |
+| `SUNDAY_COLOR` | `#ee0000` | 日曜・祝日用の赤色 |
+| `SATURDAY_COLOR` | `#0000cc` | 土曜日用の青色 |
+| `TODAY_CELL_COLOR` | `#ffffd0` | 今日のセル背景色（カレンダー用） |
+| `SELECTION_COLOR` | `#000080` | 選択枠色（ネイビー） |
+| `CALENDAR_VOBJ_BGCOL` | `#e8f4ff` | カレンダー仮身の背景色 |
+| `CALENDAR_VOBJ_FRCOL` | `#b0c0d0` | カレンダー仮身のボーダー色 |
+| `VOBJ_SELECTION_COLOR` | `#007bff` | 仮身選択時の枠色 |
+| `LIST_SELECTED_BG_COLOR` | `#e8f4f8` | リスト選択時の背景色 |
+| `PREVIEW_BORDER_COLOR` | `#0078d4` | プレビュー枠線色 |
+
+#### 14.5.6 レイアウト・フォント定数
+
+| 定数名 | 値 | 用途 |
+|--------|-----|------|
+| `DEFAULT_LINE_HEIGHT` | 1.2 | デフォルト行の高さ（line-height） |
+| `DEFAULT_FONT_SIZE` | 14 | デフォルトフォントサイズ（ピクセル） |
+| `DEFAULT_FONT_FAMILY` | `'Noto Sans JP', sans-serif` | デフォルトフォントファミリー |
+| `DEFAULT_FONT_STYLE` | `normal` | デフォルトフォントスタイル |
+| `DEFAULT_FONT_WEIGHT` | `400` | デフォルトフォントウェイト |
+| `DEFAULT_FONT_STRETCH` | `normal` | デフォルトフォントストレッチ |
+| `DEFAULT_LETTER_SPACING` | `0` | デフォルト文字間隔 |
+| `DEFAULT_INPUT_WIDTH` | 30 | デフォルト入力欄幅（文字数） |
+| `VOBJ_BORDER_WIDTH` | 2 | 仮身枠ボーダー幅（上下合計ピクセル） |
+
+#### 14.5.7 ウィンドウ・スクロールバー定数
+
+| 定数名 | 値 | 用途 |
+|--------|-----|------|
+| `MIN_WINDOW_WIDTH` | 200 | ウィンドウの最小幅（ピクセル） |
+| `MIN_WINDOW_HEIGHT` | 150 | ウィンドウの最小高さ（ピクセル） |
+| `MIN_SCROLLBAR_THUMB_SIZE` | 20 | スクロールバーサムの最小サイズ（ピクセル） |
+
+### 14.6 ダイアログ系プラグインの共通パターン
 
 accessory タイプのプラグイン（設定ダイアログ等）では、以下のパターンを推奨：
 
@@ -2003,7 +2937,7 @@ accessory タイプのプラグイン（設定ダイアログ等）では、以�
 }
 ```
 
-### 13.6 カスタムスクロールバー使用時の注意
+### 14.7 カスタムスクロールバー使用時の注意
 
 `initCustomScrollbar()` を使用する場合、スクロールコンテナとその子要素に明示的な背景色を設定してください：
 
@@ -2029,7 +2963,7 @@ accessory タイプのプラグイン（設定ダイアログ等）では、以�
 }
 ```
 
-### 13.7 よくある問題と解決策
+### 14.8 よくある問題と解決策
 
 #### スクロール時に背景色が変わる
 
@@ -2077,13 +3011,13 @@ accessory タイプのプラグイン（設定ダイアログ等）では、以�
 
 ---
 
-## 14. XTAD形式ガイド
+## 15. XTAD形式ガイド
 
-### 14.1 概要
+### 15.1 概要
 
 XTAD（XML TAD）はTAD形式のXML表現です。プラグインがXTADを出力する際は、以下のルールを遵守してください。
 
-### 14.2 tadタグのfilename属性
+### 15.2 tadタグのfilename属性
 
 **重要**: `<tad>` タグの `filename` 属性には**実身名（displayName）**を使用します。
 
@@ -2120,7 +3054,7 @@ this.fileName = data.fileData.fileName || data.fileData.displayName || 'デフ�
 | `name` | 実身名 | `"基本表計算"` |
 | `realObject.name` | JSON内の実身名 | `"基本表計算"` |
 
-### 14.3 figureタグ（図形データ）
+### 15.3 figureタグ（図形データ）
 
 図形データを含む `<figure>` タグは属性なしで出力します。
 
@@ -2137,7 +3071,7 @@ this.fileName = data.fileData.fileName || data.fileData.displayName || 'デフ�
 <figure x="0" y="0" w="400" h="200">
 ```
 
-### 14.4 figView / figDraw タグ
+### 15.4 figView / figDraw タグ
 
 座標は `top`, `left`, `right`, `bottom` 形式を使用します。
 
@@ -2162,7 +3096,7 @@ const bottom = Math.round(y + height);
 xtad += `<figView top="${top}" left="${left}" right="${right}" bottom="${bottom}"/>`;
 ```
 
-### 14.5 figScale タグ
+### 15.5 figScale タグ
 
 スケールは `hunit`, `vunit` 属性を使用し、値は `"0.1"` を標準とします。
 
@@ -2174,7 +3108,7 @@ xtad += `<figView top="${top}" left="${left}" right="${right}" bottom="${bottom}
 <figScale x="100" y="100"/>
 ```
 
-### 14.6 XTAD出力の実装例
+### 15.6 XTAD出力の実装例
 
 ```javascript
 generateXtad() {
@@ -2205,7 +3139,7 @@ generateXtad() {
 }
 ```
 
-### 14.7 document要素（文字枠）
+### 15.7 document要素（文字枠）
 
 文字枠は `<document>` タグ内に各種 `<text>` タグを含める形式で表現します。
 
@@ -2274,7 +3208,7 @@ case 'document':
     break;
 ```
 
-### 14.8 text要素のalign属性
+### 15.8 text要素のalign属性
 
 テキストの配置（左揃え、中央揃え、右揃え）は `<text align="..."/>` で指定します。
 
@@ -2331,7 +3265,7 @@ if (textAlign === 'center') {
 this.ctx.fillText(line, lineX, lineY);
 ```
 
-### 14.9 group要素内のdocument/text要素
+### 15.9 group要素内のdocument/text要素
 
 グループ内にネストされたdocument/text要素も正しくパースする必要があります。
 
@@ -2384,7 +3318,7 @@ parseGroupElement(elem) {
 }
 ```
 
-### 14.10 calc-editorからのグラフコピー形式
+### 15.10 calc-editorからのグラフコピー形式
 
 基本表計算プラグインからグラフをコピーする際、X軸ラベル等はdocument形式で生成されます。
 
@@ -2411,7 +3345,7 @@ shapes.push({
 
 これにより、グラフのラベルが保存後も正しく表示されます。
 
-### 14.11 XTAD形式チェックリスト
+### 15.11 XTAD形式チェックリスト
 
 プラグインでXTAD出力を実装する際は以下を確認：
 

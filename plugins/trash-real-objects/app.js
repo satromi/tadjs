@@ -419,7 +419,7 @@ class TrashRealObjectsApp extends window.PluginBase {
             vobjleft: 0,
             vobjtop: 0,
             vobjright: 100,
-            vobjbottom: 30
+            vobjbottom: DEFAULT_VOBJ_HEIGHT
         };
         this.setClipboard(vobjData);
 
@@ -454,7 +454,7 @@ class TrashRealObjectsApp extends window.PluginBase {
             vobjleft: 0,
             vobjtop: 0,
             vobjright: 100,
-            vobjbottom: 30
+            vobjbottom: DEFAULT_VOBJ_HEIGHT
         };
         this.setClipboard(vobjData);
 

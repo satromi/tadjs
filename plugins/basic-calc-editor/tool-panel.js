@@ -20,9 +20,9 @@ class CalcToolPanel {
             strikethrough: false,
             superscript: false,
             subscript: false,
-            textColor: '#000000',
-            bgColor: '#ffffff',
-            borderColor: '#000000',
+            textColor: typeof DEFAULT_CHCOL !== 'undefined' ? DEFAULT_CHCOL : '#000000',
+            bgColor: typeof DEFAULT_BGCOL !== 'undefined' ? DEFAULT_BGCOL : '#ffffff',
+            borderColor: typeof DEFAULT_FRCOL !== 'undefined' ? DEFAULT_FRCOL : '#000000',
             align: 'left',
             vAlign: 'middle',
             fontFamily: 'MS Gothic',
@@ -420,12 +420,12 @@ class CalcToolPanel {
         }
 
         // 文字色（デフォルトは黒）
-        const textColor = style.color || '#000000';
+        const textColor = style.color || DEFAULT_CHCOL;
         this.formatState.textColor = textColor;
         document.getElementById('textColorPicker').value = textColor;
 
         // 背景色（デフォルトは白）
-        const bgColor = style.backgroundColor || '#ffffff';
+        const bgColor = style.backgroundColor || DEFAULT_BGCOL;
         this.formatState.bgColor = bgColor;
         document.getElementById('bgColorPicker').value = bgColor;
 

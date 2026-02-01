@@ -1,11 +1,13 @@
 {
   "name": "TADjs表示",
+  "relationship": [],
   "linktype": false,
   "makeDate": "2025-12-21T00:00:00Z",
   "updateDate": "2025-12-21T00:00:00Z",
   "accessDate": "2025-12-21T00:00:00Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": false,
   "readable": true,
   "maker": "TRON User",

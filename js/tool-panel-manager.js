@@ -5,7 +5,7 @@
  */
 
 import { getLogger } from './logger.js';
-import { UI_UPDATE_DELAY_MS, HOVER_BG_COLOR } from './util.js';
+import { UI_UPDATE_DELAY_MS, HOVER_BG_COLOR, DESKTOP_BG_COLOR, DEFAULT_TBCOL } from './util.js';
 
 const logger = getLogger('ToolPanelManager');
 
@@ -278,8 +278,8 @@ export class ToolPanelManager {
         popup.id = 'tool-panel-popup';
         popup.style.cssText = `
             position: fixed;
-            background: #c0c0c0;
-            border: 2px outset #ffffff;
+            background: ${DESKTOP_BG_COLOR};
+            border: 2px outset ${DEFAULT_TBCOL};
             box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
             padding: 8px;
             z-index: 10000;

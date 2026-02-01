@@ -1,11 +1,15 @@
 {
   "name": "画用紙",
+  "relationship": [],
+  "linktype": false,
   "makeDate": "2025-11-09T00:00:00Z",
   "updateDate": "2025-11-09T00:00:00Z",
   "accessDate": "2025-11-09T00:00:00Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TRON User",
   "window": {

@@ -8789,6 +8789,11 @@ function tadRawArray(raw){
         //const lastEntry = xmlBuffer[xmlBuffer.length - 1];
         if (isXmlTad) {
             logger.debug('Adding closing </document> tag to xmlBuffer');
+            // 開いている段落タグがあれば閉じる
+            if (isParagraphOpen) {
+                xmlBuffer.push('</p>\r\n');
+                isParagraphOpen = false;
+            }
             xmlBuffer.push('</document>\r\n');
         }
         if (isXmlFig) {

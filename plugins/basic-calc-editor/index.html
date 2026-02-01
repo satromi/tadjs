@@ -53,7 +53,10 @@
     <script type="module">
         import {
             convertPtToPx, rgbToHex, hexToRgb, invertColor,
-            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS,
+            DEFAULT_FONT_SIZE, DEFAULT_VOBJ_HEIGHT,
+            DEFAULT_FRCOL, DEFAULT_CHCOL, DEFAULT_TBCOL, DEFAULT_BGCOL,
+            LIST_SELECTED_BG_COLOR, GRAY_COLOR
         } from '../../js/util.js';
         window.convertPtToPx = convertPtToPx;
         window.rgbToHex = rgbToHex;
@@ -62,6 +65,14 @@
         window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
         window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
         window.ICON_LOAD_TIMEOUT_MS = ICON_LOAD_TIMEOUT_MS;
+        window.DEFAULT_FONT_SIZE = DEFAULT_FONT_SIZE;
+        window.DEFAULT_VOBJ_HEIGHT = DEFAULT_VOBJ_HEIGHT;
+        window.DEFAULT_FRCOL = DEFAULT_FRCOL;
+        window.DEFAULT_CHCOL = DEFAULT_CHCOL;
+        window.DEFAULT_TBCOL = DEFAULT_TBCOL;
+        window.DEFAULT_BGCOL = DEFAULT_BGCOL;
+        window.LIST_SELECTED_BG_COLOR = LIST_SELECTED_BG_COLOR;
+        window.GRAY_COLOR = GRAY_COLOR;
     </script>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">

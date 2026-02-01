@@ -37,6 +37,11 @@
             <span class="size-value" id="brushSizeValue">5px</span>
         </div>
     </div>
-    <script src="material-panel.js"></script>
+    <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
+    <script type="module">
+        import { DEFAULT_FRCOL } from '../../js/util.js';
+        window.DEFAULT_FRCOL = DEFAULT_FRCOL;
+    </script>
+    <script type="module" src="material-panel.js"></script>
 </body>
 </html>

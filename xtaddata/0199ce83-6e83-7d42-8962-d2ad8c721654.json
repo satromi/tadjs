@@ -1,5 +1,6 @@
 {
   "name": "BTRON",
+  "relationship": [],
   "linktype": false,
   "makeDate": "2024-06-20T12:00:00Z",
   "updateDate": "2026-01-02T00:36:42.178Z",
@@ -7,6 +8,7 @@
   "periodDate": null,
   "refCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TADjs User",
   "window": {

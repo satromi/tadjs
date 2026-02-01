@@ -119,6 +119,16 @@ class RealObjectConfigApp extends PluginBase {
         document.getElementById('set-default-button').addEventListener('click', () => {
             this.setDefaultOpen();
         });
+
+        // 編集不可チェックボックス
+        document.getElementById('not-editable').addEventListener('change', () => {
+            this.isModified = true;
+        });
+
+        // 削除不可チェックボックス
+        document.getElementById('not-deletable').addEventListener('change', () => {
+            this.isModified = true;
+        });
     }
 
     /**
@@ -266,6 +276,14 @@ class RealObjectConfigApp extends PluginBase {
         // 所有者
         const maker = this.realObjectData.maker;
         document.getElementById('owner').textContent = maker || '-';
+
+        // 編集不可チェックボックス（editable: falseの場合にチェック）
+        const notEditableCheckbox = document.getElementById('not-editable');
+        notEditableCheckbox.checked = (this.realObjectData.editable === false);
+
+        // 削除不可チェックボックス（deletable: falseの場合にチェック）
+        const notDeletableCheckbox = document.getElementById('not-deletable');
+        notDeletableCheckbox.checked = (this.realObjectData.deletable === false);
     }
 
     /**
@@ -511,10 +529,16 @@ class RealObjectConfigApp extends PluginBase {
                 return;
             }
 
-            // 2. メタデータのapplistを更新
+            // 2. メタデータを更新
             const realObject = loadResult.realObject;
             realObject.metadata = realObject.metadata || {};
             realObject.metadata.applist = this.realObjectData.applist;
+
+            // editable/deletableを更新（チェック時にfalse）
+            const notEditableChecked = document.getElementById('not-editable').checked;
+            const notDeletableChecked = document.getElementById('not-deletable').checked;
+            realObject.metadata.editable = !notEditableChecked;
+            realObject.metadata.deletable = !notDeletableChecked;
 
             // 3. 実身を保存する
             const saveMessageId = `save-real-object-${Date.now()}-${Math.random()}`;
@@ -567,8 +591,15 @@ class RealObjectConfigApp extends PluginBase {
 
             const realObject = loadResult.realObject;
 
-            // 2. applistを更新
-            realObject.applist = this.buildApplistFromUI();
+            // 2. メタデータを更新
+            realObject.metadata = realObject.metadata || {};
+            realObject.metadata.applist = this.realObjectData.applist;
+
+            // editable/deletableを更新（チェック時にfalse）
+            const notEditableChecked = document.getElementById('not-editable').checked;
+            const notDeletableChecked = document.getElementById('not-deletable').checked;
+            realObject.metadata.editable = !notEditableChecked;
+            realObject.metadata.deletable = !notDeletableChecked;
 
             // 3. 実身を保存する
             const saveMessageId = `save-real-object-${Date.now()}-${Math.random()}`;

@@ -1,12 +1,15 @@
 {
   "name": "仮身一覧",
+  "relationship": [],
   "linktype": false,
   "makeDate": "2025-11-23T07:09:55.529Z",
   "updateDate": "2026-01-11T01:57:40.750Z",
   "accessDate": "2026-01-11T01:57:37.228Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TADjs User",
   "window": {

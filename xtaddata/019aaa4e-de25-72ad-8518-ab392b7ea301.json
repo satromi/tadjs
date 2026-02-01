@@ -1,11 +1,15 @@
 {
   "name": "基本図形編集サンプル",
+  "relationship": [],
+  "linktype": false,
   "makeDate": "2025-11-22T06:44:46.783Z",
   "updateDate": "2026-01-02T00:39:58.735Z",
   "accessDate": "2026-01-02T00:39:53.954Z",
   "periodDate": null,
   "refCount": 2,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TADjs User",
   "window": {

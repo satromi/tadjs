@@ -5,7 +5,7 @@
  */
 
 import { getLogger } from './logger.js';
-import { UI_UPDATE_DELAY_MS } from './util.js';
+import { UI_UPDATE_DELAY_MS, DEFAULT_FONT_SIZE, DEFAULT_FRCOL } from './util.js';
 
 const logger = getLogger('DialogManager');
 
@@ -280,7 +280,7 @@ export class DialogManager {
                 colorPicker.id = 'dialog-color-picker';
                 colorPicker.className = 'dialog-color-picker';
                 // デフォルト値が有効なカラーコードでない場合は黒をセット
-                colorPicker.value = /^#[0-9A-Fa-f]{6}$/.test(defaultValue) ? defaultValue : '#000000';
+                colorPicker.value = /^#[0-9A-Fa-f]{6}$/.test(defaultValue) ? defaultValue : DEFAULT_FRCOL;
                 inputField.parentNode.insertBefore(colorPicker, inputField.nextSibling);
 
                 // カラーピッカー→テキスト入力の同期
@@ -546,23 +546,35 @@ export class DialogManager {
                     <!-- 左側: 表示項目 -->
                     <div>
                         <div class="vobj-attr-section-title">表示項目：</div>
-                        <label class="vobj-attr-checkbox-label">
-                            <input type="checkbox" id="pictdisp" ${attrs.pictdisp ? 'checked' : ''}> <span>ピクトグラム</span>
+                        <label class="checkbox-label vobj-attr-checkbox">
+                            <input type="checkbox" id="pictdisp" ${attrs.pictdisp ? 'checked' : ''}>
+                            <span class="checkbox-indicator"></span>
+                            <span>ピクトグラム</span>
                         </label>
-                        <label class="vobj-attr-checkbox-label">
-                            <input type="checkbox" id="namedisp" ${attrs.namedisp ? 'checked' : ''}> <span>名称</span>
+                        <label class="checkbox-label vobj-attr-checkbox">
+                            <input type="checkbox" id="namedisp" ${attrs.namedisp ? 'checked' : ''}>
+                            <span class="checkbox-indicator"></span>
+                            <span>名称</span>
                         </label>
-                        <label class="vobj-attr-checkbox-label">
-                            <input type="checkbox" id="roledisp" ${attrs.roledisp ? 'checked' : ''}> <span>続柄</span>
+                        <label class="checkbox-label vobj-attr-checkbox">
+                            <input type="checkbox" id="roledisp" ${attrs.roledisp ? 'checked' : ''}>
+                            <span class="checkbox-indicator"></span>
+                            <span>続柄</span>
                         </label>
-                        <label class="vobj-attr-checkbox-label">
-                            <input type="checkbox" id="typedisp" ${attrs.typedisp ? 'checked' : ''}> <span>タイプ</span>
+                        <label class="checkbox-label vobj-attr-checkbox">
+                            <input type="checkbox" id="typedisp" ${attrs.typedisp ? 'checked' : ''}>
+                            <span class="checkbox-indicator"></span>
+                            <span>タイプ</span>
                         </label>
-                        <label class="vobj-attr-checkbox-label">
-                            <input type="checkbox" id="updatedisp" ${attrs.updatedisp ? 'checked' : ''}> <span>更新日時</span>
+                        <label class="checkbox-label vobj-attr-checkbox">
+                            <input type="checkbox" id="updatedisp" ${attrs.updatedisp ? 'checked' : ''}>
+                            <span class="checkbox-indicator"></span>
+                            <span>更新日時</span>
                         </label>
-                        <label class="vobj-attr-checkbox-label">
-                            <input type="checkbox" id="framedisp" ${attrs.framedisp ? 'checked' : ''}> <span>仮身枠</span>
+                        <label class="checkbox-label vobj-attr-checkbox">
+                            <input type="checkbox" id="framedisp" ${attrs.framedisp ? 'checked' : ''}>
+                            <span class="checkbox-indicator"></span>
+                            <span>仮身枠</span>
                         </label>
                     </div>
 
@@ -589,8 +601,10 @@ export class DialogManager {
                             <input type="text" id="bgcol" value="${attrs.bgcol}" class="vobj-attr-color-input">
                             <input type="color" id="bgcol-picker" value="${attrs.bgcol}" class="vobj-attr-color-picker">
                         </label>
-                        <label class="vobj-attr-checkbox-label">
-                            <input type="checkbox" id="autoopen" ${attrs.autoopen ? 'checked' : ''}> <span>自動起動</span>
+                        <label class="checkbox-label vobj-attr-checkbox">
+                            <input type="checkbox" id="autoopen" ${attrs.autoopen ? 'checked' : ''}>
+                            <span class="checkbox-indicator"></span>
+                            <span>自動起動</span>
                         </label>
                     </div>
 
@@ -620,7 +634,7 @@ export class DialogManager {
                 // 文字サイズの選択ドロップダウンと自由入力を同期
                 const chszSelect = document.getElementById('chszSelect');
                 const chszCustom = document.getElementById('chszCustom');
-                const baseFontSize = 14; // BTRONの標準文字サイズ
+                const baseFontSize = ${DEFAULT_FONT_SIZE}; // BTRONの標準文字サイズ
 
                 // ドロップダウン変更時: 倍率をピクセル値に変換
                 chszSelect.addEventListener('change', () => {
@@ -674,7 +688,7 @@ export class DialogManager {
      * @returns {Object} 仮身属性オブジェクト
      */
     extractVirtualObjectAttributesFromDialog(dialogElement) {
-        const chszValue = parseInt(dialogElement.querySelector('#chszCustom').value) || 14;
+        const chszValue = parseInt(dialogElement.querySelector('#chszCustom').value) || DEFAULT_FONT_SIZE;
 
         return {
             pictdisp: dialogElement.querySelector('#pictdisp').checked,

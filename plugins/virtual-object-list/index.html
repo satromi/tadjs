@@ -42,7 +42,10 @@
     <script type="module">
         import {
             convertPtToPx, rgbToHex, hexToRgb, invertColor,
-            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, ERROR_CHECK_TIMEOUT_MS
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, ERROR_CHECK_TIMEOUT_MS,
+            VOBJ_BORDER_WIDTH, DEFAULT_FONT_SIZE, DEFAULT_VOBJ_HEIGHT,
+            DEFAULT_FRCOL, DEFAULT_CHCOL, DEFAULT_TBCOL, DEFAULT_BGCOL,
+            VOBJ_SELECTION_COLOR, LIST_SELECTED_BG_COLOR, PREVIEW_BORDER_COLOR
         } from '../../js/util.js';
         window.convertPtToPx = convertPtToPx;
         window.rgbToHex = rgbToHex;
@@ -52,6 +55,16 @@
         window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
         window.ICON_LOAD_TIMEOUT_MS = ICON_LOAD_TIMEOUT_MS;
         window.ERROR_CHECK_TIMEOUT_MS = ERROR_CHECK_TIMEOUT_MS;
+        window.VOBJ_BORDER_WIDTH = VOBJ_BORDER_WIDTH;
+        window.DEFAULT_FONT_SIZE = DEFAULT_FONT_SIZE;
+        window.DEFAULT_VOBJ_HEIGHT = DEFAULT_VOBJ_HEIGHT;
+        window.DEFAULT_FRCOL = DEFAULT_FRCOL;
+        window.DEFAULT_CHCOL = DEFAULT_CHCOL;
+        window.DEFAULT_TBCOL = DEFAULT_TBCOL;
+        window.DEFAULT_BGCOL = DEFAULT_BGCOL;
+        window.VOBJ_SELECTION_COLOR = VOBJ_SELECTION_COLOR;
+        window.LIST_SELECTED_BG_COLOR = LIST_SELECTED_BG_COLOR;
+        window.PREVIEW_BORDER_COLOR = PREVIEW_BORDER_COLOR;
     </script>
     <!-- パフォーマンス最適化ユーティリティをグローバル変数として読み込み -->
     <script type="module">

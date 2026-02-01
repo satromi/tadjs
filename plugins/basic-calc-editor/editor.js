@@ -932,7 +932,7 @@ class CalcEditor extends window.PluginBase {
 
         // 描画設定
         ctx.save();
-        ctx.strokeStyle = '#808080';
+        ctx.strokeStyle = GRAY_COLOR;
         ctx.lineWidth = 2;
         ctx.setLineDash([8, 4]);
 
@@ -1012,7 +1012,7 @@ class CalcEditor extends window.PluginBase {
         ctx.fillRect(x, y, width, height);
 
         // 枠線
-        ctx.strokeStyle = '#808080';
+        ctx.strokeStyle = GRAY_COLOR;
         ctx.lineWidth = 1;
         ctx.strokeRect(x, y, width, height);
 
@@ -1024,7 +1024,7 @@ class CalcEditor extends window.PluginBase {
 
         // 以下は新規グラフ作成時（elementsがない場合）の処理
         if (!data || !data.labels || data.labels.length === 0) {
-            ctx.fillStyle = '#808080';
+            ctx.fillStyle = GRAY_COLOR;
             ctx.font = '12px sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('データなし', x + width / 2, y + height / 2);
@@ -1091,7 +1091,7 @@ class CalcEditor extends window.PluginBase {
         ctx.fillRect(x, y, width, height);
 
         // 枠線
-        ctx.strokeStyle = '#808080';
+        ctx.strokeStyle = GRAY_COLOR;
         ctx.lineWidth = 1;
         ctx.strokeRect(x, y, width, height);
 
@@ -1103,7 +1103,7 @@ class CalcEditor extends window.PluginBase {
 
         // 以下は新規グラフ作成時（elementsがない場合）の処理
         if (!data || !data.labels || data.labels.length === 0) {
-            ctx.fillStyle = '#808080';
+            ctx.fillStyle = GRAY_COLOR;
             ctx.font = '12px sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('データなし', x + width / 2, y + height / 2);
@@ -1175,7 +1175,7 @@ class CalcEditor extends window.PluginBase {
         ctx.fillRect(x, y, width, height);
 
         // 枠線
-        ctx.strokeStyle = '#808080';
+        ctx.strokeStyle = GRAY_COLOR;
         ctx.lineWidth = 1;
         ctx.strokeRect(x, y, width, height);
 
@@ -1187,7 +1187,7 @@ class CalcEditor extends window.PluginBase {
 
         // 以下は新規グラフ作成時（elementsがない場合）の処理
         if (!data || !data.labels || data.labels.length === 0) {
-            ctx.fillStyle = '#808080';
+            ctx.fillStyle = GRAY_COLOR;
             ctx.font = '12px sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('データなし', x + width / 2, y + height / 2);
@@ -1273,7 +1273,7 @@ class CalcEditor extends window.PluginBase {
         ctx.fillRect(x, y, width, height);
 
         // 枠線
-        ctx.strokeStyle = '#808080';
+        ctx.strokeStyle = GRAY_COLOR;
         ctx.lineWidth = 1;
         ctx.strokeRect(x, y, width, height);
 
@@ -1285,7 +1285,7 @@ class CalcEditor extends window.PluginBase {
 
         // 以下は新規グラフ作成時（elementsがない場合）の処理
         if (!data || !data.labels || data.labels.length === 0) {
-            ctx.fillStyle = '#808080';
+            ctx.fillStyle = GRAY_COLOR;
             ctx.font = '12px sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('データなし', x + width / 2, y + height / 2);
@@ -1380,7 +1380,7 @@ class CalcEditor extends window.PluginBase {
         for (const elem of elements) {
             if (elem.type === 'rect') {
                 // 矩形描画
-                ctx.fillStyle = elem.fillC || '#808080';
+                ctx.fillStyle = elem.fillC || GRAY_COLOR;
                 ctx.fillRect(x + elem.x, y + elem.y, elem.w, elem.h);
                 if (elem.bdC) {
                     ctx.strokeStyle = elem.bdC;
@@ -1389,7 +1389,7 @@ class CalcEditor extends window.PluginBase {
                 }
             } else if (elem.type === 'text') {
                 // テキスト描画
-                ctx.fillStyle = elem.color || '#000000';
+                ctx.fillStyle = elem.color || DEFAULT_FRCOL;
                 ctx.font = `${elem.fontSize || 10}px ${elem.fontFace || 'sans-serif'}`;
                 ctx.textAlign = elem.align || 'left';
                 ctx.textBaseline = 'top';
@@ -1407,7 +1407,7 @@ class CalcEditor extends window.PluginBase {
                 // 折れ線描画
                 if (elem.points && elem.points.length > 0) {
                     ctx.beginPath();
-                    ctx.strokeStyle = elem.stroke || '#000000';
+                    ctx.strokeStyle = elem.stroke || DEFAULT_FRCOL;
                     ctx.lineWidth = elem.strokeWidth || 2;
                     ctx.moveTo(x + elem.points[0].x, y + elem.points[0].y);
                     for (let i = 1; i < elem.points.length; i++) {
@@ -1418,7 +1418,7 @@ class CalcEditor extends window.PluginBase {
             } else if (elem.type === 'circle') {
                 // 円描画
                 ctx.beginPath();
-                ctx.fillStyle = elem.fillC || '#000000';
+                ctx.fillStyle = elem.fillC || DEFAULT_FRCOL;
                 ctx.arc(x + elem.cx, y + elem.cy, elem.r, 0, Math.PI * 2);
                 ctx.fill();
             }
@@ -1841,7 +1841,7 @@ class CalcEditor extends window.PluginBase {
                 e.dataTransfer.dropEffect = 'copy';
             }
 
-            container.style.backgroundColor = '#e8f4f8';
+            container.style.backgroundColor = LIST_SELECTED_BG_COLOR;
         });
 
         // ドラッグリーブ
@@ -3185,7 +3185,7 @@ class CalcEditor extends window.PluginBase {
         const borderDef = {
             width: border.width || 1,
             style: border.style || 'solid',
-            color: border.color || '#000000'
+            color: border.color || DEFAULT_FRCOL
         };
 
         switch (borderType) {
@@ -3607,8 +3607,8 @@ class CalcEditor extends window.PluginBase {
                 // 反転（invert）
                 if (cellData.style.invert) {
                     // 前景色と背景色を反転
-                    const currentBg = cellData.style.backgroundColor || '#ffffff';
-                    const currentColor = cellData.style.color || '#000000';
+                    const currentBg = cellData.style.backgroundColor || DEFAULT_BGCOL;
+                    const currentColor = cellData.style.color || DEFAULT_FRCOL;
                     cell.style.backgroundColor = currentColor;
                     cell.style.color = currentBg;
                 }
@@ -4494,7 +4494,7 @@ class CalcEditor extends window.PluginBase {
                 content: elem.text || '',
                 fontSize: fontSize,
                 fontFamily: fontFace,
-                textColor: elem.color || '#000000',
+                textColor: elem.color || DEFAULT_FRCOL,
                 textAlign: elem.align || 'center',  // 元の align を引き継ぐ（デフォルトは center）
                 fillColor: 'transparent',
                 strokeColor: 'transparent',
@@ -4512,14 +4512,14 @@ class CalcEditor extends window.PluginBase {
             return {
                 type: 'polyline',
                 points: offsetPoints,
-                strokeColor: elem.stroke || '#000000',
+                strokeColor: elem.stroke || DEFAULT_FRCOL,
                 lineWidth: elem.strokeWidth || 2,
                 zIndex: elem.zIndex || 0
             };
         } else if (elem.type === 'circle') {
             // 円（データポイント） - ellipseタイプに変換
             const r = elem.r || 4;
-            const color = elem.fillC || elem.fill || '#000000';
+            const color = elem.fillC || elem.fill || DEFAULT_FRCOL;
             return {
                 type: 'ellipse',
                 startX: offsetX + elem.cx - r,
@@ -4551,8 +4551,8 @@ class CalcEditor extends window.PluginBase {
             startY: y,
             endX: x + width,
             endY: y + height,
-            fillColor: '#ffffff',
-            strokeColor: '#808080',
+            fillColor: DEFAULT_BGCOL,
+            strokeColor: GRAY_COLOR,
             strokeWidth: 1,
             zIndex: 0
         });
@@ -4679,7 +4679,7 @@ class CalcEditor extends window.PluginBase {
                 content: data.labels[labelIdx] || '',
                 fontSize: 10,
                 fontFamily: 'sans-serif',
-                textColor: '#000000',
+                textColor: DEFAULT_CHCOL,
                 textAlign: 'center',  // 中央揃えを指定
                 fillColor: 'transparent',
                 strokeColor: 'transparent',
@@ -4821,7 +4821,7 @@ class CalcEditor extends window.PluginBase {
                 content: data.labels[labelIdx] || '',
                 fontSize: 10,
                 fontFamily: 'sans-serif',
-                textColor: '#000000',
+                textColor: DEFAULT_CHCOL,
                 textAlign: 'center',  // 中央揃えを指定
                 fillColor: 'transparent',
                 strokeColor: 'transparent',
@@ -6018,7 +6018,7 @@ class CalcEditor extends window.PluginBase {
                 borderProps[sideKey] = {
                     style: typeMatch ? (typeMatch[1] === 'dash' ? 'dashed' : typeMatch[1] === 'dot' ? 'dotted' : typeMatch[1] === 'line' ? 'solid' : 'solid') : 'solid',
                     width: widthMatch ? parseInt(widthMatch[1]) : 1,
-                    color: colorMatch ? colorMatch[1] : '#000000'
+                    color: colorMatch ? colorMatch[1] : DEFAULT_FRCOL
                 };
             }
         });
@@ -6273,7 +6273,7 @@ class CalcEditor extends window.PluginBase {
         let attrs = [];
 
         // 背景色
-        if (style.backgroundColor && style.backgroundColor !== '#ffffff') {
+        if (style.backgroundColor && style.backgroundColor !== DEFAULT_BGCOL) {
             attrs.push(`bgCol="${style.backgroundColor}"`);
         }
 
@@ -6334,7 +6334,7 @@ class CalcEditor extends window.PluginBase {
         // フォント設定（自己閉じタグ）
         let fontTags = '';
 
-        if (style.color && style.color !== '#000000') {
+        if (style.color && style.color !== DEFAULT_CHCOL) {
             fontTags += `<font color="${style.color}"/>`;
         }
 
@@ -6867,7 +6867,7 @@ class CalcEditor extends window.PluginBase {
                     w: parseFloat(right) - parseFloat(left),
                     h: parseFloat(bottom) - parseFloat(top),
                     bdC: getAttr(tag, 'strokeColor'),
-                    fillC: getAttr(tag, 'fillColor') || '#808080',
+                    fillC: getAttr(tag, 'fillColor') || GRAY_COLOR,
                     zIndex: parseInt(getAttr(tag, 'zIndex')) || 0
                 });
             }
@@ -6914,7 +6914,7 @@ class CalcEditor extends window.PluginBase {
             let fontMatch;
             let fontSize = 10;
             let fontFace = 'sans-serif';
-            let color = '#000000';
+            let color = DEFAULT_CHCOL;
             while ((fontMatch = fontPattern.exec(docContent)) !== null) {
                 const fontTag = fontMatch[0];
                 const sizeAttr = getAttr(fontTag, 'size');
@@ -6974,7 +6974,7 @@ class CalcEditor extends window.PluginBase {
 
                 if (points.length > 0) {
                     // strokeColor属性を使用（標準形式）
-                    const strokeColor = getAttr(tag, 'strokeColor') || '#000000';
+                    const strokeColor = getAttr(tag, 'strokeColor') || DEFAULT_FRCOL;
                     // lineWidth形式を優先、l_atr形式もサポート（後方互換性）
                     let strokeWidth = 1;
                     if (getAttr(tag, 'lineWidth') !== null) {
@@ -7007,7 +7007,7 @@ class CalcEditor extends window.PluginBase {
 
             if (cx !== null && cy !== null && rx !== null) {
                 // fillColor属性を使用（標準形式）
-                const fillColor = getAttr(tag, 'fillColor') || '#000000';
+                const fillColor = getAttr(tag, 'fillColor') || DEFAULT_FRCOL;
 
                 elements.push({
                     type: 'circle',
@@ -7276,10 +7276,10 @@ class CalcEditor extends window.PluginBase {
                 const newVirtualObject = {
                     link_id: `${newRealId}_0.xtad`,
                     link_name: newName,
-                    tbcol: virtualObject.tbcol || '#ffffff',
-                    frcol: virtualObject.frcol || '#000000',
-                    chcol: virtualObject.chcol || '#000000',
-                    bgcol: virtualObject.bgcol || '#ffffff',
+                    tbcol: virtualObject.tbcol || DEFAULT_BGCOL,
+                    frcol: virtualObject.frcol || DEFAULT_FRCOL,
+                    chcol: virtualObject.chcol || DEFAULT_FRCOL,
+                    bgcol: virtualObject.bgcol || DEFAULT_BGCOL,
                     chsz: virtualObject.chsz || '',
                     framedisp: virtualObject.framedisp,
                     namedisp: virtualObject.namedisp,
@@ -8055,12 +8055,12 @@ class CalcEditor extends window.PluginBase {
                     link_id: `${result.newRealId}_0.xtad`,
                     link_name: result.newName,
                     width: originalVobj.width || 150,
-                    heightPx: originalVobj.heightPx || 30,
-                    chsz: originalVobj.chsz || 14,
-                    frcol: originalVobj.frcol || '#000000',
-                    chcol: originalVobj.chcol || '#000000',
-                    tbcol: originalVobj.tbcol || '#ffffff',
-                    bgcol: originalVobj.bgcol || '#ffffff',
+                    heightPx: originalVobj.heightPx || DEFAULT_VOBJ_HEIGHT,
+                    chsz: originalVobj.chsz || DEFAULT_FONT_SIZE,
+                    frcol: originalVobj.frcol || DEFAULT_FRCOL,
+                    chcol: originalVobj.chcol || DEFAULT_FRCOL,
+                    tbcol: originalVobj.tbcol || DEFAULT_BGCOL,
+                    bgcol: originalVobj.bgcol || DEFAULT_BGCOL,
                     dlen: 0,
                     pictdisp: originalVobj.pictdisp || 'true',
                     namedisp: originalVobj.namedisp || 'true',
@@ -8859,12 +8859,12 @@ class CalcEditor extends window.PluginBase {
             link_id: realId,
             link_name: name,
             width: 150,
-            heightPx: 30,
+            heightPx: DEFAULT_VOBJ_HEIGHT,
             chsz: chsz,  // メニュー文字サイズを使用
-            frcol: '#000000',
-            chcol: '#000000',
-            tbcol: '#ffffff',
-            bgcol: '#ffffff',
+            frcol: DEFAULT_FRCOL,
+            chcol: DEFAULT_CHCOL,
+            tbcol: DEFAULT_TBCOL,
+            bgcol: DEFAULT_BGCOL,
             dlen: 0,
             pictdisp: 'true',  // ピクトグラムを表示
             namedisp: 'true',  // 名称を表示
@@ -8882,30 +8882,33 @@ class CalcEditor extends window.PluginBase {
 
     /**
      * セル内仮身が開いた仮身かどうかを判定
+     * VirtualObjectRenderer.isOpenedVirtualObject() に委譲
      * @param {Object} virtualObject - 仮身オブジェクト
      * @returns {boolean} 開いた仮身ならtrue
      */
     isOpenedVirtualObjectInCell(virtualObject) {
+        // VirtualObjectRendererに委譲
+        if (this.virtualObjectRenderer) {
+            return this.virtualObjectRenderer.isOpenedVirtualObject(virtualObject);
+        }
+
+        // フォールバック: VirtualObjectRenderer未初期化時
         // 明示的なopenedプロパティがあればそれを優先
         if (virtualObject.opened !== undefined) {
             return virtualObject.opened === true;
         }
 
         // heightPxベースの判定（セル内仮身用）
-        const heightPx = virtualObject.heightPx || 30;
-        const chsz = parseFloat(virtualObject.chsz) || 14;
+        const heightPx = virtualObject.heightPx || DEFAULT_VOBJ_HEIGHT;
+        const chsz = parseFloat(virtualObject.chsz) || DEFAULT_FONT_SIZE;
 
-        // 閉じた仮身の最小高さを計算（chszはポイント値なのでピクセルに変換）
+        // 閉じた仮身の最小高さを計算（VirtualObjectRendererと同じ閾値）
         const chszPx = window.convertPtToPx ? window.convertPtToPx(chsz) : chsz * 1.333;
-        const lineHeight = 1.2;
-        const textHeight = Math.ceil(chszPx * lineHeight);
+        const textHeight = Math.ceil(chszPx * 1.2);
         const minClosedHeight = textHeight + 8;
 
-        // 開いた仮身の閾値（タイトルバー + 区切り線 + コンテンツ最小）
-        const minOpenHeight = textHeight + 30;
-
-        // 閾値以上なら開いた仮身と判定
-        return heightPx >= minOpenHeight;
+        // VirtualObjectRendererと同じ閾値を使用: height > minClosedHeight
+        return heightPx > minClosedHeight;
     }
 
     /**
@@ -8966,7 +8969,7 @@ class CalcEditor extends window.PluginBase {
             contentArea.style.userSelect = 'none';
 
             // 仮身の背景色を取得
-            const bgcol = virtualObject.bgcol || '#ffffff';
+            const bgcol = virtualObject.bgcol || DEFAULT_BGCOL;
 
             // 4. プラグインをiframeで読み込む
             const iframe = document.createElement('iframe');

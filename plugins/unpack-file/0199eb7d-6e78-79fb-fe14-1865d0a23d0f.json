@@ -1,12 +1,15 @@
 {
   "name": "書庫解凍",
+  "relationship": [],
   "linktype": false,
   "makeDate": "2025-11-09T00:00:00.000Z",
   "updateDate": "2025-11-09T00:00:00.000Z",
   "accessDate": "2025-11-09T00:00:00.000Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TRON User",
   "window": {
@@ -31,12 +34,12 @@
     "backgroundColor": "#ffffff"
   },
   "applist": {
-    "tadjs-view":{
-      "name":"TADjs View",
+    "tadjs-view": {
+      "name": "TADjs View",
       "defaultOpen": true
     },
-    "unpack-file":{
-      "name":"書庫解凍",
+    "unpack-file": {
+      "name": "書庫解凍",
       "defaultOpen": false
     }
   }

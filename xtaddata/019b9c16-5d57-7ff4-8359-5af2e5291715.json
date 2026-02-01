@@ -1,12 +1,15 @@
 {
   "name": "年月日実身",
+  "relationship": [],
   "linktype": false,
   "makeDate": "2026-01-11T05:31:10.065Z",
   "updateDate": "2026-01-11T05:34:43.638Z",
   "accessDate": "2026-01-11T05:32:40.507Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TADjs User",
   "window": {

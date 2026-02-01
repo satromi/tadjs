@@ -689,11 +689,140 @@ export class RealObjectSystem {
     }
 
     /**
-     * 実身の物理削除（deleteRealObjectのエイリアス）
-     * @param {string} realId 実身ID
+     * 指定された実身IDが他のXTADファイルから参照されているかチェック
+     * @param {string} targetRealId チェック対象の実身ID
+     * @param {Set<string>} excludeRealIds 検索対象から除外する実身ID（削除処理中のもの）
+     * @returns {boolean} 参照がある場合true
      */
-    async physicalDeleteRealObject(realId) {
-        return await this.deleteRealObject(realId);
+    hasReferencesInAllXtadFiles(targetRealId, excludeRealIds = new Set()) {
+        const basePath = this._basePath;
+
+        // データフォルダ内の全XTADファイルを取得
+        const files = this.fs.readdirSync(basePath);
+        const xtadFiles = files.filter(f => f.endsWith('.xtad'));
+
+        for (const xtadFile of xtadFiles) {
+            // 除外対象の実身のXTADはスキップ
+            const fileRealId = xtadFile.replace(/_\d+\.xtad$/i, '');
+            if (excludeRealIds.has(fileRealId)) {
+                continue;
+            }
+
+            try {
+                const xtadPath = this.path.join(basePath, xtadFile);
+                const xtadContent = this.fs.readFileSync(xtadPath, 'utf-8');
+
+                // XTADから仮身（<link>タグ）を検索
+                const linkRegex = /<link[^>]*\sid="([^"]+)"[^>]*>/g;
+                let match;
+                while ((match = linkRegex.exec(xtadContent)) !== null) {
+                    const linkId = match[1];
+                    const refRealId = linkId.replace(/_\d+\.xtad$/i, '');
+                    if (refRealId === targetRealId) {
+                        logger.debug(`参照発見: ${xtadFile} → ${targetRealId}`);
+                        return true;  // 参照が見つかった
+                    }
+                }
+            } catch (error) {
+                logger.warn(`XTADファイル読み込みエラー: ${xtadFile}`, error);
+            }
+        }
+
+        return false;  // 参照なし
+    }
+
+    /**
+     * 実身の物理削除（参照カウンタ連動）
+     * 削除対象の実身内にある仮身の参照先実身のrefCountを-1し、
+     * refCountが0になった実身も再帰的に削除する
+     * @param {string} realId 実身ID
+     * @param {Set<string>} processedIds 処理済みID（循環参照対策）
+     * @param {boolean} safetyCheck 安全チェック有効（初回呼び出しのみtrue、再帰呼び出しはfalse）
+     */
+    async physicalDeleteRealObject(realId, processedIds = new Set(), safetyCheck = false) {
+        if (!this.isElectronEnv) {
+            throw new Error('ファイルシステムアクセスにはElectron環境が必要です');
+        }
+
+        // 循環参照対策
+        if (processedIds.has(realId)) {
+            logger.debug(`既に処理済み（スキップ）: ${realId}`);
+            return;
+        }
+        processedIds.add(realId);
+
+        const basePath = this._basePath;
+        const referencedRealIds = new Set();
+
+        // 1. 削除対象実身のXTADから仮身を抽出
+        let recordNo = 0;
+        while (true) {
+            const xtadPath = this.path.join(basePath, `${realId}_${recordNo}.xtad`);
+            if (!this.fs.existsSync(xtadPath)) {
+                break;
+            }
+
+            try {
+                const xtadContent = this.fs.readFileSync(xtadPath, 'utf-8');
+
+                // XTADから仮身（<link>タグ）を抽出
+                const linkRegex = /<link[^>]*\sid="([^"]+)"[^>]*>/g;
+                let match;
+                while ((match = linkRegex.exec(xtadContent)) !== null) {
+                    const linkId = match[1];
+                    // link_idから実身IDを抽出（_0.xtad を除去）
+                    const refRealId = linkId.replace(/_\d+\.xtad$/i, '');
+                    if (refRealId && refRealId !== realId) {
+                        referencedRealIds.add(refRealId);
+                    }
+                }
+            } catch (error) {
+                logger.warn(`XTADファイル読み込みエラー: ${xtadPath}`, error);
+            }
+            recordNo++;
+        }
+
+        // 2. 各参照先実身のrefCountを-1し、0になったら再帰的に削除
+        for (const refRealId of referencedRealIds) {
+            try {
+                const jsonPath = this.path.join(basePath, `${refRealId}.json`);
+                if (!this.fs.existsSync(jsonPath)) {
+                    continue;
+                }
+
+                const metadata = JSON.parse(this.fs.readFileSync(jsonPath, 'utf-8'));
+                const currentRefCount = metadata.refCount || 0;
+                const newRefCount = Math.max(0, currentRefCount - 1);
+                metadata.refCount = newRefCount;
+                this.fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
+
+                logger.debug(`参照カウント更新: ${refRealId} ${currentRefCount} -> ${newRefCount}`);
+
+                // refCountが0になったら再帰的に削除
+                if (newRefCount === 0) {
+                    // safetyCheck有効時のみ全XTADファイルを検索して参照がないか確認
+                    if (safetyCheck) {
+                        const hasReferences = this.hasReferencesInAllXtadFiles(refRealId, processedIds);
+                        if (hasReferences) {
+                            logger.warn(`参照カウント0だが他の仮身から参照あり（削除スキップ）: ${refRealId}`);
+                            // refCountを1に修正（整合性回復）
+                            metadata.refCount = 1;
+                            this.fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
+                            logger.debug(`参照カウント修正: ${refRealId} 0 -> 1`);
+                            continue;  // 次の参照先へ
+                        }
+                    }
+                    logger.debug(`参照カウント0のため削除: ${refRealId}`);
+                    // 再帰呼び出しではsafetyCheck=false（初回のみチェック）
+                    await this.physicalDeleteRealObject(refRealId, processedIds, false);
+                }
+            } catch (error) {
+                logger.warn(`参照先実身の処理エラー: ${refRealId}`, error);
+            }
+        }
+
+        // 3. 対象実身のファイルを削除
+        await this.deleteRealObject(realId);
     }
 
     /**

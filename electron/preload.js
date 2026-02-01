@@ -19,5 +19,17 @@ window.electronAPI = {
 
     // フルスクリーン制御
     enterFullscreen: () => ipcRenderer.invoke('enter-fullscreen'),
-    exitFullscreen: () => ipcRenderer.invoke('exit-fullscreen')
+    exitFullscreen: () => ipcRenderer.invoke('exit-fullscreen'),
+
+    // クリップボード操作
+    clipboardReadText: () => ipcRenderer.invoke('clipboard-read-text'),
+    clipboardWriteText: (text) => ipcRenderer.invoke('clipboard-write-text', text),
+
+    // PTY（疑似端末）操作
+    ptySpawn: (options) => ipcRenderer.invoke('pty-spawn', options),
+    ptyWrite: (windowId, data) => ipcRenderer.invoke('pty-write', { windowId, data }),
+    ptyResize: (windowId, cols, rows) => ipcRenderer.invoke('pty-resize', { windowId, cols, rows }),
+    ptyKill: (windowId) => ipcRenderer.invoke('pty-kill', { windowId }),
+    onPtyData: (callback) => ipcRenderer.on('pty-data', (event, data) => callback(data)),
+    onPtyExit: (callback) => ipcRenderer.on('pty-exit', (event, data) => callback(data))
 };

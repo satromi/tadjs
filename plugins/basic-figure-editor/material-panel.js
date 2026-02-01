@@ -8,7 +8,7 @@ class MaterialPanel {
         this.parentWindowId = null;
         this.currentTool = 'pencil';
         this.brushSize = 5;
-        this.currentColor = '#000000';
+        this.currentColor = typeof DEFAULT_FRCOL !== 'undefined' ? DEFAULT_FRCOL : '#000000';
 
         this.setupMessageHandler();
         this.setupEventListeners();

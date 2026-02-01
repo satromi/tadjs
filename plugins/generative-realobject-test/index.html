@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>生成的実身テスト</title>
+    <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="plugin-content">
+        <div id="terminal"></div>
+    </div>
+
+    <!-- xterm.js を UMD 形式で読み込み（グローバル変数 Terminal が公開される） -->
+    <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+    <!-- addon-fit を UMD 形式で読み込み（グローバル変数 FitAddon が公開される） -->
+    <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+
+    <!-- すべてのES Moduleを1つのscriptにまとめて読み込み順序を保証 -->
+    <script type="module">
+        // ロガー
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+
+        // グローバル設定
+        import { CONFIG } from '../../js/config.js';
+        window.TADjsConfig = CONFIG;
+
+        // 共通ユーティリティと定数
+        import { DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS } from '../../js/util.js';
+        window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+        window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
+
+        // メッセージバス
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+
+        // プラグイン共通基底クラス
+        import { PluginBase } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+
+        // すべてのモジュールが読み込まれた後に app.js を動的に読み込む
+        const script = document.createElement('script');
+        script.src = 'app.js';
+        document.body.appendChild(script);
+    </script>
+</body>
+</html>

@@ -21,6 +21,11 @@
         window.LogLevel = LogLevel;
         window.logManager = logManager;
     </script>
+    <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
+    <script type="module">
+        import { DEFAULT_VOBJ_HEIGHT } from '../../js/util.js';
+        window.DEFAULT_VOBJ_HEIGHT = DEFAULT_VOBJ_HEIGHT;
+    </script>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">
         import { MessageBus } from '../../js/message-bus.js';

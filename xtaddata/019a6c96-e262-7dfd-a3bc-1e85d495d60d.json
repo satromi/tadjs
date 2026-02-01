@@ -1,12 +1,15 @@
 {
   "name": "TADjsについて",
+  "relationship": [],
   "linktype": false,
   "makeDate": "2025-11-10T07:06:59.063Z",
-  "updateDate": "2026-01-11T02:06:50.439Z",
-  "accessDate": "2026-01-11T01:55:12.628Z",
+  "updateDate": "2026-01-25T04:25:35.436Z",
+  "accessDate": "2026-01-25T04:25:34.150Z",
   "periodDate": null,
   "refCount": 3,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TADjs User",
   "window": {

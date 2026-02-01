@@ -1,12 +1,15 @@
 {
   "name": "カレンダー",
   "relationship": [],
+  "linktype": false,
   "makeDate": "2026-01-02T00:00:00Z",
   "updateDate": "2026-01-02T00:00:00Z",
   "accessDate": "2026-01-02T00:00:00Z",
   "periodDate": null,
   "refCount": 1,
+  "recordCount": 1,
   "editable": true,
+  "deletable": true,
   "readable": true,
   "maker": "TRON User",
   "window": {

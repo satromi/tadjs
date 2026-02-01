@@ -14,7 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  *
- * TADjs Ver 0.34
+ * TADjs Ver 0.35
  * ブラウザ上でBTRON風デスクトップ環境を再現
 
  * @link https://github.com/satromi/tadjs
@@ -499,6 +499,40 @@ class TADjsDesktop {
             this.handleExitPresentationMode(data, event);
         });
 
+        // set-scrollbar-visible: スクロールバーの表示/非表示を切り替え
+        // プレゼンテーションモードとは異なり、スクロールバーのみを制御（副作用なし）
+        this.parentMessageBus.on('set-scrollbar-visible', (data, event) => {
+            const windowId = data.windowId || this.parentMessageBus.getWindowIdFromSource(event.source);
+            const windowElement = document.getElementById(windowId);
+            if (!windowElement) {
+                logger.warn('[TADjs] set-scrollbar-visible: windowElementが見つかりません:', windowId);
+                return;
+            }
+
+            const visible = data.visible !== false; // デフォルトはtrue（表示）
+            const displayValue = visible ? '' : 'none';
+
+            // スクロールバーコンテナの表示/非表示
+            const scrollbarContainer = windowElement.querySelector('.custom-scroll-container');
+            if (scrollbarContainer) {
+                scrollbarContainer.style.display = displayValue;
+            }
+
+            // スクロールコーナーの表示/非表示
+            const scrollCorner = windowElement.querySelector('.scroll-corner');
+            if (scrollCorner) {
+                scrollCorner.style.display = displayValue;
+            }
+
+            // ウィンドウコンテンツのオーバーフロー制御
+            const windowContent = windowElement.querySelector('.window-content');
+            if (windowContent) {
+                windowContent.style.overflow = visible ? '' : 'hidden';
+            }
+
+            logger.debug(`[TADjs] set-scrollbar-visible: ${windowId} visible=${visible}`);
+        });
+
         // close-window: ウィンドウを閉じる
         this.parentMessageBus.on('close-window', (data, event) => {
             let windowId = data.windowId;
@@ -625,6 +659,124 @@ class TADjsDesktop {
             if (!data.windowId) return;
             this.updateScrollbarsForWindow(data.windowId);
         });
+
+        // ========== PTY（疑似端末）関連ハンドラ ==========
+        // プラグイン（iframe）はelectronAPIに直接アクセスできないため、
+        // 親ウィンドウがMessageBus経由で中継する
+
+        // PTYプロセス起動リクエスト
+        this.parentMessageBus.on('pty-spawn-request', async (data, event) => {
+            const windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
+            if (!windowId) {
+                logger.warn('[TADjs] pty-spawn-request: windowIdが見つかりません');
+                return;
+            }
+
+            try {
+                const result = await window.electronAPI.ptySpawn({
+                    windowId: windowId,
+                    cwd: data.cwd,
+                    cols: data.cols,
+                    rows: data.rows
+                });
+                this.parentMessageBus.sendToWindow(windowId, 'pty-spawn-response', result);
+            } catch (error) {
+                logger.error('[TADjs] PTY spawn error:', error);
+                this.parentMessageBus.sendToWindow(windowId, 'pty-spawn-response', {
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // PTYへのデータ送信リクエスト
+        this.parentMessageBus.on('pty-write-request', async (data, event) => {
+            const windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
+            if (!windowId) return;
+
+            try {
+                await window.electronAPI.ptyWrite(windowId, data.data);
+            } catch (error) {
+                logger.error('[TADjs] PTY write error:', error);
+            }
+        });
+
+        // PTYリサイズリクエスト
+        this.parentMessageBus.on('pty-resize-request', async (data, event) => {
+            const windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
+            if (!windowId) return;
+
+            try {
+                await window.electronAPI.ptyResize(windowId, data.cols, data.rows);
+            } catch (error) {
+                logger.error('[TADjs] PTY resize error:', error);
+            }
+        });
+
+        // PTY終了リクエスト
+        this.parentMessageBus.on('pty-kill-request', async (data, event) => {
+            const windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
+            if (!windowId) return;
+
+            try {
+                await window.electronAPI.ptyKill(windowId);
+                this.parentMessageBus.sendToWindow(windowId, 'pty-kill-response', { success: true });
+            } catch (error) {
+                logger.error('[TADjs] PTY kill error:', error);
+                this.parentMessageBus.sendToWindow(windowId, 'pty-kill-response', {
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // ファイル読み込みリクエスト（プラグインからのファイル読み込み要求）
+        this.parentMessageBus.on('read-file-request', async (data, event) => {
+            const windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
+            if (!windowId) {
+                logger.warn('[TADjs] read-file-request: windowIdが見つかりません');
+                return;
+            }
+
+            try {
+                const fs = require('fs').promises;
+                const content = await fs.readFile(data.filePath, 'utf-8');
+                this.parentMessageBus.sendToWindow(windowId, 'read-file-response', {
+                    messageId: data.messageId,
+                    success: true,
+                    content: content
+                });
+            } catch (error) {
+                logger.debug('[TADjs] read-file-request error:', error.message);
+                this.parentMessageBus.sendToWindow(windowId, 'read-file-response', {
+                    messageId: data.messageId,
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // PTYからのデータを対応するプラグインに転送
+        if (window.electronAPI && window.electronAPI.onPtyData) {
+            window.electronAPI.onPtyData((data) => {
+                if (data.windowId) {
+                    this.parentMessageBus.sendToWindow(data.windowId, 'pty-data', {
+                        data: data.data
+                    });
+                }
+            });
+        }
+
+        // PTY終了通知を対応するプラグインに転送
+        if (window.electronAPI && window.electronAPI.onPtyExit) {
+            window.electronAPI.onPtyExit((data) => {
+                if (data.windowId) {
+                    this.parentMessageBus.sendToWindow(data.windowId, 'pty-exit', {
+                        exitCode: data.exitCode
+                    });
+                }
+            });
+        }
 
         logger.info('[TADjs] 親MessageBusハンドラ登録完了');
     }
@@ -2118,7 +2270,9 @@ ${url}
             accessDate: currentDateTime,
             periodDate: null,
             refCount: 1,
+            recordCount: 1,
             editable: true,
+            deletable: false,
             readable: true,
             maker: this.currentUser || 'TRON User',
             window: {
@@ -5869,7 +6023,13 @@ ${url}
             { autoResponse: false }
         );
 
-        logger.info('[TADjs] Phase 4 Batch 2: ファイル・データ取得系ハンドラー登録完了 (6件)');
+        this.messageRouter.register(
+            'get-text-clipboard',
+            this.handleGetTextClipboard.bind(this),
+            { autoResponse: false }
+        );
+
+        logger.info('[TADjs] Phase 4 Batch 2: ファイル・データ取得系ハンドラー登録完了 (7件)');
 
         // Phase 4 Batch 3: 実身/仮身操作系ハンドラー登録
         this.messageRouter.register(
@@ -7002,7 +7162,7 @@ ${url}
                             frcol: link.getAttribute('frcol') || '#000000',
                             tbcol: link.getAttribute('tbcol') || '#ffffff',
                             chcol: link.getAttribute('chcol') || '#000000',
-                            chsz: parseInt(link.getAttribute('chsz')) || 14
+                            chsz: parseInt(link.getAttribute('chsz')) || DEFAULT_FONT_SIZE
                         };
                         virtualObjects.push(vobj);
                     }
@@ -7121,6 +7281,9 @@ ${url}
         const { searchText, searchTarget, useRegex } = params;
         const results = [];
 
+        // 重複スキップ用Set（本文検索以外で使用）
+        const processedRealIds = new Set();
+
         // 検索中断フラグをリセット
         this.searchAborted = false;
 
@@ -7143,6 +7306,15 @@ ${url}
             if (this.searchAborted) {
                 logger.info('[TADjs] 文字列検索が中断されました');
                 break;
+            }
+
+            // 重複チェック（本文検索以外の場合のみ）
+            // 検索対象が content または all の場合は全文検索が必要なためスキップしない
+            if (searchTarget !== 'content' && searchTarget !== 'all') {
+                if (processedRealIds.has(metadata.realId)) {
+                    processedCount++;
+                    continue;
+                }
             }
 
             processedCount++;
@@ -7241,6 +7413,9 @@ ${url}
             }
 
             if (matchType) {
+                // 処理済みとしてマーク（重複防止用）
+                processedRealIds.add(metadata.realId);
+
                 // 仮身属性を抽出（色、サイズなど）
                 const vobjAttrs = await this.extractVobjAttributesFromRealObject(metadata.realId);
 
@@ -7293,6 +7468,9 @@ ${url}
         const { searchText, searchTarget, useRegex, dateFrom, dateTo, dateTarget } = params;
         const results = [];
 
+        // 重複スキップ用Set（本文検索以外で使用）
+        const processedRealIds = new Set();
+
         // 検索中断フラグをリセット
         this.searchAborted = false;
 
@@ -7324,6 +7502,15 @@ ${url}
             if (this.searchAborted) {
                 logger.info('[TADjs] 日付検索が中断されました');
                 break;
+            }
+
+            // 重複チェック（本文検索以外の場合のみ）
+            // 検索対象が content または all の場合は全文検索が必要なためスキップしない
+            if (effectiveSearchTarget !== 'content' && effectiveSearchTarget !== 'all') {
+                if (processedRealIds.has(metadata.realId)) {
+                    processedCount++;
+                    continue;
+                }
             }
 
             processedCount++;
@@ -7464,6 +7651,9 @@ ${url}
 
             // 日付と文字列の両方が一致した場合に結果に追加
             if (dateMatched && stringMatched) {
+                // 処理済みとしてマーク（重複防止用）
+                processedRealIds.add(metadata.realId);
+
                 // 仮身属性を抽出（色、サイズなど）
                 const vobjAttrs = await this.extractVobjAttributesFromRealObject(metadata.realId);
 
@@ -7805,6 +7995,38 @@ ${url}
             });
         }
         logger.info('[TADjs] クリップボードを取得:', this.clipboard?.link_name);
+    }
+
+    /**
+     * get-text-clipboard ハンドラー（テキストクリップボード取得）
+     * プラグインからのテキストクリップボード取得要求に応答
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleGetTextClipboard(data, event) {
+        try {
+            // Electron APIからテキストクリップボードを取得
+            const text = await window.electronAPI.clipboardReadText();
+            if (event.source) {
+                this.parentMessageBus.respondTo(event.source, 'text-clipboard-data', {
+                    messageId: data.messageId,
+                    windowId: data.windowId,
+                    text: text
+                });
+            }
+            logger.debug('[TADjs] テキストクリップボードを取得:', text?.substring(0, 50));
+        } catch (err) {
+            logger.error('[TADjs] テキストクリップボード取得エラー:', err.message);
+            if (event.source) {
+                this.parentMessageBus.respondTo(event.source, 'text-clipboard-data', {
+                    messageId: data.messageId,
+                    windowId: data.windowId,
+                    text: null,
+                    error: err.message
+                });
+            }
+        }
     }
 
     // ========================================
@@ -8654,36 +8876,79 @@ ${url}
      * @returns {Promise<void>}
      */
     async handleLoadDataFileRequest(data, event) {
-        logger.debug('[TADjs] load-data-file-request受信:', data.fileName);
         try {
             const fileData = await this.loadDataFileAsFile(data.fileName);
-            if (event.source) {
-                if (fileData) {
-                    this.parentMessageBus.respondTo(event.source, 'load-data-file-response', {
-                        messageId: data.messageId,
-                        fileName: data.fileName,
-                        success: true,
-                        data: fileData
-                    });
-                } else {
-                    this.parentMessageBus.respondTo(event.source, 'load-data-file-response', {
-                        messageId: data.messageId,
-                        fileName: data.fileName,
-                        success: false,
-                        error: 'ファイルが見つかりません'
-                    });
+            const responseData = {
+                type: 'load-data-file-response',
+                messageId: data.messageId,
+                fileName: data.fileName,
+                success: !!fileData,
+                data: fileData || null,
+                error: fileData ? null : 'ファイルが見つかりません'
+            };
+
+            // sourceWindowIdがある場合、DOMから直接iframeを探して送信（registerChild前でも動作）
+            if (data.sourceWindowId) {
+                const sent = this.sendResponseToWindowById(data.sourceWindowId, responseData);
+                if (!sent && event.source) {
+                    // DOMで見つからない場合、event.sourceにフォールバック
+                    logger.info('[TADjs] DOM送信失敗、event.sourceにフォールバック');
+                    event.source.postMessage(responseData, '*');
                 }
+            } else if (event.source) {
+                // sourceWindowIdがない場合、event.sourceを使用
+                event.source.postMessage(responseData, '*');
+            } else {
+                logger.warn('[TADjs] load-data-file-request: 送信先がありません');
             }
         } catch (error) {
             logger.error('[TADjs] データファイル読み込みエラー:', error);
-            if (event.source) {
-                this.parentMessageBus.respondTo(event.source, 'load-data-file-response', {
-                    messageId: data.messageId,
-                    fileName: data.fileName,
-                    success: false,
-                    error: error.message
-                });
+            const errorResponseData = {
+                type: 'load-data-file-response',
+                messageId: data.messageId,
+                fileName: data.fileName,
+                success: false,
+                error: error.message
+            };
+            if (data.sourceWindowId) {
+                const sent = this.sendResponseToWindowById(data.sourceWindowId, errorResponseData);
+                if (!sent && event.source) {
+                    event.source.postMessage(errorResponseData, '*');
+                }
+            } else if (event.source) {
+                event.source.postMessage(errorResponseData, '*');
             }
+        }
+    }
+
+    /**
+     * windowIdからDOMでiframeを探して直接メッセージを送信
+     * @param {string} windowId - ウィンドウID
+     * @param {Object} message - 送信するメッセージ
+     * @returns {boolean} 送信成功したらtrue
+     */
+    sendResponseToWindowById(windowId, message) {
+        logger.debug('[TADjs] sendResponseToWindowById: 開始', windowId, 'messageId:', message.messageId);
+        const windowElement = document.querySelector(`.window[data-window-id="${windowId}"]`);
+        if (!windowElement) {
+            logger.warn('[TADjs] sendResponseToWindowById: ウィンドウが見つかりません:', windowId);
+            return false;
+        }
+        const iframe = windowElement.querySelector('iframe[data-plugin-id]');
+        if (!iframe) {
+            logger.warn('[TADjs] sendResponseToWindowById: iframe要素が見つかりません:', windowId);
+            return false;
+        }
+        if (!iframe.contentWindow) {
+            logger.warn('[TADjs] sendResponseToWindowById: iframe.contentWindowがnull:', windowId, 'iframeId:', iframe.id, 'src:', iframe.src);
+            return false;
+        }
+        try {
+            iframe.contentWindow.postMessage(message, '*');
+            return true;
+        } catch (error) {
+            logger.error('[TADjs] sendResponseToWindowById: 送信エラー:', error, 'windowId:', windowId);
+            return false;
         }
     }
 
@@ -9736,8 +10001,23 @@ ${url}
         const { realId, messageId } = e.data;
 
         try {
-            // 実身を削除
-            await this.realObjectSystem.physicalDeleteRealObject(realId);
+            // メタデータを読み込んでdeletableをチェック
+            const { metadata } = await this.realObjectSystem.loadRealObject(realId);
+            if (metadata.deletable === false) {
+                // 削除不可の場合はエラーレスポンスを返す
+                if (e.source) {
+                    e.source.postMessage({
+                        type: 'delete-real-object-response',
+                        messageId: messageId,
+                        success: false,
+                        error: 'この実身は「削除不可」に設定されているため削除できません'
+                    }, '*');
+                }
+                return;
+            }
+
+            // 実身を削除（屑箱からの削除なのでsafetyCheck有効）
+            await this.realObjectSystem.physicalDeleteRealObject(realId, new Set(), true);
 
             // ファイルシステムから削除
             if (window.electronAPI && window.electronAPI.deleteFile) {

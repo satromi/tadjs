@@ -432,12 +432,16 @@ class FileImportManager {
         const currentDateTime = new Date().toISOString();
         const newRealJson = {
             name: newName,
+            relationship: [],
+            linktype: false,
             makeDate: currentDateTime,
             updateDate: currentDateTime,
             accessDate: currentDateTime,
             periodDate: null,
             refCount: 1,
+            recordCount: 1,
             editable: true,
+            deletable: false,
             readable: true,
             maker: 'TRON User',
             window: {
@@ -458,7 +462,7 @@ class FileImportManager {
                 skipTaskbar: false,
                 frame: true,
                 transparent: false,
-                backgroundColor: '#ffffff'
+                backgroundColor: typeof DEFAULT_BGCOL !== 'undefined' ? DEFAULT_BGCOL : '#ffffff'
             },
             applist: {
                 'basic-figure-editor': {

@@ -5,6 +5,7 @@
  */
 
 import { getLogger } from './logger.js';
+import { SCROLLBAR_THUMB_COLOR } from './util.js';
 
 const logger = getLogger('ScrollbarManager');
 
@@ -468,7 +469,7 @@ export class ScrollbarManager {
                 // スクロール不要
                 thumb.style.height = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.height - 4) + 'px';
                 thumb.style.top = '2px';
-                thumb.style.background = '#d0d0d0';
+                thumb.style.background = SCROLLBAR_THUMB_COLOR;
                 thumb.style.cursor = 'default';
             } else {
                 // スクロール可能
@@ -491,7 +492,7 @@ export class ScrollbarManager {
                 // スクロール不要
                 thumb.style.width = Math.max(window.MIN_SCROLLBAR_THUMB_SIZE, trackRect.width - 4) + 'px';
                 thumb.style.left = '2px';
-                thumb.style.background = '#d0d0d0';
+                thumb.style.background = SCROLLBAR_THUMB_COLOR;
                 thumb.style.cursor = 'default';
             } else {
                 // スクロール可能

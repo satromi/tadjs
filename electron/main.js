@@ -24,6 +24,23 @@ const { execSync } = require('child_process');
 const fontList = require('font-list');
 const fontkit = require('fontkit');
 
+// node-pty（PTY - 疑似端末）の読み込み
+// node-ptyが利用できない場合はchild_processにフォールバック
+let pty = null;
+let usePtyFallback = false;
+try {
+    pty = require('node-pty');
+    logger.info('node-pty loaded successfully');
+} catch (e) {
+    logger.warn('node-pty module not available, using child_process fallback:', e.message);
+    usePtyFallback = true;
+}
+
+const { spawn } = require('child_process');
+
+// PTYプロセス管理（windowId => ptyProcess or childProcess）
+const ptyProcesses = new Map();
+
 // winreg は Windows 専用なので条件付きで読み込み
 let winreg = null;
 if (process.platform === 'win32') {
@@ -420,6 +437,17 @@ ipcMain.handle('exit-fullscreen', async () => {
     return { success: false };
 });
 
+// IPC通信: クリップボードからテキスト読み取り
+ipcMain.handle('clipboard-read-text', async () => {
+    return electron.clipboard.readText();
+});
+
+// IPC通信: クリップボードにテキスト書き込み
+ipcMain.handle('clipboard-write-text', async (event, text) => {
+    electron.clipboard.writeText(text);
+    return { success: true };
+});
+
 // IPC通信: メニューバーの表示/非表示
 ipcMain.on('set-menu-bar-visibility', (event, visible) => {
     if (mainWindow) {
@@ -664,4 +692,171 @@ ipcMain.handle('get-system-fonts', async () => {
         logger.error('システムフォント取得エラー:', error);
         return { success: false, fonts: [], error: error.message };
     }
+});
+
+// ========================================
+// PTY（疑似端末）関連 IPC通信
+// ========================================
+
+// IPC通信: PTYプロセス生成
+ipcMain.handle('pty-spawn', async (event, options) => {
+    const { windowId, cwd, cols, rows } = options;
+
+    try {
+        // 既存のPTYプロセスがあれば終了
+        if (ptyProcesses.has(windowId)) {
+            const oldProcess = ptyProcesses.get(windowId);
+            if (oldProcess.kill) oldProcess.kill();
+            ptyProcesses.delete(windowId);
+        }
+
+        const shell = process.platform === 'win32' ? 'powershell.exe' : (process.env.SHELL || 'bash');
+        const workingDir = cwd || process.env.HOME || process.env.USERPROFILE;
+
+        // node-ptyが利用可能な場合はそちらを使用
+        if (pty && !usePtyFallback) {
+            const ptyProcess = pty.spawn(shell, [], {
+                name: 'xterm-256color',
+                cols: cols || 80,
+                rows: rows || 24,
+                cwd: workingDir,
+                env: process.env
+            });
+
+            ptyProcesses.set(windowId, { type: 'pty', process: ptyProcess });
+
+            // データ受信時にレンダラーへ転送
+            ptyProcess.onData((data) => {
+                if (!event.sender.isDestroyed()) {
+                    event.sender.send('pty-data', { windowId, data });
+                }
+            });
+
+            // プロセス終了時
+            ptyProcess.onExit(({ exitCode }) => {
+                if (!event.sender.isDestroyed()) {
+                    event.sender.send('pty-exit', { windowId, exitCode });
+                }
+                ptyProcesses.delete(windowId);
+            });
+
+            logger.info(`PTY spawned (node-pty): windowId=${windowId}, pid=${ptyProcess.pid}`);
+            return { success: true, pid: ptyProcess.pid };
+        }
+
+        // フォールバック: child_processを使用
+        // PowerShellはパイプI/Oで正しく動作しないため、cmd.exeを使用
+        const fallbackShell = process.platform === 'win32' ? 'cmd.exe' : shell;
+        const fallbackArgs = process.platform === 'win32' ? ['/Q'] : [];  // /Q: エコーオフ
+
+        logger.info(`PTY spawned (fallback): windowId=${windowId}, shell=${fallbackShell}`);
+
+        const childProcess = spawn(fallbackShell, fallbackArgs, {
+            cwd: workingDir,
+            env: { ...process.env, TERM: 'xterm-256color' },
+            shell: false,
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        ptyProcesses.set(windowId, { type: 'child', process: childProcess });
+
+        // フォールバックモードの開始メッセージを送信
+        if (!event.sender.isDestroyed()) {
+            event.sender.send('pty-data', {
+                windowId,
+                data: '[Terminal fallback mode - cmd.exe]\r\n'
+            });
+        }
+
+        // 標準出力をレンダラーへ転送
+        childProcess.stdout.on('data', (data) => {
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('pty-data', { windowId, data: data.toString() });
+            }
+        });
+
+        // 標準エラー出力をレンダラーへ転送
+        childProcess.stderr.on('data', (data) => {
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('pty-data', { windowId, data: data.toString() });
+            }
+        });
+
+        // プロセス終了時
+        childProcess.on('close', (exitCode) => {
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('pty-exit', { windowId, exitCode: exitCode || 0 });
+            }
+            ptyProcesses.delete(windowId);
+        });
+
+        childProcess.on('error', (error) => {
+            logger.error(`Child process error: ${error.message}`);
+            if (!event.sender.isDestroyed()) {
+                event.sender.send('pty-data', { windowId, data: `\r\n[Error: ${error.message}]\r\n` });
+            }
+        });
+
+        return { success: true, pid: childProcess.pid };
+    } catch (error) {
+        logger.error('PTY spawn error:', error);
+        return { success: false, error: error.message };
+    }
+});
+
+// IPC通信: PTYへの入力送信
+ipcMain.handle('pty-write', async (event, { windowId, data }) => {
+    const entry = ptyProcesses.get(windowId);
+    if (entry) {
+        if (entry.type === 'pty') {
+            entry.process.write(data);
+        } else {
+            // child_processの場合はstdinに書き込み
+            entry.process.stdin.write(data);
+        }
+        return { success: true };
+    }
+    return { success: false, error: 'PTY not found' };
+});
+
+// IPC通信: PTYリサイズ
+ipcMain.handle('pty-resize', async (event, { windowId, cols, rows }) => {
+    const entry = ptyProcesses.get(windowId);
+    if (entry) {
+        if (entry.type === 'pty' && entry.process.resize) {
+            entry.process.resize(cols, rows);
+        }
+        // child_processの場合はリサイズ不可（無視）
+        return { success: true };
+    }
+    return { success: false, error: 'PTY not found' };
+});
+
+// IPC通信: PTYプロセス終了
+ipcMain.handle('pty-kill', async (event, { windowId }) => {
+    const entry = ptyProcesses.get(windowId);
+    if (entry) {
+        if (entry.type === 'pty') {
+            entry.process.kill();
+        } else {
+            entry.process.kill('SIGTERM');
+        }
+        ptyProcesses.delete(windowId);
+        logger.info(`PTY killed: windowId=${windowId}`);
+        return { success: true };
+    }
+    return { success: false, error: 'PTY not found' };
+});
+
+// アプリ終了時に全PTYプロセスを終了
+app.on('before-quit', () => {
+    for (const [windowId, entry] of ptyProcesses) {
+        logger.info(`Killing PTY on quit: windowId=${windowId}`);
+        if (entry.type === 'pty') {
+            entry.process.kill();
+        } else {
+            entry.process.kill('SIGTERM');
+        }
+    }
+    ptyProcesses.clear();
 });

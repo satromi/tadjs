@@ -13,9 +13,9 @@ class ToolPanel {
         this.editorWindow = null; // 親エディタウィンドウへの参照
 
         // 現在の設定値
-        this.fillColor = '#ffffff';
+        this.fillColor = DEFAULT_BGCOL;
         this.fillEnabled = true;
-        this.strokeColor = '#000000';
+        this.strokeColor = DEFAULT_FRCOL;
         this.lineWidth = 2;
         this.lineType = 0; // 0:実線, 1:破線, 2:点線, 3:一点鎖線, 4:二点鎖線, 5:長破線
         this.lineConnectionType = 'straight'; // 'straight', 'elbow', 'curve'
@@ -43,9 +43,9 @@ class ToolPanel {
             if (event.data && event.data.type === 'init-tool-panel') {
                 // 初期設定を受信
                 if (event.data.settings) {
-                    this.fillColor = event.data.settings.fillColor || '#ffffff';
+                    this.fillColor = event.data.settings.fillColor || DEFAULT_BGCOL;
                     this.fillEnabled = event.data.settings.fillEnabled !== false;
-                    this.strokeColor = event.data.settings.strokeColor || '#000000';
+                    this.strokeColor = event.data.settings.strokeColor || DEFAULT_FRCOL;
                     this.lineWidth = event.data.settings.lineWidth || 2;
                     // lineType対応（後方互換: linePatternがあればlineTypeに変換）
                     if (event.data.settings.lineType !== undefined) {
@@ -189,9 +189,9 @@ class ToolPanel {
                 // 選択図形の属性を同期
                 const attrs = event.data.attributes;
                 if (attrs) {
-                    this.fillColor = attrs.fillColor || '#ffffff';
+                    this.fillColor = attrs.fillColor || DEFAULT_BGCOL;
                     this.fillEnabled = attrs.fillEnabled !== false;
-                    this.strokeColor = attrs.strokeColor || '#000000';
+                    this.strokeColor = attrs.strokeColor || DEFAULT_FRCOL;
                     this.lineWidth = attrs.lineWidth || 2;
                     this.lineType = attrs.lineType !== undefined ? attrs.lineType : 0;
                     this.lineConnectionType = attrs.lineConnectionType || 'straight';
@@ -434,7 +434,7 @@ class ToolPanel {
         // デフォルト値を設定
         const fontSize = settings.fontSize || 16;
         const fontFamily = settings.fontFamily || 'sans-serif';
-        const textColor = settings.textColor || '#000000';
+        const textColor = settings.textColor || DEFAULT_CHCOL;
         const decorations = settings.decorations || {
             bold: false,
             italic: false,

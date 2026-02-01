@@ -205,9 +205,9 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             y: this.padding,
             width: this.nodeWidth,
             height: this.nodeHeight,
-            frcol: '#000000',
+            frcol: DEFAULT_FRCOL,
             tbcol: '#e3f2fd',
-            chcol: '#000000',
+            chcol: DEFAULT_CHCOL,
             chsz: 14,
             depth: 0,
             children: []
@@ -224,12 +224,14 @@ class VirtualObjectNetworkApp extends window.PluginBase {
 
         // 表示モードに応じてレイアウト計算と描画
         if (this.displayMode === 'graph') {
+            this.resetViewState();      // viewStateをリセット（初期化）
             this.calculateGraphLayout();
             this.renderGraphView();
             this.setupGraphEvents();
-            // 注: 初期表示時の自動スクロールは無効化
-            // this.centerOnStartNode(false);
-            this.startSimulation();
+            // 全ノードが画面内に収まるようにズームと位置を調整（即座に表示）
+            this.fitAllNodes();
+            // シミュレーション開始（バックグラウンドで実行、完了を待たない）
+            this.startSimulation(false);
         } else {
             this.resetViewState();      // viewStateをリセット
             this.calculateLayout();
@@ -332,10 +334,10 @@ class VirtualObjectNetworkApp extends window.PluginBase {
                 y: 0,
                 width: this.nodeWidth,
                 height: this.nodeHeight,
-                frcol: vobj.frcol || '#000000',
-                tbcol: vobj.tbcol || '#ffffff',
-                chcol: vobj.chcol || '#000000',
-                chsz: vobj.chsz || 14,
+                frcol: vobj.frcol || DEFAULT_FRCOL,
+                tbcol: vobj.tbcol || DEFAULT_BGCOL,
+                chcol: vobj.chcol || DEFAULT_CHCOL,
+                chsz: vobj.chsz || DEFAULT_FONT_SIZE,
                 depth: parentNode.depth + 1,
                 children: [],
                 linkId: vobj.link_id
@@ -635,9 +637,18 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         const g = document.querySelector(`g[data-node-id="${node.id}"]`);
         if (g) {
             g.classList.add('selected');
+            // グラフ表示時は選択ノードのラベルを省略なしで表示
+            if (this.displayMode === 'graph') {
+                const label = g.querySelector('.node-label');
+                if (label) {
+                    label.textContent = node.name;
+                }
+            }
         }
 
         // 関連する接続線をハイライト（グラフ表示時はlineタグ）
+        // 接続ノードのIDを収集
+        const connectedNodeIds = new Set();
         for (const conn of this.connections) {
             if (conn.from === node.id || conn.to === node.id) {
                 // ネットワーク表示ではpath、グラフ表示ではline
@@ -648,6 +659,28 @@ class VirtualObjectNetworkApp extends window.PluginBase {
                 const line = document.querySelector(`line[data-from="${conn.from}"][data-to="${conn.to}"]`);
                 if (line) {
                     line.classList.add('highlight');
+                }
+                // 接続ノードIDを収集
+                if (conn.from === node.id) {
+                    connectedNodeIds.add(conn.to);
+                } else {
+                    connectedNodeIds.add(conn.from);
+                }
+            }
+        }
+
+        // グラフ表示時は接続ノードのラベルも省略なしで表示
+        if (this.displayMode === 'graph') {
+            for (const connectedId of connectedNodeIds) {
+                const connectedNode = this.nodes.find(n => n.id === connectedId);
+                if (connectedNode) {
+                    const connectedG = document.querySelector(`g[data-node-id="${connectedId}"]`);
+                    if (connectedG) {
+                        const label = connectedG.querySelector('.node-label');
+                        if (label) {
+                            label.textContent = connectedNode.name;
+                        }
+                    }
                 }
             }
         }
@@ -715,10 +748,63 @@ class VirtualObjectNetworkApp extends window.PluginBase {
     }
 
     /**
+     * 全ノードが画面内に収まるようにズームと位置を調整
+     * 初期表示時に呼び出す
+     */
+    fitAllNodes() {
+        if (this.nodes.length === 0) return;
+
+        // ノードの境界ボックスを計算
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let validNodeCount = 0;
+
+        for (const node of this.nodes) {
+            if (!this.isValidNodePosition(node)) continue;
+            const radius = this.getNodeRadius(node.id);
+            minX = Math.min(minX, node.x - radius);
+            minY = Math.min(minY, node.y - radius);
+            maxX = Math.max(maxX, node.x + radius);
+            maxY = Math.max(maxY, node.y + radius);
+            validNodeCount++;
+        }
+
+        if (validNodeCount === 0) return;
+
+        // マージンを追加（ノードがぎりぎりにならないように）
+        const margin = 50;
+        minX -= margin;
+        minY -= margin;
+        maxX += margin;
+        maxY += margin;
+
+        // コンテンツのサイズ
+        const contentWidth = maxX - minX;
+        const contentHeight = maxY - minY;
+
+        // 画面に収まるスケールを計算（縦横比を維持）
+        const scaleX = this.baseWidth / contentWidth;
+        const scaleY = this.baseHeight / contentHeight;
+        const fitScale = Math.min(scaleX, scaleY, 1.0);  // 1.0以上にはしない（拡大しすぎない）
+
+        // viewStateを設定
+        this.viewState.scale = fitScale;
+        this.viewState.width = this.baseWidth / fitScale;
+        this.viewState.height = this.baseHeight / fitScale;
+
+        // コンテンツの中心を画面中心に配置
+        const contentCenterX = (minX + maxX) / 2;
+        const contentCenterY = (minY + maxY) / 2;
+        this.viewState.x = contentCenterX - this.viewState.width / 2;
+        this.viewState.y = contentCenterY - this.viewState.height / 2;
+
+        this.updateViewBox();
+    }
+
+    /**
      * 選択解除
      */
     clearSelection() {
-        const hadSelection = this.selectedNode !== null;
+        const previousSelectedNode = this.selectedNode;
         this.selectedNode = null;
 
         // ネットワーク表示のノード
@@ -731,6 +817,35 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             el.classList.remove('selected');
         });
 
+        // グラフ表示時、以前選択していたノードと接続ノードのラベルを省略形式に戻す
+        if (previousSelectedNode && this.displayMode === 'graph') {
+            // 選択ノードのラベルを省略形式に戻す
+            const prevG = document.querySelector(`g[data-node-id="${previousSelectedNode.id}"]`);
+            if (prevG) {
+                const label = prevG.querySelector('.node-label');
+                if (label) {
+                    label.textContent = this.truncateText(previousSelectedNode.name, 100, 12);
+                }
+            }
+
+            // 接続ノードのラベルも省略形式に戻す
+            for (const conn of this.connections) {
+                if (conn.from === previousSelectedNode.id || conn.to === previousSelectedNode.id) {
+                    const connectedId = conn.from === previousSelectedNode.id ? conn.to : conn.from;
+                    const connectedNode = this.nodes.find(n => n.id === connectedId);
+                    if (connectedNode) {
+                        const connectedG = document.querySelector(`g[data-node-id="${connectedId}"]`);
+                        if (connectedG) {
+                            const label = connectedG.querySelector('.node-label');
+                            if (label) {
+                                label.textContent = this.truncateText(connectedNode.name, 100, 12);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // ネットワーク表示の接続線
         document.querySelectorAll('.connection-line.highlight').forEach(el => {
             el.classList.remove('highlight');
@@ -742,7 +857,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         });
 
         // グラフ表示時、選択解除でラベル表示を更新
-        if (hadSelection && this.displayMode === 'graph') {
+        if (previousSelectedNode && this.displayMode === 'graph') {
             this.updateNodeLabels();
         }
     }
@@ -795,7 +910,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             vobjleft: 0,
             vobjtop: 0,
             vobjright: 200,
-            vobjbottom: 30
+            vobjbottom: DEFAULT_VOBJ_HEIGHT
         };
 
         this.setClipboard(clipboardData);
@@ -940,7 +1055,10 @@ class VirtualObjectNetworkApp extends window.PluginBase {
                 this.calculateGraphLayout();
                 this.renderGraphView();
                 this.setupGraphEvents();
-                this.startSimulation();
+                // 全ノードが画面内に収まるようにズームと位置を調整（即座に表示）
+                this.fitAllNodes();
+                // シミュレーション開始（バックグラウンドで実行、完了を待たない）
+                this.startSimulation(false);
             } else {
                 // ネットワーク表示に切り替え
                 this.cleanupGraphEvents();  // グラフ用イベントを解除
@@ -1084,14 +1202,35 @@ class VirtualObjectNetworkApp extends window.PluginBase {
     }
 
     /**
+     * ノード数に応じた必要な円半径を計算
+     * @returns {number} 必要な円半径
+     */
+    calculateRequiredRadius() {
+        const nodeCount = this.nodes.length;
+        if (nodeCount <= 1) return 0;
+
+        // 必要な円周 = ノード数 × (ノード最大直径 + 最小間隔)
+        const minSpacing = 2 * this.graphConfig.maxRadius + this.graphConfig.minDistance;
+        const requiredCircumference = nodeCount * minSpacing;
+        return requiredCircumference / (2 * Math.PI);
+    }
+
+    /**
      * グラフ用の初期レイアウト計算（円形配置）
      */
     calculateGraphLayout() {
-        const centerX = this.baseWidth / 2;
-        const centerY = this.baseHeight / 2;
         const nodeCount = this.nodes.length;
 
         if (nodeCount === 0) return;
+
+        // ノード数に応じた円半径を計算
+        const baseRadius = Math.min(this.baseWidth, this.baseHeight) / 2 * 0.7;
+        const requiredRadius = this.calculateRequiredRadius();
+        const radius = Math.max(requiredRadius, baseRadius);
+
+        // 円の中心（半径が大きい場合は配置領域の中心）
+        const centerX = Math.max(this.baseWidth / 2, radius + 100);
+        const centerY = Math.max(this.baseHeight / 2, radius + 100);
 
         if (nodeCount === 1) {
             this.nodes[0].x = centerX;
@@ -1102,7 +1241,6 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         }
 
         // 円形に配置
-        const radius = Math.min(centerX, centerY) * 0.7;
         for (let i = 0; i < nodeCount; i++) {
             const angle = (2 * Math.PI * i) / nodeCount - Math.PI / 2;
             this.nodes[i].x = centerX + radius * Math.cos(angle);
@@ -1236,7 +1374,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             rect.setAttribute('y', -rectHeight / 2);
             rect.setAttribute('width', rectWidth);
             rect.setAttribute('height', rectHeight);
-            rect.setAttribute('fill', node.tbcol || '#ffffff');
+            rect.setAttribute('fill', node.tbcol || DEFAULT_BGCOL);
             rect.setAttribute('stroke', node.frcol || '#374151');
             rect.setAttribute('stroke-width', '2');
             rect.setAttribute('rx', '2');
@@ -1474,7 +1612,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         iframe.style.height = '100%';
         iframe.style.border = 'none';
         iframe.style.overflow = 'hidden';
-        iframe.style.backgroundColor = node.tbcol || '#ffffff';
+        iframe.style.backgroundColor = node.tbcol || DEFAULT_BGCOL;
         iframe.style.pointerEvents = 'none';  // 操作は無効
 
         // IMPORTANT: nodeintegration属性を設定してからsrcを設定（これが重要！）
@@ -1494,7 +1632,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
                     bgcol: node.tbcol
                 },
                 realObject: realObjectData,
-                bgcol: node.tbcol || '#ffffff',
+                bgcol: node.tbcol || DEFAULT_BGCOL,
                 readonly: true,
                 noScrollbar: true
             }, '*');
@@ -1514,7 +1652,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         const div = document.createElement('div');
         div.style.width = '100%';
         div.style.height = '100%';
-        div.style.backgroundColor = node.tbcol || '#ffffff';
+        div.style.backgroundColor = node.tbcol || DEFAULT_BGCOL;
         div.style.display = 'flex';
         div.style.alignItems = 'center';
         div.style.justifyContent = 'center';
@@ -1739,7 +1877,11 @@ class VirtualObjectNetworkApp extends window.PluginBase {
     /**
      * Force-Directed シミュレーションを開始
      */
-    startSimulation() {
+    /**
+     * 力学シミュレーションを開始
+     * @param {boolean} centerOnComplete - シミュレーション完了後に開始ノードを中心に表示するか（デフォルト: false）
+     */
+    startSimulation(centerOnComplete = false) {
         this.simulationRunning = true;
         let iterations = 0;
         const maxIterations = 300;
@@ -1747,7 +1889,11 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         const animate = () => {
             if (!this.simulationRunning || iterations >= maxIterations) {
                 this.simulationRunning = false;
-                // シミュレーション完了時にスクロール状態を更新
+                // シミュレーション完了時に開始ノードを中心に表示（初期表示時のみ）
+                if (centerOnComplete) {
+                    this.centerOnStartNode(false);
+                }
+                // スクロール状態を更新
                 this._sendGraphScrollState();
                 return;
             }
@@ -1762,7 +1908,11 @@ class VirtualObjectNetworkApp extends window.PluginBase {
 
             if (totalVelocity < 0.5) {
                 this.simulationRunning = false;
-                // シミュレーション完了時にスクロール状態を更新
+                // シミュレーション完了時に開始ノードを中心に表示（初期表示時のみ）
+                if (centerOnComplete) {
+                    this.centerOnStartNode(false);
+                }
+                // スクロール状態を更新
                 this._sendGraphScrollState();
                 return;
             }
@@ -1815,10 +1965,13 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             }
 
             // 中心への引力（散らばりすぎ防止）
-            const centerX = this.baseWidth / 2;
-            const centerY = this.baseHeight / 2;
-            node.fx += (centerX - node.x) * 0.001;
-            node.fy += (centerY - node.y) * 0.001;
+            // ノード数が多い場合は引力を弱めて広がりやすくする
+            const requiredRadius = this.calculateRequiredRadius();
+            const centerX = Math.max(this.baseWidth / 2, requiredRadius + 100);
+            const centerY = Math.max(this.baseHeight / 2, requiredRadius + 100);
+            const centerAttraction = 0.001 / Math.max(1, this.nodes.length / 20);
+            node.fx += (centerX - node.x) * centerAttraction;
+            node.fy += (centerY - node.y) * centerAttraction;
         }
     }
 
@@ -1827,6 +1980,12 @@ class VirtualObjectNetworkApp extends window.PluginBase {
      */
     updatePositions() {
         const cfg = this.graphConfig;
+
+        // ノード数に応じた境界サイズを計算
+        const requiredRadius = this.calculateRequiredRadius();
+        const nodeAreaSize = requiredRadius * 2 + 200;  // マージン含む
+        const boundWidth = Math.max(this.baseWidth, nodeAreaSize);
+        const boundHeight = Math.max(this.baseHeight, nodeAreaSize);
 
         for (const node of this.nodes) {
             if (node.isDragging) continue;
@@ -1837,10 +1996,10 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             node.x += node.vx;
             node.y += node.vy;
 
-            // 境界制限
+            // 拡張された境界制限
             const margin = 50;
-            node.x = Math.max(margin, Math.min(this.baseWidth - margin, node.x));
-            node.y = Math.max(margin, Math.min(this.baseHeight - margin, node.y));
+            node.x = Math.max(margin, Math.min(boundWidth - margin, node.x));
+            node.y = Math.max(margin, Math.min(boundHeight - margin, node.y));
         }
     }
 
@@ -2063,23 +2222,38 @@ class VirtualObjectNetworkApp extends window.PluginBase {
     /**
      * コンテナサイズからbaseWidth/baseHeightを更新
      * 全画面表示切り替え時やウィンドウリサイズ時に呼び出す
+     * ビューの中心点を維持するようにviewState.x/yも調整する
      */
     updateBaseSize() {
         const container = document.querySelector('.plugin-content');
-        if (container) {
-            this.baseWidth = container.clientWidth || 800;
-            this.baseHeight = container.clientHeight || 600;
+        if (!container) return;
+
+        // 新しいサイズを取得
+        const newBaseWidth = container.clientWidth || 800;
+        const newBaseHeight = container.clientHeight || 600;
+
+        // viewStateが存在する場合、ビューの中心点を維持するようにx/yを調整
+        if (this.viewState && this.viewState.width > 0 && this.viewState.height > 0) {
+            // 現在のビューの中心点（viewBox座標系）
+            const currentCenterX = this.viewState.x + this.viewState.width / 2;
+            const currentCenterY = this.viewState.y + this.viewState.height / 2;
+
+            // 新しいviewStateサイズを計算（スケールを維持）
+            const newWidth = newBaseWidth / this.viewState.scale;
+            const newHeight = newBaseHeight / this.viewState.scale;
+
+            // 中心点を維持するようにx/yを調整
+            this.viewState.x = currentCenterX - newWidth / 2;
+            this.viewState.y = currentCenterY - newHeight / 2;
+            this.viewState.width = newWidth;
+            this.viewState.height = newHeight;
         }
 
-        // svgWidth/svgHeightも同期
+        // baseWidth/baseHeight/svgWidth/svgHeightを更新
+        this.baseWidth = newBaseWidth;
+        this.baseHeight = newBaseHeight;
         this.svgWidth = this.baseWidth;
         this.svgHeight = this.baseHeight;
-
-        // viewStateのサイズも更新（スケールを維持）
-        if (this.viewState) {
-            this.viewState.width = this.baseWidth / this.viewState.scale;
-            this.viewState.height = this.baseHeight / this.viewState.scale;
-        }
     }
 
     /**
@@ -2087,18 +2261,23 @@ class VirtualObjectNetworkApp extends window.PluginBase {
      * @param {Object} data - リサイズ情報
      */
     onWindowResizedEnd(data) {
-        // baseWidth/baseHeightを更新
-        this.updateBaseSize();
+        // DOMの更新を待ってから処理（タイミング問題を回避）
+        requestAnimationFrame(() => {
+            // baseWidth/baseHeightを更新（ビューの中心点を維持）
+            this.updateBaseSize();
 
-        // 表示モードに応じて再描画
-        if (this.displayMode === 'graph') {
-            // グラフ表示: viewBoxを更新してスクロール状態を通知
-            this.updateViewBox();
-            this._sendGraphScrollState();
-        } else {
-            // ネットワーク表示: 再描画（render内でviewBox更新とスクロール通知も行う）
-            this.render();
-        }
+            // 表示モードに応じて再描画
+            if (this.displayMode === 'graph') {
+                // グラフ表示: 現在のスクロール位置とズームを維持して再描画
+                // updateBaseSize()でviewState.x/y/width/heightは中心点維持で更新済み
+                this.renderGraphView();
+                // グラフ用イベントを再設定（renderGraphViewでSVGがクリアされるため）
+                this.setupGraphEvents();
+            } else {
+                // ネットワーク表示: 再描画（render内でviewBox更新とスクロール通知も行う）
+                this.render();
+            }
+        });
     }
 
     /**
@@ -2190,6 +2369,33 @@ class VirtualObjectNetworkApp extends window.PluginBase {
     // ========================================
 
     /**
+     * 指定ノードの子孫ノード（そのノードから参照されている全ノード）を取得
+     * @param {Object} node - 起点ノード
+     * @returns {Object[]} 子孫ノードの配列
+     */
+    getDescendantNodes(node) {
+        const descendants = [];
+        const visited = new Set([node.id]);
+
+        const traverse = (currentNode) => {
+            // currentNodeから出ている接続を探す
+            for (const conn of this.connections) {
+                if (conn.from === currentNode.id && !visited.has(conn.to)) {
+                    const childNode = this.nodes.find(n => n.id === conn.to);
+                    if (childNode) {
+                        visited.add(conn.to);
+                        descendants.push(childNode);
+                        traverse(childNode);
+                    }
+                }
+            }
+        };
+
+        traverse(node);
+        return descendants;
+    }
+
+    /**
      * ノードドラッグ開始
      */
     startNodeDrag(e, node) {
@@ -2225,8 +2431,20 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         const newX = (e.clientX - rect.left) * scaleX + this.viewState.x - this.dragOffset.x;
         const newY = (e.clientY - rect.top) * scaleY + this.viewState.y - this.dragOffset.y;
 
+        // 移動量を計算
+        const dx = newX - this.draggedNode.x;
+        const dy = newY - this.draggedNode.y;
+
+        // ドラッグ中のノードを移動
         this.draggedNode.x = newX;
         this.draggedNode.y = newY;
+
+        // 子孫ノードも同じ量だけ移動（相対位置を維持）
+        const descendants = this.getDescendantNodes(this.draggedNode);
+        for (const descendant of descendants) {
+            descendant.x += dx;
+            descendant.y += dy;
+        }
 
         this.updateGraphPositions();
     }

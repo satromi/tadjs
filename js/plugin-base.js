@@ -3,6 +3,16 @@ import {
     DEFAULT_TIMEOUT_MS,
     ERROR_CHECK_TIMEOUT_MS,
     DEFAULT_INPUT_WIDTH,
+    DEFAULT_FONT_SIZE,
+    DEFAULT_FONT_STYLE,
+    DEFAULT_FONT_WEIGHT,
+    DEFAULT_FONT_STRETCH,
+    DEFAULT_LETTER_SPACING,
+    DEFAULT_FRCOL,
+    DEFAULT_CHCOL,
+    DEFAULT_TBCOL,
+    DEFAULT_BGCOL,
+    DEFAULT_VOBJ_HEIGHT,
     escapeXml as escapeXmlUtil,
     unescapeXml as unescapeXmlUtil
 } from './util.js';
@@ -26,17 +36,17 @@ export class TextStyleStateManager {
      */
     reset() {
         // フォント属性
-        this.size = '14';
-        this.color = '#000000';
+        this.size = String(DEFAULT_FONT_SIZE);
+        this.color = DEFAULT_CHCOL;
         this.face = '';
-        this.style = 'normal';
-        this.weight = '400';
-        this.stretch = 'normal';
+        this.style = DEFAULT_FONT_STYLE;
+        this.weight = DEFAULT_FONT_WEIGHT;
+        this.stretch = DEFAULT_FONT_STRETCH;
         // 文字送り属性
         this.direction = '0';          // 文字送り方向 (0:横, 1:縦)
         this.kerning = '0';            // カーニング (0:無効, 1:有効)
         this.pattern = '0';            // 文字送りパターン
-        this.space = '0';              // 文字間隔
+        this.space = DEFAULT_LETTER_SPACING;  // 文字間隔
         // テキスト属性
         this.align = 'left';
         this.lineHeight = '1';         // 行の高さ
@@ -50,16 +60,16 @@ export class TextStyleStateManager {
      */
     update(attr, value) {
         const defaults = {
-            size: '14',
-            color: '#000000',
+            size: String(DEFAULT_FONT_SIZE),
+            color: DEFAULT_CHCOL,
             face: '',
-            style: 'normal',
-            weight: '400',
-            stretch: 'normal',
+            style: DEFAULT_FONT_STYLE,
+            weight: DEFAULT_FONT_WEIGHT,
+            stretch: DEFAULT_FONT_STRETCH,
             direction: '0',
             kerning: '0',
             pattern: '0',
-            space: '0',
+            space: DEFAULT_LETTER_SPACING,
             align: 'left',
             lineHeight: '1',
             textDirection: '0'
@@ -106,13 +116,13 @@ export class TextStyleStateManager {
      */
     toCssStyle() {
         let style = '';
-        if (this.size !== '14') style += `font-size: ${this.size}pt;`;
-        if (this.color !== '#000000') style += `color: ${this.color};`;
+        if (this.size !== String(DEFAULT_FONT_SIZE)) style += `font-size: ${this.size}pt;`;
+        if (this.color !== DEFAULT_CHCOL) style += `color: ${this.color};`;
         if (this.face) style += `font-family: ${this.face};`;
-        if (this.style !== 'normal') style += `font-style: ${this.style};`;
-        if (this.weight !== '400') style += `font-weight: ${this.weight};`;
-        if (this.stretch !== 'normal') style += `font-stretch: ${this.stretch};`;
-        if (this.space !== '0') style += `letter-spacing: ${this.space}px;`;
+        if (this.style !== DEFAULT_FONT_STYLE) style += `font-style: ${this.style};`;
+        if (this.weight !== DEFAULT_FONT_WEIGHT) style += `font-weight: ${this.weight};`;
+        if (this.stretch !== DEFAULT_FONT_STRETCH) style += `font-stretch: ${this.stretch};`;
+        if (this.space !== DEFAULT_LETTER_SPACING) style += `letter-spacing: ${this.space}px;`;
         return style;
     }
 
@@ -132,13 +142,13 @@ export class TextStyleStateManager {
      * @returns {boolean} デフォルト以外のスタイルがあればtrue
      */
     hasNonDefaultStyle() {
-        return this.size !== '14' ||
-               this.color !== '#000000' ||
+        return this.size !== String(DEFAULT_FONT_SIZE) ||
+               this.color !== DEFAULT_CHCOL ||
                this.face !== '' ||
-               this.style !== 'normal' ||
-               this.weight !== '400' ||
-               this.stretch !== 'normal' ||
-               this.space !== '0';
+               this.style !== DEFAULT_FONT_STYLE ||
+               this.weight !== DEFAULT_FONT_WEIGHT ||
+               this.stretch !== DEFAULT_FONT_STRETCH ||
+               this.space !== DEFAULT_LETTER_SPACING;
     }
 
     /**
@@ -161,6 +171,128 @@ export class TextStyleStateManager {
         copy.lineHeight = this.lineHeight;
         copy.textDirection = this.textDirection;
         return copy;
+    }
+}
+
+/**
+ * リクエストキュー管理クラス
+ * - 並列実行数の制限
+ * - 処理開始時からのタイムアウト計算
+ * - 同一キーのリクエスト重複防止
+ */
+class RequestQueueManager {
+    constructor() {
+        // 処理タイプ別のキュー
+        // Map<string, { queue: Array, active: number, maxConcurrent: number }>
+        this._queues = new Map();
+
+        // 同一キーのリクエスト重複防止用
+        // Map<string, Promise>
+        this._pendingRequests = new Map();
+    }
+
+    /**
+     * キュー設定を登録
+     * @param {string} queueType - キュータイプ（例: 'load-data-file', 'load-real-object'）
+     * @param {number} maxConcurrent - 最大同時実行数
+     */
+    registerQueue(queueType, maxConcurrent = 10) {
+        this._queues.set(queueType, {
+            queue: [],
+            active: 0,
+            maxConcurrent: maxConcurrent
+        });
+    }
+
+    /**
+     * リクエストをキューに追加して実行
+     * @param {string} queueType - キュータイプ
+     * @param {string} requestKey - リクエストの一意キー（重複防止用、nullで重複防止無効）
+     * @param {Function} requestFn - 実行する非同期関数
+     * @param {number} timeout - タイムアウト（ms）
+     * @returns {Promise} 処理結果
+     */
+    async enqueue(queueType, requestKey, requestFn, timeout) {
+        // 同一キーのリクエストが実行中なら、そのPromiseを返す（重複防止）
+        if (requestKey && this._pendingRequests.has(requestKey)) {
+            return this._pendingRequests.get(requestKey);
+        }
+
+        const queueInfo = this._queues.get(queueType);
+        if (!queueInfo) {
+            // 未登録のキュータイプは直接実行
+            return this._executeWithTimeout(requestFn, timeout);
+        }
+
+        // Promiseを作成してキューに追加
+        let resolvePromise, rejectPromise;
+        const promise = new Promise((resolve, reject) => {
+            resolvePromise = resolve;
+            rejectPromise = reject;
+        });
+
+        queueInfo.queue.push({
+            requestFn,
+            timeout,
+            resolve: resolvePromise,
+            reject: rejectPromise
+        });
+
+        // 重複防止マップに登録
+        if (requestKey) {
+            this._pendingRequests.set(requestKey, promise);
+            promise.finally(() => {
+                this._pendingRequests.delete(requestKey);
+            });
+        }
+
+        // キュー処理を開始
+        this._processQueue(queueType);
+
+        return promise;
+    }
+
+    /**
+     * キューから次のリクエストを処理
+     * @private
+     */
+    _processQueue(queueType) {
+        const queueInfo = this._queues.get(queueType);
+        if (!queueInfo) return;
+
+        // 最大同時実行数に達している場合は待機
+        while (queueInfo.active < queueInfo.maxConcurrent && queueInfo.queue.length > 0) {
+            const request = queueInfo.queue.shift();
+            queueInfo.active++;
+
+            // 処理開始時からタイムアウトを計算
+            this._executeWithTimeout(request.requestFn, request.timeout)
+                .then(request.resolve)
+                .catch(request.reject)
+                .finally(() => {
+                    queueInfo.active--;
+                    this._processQueue(queueType);
+                });
+        }
+    }
+
+    /**
+     * タイムアウト付きで関数を実行
+     * @private
+     */
+    async _executeWithTimeout(fn, timeout) {
+        if (!timeout || timeout <= 0) {
+            return fn();
+        }
+
+        return Promise.race([
+            fn(),
+            new Promise((_, reject) => {
+                setTimeout(() => {
+                    reject(new Error(`Request timeout after ${timeout}ms`));
+                }, timeout);
+            })
+        ]);
     }
 }
 
@@ -191,8 +323,13 @@ export class PluginBase {
         this.openedRealObjects = new Map();
         this.iconManager = null;
         this.iconData = {};  // アイコンデータキャッシュ { realId: base64Data }
-        this.bgColor = '#ffffff';  // 背景色（デフォルト白）
+        this.bgColor = DEFAULT_BGCOL;  // 背景色（デフォルト白）
         this.debug = window.TADjsConfig?.debug || false;
+
+        // リクエストキューマネージャー初期化
+        this._requestQueueManager = new RequestQueueManager();
+        this._requestQueueManager.registerQueue('load-data-file', 10);
+        this._requestQueueManager.registerQueue('load-real-object', 10);
 
         // ダブルクリック+ドラッグの共通状態管理
         this.dblClickDragState = {
@@ -356,29 +493,33 @@ export class PluginBase {
      * const jsonData = JSON.parse(jsonText);
      */
     async loadDataFileFromParent(fileName) {
-        const messageId = this.generateMessageId('load');
+        return this._requestQueueManager.enqueue(
+            'load-data-file',
+            `load-data-file:${fileName}`,  // 同一ファイルの重複リクエスト防止
+            async () => {
+                const messageId = this.generateMessageId('load');
 
-        if (this.messageBus) {
-            this.messageBus.send('load-data-file-request', {
-                messageId: messageId,
-                fileName: fileName
-            });
-        } else {
-            throw new Error('MessageBusが初期化されていません');
-        }
+                if (this.messageBus) {
+                    this.messageBus.send('load-data-file-request', {
+                        messageId: messageId,
+                        fileName: fileName
+                    });
+                } else {
+                    throw new Error('MessageBusが初期化されていません');
+                }
 
-        try {
-            const result = await this.messageBus.waitFor('load-data-file-response', DEFAULT_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-            if (result.success) {
-                return result.data;
-            } else {
-                throw new Error(result.error || 'ファイル読み込み失敗');
-            }
-        } catch (error) {
-            throw new Error('ファイル読み込みエラー: ' + error.message);
-        }
+                // タイムアウトはキューマネージャーで管理するため、waitForは無限待機
+                const result = await this.messageBus.waitFor('load-data-file-response', 0, (data) => {
+                    return data.messageId === messageId;
+                });
+                if (result.success) {
+                    return result.data;
+                } else {
+                    throw new Error(result.error || 'ファイル読み込み失敗');
+                }
+            },
+            DEFAULT_TIMEOUT_MS
+        );
     }
 
     /**
@@ -454,36 +595,43 @@ export class PluginBase {
     }
 
     /**
-     * 実身データを読み込む
+     * 実身データを読み込む（キュー管理・重複防止付き）
      * @param {string} realId - 実身ID
      * @returns {Promise<Object>} 実身データ
      */
     async loadRealObjectData(realId) {
-        const messageId = this.generateMessageId('load-real');
+        return this._requestQueueManager.enqueue(
+            'load-real-object',
+            `load-real-object:${realId}`,  // 同一realIdの重複リクエスト防止
+            async () => {
+                const messageId = this.generateMessageId('load-real');
 
-        // 親ウィンドウに実身データ読み込みを要求
-        this.messageBus.send('load-real-object', {
-            realId: realId,
-            messageId: messageId
-        });
-
-        try {
-            // レスポンスを待つ
-            const result = await this.messageBus.waitFor('real-object-loaded', DEFAULT_TIMEOUT_MS, (data) => {
-                return data.messageId === messageId;
-            });
-            return result.realObject;
-        } catch (error) {
-            // エラーレスポンスの可能性もチェック
-            try {
-                const errorResult = await this.messageBus.waitFor('real-object-error', ERROR_CHECK_TIMEOUT_MS, (data) => {
-                    return data.messageId === messageId;
+                // 親ウィンドウに実身データ読み込みを要求
+                this.messageBus.send('load-real-object', {
+                    realId: realId,
+                    messageId: messageId
                 });
-                throw new Error(errorResult.error);
-            } catch {
-                throw new Error('実身データ読み込みタイムアウト');
-            }
-        }
+
+                try {
+                    // タイムアウトはキューマネージャーで管理するため、waitForは無限待機
+                    const result = await this.messageBus.waitFor('real-object-loaded', 0, (data) => {
+                        return data.messageId === messageId;
+                    });
+                    return result.realObject;
+                } catch (error) {
+                    // エラーレスポンスの可能性もチェック
+                    try {
+                        const errorResult = await this.messageBus.waitFor('real-object-error', ERROR_CHECK_TIMEOUT_MS, (data) => {
+                            return data.messageId === messageId;
+                        });
+                        throw new Error(errorResult.error);
+                    } catch {
+                        throw error;
+                    }
+                }
+            },
+            DEFAULT_TIMEOUT_MS
+        );
     }
 
     /**
@@ -584,7 +732,7 @@ export class PluginBase {
             }
 
             // 仮身の色属性を取得
-            const bgcol = options.bgcol || virtualObject.bgcol || '#ffffff';
+            const bgcol = options.bgcol || virtualObject.bgcol || DEFAULT_BGCOL;
 
             // iframeを作成
             const iframe = document.createElement('iframe');
@@ -2934,8 +3082,6 @@ export class PluginBase {
             }
         });
 
-        logger.info(`[${this.pluginName}] 共通MessageBusハンドラ登録完了 (12件)`);
-
         // plugin-ready シグナルを親ウィンドウに送信
         // これにより親ウィンドウはプラグインの準備完了を確認してからinitを送信できる
         if (window.parent && window.parent !== window) {
@@ -3629,7 +3775,7 @@ export class PluginBase {
             round = 0,
             start_arrow = 0,
             end_arrow = 0,
-            strokeColor = '#000000',
+            strokeColor = DEFAULT_FRCOL,
             zIndex
         } = options;
         const zIndexAttr = zIndex !== undefined ? ` zIndex="${zIndex}"` : '';
@@ -3662,8 +3808,8 @@ export class PluginBase {
             l_pat = 0,
             f_pat = 1,
             angle = 0,
-            strokeColor = '#000000',
-            fillColor = '#000000',
+            strokeColor = DEFAULT_FRCOL,
+            fillColor = DEFAULT_FRCOL,
             zIndex
         } = options;
         const zIndexAttr = zIndex !== undefined ? ` zIndex="${zIndex}"` : '';
@@ -3733,7 +3879,7 @@ export class PluginBase {
         const currentBgColor = this.bgColor ||
             this.currentFile?.windowConfig?.backgroundColor ||
             this.fileData?.windowConfig?.backgroundColor ||
-            '#ffffff';
+            DEFAULT_BGCOL;
 
         const result = await this.showInputDialog(
             '背景色を入力してください（例: #ffffff）',
@@ -4663,6 +4809,12 @@ export class PluginBase {
         const div = document.createElement('div');
         div.className = 'figure-rect';
 
+        // id属性を保持（アニメーション対象の識別用）
+        const id = rectEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
         // 座標取得
         const left = parseFloat(rectEl.getAttribute('left')) || 0;
         const top = parseFloat(rectEl.getAttribute('top')) || 0;
@@ -4670,8 +4822,8 @@ export class PluginBase {
         const bottom = parseFloat(rectEl.getAttribute('bottom')) || 0;
 
         // スタイル属性取得
-        const fillColor = rectEl.getAttribute('fillColor') || '#ffffff';
-        const strokeColor = rectEl.getAttribute('strokeColor') || '#000000';
+        const fillColor = rectEl.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const strokeColor = rectEl.getAttribute('strokeColor') || DEFAULT_FRCOL;
         const lineWidth = parseFloat(rectEl.getAttribute('lineWidth')) || 1;
         const round = parseFloat(rectEl.getAttribute('round')) || 0;
         const zIndex = parseInt(rectEl.getAttribute('zIndex')) || 0;
@@ -4718,20 +4870,21 @@ export class PluginBase {
 
         // font要素からスタイル取得
         let fontSize = 12;
-        let fontColor = '#000000';
+        let fontColor = DEFAULT_CHCOL;
         const fontElements = docEl.querySelectorAll('font');
         fontElements.forEach(fontEl => {
             if (fontEl.hasAttribute('size')) {
                 fontSize = parseFloat(fontEl.getAttribute('size')) || 12;
             }
             if (fontEl.hasAttribute('color')) {
-                fontColor = fontEl.getAttribute('color') || '#000000';
+                fontColor = fontEl.getAttribute('color') || DEFAULT_CHCOL;
             }
         });
 
-        // text要素から配置取得
+        // text要素から配置とidを取得
         let textAlign = 'left';
         let zIndex = 0;
+        let textId = null;
         const textElements = docEl.querySelectorAll('text');
         textElements.forEach(textEl => {
             if (textEl.hasAttribute('align')) {
@@ -4740,18 +4893,37 @@ export class PluginBase {
             if (textEl.hasAttribute('zIndex')) {
                 zIndex = parseInt(textEl.getAttribute('zIndex')) || 0;
             }
+            if (textEl.hasAttribute('id')) {
+                textId = textEl.getAttribute('id');
+            }
         });
 
-        // テキスト内容を取得（要素ではない直接のテキストノード）
+        // id属性を保持（アニメーション対象の識別用）
+        if (textId) {
+            div.dataset.id = textId;
+        }
+
+        // テキスト内容を取得（直接のテキストノードまたは<p>要素内）
         let textContent = '';
-        const childNodes = docEl.childNodes;
-        for (let i = 0; i < childNodes.length; i++) {
-            const node = childNodes[i];
-            if (node.nodeType === Node.TEXT_NODE) {
-                const trimmed = node.textContent.trim();
-                if (trimmed) {
-                    textContent = trimmed;
-                    break;
+        // まず<p>要素を確認
+        const pElement = docEl.querySelector('p');
+        if (pElement) {
+            textContent = pElement.textContent.trim();
+            // <p>要素のalign属性を取得
+            if (pElement.hasAttribute('align')) {
+                textAlign = pElement.getAttribute('align') || 'left';
+            }
+        } else {
+            // <p>要素がない場合は直接のテキストノードを取得
+            const childNodes = docEl.childNodes;
+            for (let i = 0; i < childNodes.length; i++) {
+                const node = childNodes[i];
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const trimmed = node.textContent.trim();
+                    if (trimmed) {
+                        textContent = trimmed;
+                        break;
+                    }
                 }
             }
         }
@@ -4793,6 +4965,12 @@ export class PluginBase {
         const div = document.createElement('div');
         div.className = 'figure-line';
 
+        // id属性を保持（アニメーション対象の識別用）
+        const id = lineEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
         // 座標取得
         const left = parseFloat(lineEl.getAttribute('left')) || 0;
         const top = parseFloat(lineEl.getAttribute('top')) || 0;
@@ -4800,7 +4978,7 @@ export class PluginBase {
         const bottom = parseFloat(lineEl.getAttribute('bottom')) || 0;
 
         // スタイル属性取得
-        const strokeColor = lineEl.getAttribute('strokeColor') || '#000000';
+        const strokeColor = lineEl.getAttribute('strokeColor') || DEFAULT_FRCOL;
         const lineWidth = parseFloat(lineEl.getAttribute('lineWidth')) || 1;
         const zIndex = parseInt(lineEl.getAttribute('zIndex')) || 0;
 
@@ -4835,8 +5013,626 @@ export class PluginBase {
     }
 
     /**
+     * 円要素（<circle>）をDOM要素として描画
+     * @param {Element} circleEl - circle XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderCircleElement(circleEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-circle';
+
+        // id属性を保持（アニメーション対象の識別用）
+        const id = circleEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
+        // 座標取得（バウンディングボックス）
+        const left = parseFloat(circleEl.getAttribute('left')) || 0;
+        const top = parseFloat(circleEl.getAttribute('top')) || 0;
+        const right = parseFloat(circleEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(circleEl.getAttribute('bottom')) || 0;
+
+        // スタイル属性取得
+        const fillColor = circleEl.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const lineColor = circleEl.getAttribute('lineColor') || DEFAULT_FRCOL;
+        const lineWidth = parseFloat(circleEl.getAttribute('lineWidth')) || 1;
+        const zIndex = parseInt(circleEl.getAttribute('zIndex')) || 0;
+
+        const width = right - left;
+        const height = bottom - top;
+
+        // スタイル設定（CSSで円を描画）
+        div.style.position = 'absolute';
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.width = `${width}px`;
+        div.style.height = `${height}px`;
+        div.style.backgroundColor = fillColor;
+        div.style.border = `${lineWidth}px solid ${lineColor}`;
+        div.style.borderRadius = '50%';
+        div.style.boxSizing = 'border-box';
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * 多角形要素（<polygon>）をDOM要素として描画
+     * SVGを使用して描画
+     * @param {Element} polygonEl - polygon XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderPolygonElement(polygonEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-polygon';
+
+        // id属性を保持（アニメーション対象の識別用）
+        const id = polygonEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
+        // 座標取得（バウンディングボックス）
+        const left = parseFloat(polygonEl.getAttribute('left')) || 0;
+        const top = parseFloat(polygonEl.getAttribute('top')) || 0;
+        const right = parseFloat(polygonEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(polygonEl.getAttribute('bottom')) || 0;
+
+        // スタイル属性取得
+        const fillColor = polygonEl.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const lineColor = polygonEl.getAttribute('lineColor') || DEFAULT_FRCOL;
+        const lineWidth = parseFloat(polygonEl.getAttribute('lineWidth')) || 1;
+        const zIndex = parseInt(polygonEl.getAttribute('zIndex')) || 0;
+        const pointsAttr = polygonEl.getAttribute('points') || '';
+
+        const width = right - left;
+        const height = bottom - top;
+
+        // SVGで多角形を描画
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', width);
+        svg.setAttribute('height', height);
+        svg.style.position = 'absolute';
+        svg.style.left = `${left}px`;
+        svg.style.top = `${top}px`;
+        svg.style.overflow = 'visible';
+
+        // points属性を相対座標に変換
+        const relativePoints = pointsAttr.split(' ').map(point => {
+            const [x, y] = point.split(',').map(Number);
+            return `${x - left},${y - top}`;
+        }).join(' ');
+
+        const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        polygon.setAttribute('points', relativePoints);
+        polygon.setAttribute('fill', fillColor);
+        polygon.setAttribute('stroke', lineColor);
+        polygon.setAttribute('stroke-width', lineWidth);
+
+        svg.appendChild(polygon);
+
+        div.style.position = 'absolute';
+        div.style.left = '0';
+        div.style.top = '0';
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+        div.appendChild(svg);
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * 楕円要素（<ellipse>）をDOM要素として描画
+     * SVGで楕円を描画（TAD仕様ではcircleはellipseで表現）
+     * @param {Element} ellipseEl - ellipse XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderEllipseElement(ellipseEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-ellipse';
+
+        // id属性を保持
+        const id = ellipseEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
+        // 座標取得
+        const left = parseFloat(ellipseEl.getAttribute('left')) || 0;
+        const top = parseFloat(ellipseEl.getAttribute('top')) || 0;
+        const right = parseFloat(ellipseEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(ellipseEl.getAttribute('bottom')) || 0;
+
+        // スタイル属性取得
+        const fillColor = ellipseEl.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const lineColor = ellipseEl.getAttribute('lineColor') || ellipseEl.getAttribute('strokeColor') || DEFAULT_FRCOL;
+        const lineWidth = parseFloat(ellipseEl.getAttribute('lineWidth')) || 1;
+        const zIndex = parseInt(ellipseEl.getAttribute('zIndex')) || 0;
+
+        const width = right - left;
+        const height = bottom - top;
+        const rx = width / 2;
+        const ry = height / 2;
+
+        // SVGで楕円を描画
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', width);
+        svg.setAttribute('height', height);
+        svg.style.overflow = 'visible';
+
+        const ellipse = document.createElementNS('http://www.w3.org/2000/svg', 'ellipse');
+        ellipse.setAttribute('cx', rx);
+        ellipse.setAttribute('cy', ry);
+        ellipse.setAttribute('rx', rx);
+        ellipse.setAttribute('ry', ry);
+        ellipse.setAttribute('fill', fillColor);
+        ellipse.setAttribute('stroke', lineColor);
+        ellipse.setAttribute('stroke-width', lineWidth);
+
+        svg.appendChild(ellipse);
+
+        div.style.position = 'absolute';
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+        div.appendChild(svg);
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * 円弧要素（<arc>）をDOM要素として描画
+     * SVGで扇形を描画
+     * @param {Element} arcEl - arc XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderArcElement(arcEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-arc';
+
+        const id = arcEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
+        const left = parseFloat(arcEl.getAttribute('left')) || 0;
+        const top = parseFloat(arcEl.getAttribute('top')) || 0;
+        const right = parseFloat(arcEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(arcEl.getAttribute('bottom')) || 0;
+        const startAngle = parseFloat(arcEl.getAttribute('startAngle')) || 0;
+        const endAngle = parseFloat(arcEl.getAttribute('endAngle')) || 90;
+
+        const fillColor = arcEl.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const lineColor = arcEl.getAttribute('lineColor') || DEFAULT_FRCOL;
+        const lineWidth = parseFloat(arcEl.getAttribute('lineWidth')) || 1;
+        const zIndex = parseInt(arcEl.getAttribute('zIndex')) || 0;
+
+        const width = right - left;
+        const height = bottom - top;
+        const rx = width / 2;
+        const ry = height / 2;
+        const cx = rx;
+        const cy = ry;
+
+        // 角度をラジアンに変換（TADは時計回り、SVGは反時計回り）
+        const startRad = (startAngle * Math.PI) / 180;
+        const endRad = (endAngle * Math.PI) / 180;
+
+        // 始点と終点の座標
+        const x1 = cx + rx * Math.cos(startRad);
+        const y1 = cy + ry * Math.sin(startRad);
+        const x2 = cx + rx * Math.cos(endRad);
+        const y2 = cy + ry * Math.sin(endRad);
+
+        // 大円弧フラグ
+        const largeArc = (endAngle - startAngle) > 180 ? 1 : 0;
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', width);
+        svg.setAttribute('height', height);
+        svg.style.overflow = 'visible';
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        // 扇形パス（中心から始点、弧、中心へ戻る）
+        const d = `M ${cx} ${cy} L ${x1} ${y1} A ${rx} ${ry} 0 ${largeArc} 1 ${x2} ${y2} Z`;
+        path.setAttribute('d', d);
+        path.setAttribute('fill', fillColor);
+        path.setAttribute('stroke', lineColor);
+        path.setAttribute('stroke-width', lineWidth);
+
+        svg.appendChild(path);
+
+        div.style.position = 'absolute';
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+        div.appendChild(svg);
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * 弦要素（<chord>）をDOM要素として描画
+     * 円弧と直線で囲まれた領域
+     * @param {Element} chordEl - chord XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderChordElement(chordEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-chord';
+
+        const id = chordEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
+        const left = parseFloat(chordEl.getAttribute('left')) || 0;
+        const top = parseFloat(chordEl.getAttribute('top')) || 0;
+        const right = parseFloat(chordEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(chordEl.getAttribute('bottom')) || 0;
+        const startAngle = parseFloat(chordEl.getAttribute('startAngle')) || 0;
+        const endAngle = parseFloat(chordEl.getAttribute('endAngle')) || 90;
+
+        const fillColor = chordEl.getAttribute('fillColor') || DEFAULT_BGCOL;
+        const lineColor = chordEl.getAttribute('lineColor') || DEFAULT_FRCOL;
+        const lineWidth = parseFloat(chordEl.getAttribute('lineWidth')) || 1;
+        const zIndex = parseInt(chordEl.getAttribute('zIndex')) || 0;
+
+        const width = right - left;
+        const height = bottom - top;
+        const rx = width / 2;
+        const ry = height / 2;
+        const cx = rx;
+        const cy = ry;
+
+        const startRad = (startAngle * Math.PI) / 180;
+        const endRad = (endAngle * Math.PI) / 180;
+
+        const x1 = cx + rx * Math.cos(startRad);
+        const y1 = cy + ry * Math.sin(startRad);
+        const x2 = cx + rx * Math.cos(endRad);
+        const y2 = cy + ry * Math.sin(endRad);
+
+        const largeArc = (endAngle - startAngle) > 180 ? 1 : 0;
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', width);
+        svg.setAttribute('height', height);
+        svg.style.overflow = 'visible';
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        // 弦パス（始点から弧を描き、直線で始点へ戻る）
+        const d = `M ${x1} ${y1} A ${rx} ${ry} 0 ${largeArc} 1 ${x2} ${y2} Z`;
+        path.setAttribute('d', d);
+        path.setAttribute('fill', fillColor);
+        path.setAttribute('stroke', lineColor);
+        path.setAttribute('stroke-width', lineWidth);
+
+        svg.appendChild(path);
+
+        div.style.position = 'absolute';
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+        div.appendChild(svg);
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * 楕円弧要素（<elliptical_arc>）をDOM要素として描画
+     * 塗りつぶしのない楕円弧
+     * @param {Element} ellArcEl - elliptical_arc XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderEllipticalArcElement(ellArcEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-elliptical-arc';
+
+        const id = ellArcEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
+        const left = parseFloat(ellArcEl.getAttribute('left')) || 0;
+        const top = parseFloat(ellArcEl.getAttribute('top')) || 0;
+        const right = parseFloat(ellArcEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(ellArcEl.getAttribute('bottom')) || 0;
+        const startAngle = parseFloat(ellArcEl.getAttribute('startAngle')) || 0;
+        const endAngle = parseFloat(ellArcEl.getAttribute('endAngle')) || 90;
+
+        const lineColor = ellArcEl.getAttribute('lineColor') || DEFAULT_FRCOL;
+        const lineWidth = parseFloat(ellArcEl.getAttribute('lineWidth')) || 1;
+        const zIndex = parseInt(ellArcEl.getAttribute('zIndex')) || 0;
+
+        const width = right - left;
+        const height = bottom - top;
+        const rx = width / 2;
+        const ry = height / 2;
+        const cx = rx;
+        const cy = ry;
+
+        const startRad = (startAngle * Math.PI) / 180;
+        const endRad = (endAngle * Math.PI) / 180;
+
+        const x1 = cx + rx * Math.cos(startRad);
+        const y1 = cy + ry * Math.sin(startRad);
+        const x2 = cx + rx * Math.cos(endRad);
+        const y2 = cy + ry * Math.sin(endRad);
+
+        const largeArc = (endAngle - startAngle) > 180 ? 1 : 0;
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', width);
+        svg.setAttribute('height', height);
+        svg.style.overflow = 'visible';
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        // 弧のみ（塗りつぶしなし）
+        const d = `M ${x1} ${y1} A ${rx} ${ry} 0 ${largeArc} 1 ${x2} ${y2}`;
+        path.setAttribute('d', d);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', lineColor);
+        path.setAttribute('stroke-width', lineWidth);
+
+        svg.appendChild(path);
+
+        div.style.position = 'absolute';
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+        div.appendChild(svg);
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * 折れ線要素（<polyline>）をDOM要素として描画
+     * @param {Element} polylineEl - polyline XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderPolylineElement(polylineEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-polyline';
+
+        const id = polylineEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
+        const left = parseFloat(polylineEl.getAttribute('left')) || 0;
+        const top = parseFloat(polylineEl.getAttribute('top')) || 0;
+        const right = parseFloat(polylineEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(polylineEl.getAttribute('bottom')) || 0;
+        const pointsAttr = polylineEl.getAttribute('points') || '';
+
+        const lineColor = polylineEl.getAttribute('lineColor') || polylineEl.getAttribute('strokeColor') || DEFAULT_FRCOL;
+        const lineWidth = parseFloat(polylineEl.getAttribute('lineWidth')) || 1;
+        const zIndex = parseInt(polylineEl.getAttribute('zIndex')) || 0;
+
+        const width = right - left;
+        const height = bottom - top;
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', width);
+        svg.setAttribute('height', height);
+        svg.style.overflow = 'visible';
+
+        // points属性を相対座標に変換
+        const relativePoints = pointsAttr.split(' ').map(point => {
+            const [x, y] = point.split(',').map(Number);
+            return `${x - left},${y - top}`;
+        }).join(' ');
+
+        const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        polyline.setAttribute('points', relativePoints);
+        polyline.setAttribute('fill', 'none');
+        polyline.setAttribute('stroke', lineColor);
+        polyline.setAttribute('stroke-width', lineWidth);
+
+        svg.appendChild(polyline);
+
+        div.style.position = 'absolute';
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+        div.appendChild(svg);
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * 曲線要素（<curve>）をDOM要素として描画
+     * ベジェ曲線またはスプライン曲線
+     * @param {Element} curveEl - curve XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderCurveElement(curveEl, container) {
+        const div = document.createElement('div');
+        div.className = 'figure-curve';
+
+        const id = curveEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
+        const left = parseFloat(curveEl.getAttribute('left')) || 0;
+        const top = parseFloat(curveEl.getAttribute('top')) || 0;
+        const right = parseFloat(curveEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(curveEl.getAttribute('bottom')) || 0;
+        const pointsAttr = curveEl.getAttribute('points') || '';
+        const curveType = curveEl.getAttribute('type') || 'spline';
+
+        const lineColor = curveEl.getAttribute('lineColor') || DEFAULT_FRCOL;
+        const lineWidth = parseFloat(curveEl.getAttribute('lineWidth')) || 1;
+        const zIndex = parseInt(curveEl.getAttribute('zIndex')) || 0;
+
+        const width = right - left;
+        const height = bottom - top;
+
+        // ポイントを配列として解析
+        const points = pointsAttr.split(' ').map(point => {
+            const [x, y] = point.split(',').map(Number);
+            return { x: x - left, y: y - top };
+        });
+
+        if (points.length < 2) {
+            if (container) container.appendChild(div);
+            return div;
+        }
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', width);
+        svg.setAttribute('height', height);
+        svg.style.overflow = 'visible';
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        let d = `M ${points[0].x} ${points[0].y}`;
+
+        if (curveType === 'bezier' && points.length >= 4) {
+            // ベジェ曲線：制御点を使用
+            for (let i = 1; i < points.length - 2; i += 3) {
+                const cp1 = points[i];
+                const cp2 = points[i + 1];
+                const end = points[i + 2];
+                d += ` C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${end.x} ${end.y}`;
+            }
+        } else {
+            // スプライン曲線：カーブを滑らかに接続（簡易実装）
+            for (let i = 1; i < points.length; i++) {
+                const prev = points[i - 1];
+                const curr = points[i];
+                const midX = (prev.x + curr.x) / 2;
+                const midY = (prev.y + curr.y) / 2;
+                d += ` Q ${prev.x} ${prev.y}, ${midX} ${midY}`;
+            }
+            d += ` L ${points[points.length - 1].x} ${points[points.length - 1].y}`;
+        }
+
+        path.setAttribute('d', d);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', lineColor);
+        path.setAttribute('stroke-width', lineWidth);
+
+        svg.appendChild(path);
+
+        div.style.position = 'absolute';
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+        div.appendChild(svg);
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
+     * 画像要素（<image>）をDOM要素として描画
+     * @param {Element} imageEl - image XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @param {string} basePath - 画像パスのベースパス（実身ID）
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderImageElement(imageEl, container, basePath = '') {
+        const div = document.createElement('div');
+        div.className = 'figure-image';
+
+        const id = imageEl.getAttribute('id');
+        if (id) {
+            div.dataset.id = id;
+        }
+
+        const left = parseFloat(imageEl.getAttribute('left')) || 0;
+        const top = parseFloat(imageEl.getAttribute('top')) || 0;
+        const right = parseFloat(imageEl.getAttribute('right')) || 0;
+        const bottom = parseFloat(imageEl.getAttribute('bottom')) || 0;
+        const href = imageEl.getAttribute('href') || imageEl.getAttribute('src') || '';
+        const zIndex = parseInt(imageEl.getAttribute('zIndex')) || 0;
+
+        const width = right - left;
+        const height = bottom - top;
+
+        const img = document.createElement('img');
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'contain';
+
+        // 画像パスを解決
+        if (href) {
+            // basePathがある場合は相対パスを解決
+            if (basePath && !href.startsWith('http') && !href.startsWith('data:')) {
+                img.src = `../data/${href}`;
+            } else {
+                img.src = href;
+            }
+        }
+
+        div.style.position = 'absolute';
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.width = `${width}px`;
+        div.style.height = `${height}px`;
+        div.style.zIndex = zIndex;
+        div.style.pointerEvents = 'none';
+        div.appendChild(img);
+
+        if (container) {
+            container.appendChild(div);
+        }
+
+        return div;
+    }
+
+    /**
      * 図形要素全体をDOM要素として描画
-     * xmlTADのfigure要素内のrect、document、lineを描画
+     * xmlTADのfigure要素内の全図形要素を描画
      * @param {Document|Element} xmlDoc - XMLドキュメントまたはfigure要素
      * @param {HTMLElement} container - 描画先コンテナ
      * @returns {Object} 描画結果 { figureContainer, elementCount }
@@ -4881,6 +5677,69 @@ export class PluginBase {
             elementCount++;
         });
 
+        // circle要素を描画
+        const circleElements = figureEl.querySelectorAll('circle');
+        circleElements.forEach(circleEl => {
+            this.renderCircleElement(circleEl, figureContainer);
+            elementCount++;
+        });
+
+        // polygon要素を描画
+        const polygonElements = figureEl.querySelectorAll('polygon');
+        polygonElements.forEach(polygonEl => {
+            this.renderPolygonElement(polygonEl, figureContainer);
+            elementCount++;
+        });
+
+        // ellipse要素（楕円）を描画
+        const ellipseElements = figureEl.querySelectorAll('ellipse');
+        ellipseElements.forEach(ellipseEl => {
+            this.renderEllipseElement(ellipseEl, figureContainer);
+            elementCount++;
+        });
+
+        // arc要素（円弧）を描画
+        const arcElements = figureEl.querySelectorAll('arc');
+        arcElements.forEach(arcEl => {
+            this.renderArcElement(arcEl, figureContainer);
+            elementCount++;
+        });
+
+        // chord要素（弦）を描画
+        const chordElements = figureEl.querySelectorAll('chord');
+        chordElements.forEach(chordEl => {
+            this.renderChordElement(chordEl, figureContainer);
+            elementCount++;
+        });
+
+        // elliptical_arc要素（楕円弧）を描画
+        const ellipticalArcElements = figureEl.querySelectorAll('elliptical_arc');
+        ellipticalArcElements.forEach(ellipticalArcEl => {
+            this.renderEllipticalArcElement(ellipticalArcEl, figureContainer);
+            elementCount++;
+        });
+
+        // polyline要素（折れ線）を描画
+        const polylineElements = figureEl.querySelectorAll('polyline');
+        polylineElements.forEach(polylineEl => {
+            this.renderPolylineElement(polylineEl, figureContainer);
+            elementCount++;
+        });
+
+        // curve要素（曲線）を描画
+        const curveElements = figureEl.querySelectorAll('curve');
+        curveElements.forEach(curveEl => {
+            this.renderCurveElement(curveEl, figureContainer);
+            elementCount++;
+        });
+
+        // image要素（画像）を描画
+        const imageElements = figureEl.querySelectorAll('image');
+        imageElements.forEach(imageEl => {
+            this.renderImageElement(imageEl, figureContainer);
+            elementCount++;
+        });
+
         // document要素（テキストボックス）を描画
         const docElements = figureEl.querySelectorAll('document');
         docElements.forEach(docEl => {
@@ -4919,7 +5778,7 @@ export class PluginBase {
      * @returns {string} xmlTAD文字列
      */
     buildTextDocumentXml(textContent, options = {}) {
-        const fontSize = options.fontSize || 14;
+        const fontSize = options.fontSize || DEFAULT_FONT_SIZE;
         const align = options.align || 'left';
         const filename = options.filename || '';
 
@@ -4928,7 +5787,7 @@ export class PluginBase {
         xmlContent += '<p>\n';
 
         // フォントサイズ指定（デフォルト値以外の場合）- <p>内に配置
-        if (fontSize !== 14) {
+        if (fontSize !== DEFAULT_FONT_SIZE) {
             xmlContent += `<font size="${fontSize}"/>\n`;
         }
 
@@ -4973,11 +5832,11 @@ export class PluginBase {
                 heightPx: vobjbottom - vobjtop,
                 height: parseInt(linkElement.getAttribute('height')) || 0,
                 // スタイル属性
-                chsz: parseInt(linkElement.getAttribute('chsz')) || 14,
-                frcol: linkElement.getAttribute('frcol') || '#000000',
-                chcol: linkElement.getAttribute('chcol') || '#000000',
-                tbcol: linkElement.getAttribute('tbcol') || '#ffffff',
-                bgcol: linkElement.getAttribute('bgcol') || '#ffffff',
+                chsz: parseInt(linkElement.getAttribute('chsz')) || DEFAULT_FONT_SIZE,
+                frcol: linkElement.getAttribute('frcol') || DEFAULT_FRCOL,
+                chcol: linkElement.getAttribute('chcol') || DEFAULT_CHCOL,
+                tbcol: linkElement.getAttribute('tbcol') || DEFAULT_TBCOL,
+                bgcol: linkElement.getAttribute('bgcol') || DEFAULT_BGCOL,
                 dlen: parseInt(linkElement.getAttribute('dlen')) || 0,
                 // 表示属性
                 pictdisp: linkElement.getAttribute('pictdisp') || 'true',
@@ -5031,13 +5890,13 @@ export class PluginBase {
             vobjtop: baseData.vobjtop !== undefined ? baseData.vobjtop : 10,
             vobjright: baseData.vobjright !== undefined ? baseData.vobjright : 160,
             vobjbottom: baseData.vobjbottom !== undefined ? baseData.vobjbottom : 40,
-            heightPx: baseData.heightPx !== undefined ? baseData.heightPx : 30,
+            heightPx: baseData.heightPx !== undefined ? baseData.heightPx : DEFAULT_VOBJ_HEIGHT,
             // スタイル属性
-            chsz: baseData.chsz !== undefined ? baseData.chsz : 14,
-            frcol: baseData.frcol || '#000000',
-            chcol: baseData.chcol || '#000000',
-            tbcol: baseData.tbcol || '#ffffff',
-            bgcol: baseData.bgcol || '#ffffff',
+            chsz: baseData.chsz !== undefined ? baseData.chsz : DEFAULT_FONT_SIZE,
+            frcol: baseData.frcol || DEFAULT_FRCOL,
+            chcol: baseData.chcol || DEFAULT_CHCOL,
+            tbcol: baseData.tbcol || DEFAULT_TBCOL,
+            bgcol: baseData.bgcol || DEFAULT_BGCOL,
             dlen: baseData.dlen !== undefined ? baseData.dlen : 0,
             // 表示属性（文字列として）
             pictdisp: baseData.pictdisp !== undefined ? baseData.pictdisp : 'true',
@@ -5065,12 +5924,12 @@ export class PluginBase {
         linkElement.setAttribute('vobjtop', (virtualObj.vobjtop || 10).toString());
         linkElement.setAttribute('vobjright', (virtualObj.vobjright || 160).toString());
         linkElement.setAttribute('vobjbottom', (virtualObj.vobjbottom || 40).toString());
-        linkElement.setAttribute('height', (virtualObj.heightPx || 30).toString());
-        linkElement.setAttribute('chsz', (virtualObj.chsz || 14).toString());
-        linkElement.setAttribute('frcol', virtualObj.frcol || '#000000');
-        linkElement.setAttribute('chcol', virtualObj.chcol || '#000000');
-        linkElement.setAttribute('tbcol', virtualObj.tbcol || '#ffffff');
-        linkElement.setAttribute('bgcol', virtualObj.bgcol || '#ffffff');
+        linkElement.setAttribute('height', (virtualObj.heightPx || DEFAULT_VOBJ_HEIGHT).toString());
+        linkElement.setAttribute('chsz', (virtualObj.chsz || DEFAULT_FONT_SIZE).toString());
+        linkElement.setAttribute('frcol', virtualObj.frcol || DEFAULT_FRCOL);
+        linkElement.setAttribute('chcol', virtualObj.chcol || DEFAULT_CHCOL);
+        linkElement.setAttribute('tbcol', virtualObj.tbcol || DEFAULT_TBCOL);
+        linkElement.setAttribute('bgcol', virtualObj.bgcol || DEFAULT_BGCOL);
         linkElement.setAttribute('dlen', (virtualObj.dlen || 0).toString());
 
         // 表示属性（デフォルト値を設定）
@@ -5162,7 +6021,7 @@ export class PluginBase {
      * @param {number} defaultSize - デフォルトサイズ（pt）
      * @returns {number} 最大フォントサイズ（pt）
      */
-    calculateMaxFontSizeInContent(content, defaultSize = 14) {
+    calculateMaxFontSizeInContent(content, defaultSize = DEFAULT_FONT_SIZE) {
         let maxSize = defaultSize;
 
         // DocumentFragmentまたはElementの場合
@@ -5197,7 +6056,7 @@ export class PluginBase {
      * @param {number} defaultSize - デフォルトサイズ（pt）
      * @returns {number} 最大フォントサイズ（pt）
      */
-    calculateMaxFontSizeFromXml(paragraphContent, defaultSize = 14) {
+    calculateMaxFontSizeFromXml(paragraphContent, defaultSize = DEFAULT_FONT_SIZE) {
         let maxSize = defaultSize;
 
         // 自己閉じタグ形式: <font size="18"/>
@@ -5248,10 +6107,10 @@ PluginBase.VOBJ_DEFAULT_ATTRS = {
     typedisp: 'false',
     updatedisp: 'false',
     framedisp: 'true',
-    frcol: '#000000',
-    chcol: '#000000',
-    tbcol: '#ffffff',
-    bgcol: '#ffffff',
+    frcol: DEFAULT_FRCOL,
+    chcol: DEFAULT_CHCOL,
+    tbcol: DEFAULT_TBCOL,
+    bgcol: DEFAULT_BGCOL,
     chsz: '14',
     autoopen: 'false'
 };

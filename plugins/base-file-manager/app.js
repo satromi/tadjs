@@ -450,10 +450,10 @@ class BaseFileManager extends window.PluginBase {
                 link_id: `${baseFile.realId}_0.xtad`,
                 link_name: baseFile.displayName,
                 chsz: attrs.chsz || chsz,  // 仮身属性優先、なければメニュー文字サイズ
-                frcol: attrs.frcol || '#000000',
-                chcol: attrs.chcol || '#000000',
-                tbcol: attrs.tbcol || '#ffffff',
-                bgcol: attrs.bgcol || '#ffffff',
+                frcol: attrs.frcol || DEFAULT_FRCOL,
+                chcol: attrs.chcol || DEFAULT_CHCOL,
+                tbcol: attrs.tbcol || DEFAULT_TBCOL,
+                bgcol: attrs.bgcol || DEFAULT_BGCOL,
                 pictdisp: attrs.pictdisp || 'true',
                 namedisp: attrs.namedisp || 'true',
                 roledisp: attrs.roledisp || 'false',
@@ -499,8 +499,8 @@ class BaseFileManager extends window.PluginBase {
         vobj.draggable = true;
 
         // 仮身枠
-        vobj.style.border = '1px solid #000000';
-        vobj.style.backgroundColor = '#ffffff';
+        vobj.style.border = `1px solid ${DEFAULT_FRCOL}`;
+        vobj.style.backgroundColor = DEFAULT_BGCOL;
         vobj.style.padding = '4px 8px';
         vobj.style.margin = '8px';
         vobj.style.cursor = 'move';
@@ -513,7 +513,7 @@ class BaseFileManager extends window.PluginBase {
         title.className = 'base-file-title';
         title.textContent = baseFile.displayName;
         title.style.fontSize = chszPx + 'px';  // ピクセル値を使用
-        title.style.color = '#000000';
+        title.style.color = DEFAULT_CHCOL;
 
         vobj.appendChild(title);
 
@@ -688,7 +688,7 @@ class BaseFileManager extends window.PluginBase {
         // 現在の背景色を取得
         const currentBgColor = (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor)
             ? this.fileData.windowConfig.backgroundColor
-            : '#ffffff';
+            : DEFAULT_BGCOL;
 
         // ダイアログのHTML要素を作成
         const dialogHtml = `

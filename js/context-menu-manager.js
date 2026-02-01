@@ -580,7 +580,7 @@ export class ContextMenuManager {
 
             // プラグインアクション（基本文章編集）
             default:
-                if (action.startsWith('plugin-')) {
+                if (action && action.startsWith('plugin-')) {
                     this.handlePluginAction(action, data);
                 }
                 break;

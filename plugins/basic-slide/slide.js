@@ -46,6 +46,12 @@ function initSlidePlugin() {
             // 親実身情報
             this.parentXtad = null;        // 親実身のXTADデータ
 
+            // 実時間制御TAD関連
+            this.realtimeParser = null;    // RealtimeTadParserインスタンス
+            this.mediaManager = null;      // SlideMediaManagerインスタンス
+            this.timelineEngine = null;    // TimelineEngineインスタンス
+            this.currentRealtimeData = null; // 現在のスライドの<realtime>データ
+
             // 編集機能を無効化
             this.isModified = false;
             if (this.editor) {
@@ -70,6 +76,51 @@ function initSlidePlugin() {
 
             // ウィンドウリサイズ時に拡大率を再計算
             window.addEventListener('resize', () => this.applyScale());
+
+            // 実時間制御TADの初期化
+            this.initRealtimeMedia();
+        }
+
+        /**
+         * 実時間制御TADの初期化
+         */
+        initRealtimeMedia() {
+            // RealtimeTadParserをグローバルから取得
+            if (window.RealtimeTadParser) {
+                this.realtimeParser = new window.RealtimeTadParser();
+            }
+
+            // TimelineEngineを初期化
+            if (window.TimelineEngine) {
+                this.timelineEngine = new window.TimelineEngine(this);
+            }
+
+            // メディアコンテナを作成
+            this.createMediaContainer();
+        }
+
+        /**
+         * メディアコンテナを作成
+         */
+        createMediaContainer() {
+            const editorContainer = document.querySelector('.editor-container');
+            if (!editorContainer) return;
+
+            // 既存のコンテナがあれば削除
+            const existing = editorContainer.querySelector('.slide-media-container');
+            if (existing) {
+                existing.remove();
+            }
+
+            // メディアコンテナを作成
+            const container = document.createElement('div');
+            container.className = 'slide-media-container';
+            editorContainer.appendChild(container);
+
+            // SlideMediaManagerを初期化
+            if (window.SlideMediaManager) {
+                this.mediaManager = new window.SlideMediaManager(container, this);
+            }
         }
 
         /**
@@ -162,10 +213,12 @@ function initSlidePlugin() {
         async loadRealObjectData(realId) {
             return new Promise((resolve) => {
                 const messageId = this.generateMessageId('load-xtad');
+                let handled = false;
 
                 const handler = (data) => {
-                    if (data.messageId === messageId) {
-                        this.messageBus.off('real-object-loaded', handler);
+                    if (data.messageId === messageId && !handled) {
+                        handled = true;
+                        this.messageBus.off('real-object-loaded');
                         // レスポンスは { success: true, realObject: { xmlData: ..., metadata: { name: ... } } } 形式
                         if (data.success && data.realObject && data.realObject.xmlData) {
                             resolve({
@@ -187,7 +240,10 @@ function initSlidePlugin() {
 
                 // タイムアウト
                 setTimeout(() => {
-                    this.messageBus.off('real-object-loaded', handler);
+                    if (!handled) {
+                        handled = true;
+                        this.messageBus.off('real-object-loaded');
+                    }
                     resolve(null);
                 }, 10000);
             });
@@ -256,6 +312,9 @@ function initSlidePlugin() {
                 return;
             }
 
+            // 前スライドのメディアをクリーンアップ
+            this.cleanupMedia();
+
             this.currentSlideIndex = index;
             this.isEndScreen = false;
 
@@ -269,6 +328,9 @@ function initSlidePlugin() {
                 return;
             }
             const xtad = data.xmlData;
+
+            // 実時間データを抽出
+            this.currentRealtimeData = this.extractRealtimeData(xtad);
 
             // 終了画面から戻った場合、背景色を元に戻す
             const wrapper = document.getElementById('slide-wrapper');
@@ -295,14 +357,140 @@ function initSlidePlugin() {
             // 親クラスのrenderTADXMLを使用して完全描画
             await this.renderTADXML(xtad);
 
+            // メディア要素をセットアップ
+            if (this.currentRealtimeData && this.currentRealtimeData.type === 'realtime') {
+                await this.setupRealtimeMedia();
+            }
+
             // 編集不可に再設定
             this.editor.contentEditable = 'false';
 
-            // 拡大縮小を適用
+            // 拡大縮小を適用（メディア要素も含む）
             this.applyScale();
+
+            // autoplayメディアを再生開始
+            if (this.currentRealtimeData && this.currentRealtimeData.type === 'realtime') {
+                this.startAutoplayMedia();
+
+                // タイムラインアニメーションを実行
+                if (this.timelineEngine && this.currentRealtimeData.timeline) {
+                    this.timelineEngine.execute(this.currentRealtimeData.timeline);
+                }
+            }
 
             // ステータスバーを更新
             this.setStatus(`${index + 1} / ${this.slides.length}: ${slide.name}`);
+        }
+
+        /**
+         * 実時間データを抽出
+         * @param {string} xtad - xmlTAD文字列
+         * @returns {Object|null} パース結果
+         */
+        extractRealtimeData(xtad) {
+            if (!this.realtimeParser || !xtad) return null;
+            return this.realtimeParser.parse(xtad);
+        }
+
+        /**
+         * メディア要素をセットアップ
+         */
+        async setupRealtimeMedia() {
+            if (!this.mediaManager || !this.currentRealtimeData) return;
+
+            const { media } = this.currentRealtimeData;
+            if (!media || media.length === 0) return;
+
+            // ベースパスを設定
+            const slide = this.slides[this.currentSlideIndex];
+            if (slide && slide.realId) {
+                this.mediaManager.setBasePath(slide.realId);
+            }
+
+            // メディア要素を作成
+            for (const item of media) {
+                if (item.type === 'video') {
+                    const video = await this.mediaManager.createVideoElement(item);
+                    this._setupMediaEventListeners(video, item);
+                } else if (item.type === 'audio') {
+                    const audio = await this.mediaManager.createAudioElement(item);
+                    this._setupMediaEventListeners(audio, item);
+                }
+            }
+        }
+
+        /**
+         * メディア要素のイベントリスナー設定
+         */
+        _setupMediaEventListeners(mediaEl, mediaData) {
+            mediaEl.addEventListener('ended', () => {
+                const onended = mediaEl.dataset.onended;
+                if (onended) {
+                    this.handleMediaEnded(onended);
+                }
+            });
+
+            mediaEl.addEventListener('error', (e) => {
+                logger.warn('[BasicSlide] メディアエラー:', mediaEl.src);
+            });
+        }
+
+        /**
+         * onended属性のアクションを実行
+         * @param {string} action - "slide:next", "jump:label_id"等
+         */
+        handleMediaEnded(action) {
+            if (!action) return;
+
+            if (action === 'slide:next') {
+                this.nextSlide();
+            } else if (action === 'slide:prev') {
+                this.prevSlide();
+            } else if (action.startsWith('slide:index:')) {
+                const indexStr = action.substring(12);
+                const targetIndex = parseInt(indexStr, 10);
+                if (!isNaN(targetIndex)) {
+                    this.showSlide(targetIndex);
+                }
+            } else if (action.startsWith('play:')) {
+                const mediaId = action.substring(5);
+                const media = this.mediaManager?.getMediaById(mediaId);
+                if (media) {
+                    media.play().catch(() => {});
+                }
+            } else if (action.startsWith('pause:')) {
+                const mediaId = action.substring(6);
+                const media = this.mediaManager?.getMediaById(mediaId);
+                if (media) {
+                    media.pause();
+                }
+            } else if (action === 'stop') {
+                this.mediaManager?.stopAll();
+            }
+            // jump:label_id は同一スライド内のタイムライン制御（将来拡張）
+        }
+
+        /**
+         * autoplayメディアを再生開始
+         */
+        startAutoplayMedia() {
+            if (!this.mediaManager) return;
+            this.mediaManager.playAutoplayMedia();
+        }
+
+        /**
+         * メディアをクリーンアップ
+         */
+        cleanupMedia() {
+            // タイムラインアニメーションを停止
+            if (this.timelineEngine) {
+                this.timelineEngine.clear();
+            }
+            // メディアをクリア
+            if (this.mediaManager) {
+                this.mediaManager.clear();
+            }
+            this.currentRealtimeData = null;
         }
 
         /**
@@ -789,11 +977,13 @@ function initSlidePlugin() {
         enterPresentationModeAndWait() {
             return new Promise((resolve) => {
                 const messageId = this.generateMessageId('presentation-mode');
+                let handled = false;
 
                 // 完了メッセージを待機
                 const handler = (data) => {
-                    if (data.messageId === messageId) {
-                        this.messageBus.off('enter-presentation-mode-complete', handler);
+                    if (data.messageId === messageId && !handled) {
+                        handled = true;
+                        this.messageBus.off('enter-presentation-mode-complete');
                         // リサイズ完了を確実に待つ
                         requestAnimationFrame(() => {
                             resolve();
@@ -817,7 +1007,10 @@ function initSlidePlugin() {
 
                 // タイムアウト（フォールバック）
                 setTimeout(() => {
-                    this.messageBus.off('enter-presentation-mode-complete', handler);
+                    if (!handled) {
+                        handled = true;
+                        this.messageBus.off('enter-presentation-mode-complete');
+                    }
                     resolve();
                 }, 500);  // 500msでタイムアウト
             });
