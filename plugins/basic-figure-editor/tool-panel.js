@@ -27,6 +27,9 @@ class ToolPanel {
         this.gridMode = 'none'; // 'none', 'show', 'snap'
         this.gridInterval = 16; // px
 
+        // ズーム倍率
+        this.zoomLevel = 1.0;
+
         // ピクセルマップモード
         this.isPixelmapMode = false;
         this.pixelmapTool = 'pencil';
@@ -59,7 +62,19 @@ class ToolPanel {
                     this.lineConnectionType = event.data.settings.lineConnectionType || 'straight';
                     this.cornerRadius = event.data.settings.cornerRadius || 0;
                 }
+                if (event.data.settings.zoomLevel !== undefined) {
+                    this.zoomLevel = event.data.settings.zoomLevel;
+                    this.updateZoomButtonLabel();
+                }
                 this.updatePaletteIcons();
+            } else if (event.data && event.data.type === 'popup-zoom-level-change') {
+                // ズーム倍率変更
+                this.zoomLevel = event.data.zoomLevel;
+                this.updateZoomButtonLabel();
+                this.sendToEditor({
+                    type: 'update-zoom-level',
+                    zoomLevel: this.zoomLevel
+                });
             } else if (event.data && event.data.type === 'tool-selected') {
                 // ツール選択状態を更新
                 this.updateToolSelection(event.data.tool);
@@ -272,6 +287,11 @@ class ToolPanel {
             this.showPalettePopup('grid', e.currentTarget);
         });
 
+        // 倍率ボタン
+        document.getElementById('zoomPalette').addEventListener('click', (e) => {
+            this.showPalettePopup('zoom', e.currentTarget);
+        });
+
         // ウィンドウドラッグ機能（ボタン以外の領域でドラッグ可能）
         this.setupWindowDrag();
     }
@@ -350,6 +370,11 @@ class ToolPanel {
 
         if (paletteType === 'material') {
             this.showMaterialPopupInParent(buttonElement);
+            return;
+        }
+
+        if (paletteType === 'zoom') {
+            this.showZoomPopupInParent(buttonElement);
             return;
         }
 
@@ -681,6 +706,70 @@ class ToolPanel {
                 ...message,
                 fromToolPanel: true
             }, '*');
+        }
+    }
+
+    showZoomPopupInParent(buttonElement) {
+        const rect = buttonElement.getBoundingClientRect();
+        const iframeRect = window.frameElement.getBoundingClientRect();
+
+        // iframe内の座標を親ウィンドウの座標に変換
+        const x = iframeRect.left + rect.left;
+        const y = iframeRect.top + rect.bottom + 5;
+
+        const zoomOptions = [
+            { value: '0.125', label: 'x1/8' },
+            { value: '0.25', label: 'x1/4' },
+            { value: '0.5', label: 'x1/2' },
+            { value: '1', label: 'x1' },
+            { value: '2', label: 'x2' },
+            { value: '3', label: 'x3' },
+            { value: '4', label: 'x4' },
+            { value: '5', label: 'x5' },
+            { value: '8', label: 'x8' }
+        ];
+
+        const optionsHtml = zoomOptions.map(opt => {
+            const selected = parseFloat(opt.value) === this.zoomLevel ? 'selected' : '';
+            return `<option value="${opt.value}" ${selected}>${opt.label}</option>`;
+        }).join('');
+
+        const htmlContent = `
+            <label style="display: flex; align-items: center; gap: 8px;">
+                <span>倍率:</span>
+                <select id="zoomLevelSelect" style="padding: 4px; min-width: 80px;">
+                    ${optionsHtml}
+                </select>
+            </label>
+        `;
+
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: 'show-tool-panel-popup',
+                popupType: 'zoom',
+                htmlContent: htmlContent,
+                x: x,
+                y: y
+            }, '*');
+        }
+    }
+
+    updateZoomButtonLabel() {
+        const labels = {
+            0.125: 'x1/8',
+            0.25: 'x1/4',
+            0.5: 'x1/2',
+            1: 'x1',
+            2: 'x2',
+            3: 'x3',
+            4: 'x4',
+            5: 'x5',
+            8: 'x8'
+        };
+        const label = labels[this.zoomLevel] || ('x' + this.zoomLevel);
+        const zoomLabel = document.querySelector('.zoom-label');
+        if (zoomLabel) {
+            zoomLabel.textContent = label;
         }
     }
 

@@ -38,7 +38,7 @@ xmlTADは、BTRONの標準データフォーマットであるTAD (Text And Draw
 | `refCount` | number | 参照カウント（この実身を指す仮身の数） |
 | `recordCount` | number | レコード数（`_0.xtad`, `_1.xtad`...のファイル数） |
 | `editable` | boolean | 編集可能フラグ |
-| `deletable` | boolean | 削除可能フラグ |
+| `deletable` | boolean | 削除可能フラグ（デフォルト: `true`）。`false`の場合、屑実身操作での物理削除が禁止される。実身管理プラグインで変更可能 |
 | `readable` | boolean | 読み込み可能フラグ |
 | `maker` | string | 作成者/最終更新者名 |
 | `window` | object | ウィンドウ設定（位置、サイズ、各種フラグ） |
@@ -123,8 +123,7 @@ xmlTADには3種類の文書タイプがあります：
 #### `<paper>` - 用紙サイズ
 
 ```xml
-<paper type="doc" length="1403" width="992" binding="0" imposition="0"
-       top="94" bottom="94" left="94" right="47" />
+<paper type="doc" length="1403" width="992" binding="0" imposition="0" top="94" bottom="94" left="94" right="47" />
 ```
 
 | 属性 | 説明 | 単位 |
@@ -148,10 +147,10 @@ xmlTADには3種類の文書タイプがあります：
 
 ```xml
 <p>
-    <font size="14"/>
-    テキスト内容
-    <br/>
-    改行後のテキスト
+<font size="14"/>
+テキスト内容
+<br/>
+改行後のテキスト
 </p>
 ```
 
@@ -278,9 +277,7 @@ TRON文字コードの袋文字（外字・特殊文字）を含む場合に使�
 #### `<attend>` - 添え字（上付き/下付き）
 
 ```xml
-<attend type="0" position="0" unit="0" targetPosition="0" baseline="0">
-    下付き文字
-</attend>
+<attend type="0" position="0" unit="0" targetPosition="0" baseline="0">下付き文字</attend>
 ```
 
 | 属性 | 説明 | 値 |
@@ -517,7 +514,8 @@ l_atr = (lineType << 8) | lineWidth
 | lineWidth | 線幅（ピクセル） |
 | l_pat | 線パターン（0:実線, 1:破線, ...） |
 | f_pat | 塗りパターン（0:塗りなし, 1:塗りあり） |
-| angle | 回転角度 |
+| angle | 回転角度（楕円傾斜用） |
+| rotation | 図形回転角度（度数法、Canvas回転ラッパーによる描画回転） |
 | left/top/right/bottom | 境界座標 |
 | figRH, figRV | 角丸の水平/垂直半径（round=1時） |
 | strokeColor | 線色 |
@@ -532,14 +530,15 @@ l_atr = (lineType << 8) | lineWidth
          strokeColor="#000000" fillColor="#ffffff" zIndex="1"/>
 ```
 
-| 属性        | 説明                        |
-|-------------|-----------------------------|
-| lineType    | 線種（共通属性参照）        |
-| lineWidth   | 線幅（共通属性参照）        |
-| cx, cy      | 中心座標                    |
-| rx, ry      | X方向/Y方向の半径           |
-| strokeColor | 線色                        |
-| fillColor   | 塗りつぶし色                |
+| 属性 | 説明 |
+| ---- | ---- |
+| lineType | 線種（共通属性参照） |
+| lineWidth | 線幅（共通属性参照） |
+| cx, cy | 中心座標 |
+| rx, ry | X方向/Y方向の半径 |
+| rotation | 図形回転角度（度数法、Canvas回転ラッパーによる描画回転） |
+| strokeColor | 線色 |
+| fillColor | 塗りつぶし色 |
 
 **注意**: 円を描画する場合は`rx`と`ry`を同じ値に設定します。
 
@@ -646,6 +645,7 @@ l_atr = (lineType << 8) | lineWidth
 | lineWidth | 線幅（共通属性参照） |
 | points | 頂点座標のリスト |
 | f_pat | 塗りパターン（0:塗りなし, 1:塗りあり） |
+| rotation | 図形回転角度（度数法） |
 | fillColor | 塗りつぶし色 |
 | strokeColor | 線色 |
 
@@ -658,13 +658,14 @@ l_atr = (lineType << 8) | lineWidth
           points="0,0 50,50 100,0" zIndex="1"/>
 ```
 
-| 属性        | 説明               |
-|-------------|--------------------|
-| lineType    | 線種（共通属性参照）|
-| lineWidth   | 線幅（共通属性参照）|
-| round       | 角の丸め           |
-| strokeColor | 線色               |
-| points      | 座標点のリスト     |
+| 属性 | 説明 |
+| ---- | ---- |
+| lineType | 線種（共通属性参照） |
+| lineWidth | 線幅（共通属性参照） |
+| round | 角の丸め |
+| rotation | 図形回転角度（度数法） |
+| strokeColor | 線色 |
+| points | 座標点のリスト |
 | start_arrow, end_arrow | 始点/終点の矢印 |
 
 #### `<curve>` - 曲線（スプライン/ベジェ）
@@ -683,6 +684,7 @@ l_atr = (lineType << 8) | lineWidth
 | type | 曲線タイプ（"bezier", "spline"） |
 | closed | 閉曲線フラグ（"0":開, "1":閉） |
 | points | 制御点座標のリスト |
+| rotation | 図形回転角度（度数法） |
 | start_arrow, end_arrow | 始点/終点の矢印 |
 | strokeColor | 線色 |
 
@@ -752,12 +754,12 @@ l_atr = (lineType << 8) | lineWidth
 
 ```xml
 <document>
-    <docView viewleft="100" viewtop="50" viewright="300" viewbottom="80"/>
-    <docDraw drawleft="100" drawtop="50" drawright="300" drawbottom="80"/>
-    <docScale hunit="-72" vunit="-72"/>
-    <text lang="0" bpat="0" zIndex="4"/>
-    <font size="16" color="#000000"/>
-    テキスト内容
+<docView viewleft="100" viewtop="50" viewright="300" viewbottom="80"/>
+<docDraw drawleft="100" drawtop="50" drawright="300" drawbottom="80"/>
+<docScale hunit="-72" vunit="-72"/>
+<text lang="0" bpat="0" zIndex="4"/>
+<font size="16" color="#000000"/>
+テキスト内容
 </document>
 ```
 
@@ -776,15 +778,32 @@ l_atr = (lineType << 8) | lineWidth
 **標準形式**:
 
 ```xml
-<image lineType="0" lineWidth="1" l_pat="0" f_pat="0" angle="0" rotation="0"
-       flipH="false" flipV="false"
-       left="37" top="187" right="175" bottom="325"
-       href="019aaa4e-de25-72ad-8518-ab392b7ea301_0_0.png" zIndex="5"/>
+<image lineType="0" lineWidth="1" l_pat="0" f_pat="0" angle="0" rotation="0" flipH="false" flipV="false" left="37" top="187" right="175" bottom="325" href="019aaa4e-de25-72ad-8518-ab392b7ea301_0_0.png" zIndex="5"/>
 ```
 
-| 属性 | 説明 |
-|------|------|
-| href | 画像ファイル名 |
+**インライン図形セグメント**（文章セグメント内に埋め込まれた図形セグメント）:
+
+文章セグメント（`<document>`）内に`<figure>`要素を直接インラインで配置できる。表示時はbasic-figure-editorが埋め込みモードで描画を担当する。
+
+```xml
+<document>
+<p>
+テキスト内容...
+<figure>
+<figView top="0" left="0" right="400" bottom="300"/>
+<figDraw top="0" left="0" right="400" bottom="300"/>
+<figScale hunit="-72" vunit="-72"/>
+<group left="0" top="0" right="400" bottom="300">
+<rect .../>
+<polyline ... points="10,50 60,30 110,70 160,20"/>
+</group>
+</figure>
+続きのテキスト...
+</p>
+</document>
+```
+
+`<figure>`要素の構造は「4. 図形TAD（figure）」と同一。文章セグメント内に複数の`<figure>`を含むことが可能。
 | left/top/right/bottom | 画像の境界座標 |
 | lineType | 線種（0:実線, 1:破線, ...） |
 | lineWidth | 線幅（0:なし, 1以上:ピクセル数） |
@@ -800,9 +819,9 @@ l_atr = (lineType << 8) | lineWidth
 
 ```xml
 <group id="group1">
-    <rect ... />
-    <ellipse ... />
-    <line ... />
+<rect ... />
+<ellipse ... />
+<line ... />
 </group>
 ```
 
@@ -882,15 +901,7 @@ Base64エンコードされたデータ...
 仮身は`<link>`要素で表現され、文章TAD・図形TADの両方で使用されます。
 
 ```xml
-<link id="019a6c9b-e67e-7a35-a461-0d199550e4cf_0.xtad"
-      name="実身/仮身"
-      tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff"
-      width="150" heightpx="30"
-      dlen="0" chsz="14"
-      framedisp="true" namedisp="true" pictdisp="true"
-      roledisp="false" typedisp="false" updatedisp="false"
-      autoopen="false" applist="{}"
-      relationship="">表示名</link>
+<link id="019a6c9b-e67e-7a35-a461-0d199550e4cf_0.xtad" name="実身/仮身" tbcol="#e1f2f9" frcol="#000000" chcol="#000000" bgcol="#ffffff" width="150" heightpx="30" dlen="0" chsz="14" framedisp="true" namedisp="true" pictdisp="true" roledisp="false" typedisp="false" updatedisp="false" autoopen="false" applist="{}" relationship="">表示名</link>
 ```
 
 > **`relationship`属性**: 仮身固有の続柄を設定する属性です（詳細は5.2「仮身固有の続柄属性」参照）。続柄設定ダイアログで`タグ`形式（括弧なし）で入力した値がスペース区切りで保存されます。`[タグ]`形式で入力した値は実身JSON側に保存されます。
@@ -1436,6 +1447,7 @@ removeLinkElement(doc, linkId) {
 
 | 日付 | 版 | 内容 |
 |------|-----|------|
+| 2026-02-05 | 2.0 | 文章セグメント内のインライン`<figure>`要素対応（図形セグメントを直接埋め込み） |
 | 2026-01-17 | 1.9 | 実時間TAD（`<realtime>`）を文書タイプに追加、realtimeDataTAD.mdへのリンクを追加 |
 | 2025-12-31 | 1.0 | 初版作成 |
 | 2025-12-31 | 1.1 | unpack.js/tad.jsから網羅的にタグを追加 |

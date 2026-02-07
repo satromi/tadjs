@@ -2930,59 +2930,15 @@ ${dayText}
             submenu: editSubmenu
         });
 
-        // 仮身選択時のメニュー
-        if (this.contextMenuVirtualObject) {
-            try {
-                const realId = this.contextMenuVirtualObject.realId;
-
-                // 仮身操作メニュー
-                const virtualObjSubmenu = [
-                    { label: '開く', action: 'open-virtual-object', shortcut: 'Ctrl+O' },
-                    { label: '閉じる', action: 'close-virtual-object' },
-                    { separator: true },
-                    { label: '属性変更', action: 'change-virtual-object-attributes' },
-                    { label: '続柄設定', action: 'set-relationship' }
-                ];
-
-                menuDef.push({
-                    label: '仮身操作',
-                    submenu: virtualObjSubmenu
-                });
-
-                // 実身操作メニュー
-                const realObjSubmenu = [
-                    { label: '実身名変更', action: 'rename-real-object' },
-                    { label: '実身複製', action: 'duplicate-real-object' },
-                    { label: '管理情報', action: 'open-real-object-config' },
-                    { label: '仮身ネットワーク', action: 'open-virtual-object-network' },
-                    { label: '実身/仮身検索', action: 'open-real-object-search' }
-                ];
-
-                menuDef.push({
-                    label: '実身操作',
-                    submenu: realObjSubmenu
-                });
-
-                // 実行メニュー（applistから）
-                const applistData = await this.getAppListData(realId);
-                if (applistData && Object.keys(applistData).length > 0) {
-                    const executeSubmenu = [];
-                    for (const [pluginId, appInfo] of Object.entries(applistData)) {
-                        executeSubmenu.push({
-                            label: appInfo.name || pluginId,
-                            action: `execute-with-${pluginId}`
-                        });
-                    }
-
-                    menuDef.push({
-                        label: '実行',
-                        submenu: executeSubmenu
-                    });
-                }
-            } catch (error) {
-                // エラー時は仮身メニューなし
-            }
-        }
+        // 仮身選択時のメニュー（PluginBase共通メソッド、カレンダー固有のオプション付き）
+        await this.buildVirtualObjectContextMenus(menuDef, {
+            openAction: 'open-virtual-object',
+            closeAction: 'close-virtual-object',
+            configAction: 'open-real-object-config',
+            includeTrash: false,
+            includeDisabled: false,
+            openShortcut: 'Ctrl+O'
+        });
 
         return menuDef;
     }

@@ -29,6 +29,14 @@ export class UISettingsManager {
      * ステータスバーをセットアップして時刻表示を開始
      */
     setupStatusBar() {
+        // 既存タイマーのクリーンアップ（再呼び出し対策）
+        if (this._statusSetupTimeout) {
+            clearTimeout(this._statusSetupTimeout);
+        }
+        if (this.statusTimeUpdateInterval) {
+            clearInterval(this.statusTimeUpdateInterval);
+        }
+
         // 即座に時刻を更新
         this.updateStatusTime();
 
@@ -37,9 +45,8 @@ export class UISettingsManager {
         const msUntilNextSecond = 1000 - now.getMilliseconds();
 
         // 次の秒の開始時点で最初の更新を行い、その後1秒ごとに更新
-        setTimeout(() => {
+        this._statusSetupTimeout = setTimeout(() => {
             this.updateStatusTime();
-            // 以降は正確に1秒ごとに更新（IDを保存してクリーンアップ可能にする）
             this.statusTimeUpdateInterval = setInterval(() => this.updateStatusTime(), window.STATUS_UPDATE_INTERVAL_MS);
         }, msUntilNextSecond);
     }
@@ -56,7 +63,8 @@ export class UISettingsManager {
                           String(now.getMinutes()).padStart(2, '0') + ':' +
                           String(now.getSeconds()).padStart(2, '0');
 
-        document.getElementById('status-time').textContent = timeString;
+        const statusTimeEl = document.getElementById('status-time');
+        if (statusTimeEl) statusTimeEl.textContent = timeString;
     }
 
     /**
@@ -70,11 +78,13 @@ export class UISettingsManager {
             this.statusMessageTimer = null;
         }
 
-        document.getElementById('status-message').textContent = message;
+        const statusMsgEl = document.getElementById('status-message');
+        if (!statusMsgEl) return;
+        statusMsgEl.textContent = message;
 
         // 5秒後に元に戻す
         this.statusMessageTimer = setTimeout(() => {
-            document.getElementById('status-message').textContent = 'システム準備完了';
+            statusMsgEl.textContent = 'システム準備完了';
             this.statusMessageTimer = null;
         }, window.STATUS_MESSAGE_DURATION_MS);
     }
@@ -100,8 +110,13 @@ export class UISettingsManager {
             desktop.style.backgroundImage = 'none';
             desktop.style.backgroundColor = window.DESKTOP_BG_COLOR;
         } else {
-            const savedBackgrounds = JSON.parse(localStorage.getItem('systemBackgrounds') || '[]');
-            const background = savedBackgrounds.find(bg => bg.id == bgId);
+            let savedBackgrounds = [];
+            try {
+                savedBackgrounds = JSON.parse(localStorage.getItem('systemBackgrounds') || '[]');
+            } catch (e) {
+                logger.warn('systemBackgrounds の JSON パースに失敗:', e);
+            }
+            const background = savedBackgrounds.find(bg => bg.id === bgId);
 
             if (background) {
                 desktop.style.backgroundImage = `url('${background.data}')`;

@@ -2390,7 +2390,7 @@ plugins/
 | `refCount` | number | ○ | `1` | 参照カウント。この実身を指す仮身の数。0になると削除対象候補 |
 | `recordCount` | number | ○ | `1` | レコード数。`{realId}_0.xtad`, `{realId}_1.xtad`...のファイル数と一致 |
 | `editable` | boolean | ○ | `true` | 編集可能フラグ |
-| `deletable` | boolean | ○ | `true` | 削除可能フラグ |
+| `deletable` | boolean | ○ | `true` | 削除可能フラグ。`false`の場合、屑実身操作での物理削除が禁止される。新規実身作成時は必ず`true`を設定すること |
 | `readable` | boolean | ○ | `true` | 読み込み可能フラグ |
 | `maker` | string | ○ | `"TRON User"` | 作成者/最終更新者名。更新時にcurrentUserで上書きされる |
 | `window` | object | ○ | — | ウィンドウ設定（11.2.2参照） |

@@ -106,7 +106,8 @@ export class RealObjectSystem {
         if (metadata.recordCount === undefined || metadata.recordCount === null) {
             logger.debug(`recordCount未定義、ファイルシステムから検索します`);
             let count = 0;
-            while (true) {
+            const MAX_RECORDS = 1000;
+            while (count < MAX_RECORDS) {
                 const xtadPath = this.path.join(basePath, `${realId}_${count}.xtad`);
                 if (this.fs.existsSync(xtadPath)) {
                     count++;
@@ -311,7 +312,13 @@ export class RealObjectSystem {
                         const oldLinkIdPattern = new RegExp(refRealId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g');
                         updatedXtad = updatedXtad.replace(oldLinkIdPattern, newRefRealId);
                     } catch (error) {
-                        logger.warn(`参照実身のコピーに失敗（スキップ）: ${refRealId}`, error);
+                        logger.warn(`参照実身のコピーに失敗（リンク除去）: ${refRealId}`, error);
+                        // コピー失敗時はXTADからlink要素を除去（壊れたリンクを残さない）
+                        const removeLinkPattern = new RegExp(
+                            `<link[^>]*\\sid="${refRealId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}[^"]*"[^>]*>([\\s\\S]*?)</link>`,
+                            'g'
+                        );
+                        updatedXtad = updatedXtad.replace(removeLinkPattern, '$1');
                     }
                 }
 
@@ -531,7 +538,8 @@ export class RealObjectSystem {
 
         // レコード削除（すべてのレコードファイルを探して削除）
         let recordNo = 0;
-        while (true) {
+        const MAX_RECORDS = 1000;
+        while (recordNo < MAX_RECORDS) {
             const xtadPath = this.path.join(basePath, `${realId}_${recordNo}.xtad`);
             if (this.fs.existsSync(xtadPath)) {
                 this.fs.unlinkSync(xtadPath);
@@ -549,29 +557,37 @@ export class RealObjectSystem {
             logger.debug(`アイコン削除: ${icoPath}`);
         }
 
-        // PNG画像ファイル削除（realId_recordNo_imgNo.png パターン）
+        // 関連リソースファイル削除（realId_*.*やrealId.* パターン）
+        // 画像(png,jpg,gif)、動画(mp4,webm)、音声(mp3,wav)、インポートファイル等
         try {
             const files = this.fs.readdirSync(basePath);
-            const pngPattern = new RegExp(`^${realId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}_\\d+_\\d+\\.png$`);
-            let pngDeleteCount = 0;
+            const escapedId = realId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+            // {realId}_数字_数字.拡張子 または {realId}.拡張子 にマッチ（.json/.xtad/.icoは除外）
+            const resourcePattern = new RegExp(`^${escapedId}([_.])`);
+            const excludeExts = ['.json', '.xtad', '.ico'];
+            let resourceDeleteCount = 0;
 
             for (const file of files) {
-                if (pngPattern.test(file)) {
-                    const pngPath = this.path.join(basePath, file);
+                if (resourcePattern.test(file)) {
+                    const ext = this.path.extname(file).toLowerCase();
+                    if (excludeExts.includes(ext)) {
+                        continue;
+                    }
+                    const filePath = this.path.join(basePath, file);
                     try {
-                        this.fs.unlinkSync(pngPath);
-                        logger.debug(`PNG画像削除: ${pngPath}`);
-                        pngDeleteCount++;
+                        this.fs.unlinkSync(filePath);
+                        logger.debug(`リソースファイル削除: ${filePath}`);
+                        resourceDeleteCount++;
                     } catch (error) {
-                        logger.error(`PNG画像削除失敗: ${file}`, error);
+                        logger.error(`リソースファイル削除失敗: ${file}`, error);
                     }
                 }
             }
-            if (pngDeleteCount > 0) {
-                logger.debug(`PNG画像ファイル ${pngDeleteCount} 個を削除`);
+            if (resourceDeleteCount > 0) {
+                logger.debug(`リソースファイル ${resourceDeleteCount} 個を削除`);
             }
         } catch (error) {
-            logger.debug(`PNG画像ファイルの検索中にエラー:`, error);
+            logger.debug(`リソースファイルの検索中にエラー:`, error);
         }
 
         logger.debug(`実身削除完了: ${realId} (${recordNo}レコード)`);
@@ -813,8 +829,8 @@ export class RealObjectSystem {
                         }
                     }
                     logger.debug(`参照カウント0のため削除: ${refRealId}`);
-                    // 再帰呼び出しではsafetyCheck=false（初回のみチェック）
-                    await this.physicalDeleteRealObject(refRealId, processedIds, false);
+                    // 再帰呼び出しでもsafetyCheckを維持（孫レベル以降も参照チェック）
+                    await this.physicalDeleteRealObject(refRealId, processedIds, safetyCheck);
                 }
             } catch (error) {
                 logger.warn(`参照先実身の処理エラー: ${refRealId}`, error);

@@ -89,7 +89,7 @@ export class MessageRouter {
             const result = await config.handler(data, event);
 
             // 自動レスポンス送信
-            if (config.autoResponse && event.source) {
+            if (config.autoResponse && event.source && this.tadjs?.parentMessageBus) {
                 this.tadjs.parentMessageBus.respondTo(
                     event.source,
                     config.responseType,
@@ -107,7 +107,7 @@ export class MessageRouter {
             logger.error(`[MessageRouter] ハンドラーエラー (${messageType}):`, error);
 
             // エラーレスポンス送信
-            if (config.autoResponse && event.source) {
+            if (config.autoResponse && event.source && this.tadjs?.parentMessageBus) {
                 this.tadjs.parentMessageBus.respondTo(
                     event.source,
                     config.responseType,

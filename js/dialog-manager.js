@@ -395,7 +395,7 @@ export class DialogManager {
             // ダイアログリストボックスにカスタムスクロールバーを適用
             this._initDialogListboxScrollbars(messageText);
 
-            // innerHTML で挿入された script タグは実行されないため、手動で実行
+            // innerHTML で挿入された script タグは実行されないため、新しいscript要素として再構築
             // DOM要素が準備された後に実行するため setTimeout を使用
             const scripts = messageText.querySelectorAll('script');
             scripts.forEach(script => {
@@ -403,7 +403,9 @@ export class DialogManager {
                 script.remove();
                 setTimeout(() => {
                     try {
-                        eval(scriptContent);
+                        const newScript = document.createElement('script');
+                        newScript.textContent = scriptContent;
+                        messageText.appendChild(newScript);
                     } catch (e) {
                         console.error('ダイアログスクリプト実行エラー:', e);
                     }

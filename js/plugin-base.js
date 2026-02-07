@@ -14,7 +14,8 @@ import {
     DEFAULT_BGCOL,
     DEFAULT_VOBJ_HEIGHT,
     escapeXml as escapeXmlUtil,
-    unescapeXml as unescapeXmlUtil
+    unescapeXml as unescapeXmlUtil,
+    rgbToHex as rgbToHexUtil
 } from './util.js';
 import { getLogger } from './logger.js';
 import { throttle } from './performance-utils.js';
@@ -1876,6 +1877,14 @@ export class PluginBase {
         // コンテナにスクロールコンテンツ用クラス追加
         container.classList.add('plugin-scrollbar-content');
 
+        // 既存のObserverを切断（再初期化対策）
+        if (this._scrollbarResizeObserver) {
+            this._scrollbarResizeObserver.disconnect();
+        }
+        if (this._scrollbarMutationObserver) {
+            this._scrollbarMutationObserver.disconnect();
+        }
+
         // カスタムスクロールバー状態を保存
         this._customScrollbars = this._customScrollbars || {};
         this._scrollbarWrapper = wrapper;
@@ -1903,16 +1912,16 @@ export class PluginBase {
         }, 16));
 
         // ResizeObserverでコンテナサイズ変更を監視
-        const resizeObserver = new ResizeObserver(() => {
+        this._scrollbarResizeObserver = new ResizeObserver(() => {
             this._updateScrollbarVisibility(container, 'vertical');
             this._updateScrollbarVisibility(container, 'horizontal');
             this._updateScrollbarThumbPosition(container, 'vertical');
             this._updateScrollbarThumbPosition(container, 'horizontal');
         });
-        resizeObserver.observe(container);
+        this._scrollbarResizeObserver.observe(container);
 
         // MutationObserverでコンテンツ変更・属性変更を監視
-        const mutationObserver = new MutationObserver(() => {
+        this._scrollbarMutationObserver = new MutationObserver(() => {
             // レイアウト再計算を待ってから更新
             requestAnimationFrame(() => {
                 this._updateScrollbarVisibility(container, 'vertical');
@@ -1922,7 +1931,7 @@ export class PluginBase {
             });
         });
         // childList: コンテンツ追加/削除, attributes: class変更（タブ切替）, subtree: 子孫要素も監視
-        mutationObserver.observe(container, {
+        this._scrollbarMutationObserver.observe(container, {
             childList: true,
             subtree: true,
             attributes: true,
@@ -2338,6 +2347,33 @@ export class PluginBase {
             type: 'group',
             group: group
         });
+    }
+
+    /**
+     * 図形セグメントをクリップボードに設定（xmlTAD形式）
+     * @param {string} xmlTad - xmlTAD形式の図形セグメントデータ
+     * @param {Object} [options] - オプション
+     * @param {number} [options.width] - 図形領域の幅
+     * @param {number} [options.height] - 図形領域の高さ
+     * @param {string} [options.sourcePlugin] - コピー元プラグイン名
+     * @param {string} [options.sourceRealId] - コピー元の実身ID（pixelmap等の画像ファイル参照解決用）
+     */
+    setFigureSegmentClipboard(xmlTad, options = {}) {
+        if (!xmlTad) {
+            logger.error(`[${this.pluginName}] setFigureSegmentClipboard: xmlTadが空です`);
+            return;
+        }
+        const clipboardData = {
+            type: 'figure-segment',
+            xmlTad: xmlTad,
+            width: options.width || 0,
+            height: options.height || 0,
+            sourcePlugin: options.sourcePlugin || this.pluginName
+        };
+        if (options.sourceRealId) {
+            clipboardData.sourceRealId = options.sourceRealId;
+        }
+        this.setClipboard(clipboardData);
     }
 
     /**
@@ -3574,33 +3610,7 @@ export class PluginBase {
      * @returns {string} #rrggbb形式の色（変換不可の場合は空文字列）
      */
     rgbToHex(color) {
-        if (!color) return '';
-
-        let result;
-
-        // 既に#rrggbb形式の場合
-        if (color.startsWith('#')) {
-            result = color;
-        } else {
-            // rgb() または rgba() 形式の場合
-            const rgbMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
-            if (rgbMatch) {
-                const r = parseInt(rgbMatch[1], 10);
-                const g = parseInt(rgbMatch[2], 10);
-                const b = parseInt(rgbMatch[3], 10);
-                result = `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
-            } else {
-                // 変換不可
-                result = color;
-            }
-        }
-
-        // Chrome workaround: #010101（黒色の代替）を#000000に正規化
-        if (result && result.toLowerCase() === '#010101') {
-            result = '#000000';
-        }
-
-        return result;
+        return rgbToHexUtil(color);
     }
 
     /**
@@ -4226,6 +4236,154 @@ export class PluginBase {
      */
     closeRealObject() {
         window.RealObjectSystem.closeRealObject(this);
+    }
+
+    /**
+     * 仮身選択時のコンテキストメニュー項目を構築してmenuDefに追加
+     * contextMenuVirtualObjectが設定されている場合のみ動作
+     *
+     * 追加されるメニュー:
+     * - 仮身操作（開く、閉じる、属性変更、続柄設定）
+     * - 実身操作（実身名変更、実身複製、管理情報、仮身ネットワーク、実身/仮身検索）
+     * - 屑実身操作（オプション）
+     * - 実行（applistから動的生成）
+     *
+     * @param {Array} menuDef - メニュー定義配列（項目が追加される）
+     * @param {Object} [options={}] - カスタマイズオプション
+     * @param {string} [options.openAction='open-real-object'] - 「開く」のアクション名
+     * @param {string} [options.closeAction='close-real-object'] - 「閉じる」のアクション名
+     * @param {string} [options.configAction='open-realobject-config'] - 「管理情報」のアクション名
+     * @param {boolean} [options.includeTrash=true] - 屑実身操作メニューを含めるか
+     * @param {boolean} [options.includeDisabled=true] - 開く/閉じるのdisabled属性を設定するか
+     * @param {string} [options.openShortcut] - 「開く」のショートカットキー表示
+     */
+    async buildVirtualObjectContextMenus(menuDef, options = {}) {
+        if (!this.contextMenuVirtualObject) return;
+
+        const {
+            openAction = 'open-real-object',
+            closeAction = 'close-real-object',
+            configAction = 'open-realobject-config',
+            includeTrash = true,
+            includeDisabled = true,
+            openShortcut = undefined
+        } = options;
+
+        try {
+            const realId = this.contextMenuVirtualObject.realId;
+            const isOpened = this.openedRealObjects ? this.openedRealObjects.has(realId) : false;
+
+            // 仮身操作メニュー
+            const openItem = { label: '開く', action: openAction };
+            const closeItem = { label: '閉じる', action: closeAction };
+            if (includeDisabled) {
+                openItem.disabled = isOpened;
+                closeItem.disabled = !isOpened;
+            }
+            if (openShortcut) {
+                openItem.shortcut = openShortcut;
+            }
+
+            menuDef.push({
+                label: '仮身操作',
+                submenu: [
+                    openItem,
+                    closeItem,
+                    { separator: true },
+                    { label: '属性変更', action: 'change-virtual-object-attributes' },
+                    { label: '続柄設定', action: 'set-relationship' }
+                ]
+            });
+
+            // 実身操作メニュー
+            menuDef.push({
+                label: '実身操作',
+                submenu: [
+                    { label: '実身名変更', action: 'rename-real-object' },
+                    { label: '実身複製', action: 'duplicate-real-object' },
+                    { label: '管理情報', action: configAction },
+                    { label: '仮身ネットワーク', action: 'open-virtual-object-network' },
+                    { label: '実身/仮身検索', action: 'open-real-object-search' }
+                ]
+            });
+
+            // 屑実身操作メニュー
+            if (includeTrash) {
+                menuDef.push({
+                    label: '屑実身操作',
+                    action: 'open-trash-real-objects'
+                });
+            }
+
+            // 実行メニュー（applistから動的生成）
+            const applistData = await this.getAppListData(this.contextMenuVirtualObject.realId);
+            if (applistData && Object.keys(applistData).length > 0) {
+                const executeSubmenu = [];
+                for (const [pluginId, appInfo] of Object.entries(applistData)) {
+                    executeSubmenu.push({
+                        label: appInfo.name || pluginId,
+                        action: `execute-with-${pluginId}`
+                    });
+                }
+                menuDef.push({
+                    label: '実行',
+                    submenu: executeSubmenu
+                });
+            }
+        } catch (error) {
+            logger.error(`[${this.pluginName}] buildVirtualObjectContextMenus エラー:`, error);
+        }
+    }
+
+    // ========================================
+    // 子iframe メッセージ転送（共通実装）
+    // ========================================
+
+    /**
+     * 開いた仮身内プラグイン（子iframe）とのメッセージ転送を設定
+     *
+     * 開いた仮身表示時、子iframeからのリクエストを親ウィンドウに中継し、
+     * 親ウィンドウからのレスポンスを子iframeに中継する。
+     *
+     * @param {Object} config - 転送設定
+     * @param {string[]} [config.forwardToParent=[]] - 子iframe→親ウィンドウに転送するメッセージタイプ
+     * @param {string[]} [config.forwardToChildren=[]] - 親ウィンドウ→子iframeに転送するメッセージタイプ
+     *
+     * @example
+     * this.setupChildIframeMessageForwarding({
+     *     forwardToParent: ['load-image-file', 'get-image-file-path'],
+     *     forwardToChildren: ['load-image-response', 'save-image-response', 'image-file-path-response']
+     * });
+     */
+    setupChildIframeMessageForwarding(config = {}) {
+        const {
+            forwardToParent = [],
+            forwardToChildren = []
+        } = config;
+
+        // 子iframe からのリクエストを親ウィンドウに転送
+        for (const messageType of forwardToParent) {
+            this.messageBus.on(messageType, (data) => {
+                this.messageBus.send(messageType, data);
+            });
+        }
+
+        // 親ウィンドウからのレスポンスを子iframe に転送
+        for (const messageType of forwardToChildren) {
+            this.messageBus.on(messageType, (data) => {
+                const iframes = document.querySelectorAll('iframe');
+                iframes.forEach(iframe => {
+                    if (iframe.contentWindow) {
+                        iframe.contentWindow.postMessage({
+                            type: messageType,
+                            ...data,
+                            _messageBus: true,
+                            _from: this.pluginName
+                        }, '*');
+                    }
+                });
+            });
+        }
     }
 
     // ========================================

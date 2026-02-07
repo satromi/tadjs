@@ -8,13 +8,16 @@ import { getLogger } from './logger.js';
 
 const logger = getLogger('IconCacheManager');
 
+// 失敗キャッシュのTTL（ミリ秒）: この期間を過ぎると再取得を試行
+const FAILURE_CACHE_TTL = 30000;
+
 export class IconCacheManager {
     /**
      * @param {MessageBus} messageBus - MessageBusインスタンス
      * @param {string} logPrefix - ログメッセージのプレフィックス（例: '[EDITOR]'）
      */
     constructor(messageBus, logPrefix = '') {
-        this.iconCache = new Map(); // realId -> Base64データ
+        this.iconCache = new Map(); // realId -> Base64データ または { failed: true, timestamp: number }
         this.messageBus = messageBus;
         this.logPrefix = logPrefix;
     }
@@ -28,8 +31,18 @@ export class IconCacheManager {
         // キャッシュチェック
         if (this.iconCache.has(realId)) {
             const cachedData = this.iconCache.get(realId);
-            logger.debug(`${this.logPrefix} アイコンキャッシュヒット:`, realId, 'データあり:', !!cachedData);
-            return cachedData;
+            // 失敗キャッシュのTTLチェック
+            if (cachedData && cachedData.failed) {
+                if (Date.now() - cachedData.timestamp > FAILURE_CACHE_TTL) {
+                    this.iconCache.delete(realId);
+                    // TTL超過: 再取得を試行
+                } else {
+                    return null;
+                }
+            } else {
+                logger.debug(`${this.logPrefix} アイコンキャッシュヒット:`, realId, 'データあり:', !!cachedData);
+                return cachedData;
+            }
         }
 
         // 親ウィンドウにアイコンファイルのパスを要求
@@ -61,25 +74,25 @@ export class IconCacheManager {
                         return base64;
                     } catch (error) {
                         logger.error(`${this.logPrefix} アイコンファイル読み込みエラー:`, realId, error);
-                        this.iconCache.set(realId, null);
+                        this.iconCache.set(realId, { failed: true, timestamp: Date.now() });
                         return null;
                     }
                 } else {
                     // ネストしたiframe環境（プレビュー表示等）では require が使えないため、これは想定内の動作
                     logger.debug(`${this.logPrefix} require not available (nested iframe environment)`);
-                    this.iconCache.set(realId, null);
+                    this.iconCache.set(realId, { failed: true, timestamp: Date.now() });
                     return null;
                 }
             } else {
                 // アイコンが存在しない場合はnullを返す
-                this.iconCache.set(realId, null);
+                this.iconCache.set(realId, { failed: true, timestamp: Date.now() });
                 logger.debug(`${this.logPrefix} アイコン読み込み失敗（親から）:`, realId);
                 return null;
             }
         } catch (error) {
             // タイムアウト（アイコンがない場合も多いのでnullを返す）
             if (!this.iconCache.has(realId)) {
-                this.iconCache.set(realId, null);
+                this.iconCache.set(realId, { failed: true, timestamp: Date.now() });
             }
             logger.debug(`${this.logPrefix} アイコン読み込みタイムアウト:`, realId);
             return null;
@@ -92,7 +105,10 @@ export class IconCacheManager {
      * @returns {string|null|undefined} Base64データ、またはnull（キャッシュミスの場合はundefined）
      */
     getFromCache(realId) {
-        return this.iconCache.get(realId);
+        const cached = this.iconCache.get(realId);
+        // 失敗キャッシュの場合はnullとして返す
+        if (cached && cached.failed) return null;
+        return cached;
     }
 
     /**

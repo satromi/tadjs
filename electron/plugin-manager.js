@@ -526,6 +526,17 @@ class PluginManager {
                 hiddenIframe.src = plugin.main; // nodeintegration設定後にsrcを設定
                 document.body.appendChild(hiddenIframe);
 
+                // 非表示iframeからのclose-windowメッセージを受け取ってDOMから削除
+                const handleHiddenIframeMessage = (event) => {
+                    if (event.source !== hiddenIframe.contentWindow) return;
+                    if (event.data && event.data.type === 'close-window') {
+                        console.log(`[PluginManager] 非表示iframe close-window受信、DOM削除: ${hiddenIframeId}`);
+                        window.removeEventListener('message', handleHiddenIframeMessage);
+                        hiddenIframe.remove();
+                    }
+                };
+                window.addEventListener('message', handleHiddenIframeMessage);
+
                 // iframeが読み込まれたら、initメッセージを送信
                 hiddenIframe.addEventListener('load', () => {
                     const initData = {

@@ -2,7 +2,6 @@
  * electron/main.js
  * TADjs Desktop アプリケーションのメインプロセス
  * 
- * 
  */
 
 const electron = require('electron');
@@ -344,7 +343,7 @@ ipcMain.handle('open-file-dialog', async () => {
 
     if (!result.canceled && result.filePaths.length > 0) {
         const filePath = result.filePaths[0];
-        const fileData = fs.readFileSync(filePath);
+        const fileData = await fs.promises.readFile(filePath);
         return {
             path: filePath,
             name: path.basename(filePath),
@@ -389,7 +388,7 @@ ipcMain.handle('save-file-dialog', async (event, defaultName) => {
 ipcMain.handle('save-file', async (event, filePath, data) => {
     try {
         const buffer = Buffer.from(data);
-        fs.writeFileSync(filePath, buffer);
+        await fs.promises.writeFile(filePath, buffer);
         return { success: true };
     } catch (error) {
         return { success: false, error: error.message };
@@ -399,7 +398,7 @@ ipcMain.handle('save-file', async (event, filePath, data) => {
 // IPC通信: ファイル読み込み
 ipcMain.handle('read-file', async (event, filePath) => {
     try {
-        const fileData = fs.readFileSync(filePath);
+        const fileData = await fs.promises.readFile(filePath);
         return {
             success: true,
             data: Array.from(fileData)
@@ -412,7 +411,7 @@ ipcMain.handle('read-file', async (event, filePath) => {
 // IPC通信: ファイル削除
 ipcMain.handle('delete-file', async (event, filePath) => {
     try {
-        fs.unlinkSync(filePath);
+        await fs.promises.unlink(filePath);
         return { success: true };
     } catch (error) {
         return { success: false, error: error.message };
@@ -723,22 +722,25 @@ ipcMain.handle('pty-spawn', async (event, options) => {
                 env: process.env
             });
 
-            ptyProcesses.set(windowId, { type: 'pty', process: ptyProcess });
+            // onData/onExitのdisposableを保存してkill時にdispose可能にする
+            const disposables = [];
 
             // データ受信時にレンダラーへ転送
-            ptyProcess.onData((data) => {
+            disposables.push(ptyProcess.onData((data) => {
                 if (!event.sender.isDestroyed()) {
                     event.sender.send('pty-data', { windowId, data });
                 }
-            });
+            }));
 
             // プロセス終了時
-            ptyProcess.onExit(({ exitCode }) => {
+            disposables.push(ptyProcess.onExit(({ exitCode }) => {
                 if (!event.sender.isDestroyed()) {
                     event.sender.send('pty-exit', { windowId, exitCode });
                 }
                 ptyProcesses.delete(windowId);
-            });
+            }));
+
+            ptyProcesses.set(windowId, { type: 'pty', process: ptyProcess, disposables });
 
             logger.info(`PTY spawned (node-pty): windowId=${windowId}, pid=${ptyProcess.pid}`);
             return { success: true, pid: ptyProcess.pid };
@@ -836,6 +838,10 @@ ipcMain.handle('pty-resize', async (event, { windowId, cols, rows }) => {
 ipcMain.handle('pty-kill', async (event, { windowId }) => {
     const entry = ptyProcesses.get(windowId);
     if (entry) {
+        // disposableをdisposeしてイベントリスナーを解放
+        if (entry.disposables) {
+            entry.disposables.forEach(d => d.dispose());
+        }
         if (entry.type === 'pty') {
             entry.process.kill();
         } else {
@@ -852,6 +858,9 @@ ipcMain.handle('pty-kill', async (event, { windowId }) => {
 app.on('before-quit', () => {
     for (const [windowId, entry] of ptyProcesses) {
         logger.info(`Killing PTY on quit: windowId=${windowId}`);
+        if (entry.disposables) {
+            entry.disposables.forEach(d => d.dispose());
+        }
         if (entry.type === 'pty') {
             entry.process.kill();
         } else {

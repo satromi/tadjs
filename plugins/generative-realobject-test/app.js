@@ -531,15 +531,16 @@ class LLMCollaboration extends window.PluginBase {
             });
 
             // ウィンドウリサイズ対応
-            window.addEventListener('resize', () => {
+            this._resizeHandler = () => {
                 this.handleResize();
-            });
+            };
+            window.addEventListener('resize', this._resizeHandler);
 
             // ResizeObserverでコンテナのリサイズを検出
-            const resizeObserver = new ResizeObserver(() => {
+            this._resizeObserver = new ResizeObserver(() => {
                 this.handleResize();
             });
-            resizeObserver.observe(container);
+            this._resizeObserver.observe(container);
 
             this.isTerminalReady = true;
             logger.debug('[LLM] Terminal initialized');
@@ -767,6 +768,14 @@ class LLMCollaboration extends window.PluginBase {
      * PTYプロセスを終了してからウィンドウを閉じる
      */
     async handleCloseRequest() {
+        // リサイズリスナー・ResizeObserverクリーンアップ
+        if (this._resizeHandler) {
+            window.removeEventListener('resize', this._resizeHandler);
+        }
+        if (this._resizeObserver) {
+            this._resizeObserver.disconnect();
+            this._resizeObserver = null;
+        }
         await this.killPty();
         return super.handleCloseRequest();
     }

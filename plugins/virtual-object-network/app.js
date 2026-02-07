@@ -60,6 +60,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         this.baseHeight = 600;
         this.svgWidth = 800;
         this.svgHeight = 600;
+        this.minZoomScale = 0.1;     // ズーム下限（fitAllNodesで動的に更新）
         this.incomingCount = {};      // 被参照数カウント
         this.simulationRunning = false;
         this.isDraggingNode = false;
@@ -790,6 +791,9 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         this.viewState.scale = fitScale;
         this.viewState.width = this.baseWidth / fitScale;
         this.viewState.height = this.baseHeight / fitScale;
+
+        // ズーム下限を動的に更新（fitScaleの半分まで縮小可能にする）
+        this.minZoomScale = Math.min(fitScale * 0.5, 0.1);
 
         // コンテンツの中心を画面中心に配置
         const contentCenterX = (minX + maxX) / 2;
@@ -2055,9 +2059,9 @@ class VirtualObjectNetworkApp extends window.PluginBase {
     zoom(delta, centerX, centerY) {
         const factor = delta > 0 ? 1.1 : 0.9;
 
-        // 最小・最大スケール制限
+        // 最小・最大スケール制限（下限はfitAllNodesで動的に設定）
         const newScale = this.viewState.scale * (delta > 0 ? 0.9 : 1.1);
-        if (newScale < 0.1 || newScale > 10) return;
+        if (newScale < this.minZoomScale || newScale > 10) return;
 
         // 実際のSVG要素サイズを取得（ズーム中心の計算に使用）
         const svg = document.getElementById('network-svg');

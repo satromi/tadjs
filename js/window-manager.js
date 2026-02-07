@@ -758,12 +758,6 @@ export class WindowManager {
         document.addEventListener('mousemove', this._boundHandleWindowResize, true);
         document.addEventListener('mouseup', this._boundEndWindowResize, true);
 
-        // テスト用：直接mousemoveイベントをテスト
-        const testMouseMove = (e) => {
-            this.handleWindowResize(e);
-        };
-        document.addEventListener('mousemove', testMouseMove);
-
         document.body.style.userSelect = 'none';
 
         // リサイズ中はすべてのiframeへのポインタイベントを無効化

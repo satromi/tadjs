@@ -330,13 +330,25 @@ export function convertPtToPx(pt) {
  * @returns {string} 16進数色コード（例: "#ff0000"）または元の文字列
  */
 export function rgbToHex(color) {
+    if (!color) return '';
+
+    // 既に#rrggbb形式の場合はそのまま返す
+    if (color.startsWith('#')) {
+        // Chrome workaround: #010101（黒色の代替）を#000000に正規化
+        if (color.toLowerCase() === '#010101') return '#000000';
+        return color;
+    }
+
     // rgb() または rgba() 形式をパース
-    const rgbMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*[\d.]+)?\)/);
+    const rgbMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*[\d.]+)?\)/i);
     if (rgbMatch) {
         const r = parseInt(rgbMatch[1], 10);
         const g = parseInt(rgbMatch[2], 10);
         const b = parseInt(rgbMatch[3], 10);
-        return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
+        const result = '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
+        // Chrome workaround: #010101（黒色の代替）を#000000に正規化
+        if (result === '#010101') return '#000000';
+        return result;
     }
     return color;
 }

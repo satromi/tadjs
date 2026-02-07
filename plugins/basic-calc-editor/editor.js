@@ -4377,9 +4377,12 @@ class CalcEditor extends window.PluginBase {
             // システムクリップボードへの書き込み失敗は無視（セキュリティ制限等）
         }
 
-        // 5. グラフを図形グループ構造に変換してグローバルクリップボードに設定
-        const group = this.convertChartToGroup(chart);
-        this.setGroupClipboard(group);
+        // 5. グラフをxmlTAD形式の図形セグメントに変換してグローバルクリップボードに設定
+        const xmlTad = this.convertChartToXmlTad(chart);
+        this.setFigureSegmentClipboard(xmlTad, {
+            width: chart.width,
+            height: chart.height
+        });
 
         // 6. ローカルクリップボードにもグラフデータを保存（同一ウィンドウ内貼り付け用）
         this.clipboard = {
@@ -4413,7 +4416,7 @@ class CalcEditor extends window.PluginBase {
 
         // 選択状態に設定
         this.selectedChart = chartData;
-        this.clearCellSelection();
+        this.clearSelection();
 
         // クリップボードの座標も更新（連続ペースト用）
         this.clipboard.data.x += 20;
@@ -4458,6 +4461,95 @@ class CalcEditor extends window.PluginBase {
                 dataRange: chart.dataRange
             }
         };
+    }
+
+    /**
+     * グラフを図形セグメントxmlTADに変換
+     * @param {Object} chart - グラフオブジェクト
+     * @returns {string} xmlTAD文字列
+     */
+    convertChartToXmlTad(chart) {
+        const group = this.convertChartToGroup(chart);
+        const shapes = group.shapes || [];
+        const width = chart.width;
+        const height = chart.height;
+
+        const xmlParts = ['<tad version="1.0" encoding="UTF-8">\r\n'];
+        xmlParts.push('<figure>\r\n');
+        xmlParts.push(`<figView top="0" left="0" right="${width}" bottom="${height}"/>\r\n`);
+        xmlParts.push(`<figDraw top="0" left="0" right="${width}" bottom="${height}"/>\r\n`);
+        xmlParts.push('<figScale hunit="-72" vunit="-72"/>\r\n');
+
+        // グラフ全体を<group>で囲み、figure-editorでグループとして扱えるようにする
+        xmlParts.push(`<group left="0" top="0" right="${width}" bottom="${height}">\r\n`);
+        for (const shape of shapes) {
+            this.shapeToXmlTadElement(shape, chart.x, chart.y, xmlParts);
+        }
+        xmlParts.push('</group>\r\n');
+
+        xmlParts.push('</figure>\r\n');
+        xmlParts.push('</tad>');
+        return xmlParts.join('');
+    }
+
+    /**
+     * 内部図形オブジェクトをxmlTAD要素文字列に変換
+     * @param {Object} shape - 図形オブジェクト
+     * @param {number} originX - グラフ原点X（座標オフセット除去用）
+     * @param {number} originY - グラフ原点Y（座標オフセット除去用）
+     * @param {Array} xmlParts - 出力配列
+     */
+    shapeToXmlTadElement(shape, originX, originY, xmlParts) {
+        const lineType = shape.lineType || 0;
+        const lineWidth = shape.lineWidth || 0;
+        const fillColor = shape.fillColor || 'transparent';
+        const strokeColor = shape.strokeColor || '#000000';
+        const zIndex = shape.zIndex || 0;
+
+        if (shape.type === 'rect') {
+            const left = Math.round(shape.startX - originX);
+            const top = Math.round(shape.startY - originY);
+            const right = Math.round(shape.endX - originX);
+            const bottom = Math.round(shape.endY - originY);
+            xmlParts.push(`<rect lineType="${lineType}" lineWidth="${lineWidth}" l_pat="0" f_pat="0" angle="0" fillColor="${fillColor}" strokeColor="${strokeColor}" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`);
+        } else if (shape.type === 'ellipse') {
+            const cx = Math.round(((shape.startX + shape.endX) / 2) - originX);
+            const cy = Math.round(((shape.startY + shape.endY) / 2) - originY);
+            const rx = Math.round(Math.abs(shape.endX - shape.startX) / 2);
+            const ry = Math.round(Math.abs(shape.endY - shape.startY) / 2);
+            xmlParts.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="0" f_pat="0" angle="0" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" zIndex="${zIndex}"/>\r\n`);
+        } else if (shape.type === 'document') {
+            const left = Math.round(shape.startX - originX);
+            const top = Math.round(shape.startY - originY);
+            const right = Math.round(shape.endX - originX);
+            const bottom = Math.round(shape.endY - originY);
+            const fontSize = shape.fontSize || 10;
+            const fontFace = shape.fontFamily || 'sans-serif';
+            const textColor = shape.textColor || '#000000';
+            const textAlign = shape.textAlign || 'left';
+            const content = (shape.content || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            // figure-editorのparseDocumentElementが期待する形式で出力
+            xmlParts.push(`<document>\r\n`);
+            xmlParts.push(`<docView viewleft="${left}" viewtop="${top}" viewright="${right}" viewbottom="${bottom}"/>\r\n`);
+            xmlParts.push(`<docDraw drawleft="${left}" drawtop="${top}" drawright="${right}" drawbottom="${bottom}"/>\r\n`);
+            xmlParts.push('<docScale hunit="-72" vunit="-72"/>\r\n');
+            xmlParts.push(`<text lang="0" bpat="0" zIndex="${zIndex}"/>\r\n`);
+            xmlParts.push(`<font size="${fontSize}"/>\r\n`);
+            xmlParts.push(`<font face="${fontFace}"/>\r\n`);
+            xmlParts.push(`<font color="${textColor}"/>\r\n`);
+            if (textAlign !== 'left') {
+                xmlParts.push(`<text align="${textAlign}"/>\r\n`);
+            }
+            xmlParts.push(`${content}\r\n`);
+            xmlParts.push('</document>\r\n');
+        } else if (shape.type === 'polyline') {
+            if (shape.points && shape.points.length >= 2) {
+                const pointsStr = shape.points.map(p =>
+                    `${Math.round(p.x - originX)},${Math.round(p.y - originY)}`
+                ).join(' ');
+                xmlParts.push(`<polyline lineType="${lineType}" lineWidth="${shape.lineWidth || 2}" l_pat="0" f_pat="0" strokeColor="${strokeColor}" points="${pointsStr}" zIndex="${zIndex}"/>\r\n`);
+            }
+        }
     }
 
     /**
@@ -5444,32 +5536,7 @@ class CalcEditor extends window.PluginBase {
      * 全セルを再描画
      */
     renderAllCells() {
-        // 全セルをクリア
-        for (let row = 1; row <= this.defaultRows; row++) {
-            for (let col = 1; col <= this.defaultCols; col++) {
-                const cell = this.getCellElement(col, row);
-                if (cell) {
-                    cell.textContent = '';
-                    cell.classList.remove('formula', 'error');
-                    // width/heightを保持したまま、他のスタイルプロパティをクリア
-                    cell.style.backgroundColor = '';
-                    cell.style.color = '';
-                    cell.style.fontWeight = '';
-                    cell.style.fontStyle = '';
-                    cell.style.textDecoration = '';
-                    cell.style.fontFamily = '';
-                    cell.style.fontSize = '';
-                    cell.style.justifyContent = '';
-                    cell.style.borderTop = '';
-                    cell.style.borderBottom = '';
-                    cell.style.borderLeft = '';
-                    cell.style.borderRight = '';
-                    // width/height/minWidthはそのまま保持（カスタム列幅・行高を維持）
-                }
-            }
-        }
-
-        // データのあるセルを描画
+        // データのあるセルのみ描画（initGrid()後は新規DOM要素のためクリア不要）
         this.cells.forEach((cellData, key) => {
             const [col, row] = key.split(',').map(Number);
             this.renderCell(col, row);
@@ -7731,61 +7798,8 @@ class CalcEditor extends window.PluginBase {
             }
         ];
 
-        // 仮身が選択されている場合は仮身操作・実身操作メニューを追加（文字色の下に表示）
-        if (this.contextMenuVirtualObject) {
-            const realId = this.contextMenuVirtualObject.realId;
-            const isOpened = this.openedRealObjects ? this.openedRealObjects.has(realId) : false;
-
-            // 仮身操作メニュー
-            menuDef.push({
-                label: '仮身操作',
-                submenu: [
-                    { label: '開く', action: 'open-real-object', disabled: isOpened },
-                    { label: '閉じる', action: 'close-real-object', disabled: !isOpened },
-                    { separator: true },
-                    { label: '属性変更', action: 'change-virtual-object-attributes' },
-                    { label: '続柄設定', action: 'set-relationship' }
-                ]
-            });
-
-            // 実身操作メニュー
-            menuDef.push({
-                label: '実身操作',
-                submenu: [
-                    { label: '実身名変更', action: 'rename-real-object' },
-                    { label: '実身複製', action: 'duplicate-real-object' },
-                    { label: '管理情報', action: 'open-realobject-config' },
-                    { label: '仮身ネットワーク', action: 'open-virtual-object-network' },
-                    { label: '実身/仮身検索', action: 'open-real-object-search' }
-                ]
-            });
-
-            // 屑実身操作メニュー
-            menuDef.push({
-                label: '屑実身操作',
-                action: 'open-trash-real-objects'
-            });
-
-            // 実行メニュー（applistからサブメニューを生成）
-            try {
-                const applistData = await this.getAppListData(realId);
-                if (applistData && Object.keys(applistData).length > 0) {
-                    const executeSubmenu = [];
-                    for (const [pluginId, appInfo] of Object.entries(applistData)) {
-                        executeSubmenu.push({
-                            label: appInfo.name || pluginId,
-                            action: `execute-with-${pluginId}`
-                        });
-                    }
-                    menuDef.push({
-                        label: '実行',
-                        submenu: executeSubmenu
-                    });
-                }
-            } catch (error) {
-                logger.error('[CalcEditor] applist取得エラー:', error);
-            }
-        }
+        // 仮身が選択されている場合は仮身操作メニューを追加（PluginBase共通メソッド）
+        await this.buildVirtualObjectContextMenus(menuDef);
 
         return menuDef;
     }

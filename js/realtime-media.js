@@ -114,7 +114,7 @@ export class RealtimeTadParser {
     _parseVideoElement(el) {
         return {
             type: 'video',
-            id: el.getAttribute('id') || `video-${Date.now()}`,
+            id: el.getAttribute('id') || `video-${Date.now()}-${RealtimeTadParser._idCounter++}`,
             href: el.getAttribute('href'),
             format: el.getAttribute('format'),
             autoplay: el.getAttribute('autoplay') !== 'false',
@@ -151,7 +151,7 @@ export class RealtimeTadParser {
     _parseAudioElement(el) {
         return {
             type: 'audio',
-            id: el.getAttribute('id') || `audio-${Date.now()}`,
+            id: el.getAttribute('id') || `audio-${Date.now()}-${RealtimeTadParser._idCounter++}`,
             href: el.getAttribute('href'),
             format: el.getAttribute('format'),
             autoplay: el.getAttribute('autoplay') !== 'false',
@@ -299,6 +299,9 @@ export class RealtimeTadParser {
     }
 }
 
+// ID衝突防止用カウンター
+RealtimeTadParser._idCounter = 0;
+
 // ============================================================
 // TimelineEngine - タイムラインアニメーションエンジン
 // ============================================================
@@ -388,6 +391,8 @@ export class TimelineEngine {
         const duration = divisions * (1000 / 60); // 約60fpsを想定
         const startTime = performance.now();
 
+        // アニメーション用スロットを確保（IDの蓄積を防ぐ）
+        const animIndex = this.animations.length;
         const animate = (currentTime) => {
             if (!this.running) return;
 
@@ -399,13 +404,11 @@ export class TimelineEngine {
             this._applyPropertyChange(element, command, currentValue);
 
             if (progress < 1) {
-                const animId = requestAnimationFrame(animate);
-                this.animations.push(animId);
+                this.animations[animIndex] = requestAnimationFrame(animate);
             }
         };
 
-        const animId = requestAnimationFrame(animate);
-        this.animations.push(animId);
+        this.animations[animIndex] = requestAnimationFrame(animate);
     }
 
     /**
@@ -420,7 +423,7 @@ export class TimelineEngine {
             if (media) {
                 switch (action) {
                     case 'play':
-                        media.play().catch(() => {});
+                        media.play().catch(e => { if (e.name !== 'AbortError') console.warn('[RealtimeMedia] play失敗:', e.name); });
                         break;
                     case 'pause':
                         media.pause();
@@ -433,7 +436,7 @@ export class TimelineEngine {
                         media.currentTime = parseFloat(value) / 1000; // msec to sec
                         break;
                     case 'setVolume':
-                        media.volume = parseFloat(value);
+                        media.volume = Math.max(0, Math.min(1, parseFloat(value) || 0));
                         break;
                     case 'fadeout':
                     case 'fadeOut':
@@ -455,24 +458,24 @@ export class TimelineEngine {
         const startTime = performance.now();
         const startVolume = fromVolume;
 
+        // アニメーション用スロットを確保（IDの蓄積を防ぐ）
+        const animIndex = this.animations.length;
         const animate = (currentTime) => {
             if (!this.running) return;
 
             const elapsed = currentTime - startTime;
             const progress = Math.min(elapsed / duration, 1);
 
-            media.volume = startVolume + (toVolume - startVolume) * progress;
+            media.volume = Math.max(0, Math.min(1, startVolume + (toVolume - startVolume) * progress));
 
             if (progress < 1) {
-                const animId = requestAnimationFrame(animate);
-                this.animations.push(animId);
+                this.animations[animIndex] = requestAnimationFrame(animate);
             } else if (toVolume === 0) {
                 media.pause();
             }
         };
 
-        const animId = requestAnimationFrame(animate);
-        this.animations.push(animId);
+        this.animations[animIndex] = requestAnimationFrame(animate);
     }
 
     /**
@@ -494,7 +497,7 @@ export class TimelineEngine {
         if (this.plugin && this.plugin.mediaManager) {
             const media = this.plugin.mediaManager.getMediaById(event.mediaId);
             if (media) {
-                media.play().catch(() => {});
+                media.play().catch(e => { if (e.name !== 'AbortError') console.warn('[RealtimeMedia] play失敗:', e.name); });
             }
         }
     }

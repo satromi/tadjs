@@ -268,18 +268,14 @@ class MaskData {
     
     // マスクが全て1かどうかをチェック
     isAllOnes() {
-        const totalBits = this.hsize * this.vsize;
-        let onesCount = 0;
-        
         for (let y = 0; y < this.vsize; y++) {
             for (let x = 0; x < this.hsize; x++) {
-                if (this.getMaskValue(x, y) === 1) {
-                    onesCount++;
+                if (this.getMaskValue(x, y) !== 1) {
+                    return false;
                 }
             }
         }
-        
-        return onesCount === totalBits;
+        return true;
     }
 }
 
@@ -8050,7 +8046,7 @@ function tsVirtualObjSegment(segLen, tadSeg) {
 
     // XMLのリンク情報を保存（TADバイナリからの変換時はlink_name情報を保持）
     if(isXmlDumpEnabled) {
-        xmlBuffer.push(`<link id="${newLink.link_id}" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}">${newLink.link_name || ''}</link>\r\n`);
+        xmlBuffer.push(`<link id="${htmlspecialchars(newLink.link_id)}" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}">${htmlspecialchars(newLink.link_name || '')}</link>\r\n`);
     }
     
     //logger.debug('Link data to save:', newLink);
@@ -9041,7 +9037,10 @@ function tadDataArray(raw, isRedrawn = false, nfiles = null, fileIndex = null) {
                 }
             } else {
                 const reason = !isXmlDumpEnabled() ? 'disabled' : 'no data in xml array';
-                tadTextView.innerHTML = `<pre>XML Parse is ${reason}</pre>`;
+                const pre = document.createElement('pre');
+                pre.textContent = `XML Parse is ${reason}`;
+                tadTextView.textContent = '';
+                tadTextView.appendChild(pre);
             }
         }
     };

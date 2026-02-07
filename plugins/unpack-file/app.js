@@ -260,7 +260,7 @@ class UnpackFileManager extends window.PluginBase {
                     refCount: 1,
                     recordCount: 1,
                     editable: true,
-                    deletable: false,
+                    deletable: true,
                     readable: true,
                     maker: "satromi",
                     window: {

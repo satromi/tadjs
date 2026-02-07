@@ -228,3 +228,14 @@ button {
     flex-direction: column;
     gap: 8px;
 }
+
+/* 倍率ボタン */
+.zoom-btn {
+    width: 42px;
+}
+
+.zoom-label {
+    font-size: 10px;
+    font-weight: bold;
+    white-space: nowrap;
+}

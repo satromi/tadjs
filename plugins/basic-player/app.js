@@ -561,41 +561,40 @@ class PlayerApp extends PluginBase {
      * 親ウィンドウにオーバーレイ表示を要求し、親がdropを処理する
      */
     setupDragAndDrop() {
-        // dragenter - ドラッグがプレイヤーに入った時、親にオーバーレイ表示を要求
-        this.playerContainer.addEventListener('dragenter', (e) => {
+        // 名前付きハンドラ（クリーンアップ用に保持）
+        this._dragEnterHandler = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            // 親ウィンドウにオーバーレイ表示を要求
             this.messageBus.send('show-media-drop-overlay', {
                 windowId: this.windowId
             });
             console.log('[PlayerApp] dragenter - 親にオーバーレイ表示を要求');
-        });
+        };
 
-        // dragover - ドラッグ中のファイルがプレイヤー上にある時
-        this.playerContainer.addEventListener('dragover', (e) => {
+        this._dragOverHandler = (e) => {
             e.preventDefault();
             e.stopPropagation();
-        });
+        };
 
-        // dragleave - ドラッグがプレイヤーから離れた時、親にオーバーレイ非表示を要求
-        this.playerContainer.addEventListener('dragleave', (e) => {
+        this._dragLeaveHandler = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            // 親ウィンドウにオーバーレイ非表示を要求
             this.messageBus.send('hide-media-drop-overlay', {
                 windowId: this.windowId
             });
             console.log('[PlayerApp] dragleave - 親にオーバーレイ非表示を要求');
-        });
+        };
 
-        // drop - 通常は親のオーバーレイが処理するが、フォールバック
-        this.playerContainer.addEventListener('drop', (e) => {
+        this._dropHandler = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            // ファイル処理は親ウィンドウが行い、'media-files-added'メッセージで通知される
             console.log('[PlayerApp] drop event - 親ウィンドウが処理します');
-        });
+        };
+
+        this.playerContainer.addEventListener('dragenter', this._dragEnterHandler);
+        this.playerContainer.addEventListener('dragover', this._dragOverHandler);
+        this.playerContainer.addEventListener('dragleave', this._dragLeaveHandler);
+        this.playerContainer.addEventListener('drop', this._dropHandler);
     }
 
     /**
@@ -1243,6 +1242,13 @@ class PlayerApp extends PluginBase {
      * @param {string} windowId - ウィンドウID
      */
     async handleCloseRequest(windowId) {
+        // D&Dイベントリスナーをクリーンアップ
+        if (this.playerContainer) {
+            if (this._dragEnterHandler) this.playerContainer.removeEventListener('dragenter', this._dragEnterHandler);
+            if (this._dragOverHandler) this.playerContainer.removeEventListener('dragover', this._dragOverHandler);
+            if (this._dragLeaveHandler) this.playerContainer.removeEventListener('dragleave', this._dragLeaveHandler);
+            if (this._dropHandler) this.playerContainer.removeEventListener('drop', this._dropHandler);
+        }
         // プレイリストウィンドウが開いていれば先に閉じる
         if (this.playlistWindowId) {
             this.messageBus.send('close-window', { windowId: this.playlistWindowId });

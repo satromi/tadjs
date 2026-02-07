@@ -559,3 +559,19 @@ sup[data-attend-unit="1"][data-attend-target-position="1"],
 sub[data-attend-unit="1"][data-attend-target-position="1"] {
     margin-left: -0.2em;
 }
+
+/* 図形セグメント（figure-editor埋め込み表示） */
+.figure-segment {
+    display: inline-block;
+    vertical-align: middle;
+    margin: 4px;
+    cursor: default;
+    border: 1px solid #ccc;
+    background: #ffffff;
+}
+
+.figure-segment iframe {
+    display: block;
+    border: none;
+    pointer-events: none;
+}

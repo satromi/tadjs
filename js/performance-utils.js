@@ -15,25 +15,35 @@
  */
 export function debounce(func, delay) {
     let timeoutId;
+    let lastArgs = null;
+    let lastContext = null;
 
     const debounced = function(...args) {
+        lastArgs = args;
+        lastContext = this;
         clearTimeout(timeoutId);
         timeoutId = setTimeout(() => {
-            func.apply(this, args);
+            func.apply(lastContext, lastArgs);
+            lastArgs = null;
+            lastContext = null;
         }, delay);
     };
 
     // 強制実行メソッド（ウィンドウクローズ時など）
     debounced.flush = function() {
         clearTimeout(timeoutId);
-        if (func) {
-            func.call(this);
+        if (func && lastArgs) {
+            func.apply(lastContext, lastArgs);
+            lastArgs = null;
+            lastContext = null;
         }
     };
 
     // キャンセルメソッド
     debounced.cancel = function() {
         clearTimeout(timeoutId);
+        lastArgs = null;
+        lastContext = null;
     };
 
     return debounced;

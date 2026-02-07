@@ -28,6 +28,8 @@ class BasicTextEditor extends window.PluginBase {
         this.mutationObserver = null; // MutationObserverインスタンス
         this.suppressMutationObserverCount = 0; // MutationObserver一時停止カウンタ（ネスト対応）
         this.selectedImage = null; // 選択中の画像要素
+        this.selectedFigureSegment = null; // 選択中の図形セグメント要素
+        this.figureSegmentClipboard = null; // ローカル図形セグメントクリップボード
         this.lastSelectedText = ''; // メニュー操作用の最後の選択テキスト
         this.isResizing = false; // リサイズ中フラグ
         this.resizeStartX = 0; // リサイズ開始X座標
@@ -137,8 +139,7 @@ class BasicTextEditor extends window.PluginBase {
 
             // realIdを保存（拡張子を除去）
             if (data.fileData) {
-                let rawId = data.fileData.realId || data.fileData.fileId;
-                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
+                this.realId = this.extractRealId(data.fileData.realId || data.fileData.fileId);
 
                 // readonlyモードの設定（開いた仮身表示用）
                 if (data.fileData.readonly) {
@@ -235,10 +236,8 @@ class BasicTextEditor extends window.PluginBase {
             if (realObject) {
                 // virtualObjからrealIdを取得
                 const virtualObj = data.virtualObj;
-                let rawId = virtualObj?.link_id;
-                if (rawId) {
-                    // _数字.xtad の形式を除去して実身IDのみを取得
-                    this.realId = rawId.replace(/_\d+\.xtad$/i, '');
+                if (virtualObj?.link_id) {
+                    this.realId = this.extractRealId(virtualObj.link_id);
                 }
 
                 // データを読み込む（完了を待つ）
@@ -406,65 +405,10 @@ class BasicTextEditor extends window.PluginBase {
             }
         });
 
-        // load-image-file メッセージ（開いた仮身内のプラグインからの画像読み込み要求を親ウィンドウに転送）
-        this.messageBus.on('load-image-file', (data) => {
-            // 親ウィンドウに転送（型名を明示的に指定）
-            this.messageBus.send('load-image-file', data);
-        });
-
-        // load-image-response メッセージ（親ウィンドウからのレスポンスを開いた仮身内のプラグインに転送）
-        this.messageBus.on('load-image-response', (data) => {
-            // すべての子iframeに転送（MessageBus形式で送信）
-            const iframes = document.querySelectorAll('iframe');
-            iframes.forEach(iframe => {
-                if (iframe.contentWindow) {
-                    iframe.contentWindow.postMessage({
-                        type: 'load-image-response',
-                        ...data,
-                        _messageBus: true,
-                        _from: 'BasicTextEditor'
-                    }, '*');
-                }
-            });
-        });
-
-        // save-image-response メッセージ（親ウィンドウからのレスポンスを開いた仮身内のプラグインに転送）
-        this.messageBus.on('save-image-response', (data) => {
-            // すべての子iframeに転送（MessageBus形式で送信）
-            const iframes = document.querySelectorAll('iframe');
-            iframes.forEach(iframe => {
-                if (iframe.contentWindow) {
-                    iframe.contentWindow.postMessage({
-                        type: 'save-image-response',
-                        ...data,
-                        _messageBus: true,
-                        _from: 'BasicTextEditor'
-                    }, '*');
-                }
-            });
-        });
-
-        // get-image-file-path メッセージ（開いた仮身内のプラグインからの画像パス取得要求を親ウィンドウに転送）
-        this.messageBus.on('get-image-file-path', (data) => {
-            // 親ウィンドウに転送（型名を明示的に指定）
-            this.messageBus.send('get-image-file-path', data);
-        });
-
-        // image-file-path-response メッセージ（親ウィンドウからのレスポンス）
-        // 自分宛の処理は PluginBase.getImageFilePath() の waitFor で処理
-        // 開いた仮身内のプラグインへの転送のみ行う
-        this.messageBus.on('image-file-path-response', (data) => {
-            const iframes = document.querySelectorAll('iframe');
-            iframes.forEach(iframe => {
-                if (iframe.contentWindow) {
-                    iframe.contentWindow.postMessage({
-                        type: 'image-file-path-response',
-                        ...data,
-                        _messageBus: true,
-                        _from: 'BasicTextEditor'
-                    }, '*');
-                }
-            });
+        // 開いた仮身内プラグインとのメッセージ転送（PluginBase共通メソッド）
+        this.setupChildIframeMessageForwarding({
+            forwardToParent: ['load-image-file', 'get-image-file-path'],
+            forwardToChildren: ['load-image-response', 'save-image-response', 'image-file-path-response']
         });
 
         // cross-window-drop-success ハンドラはPluginBaseの共通機能に移行
@@ -569,14 +513,24 @@ class BasicTextEditor extends window.PluginBase {
             // 親ウィンドウにメニューを閉じる要求を送信
             this.messageBus.send('close-context-menu');
 
+            // 図形セグメントのクリック処理
+            const figureSegment = e.target.closest('.figure-segment');
+            if (figureSegment) {
+                e.preventDefault();
+                e.stopPropagation();
+                this.selectFigureSegment(figureSegment);
+                return;
+            }
+
             // 画像のクリック処理
             if (e.target.tagName === 'IMG') {
                 e.preventDefault();
                 e.stopPropagation();
                 this.selectImage(e.target);
             } else {
-                // 画像以外をクリックした場合は選択解除
+                // 画像・図形セグメント以外をクリックした場合は選択解除
                 this.deselectImage();
+                this.deselectFigureSegment();
             }
         });
 
@@ -1030,37 +984,41 @@ class BasicTextEditor extends window.PluginBase {
             // グローバルクリップボードをチェック（アプリ内コピーを優先）
             const globalClipboard = await this.getGlobalClipboard();
 
-            // グローバルクリップボードにテキストがある場合は優先使用
-            // （メニュー操作等でシステムクリップボード書き込みが失敗した場合に対応）
-            if (globalClipboard && globalClipboard.type === 'text' && globalClipboard.text) {
-                document.execCommand('insertText', false, globalClipboard.text);
-                this.updateParagraphLineHeight(); // 段落のline-heightを更新
-                this.isModified = true;
-                this.setStatus('テキストをクリップボードから貼り付けました');
-                return;
+            // グローバルクリップボードの全型をチェック（アプリ内コピーをシステムクリップボードより優先）
+            if (globalClipboard) {
+                if (globalClipboard.type === 'text' && globalClipboard.text) {
+                    // テキスト（メニュー操作等でシステムクリップボード書き込みが失敗した場合に対応）
+                    document.execCommand('insertText', false, globalClipboard.text);
+                    this.updateParagraphLineHeight();
+                    this.isModified = true;
+                    this.setStatus('テキストをクリップボードから貼り付けました');
+                    return;
+                }
+                if (globalClipboard.type === 'figure-segment') {
+                    // 図形セグメント（グラフ等）はCanvas描画で貼り付け（xmlTadデータ保持）
+                    await this.insertFigureSegment(globalClipboard.xmlTad, globalClipboard.sourceRealId);
+                    return;
+                }
+                if (globalClipboard.type === 'image' && globalClipboard.dataUrl) {
+                    await this.insertImageFromDataUrl(globalClipboard.dataUrl, globalClipboard.name || 'image.png');
+                    this.setStatus('画像をクリップボードから貼り付けました');
+                    return;
+                }
+                if (globalClipboard.link_id) {
+                    this.insertVirtualObjectLink(globalClipboard);
+                    this.requestCopyVirtualObject(globalClipboard.link_id);
+                    this.setStatus('仮身をクリップボードから貼り付けました');
+                    return;
+                }
             }
 
-            // グローバルクリップボードにテキストがない場合はシステムクリップボードを使用
+            // グローバルクリップボードにデータがない場合はシステムクリップボードを使用
             const text = clipboardData.getData('text/plain');
             if (text) {
                 document.execCommand('insertText', false, text);
-                this.updateParagraphLineHeight(); // 段落のline-heightを更新
+                this.updateParagraphLineHeight();
                 this.isModified = true;
                 this.setStatus('クリップボードから貼り付けました');
-                return;
-            }
-
-            // テキストがない場合は画像・仮身をチェック
-            if (globalClipboard && globalClipboard.type === 'image' && globalClipboard.dataUrl) {
-                await this.insertImageFromDataUrl(globalClipboard.dataUrl, globalClipboard.name || 'image.png');
-                this.setStatus('画像をクリップボードから貼り付けました');
-                return;
-            }
-
-            if (globalClipboard && globalClipboard.link_id) {
-                this.insertVirtualObjectLink(globalClipboard);
-                this.requestCopyVirtualObject(globalClipboard.link_id);
-                this.setStatus('仮身をクリップボードから貼り付けました');
                 return;
             }
 
@@ -1350,6 +1308,8 @@ class BasicTextEditor extends window.PluginBase {
      * DataURLから画像を挿入（グローバルクリップボードからのペースト用）
      * @param {string} dataUrl - 画像のDataURL
      * @param {string} fileName - ファイル名
+     * @param {Object} options - オプション
+     * @param {string} options.figureXmlTad - base64エンコードされた図形xmlTadデータ
      */
     async insertImageFromDataUrl(dataUrl, fileName = 'image.png') {
         try {
@@ -2408,9 +2368,8 @@ class BasicTextEditor extends window.PluginBase {
             logger.debug('[EDITOR] loadFile呼び出し, fileData:', fileData);
             this.setStatus('ファイル読み込み中...');
             this.currentFile = fileData;
-            // _数字.xtad の形式を除去して実身IDのみを取得
-            let rawId = fileData ? fileData.realId : null;
-            this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
+            // 実身IDを設定
+            this.realId = fileData ? this.extractRealId(fileData.realId) : null;
 
             logger.debug('[EDITOR] fileDataチェック:', {
                 hasXmlData: !!fileData.xmlData,
@@ -3203,7 +3162,17 @@ class BasicTextEditor extends window.PluginBase {
                 return;
             }
 
-            // <document>...</document>を抽出
+            // インライン<figure>ブロックを事前抽出（ネストされた<document>問題の回避）
+            // <figure>内のテキストボックスが<document>を含むため、
+            // 先に<figure>を除去しないと外側の<document>正規表現が誤マッチする
+            const figureBlocks = [];
+            tadXML = tadXML.replace(/<figure[^>]*>[\s\S]*?<\/figure>/gi, (match) => {
+                const index = figureBlocks.length;
+                figureBlocks.push(match);
+                return `__FIGURE_PLACEHOLDER_${index}__`;
+            });
+
+            // <document>...</document>を抽出（<figure>除去済みなので安全）
             const docMatch = /<document[^>]*>([\s\S]*?)<\/document>/i.exec(tadXML);
             if (!docMatch) {
                 logger.warn('[EDITOR] <document>タグが見つかりません');
@@ -3538,6 +3507,46 @@ class BasicTextEditor extends window.PluginBase {
                 }
             }
 
+            // プレースホルダをdiv.figure-segment + iframeに置換
+            figureBlocks.forEach((figureXml, index) => {
+                const tmpParser = new DOMParser();
+                const tmpDoc = tmpParser.parseFromString(`<tad>${figureXml}</tad>`, 'text/xml');
+
+                // <figure>が実際の図形描画要素を含むか検証
+                // <document>のみの<figure>（テキストボックスのみ）はテキストとして展開
+                const figure = tmpDoc.querySelector('figure');
+                const hasDrawingElements = figure && figure.querySelector('rect, ellipse, polyline, group, image');
+                if (!hasDrawingElements) {
+                    const docEls = figure ? figure.querySelectorAll('document') : [];
+                    let textHtml = '';
+                    docEls.forEach((docEl, docIndex) => {
+                        // 2つ目以降の<document>の前に改行を挿入
+                        if (docIndex > 0 && textHtml.length > 0) {
+                            textHtml += '<br/>';
+                        }
+                        for (const child of docEl.childNodes) {
+                            if (child.nodeType === Node.TEXT_NODE) {
+                                const text = child.textContent.trim();
+                                if (text) textHtml += text;
+                            } else if (child.nodeType === Node.ELEMENT_NODE && child.tagName.toLowerCase() === 'br') {
+                                textHtml += '<br/>';
+                            }
+                        }
+                    });
+                    htmlContent = htmlContent.replace(`__FIGURE_PLACEHOLDER_${index}__`, textHtml);
+                    return;
+                }
+
+                const figView = tmpDoc.querySelector('figView');
+                const fWidth = figView ? (parseInt(figView.getAttribute('right')) - parseInt(figView.getAttribute('left'))) : 200;
+                const fHeight = figView ? (parseInt(figView.getAttribute('bottom')) - parseInt(figView.getAttribute('top'))) : 200;
+                const encoded = btoa(unescape(encodeURIComponent(figureXml)));
+                htmlContent = htmlContent.replace(`__FIGURE_PLACEHOLDER_${index}__`,
+                    `<div class="figure-segment" contenteditable="false" data-figure-xmltad="${encoded}" style="display: inline-block; vertical-align: middle; margin: 4px; width: ${fWidth}px; height: ${fHeight}px;">` +
+                    `<iframe src="../../plugins/basic-figure-editor/index.html?embedded=true" style="width: ${fWidth}px; height: ${fHeight}px; border: none; pointer-events: none;"></iframe></div>`
+                );
+            });
+
             if (htmlContent) {
                 this.editor.innerHTML = htmlContent;
 
@@ -3546,6 +3555,9 @@ class BasicTextEditor extends window.PluginBase {
 
                 // 画像を読み込んで表示
                 this.loadImagesFromParent();
+
+                // 図形セグメントのiframeを初期化
+                this.initFigureSegmentIframes();
 
                 // DOM更新後に自動展開チェック（レイアウトが確定してから）
                 setTimeout(() => {
@@ -4450,6 +4462,17 @@ class BasicTextEditor extends window.PluginBase {
                     this.extractTADXMLFromElement(tempWrapper, xmlParts, defaultFontState);
                     xmlParts.push('\r\n</p>\r\n');
                 }
+                // 段落外の図形セグメント要素を処理（新しい段落として出力）
+                else if (child.nodeType === Node.ELEMENT_NODE &&
+                         child.classList &&
+                         child.classList.contains('figure-segment')) {
+                    xmlParts.push('<p>\r\n');
+                    // figure-segment単体をラッパーで包んで処理
+                    const tempWrapper = document.createElement('div');
+                    tempWrapper.appendChild(child.cloneNode(true));
+                    this.extractTADXMLFromElement(tempWrapper, xmlParts, defaultFontState);
+                    xmlParts.push('\r\n</p>\r\n');
+                }
                 // 条件付き改ページ要素を処理
                 else if (child.nodeType === Node.ELEMENT_NODE &&
                          child.classList &&
@@ -4526,6 +4549,17 @@ class BasicTextEditor extends window.PluginBase {
             } else if (node.nodeName === 'BR') {
                 // 改行タグ
                 xml += '<br/>\r\n';
+            } else if (node.nodeType === Node.ELEMENT_NODE && node.classList && node.classList.contains('figure-segment')) {
+                // div.figure-segment要素をインライン<figure>として出力
+                const figureXmlTadBase64 = node.getAttribute('data-figure-xmltad');
+                if (figureXmlTadBase64) {
+                    const figureXmlTad = decodeURIComponent(escape(atob(figureXmlTadBase64)));
+                    // <tad>ラッパーを除去し、<figure>...</figure>のみ出力
+                    const figureMatch = /<figure[^>]*>[\s\S]*<\/figure>/i.exec(figureXmlTad);
+                    if (figureMatch) {
+                        xml += figureMatch[0];
+                    }
+                }
             } else if (node.nodeName === 'IMG') {
                 // 画像タグを<image>として出力（TAD形式: 自己閉じタグ）
                 const savedFileName = node.getAttribute('data-saved-filename') || '';
@@ -4552,7 +4586,10 @@ class BasicTextEditor extends window.PluginBase {
                 const pixbits = parseInt(node.getAttribute('data-pixbits')) || 0x0818;
 
                 // xmlTAD標準形式で出力（href/left/top/right/bottom属性）
-                xml += `<image lineType="0" lineWidth="0" l_pat="0" f_pat="0" angle="0" rotation="0" flipH="false" flipV="false" left="0" top="0" right="${displayWidth}" bottom="${displayHeight}" href="${this.escapeXml(savedFileName)}"/>`;
+                let imageXml = `<image lineType="0" lineWidth="0" l_pat="0" f_pat="0" angle="0" rotation="0" flipH="false" flipV="false" left="0" top="0" right="${displayWidth}" bottom="${displayHeight}" href="${this.escapeXml(savedFileName)}"`;
+
+                imageXml += '/>';
+                xml += imageXml;
             } else if (node.nodeType === Node.ELEMENT_NODE) {
                 const nodeName = node.nodeName.toLowerCase();
 
@@ -5784,76 +5821,8 @@ class BasicTextEditor extends window.PluginBase {
             }
         ];
 
-        // 仮身が選択されている場合は仮身操作メニューを追加
-        logger.debug('[EDITOR] getMenuDefinition: contextMenuVirtualObject:', this.contextMenuVirtualObject);
-        if (this.contextMenuVirtualObject) {
-            try {
-                logger.debug('[EDITOR] getMenuDefinition: 仮身が選択されています realId:', this.contextMenuVirtualObject.realId);
-
-                // 仮身操作メニュー
-                const realId = this.contextMenuVirtualObject.realId;
-                const isOpened = this.openedRealObjects.has(realId);
-
-                const virtualObjSubmenu = [
-                    { label: '開く', action: 'open-real-object', disabled: isOpened },
-                    { label: '閉じる', action: 'close-real-object', disabled: !isOpened },
-                    { separator: true },
-                    { label: '属性変更', action: 'change-virtual-object-attributes' },
-                    { label: '続柄設定', action: 'set-relationship' }
-                ];
-
-                menuDef.push({
-                    label: '仮身操作',
-                    submenu: virtualObjSubmenu
-                });
-
-                // 実身操作メニュー
-                const realObjSubmenu = [
-                    { label: '実身名変更', action: 'rename-real-object' },
-                    { label: '実身複製', action: 'duplicate-real-object' },
-                    { label: '管理情報', action: 'open-realobject-config' },
-                    { label: '仮身ネットワーク', action: 'open-virtual-object-network' },
-                    { label: '実身/仮身検索', action: 'open-real-object-search' }
-                ];
-
-                menuDef.push({
-                    label: '実身操作',
-                    submenu: realObjSubmenu
-                });
-
-                // 屑実身操作メニュー
-                menuDef.push({
-                    label: '屑実身操作',
-                    action: 'open-trash-real-objects'
-                });
-
-                // 実行メニュー
-                const applistData = await this.getAppListData(this.contextMenuVirtualObject.realId);
-                logger.debug('[EDITOR] getMenuDefinition: applistData:', applistData);
-                if (applistData && Object.keys(applistData).length > 0) {
-                    const executeSubmenu = [];
-                    for (const [pluginId, appInfo] of Object.entries(applistData)) {
-                        logger.debug('[EDITOR] getMenuDefinition: 実行メニュー項目追加:', pluginId, appInfo);
-                        executeSubmenu.push({
-                            label: appInfo.name || pluginId,
-                            action: `execute-with-${pluginId}`
-                        });
-                    }
-
-                    menuDef.push({
-                        label: '実行',
-                        submenu: executeSubmenu
-                    });
-                    logger.debug('[EDITOR] getMenuDefinition: 実行メニュー追加完了 項目数:', executeSubmenu.length);
-                } else {
-                    logger.warn('[EDITOR] getMenuDefinition: applistDataが空またはnull');
-                }
-            } catch (error) {
-                logger.error('[EDITOR] applist取得エラー:', error);
-            }
-        } else {
-            logger.debug('[EDITOR] getMenuDefinition: 仮身が選択されていません');
-        }
+        // 仮身が選択されている場合は仮身操作メニューを追加（PluginBase共通メソッド）
+        await this.buildVirtualObjectContextMenus(menuDef);
 
         return menuDef;
     }
@@ -5931,8 +5900,12 @@ class BasicTextEditor extends window.PluginBase {
             case 'copy':
                 // メニューからの呼び出し時はフォーカスがないためエディタにフォーカスを戻す
                 this.editor.focus();
-                // 画像が選択されている場合は画像をコピー
-                if (this.selectedImage) {
+                // 図形セグメントが選択されている場合は図形セグメントをコピー
+                if (this.selectedFigureSegment) {
+                    this.copyFigureSegment(this.selectedFigureSegment);
+                    this.setStatus('図形セグメントをクリップボードへコピーしました');
+                } else if (this.selectedImage) {
+                    // 画像が選択されている場合は画像をコピー
                     this.copyImage(this.selectedImage);
                     this.setStatus('画像をクリップボードへコピーしました');
                 } else if (this.selectedVirtualObject) {
@@ -5947,8 +5920,12 @@ class BasicTextEditor extends window.PluginBase {
             case 'paste':
                 // メニューからの呼び出し時はフォーカスがないためエディタにフォーカスを戻す
                 this.editor.focus();
-                // クリップボードに画像がある場合は画像を貼り付け
-                if (this.imageClipboard) {
+                // ローカルクリップボードに図形セグメントがある場合は図形セグメントを貼り付け
+                if (this.figureSegmentClipboard) {
+                    this.pasteFigureSegment();
+                    this.setStatus('図形セグメントをクリップボードから貼り付けました');
+                } else if (this.imageClipboard) {
+                    // クリップボードに画像がある場合は画像を貼り付け
                     this.pasteImage();
                     this.setStatus('画像をクリップボードから貼り付けました');
                 } else if (this.virtualObjectClipboard) {
@@ -5963,8 +5940,15 @@ class BasicTextEditor extends window.PluginBase {
             case 'cut':
                 // メニューからの呼び出し時はフォーカスがないためエディタにフォーカスを戻す
                 this.editor.focus();
-                // 画像が選択されている場合は画像を移動
-                if (this.selectedImage) {
+                // 図形セグメントが選択されている場合は図形セグメントを移動
+                if (this.selectedFigureSegment) {
+                    this.copyFigureSegment(this.selectedFigureSegment);
+                    this.selectedFigureSegment.remove();
+                    this.selectedFigureSegment = null;
+                    this.isModified = true;
+                    this.setStatus('図形セグメントをクリップボードへ移動しました');
+                } else if (this.selectedImage) {
+                    // 画像が選択されている場合は画像を移動
                     this.cutImage(this.selectedImage);
                     this.setStatus('画像をクリップボードへ移動しました');
                 } else if (this.selectedVirtualObject) {
@@ -5979,8 +5963,12 @@ class BasicTextEditor extends window.PluginBase {
             case 'redo':
                 // メニューからの呼び出し時はフォーカスがないためエディタにフォーカスを戻す
                 this.editor.focus();
-                // クリップボードに画像がある場合は画像を移動（貼り付け後クリア）
-                if (this.imageClipboard && this.imageClipboard.isCut) {
+                // ローカルクリップボードに図形セグメントがある場合は図形セグメントを移動（貼り付け後クリア）
+                if (this.figureSegmentClipboard) {
+                    this.pasteFigureSegment();
+                    this.figureSegmentClipboard = null;
+                    this.setStatus('図形セグメントをクリップボードから移動しました');
+                } else if (this.imageClipboard && this.imageClipboard.isCut) {
                     this.pasteImage();
                     this.imageClipboard = null;  // 移動なのでクリップボードをクリア
                     this.setStatus('画像をクリップボードから移動しました');
@@ -8647,9 +8635,9 @@ class BasicTextEditor extends window.PluginBase {
     getMemoryMaxImageNumber() {
         // エディタ内のすべての画像要素から最大のimgNoを取得
         let maxImgNo = -1;
-        const images = this.editor.querySelectorAll('img[data-img-no]');
-        images.forEach(img => {
-            const imgNo = parseInt(img.getAttribute('data-img-no'));
+        const elements = this.editor.querySelectorAll('img[data-img-no]');
+        elements.forEach(el => {
+            const imgNo = parseInt(el.getAttribute('data-img-no'));
             if (!isNaN(imgNo) && imgNo > maxImgNo) {
                 maxImgNo = imgNo;
             }
@@ -8746,6 +8734,9 @@ class BasicTextEditor extends window.PluginBase {
                 }
             }
         }
+
+        // 図形セグメントのiframeを初期化
+        this.initFigureSegmentIframes();
     }
 
     // saveImageFile, deleteImageFile は PluginBase の共通実装を使用
@@ -9499,6 +9490,9 @@ class BasicTextEditor extends window.PluginBase {
             // テキストデータがある場合（グローバルクリップボード優先）
             document.execCommand('insertText', false, globalClipboard.text);
             this.setStatus('テキストをクリップボードから貼り付けました');
+        } else if (globalClipboard && globalClipboard.type === 'figure-segment') {
+            // 図形セグメント（グラフ等）はCanvas描画で貼り付け（xmlTadデータ保持）
+            await this.insertFigureSegment(globalClipboard.xmlTad, globalClipboard.sourceRealId);
         } else {
             // グローバルクリップボードにデータがない場合はシステムクリップボードからテキストをペースト
             await this.pasteTextFromClipboard();
@@ -9534,6 +9528,11 @@ class BasicTextEditor extends window.PluginBase {
             // テキストデータがある場合（グローバルクリップボード優先）
             document.execCommand('insertText', false, globalClipboard.text);
             this.setStatus('テキストをクリップボードから移動しました');
+            // グローバルクリップボードをクリア（移動なので）
+            this.setClipboard(null);
+        } else if (globalClipboard && globalClipboard.type === 'figure-segment') {
+            // 図形セグメント（グラフ等）はCanvas描画で貼り付け（xmlTadデータ保持）
+            await this.insertFigureSegment(globalClipboard.xmlTad, globalClipboard.sourceRealId);
             // グローバルクリップボードをクリア（移動なので）
             this.setClipboard(null);
         } else {
@@ -9636,6 +9635,239 @@ class BasicTextEditor extends window.PluginBase {
             // その他のエラーも同様に処理（危険なdocument.execCommand('paste')は使用しない）
             this.setStatus('貼り付けに失敗しました');
         }
+    }
+
+    /**
+     * 図形セグメントをiframe（figure-editor埋め込み）で貼り付け
+     * xmlTadデータをdata属性に保持し、figure-editorで描画を委譲する
+     * @param {string} xmlTad - 図形のxmlTadデータ
+     * @param {string} [sourceRealId] - コピー元の実身ID（pixelmap等の画像ファイル参照解決用）
+     */
+    async insertFigureSegment(xmlTad, sourceRealId) {
+        try {
+            // xmlTadからfigView寸法を取得
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(xmlTad, 'text/xml');
+            const figView = doc.querySelector('figView');
+            if (!figView) {
+                this.setStatus('図形データの解析に失敗しました');
+                return;
+            }
+
+            // <figure>が実際の図形描画要素を含むか検証
+            // <document>のみの<figure>（テキストボックスのみ）はテキストとして貼り付ける
+            const figure = doc.querySelector('figure');
+            if (figure) {
+                const hasDrawingElements = figure.querySelector('rect, ellipse, polyline, group, image, pixelmap');
+                if (!hasDrawingElements) {
+                    this._insertDocumentOnlyFigureAsText(figure);
+                    return;
+                }
+            }
+            const width = parseInt(figView.getAttribute('right')) - parseInt(figView.getAttribute('left'));
+            const height = parseInt(figView.getAttribute('bottom')) - parseInt(figView.getAttribute('top'));
+
+            // figure-segmentコンテナを作成
+            const container = this.createFigureSegmentElement(xmlTad, width, height, sourceRealId);
+
+            // カーソル位置に挿入
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                range.deleteContents();
+                range.insertNode(container);
+                range.setStartAfter(container);
+                range.setEndAfter(container);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            } else {
+                this.editor.appendChild(container);
+            }
+
+            // iframe初期化（load-dataメッセージ送信）
+            this.initFigureSegmentIframes();
+
+            this.updateContentHeight();
+            this.isModified = true;
+            this.setStatus('図形セグメントを貼り付けました');
+        } catch (error) {
+            this.setStatus('図形セグメントの貼り付けに失敗しました');
+        }
+    }
+
+    /**
+     * <document>のみの<figure>からテキスト内容を抽出してカーソル位置に貼り付ける
+     * @param {Element} figure - <figure>要素（DOMParserで解析済み）
+     */
+    _insertDocumentOnlyFigureAsText(figure) {
+        const docElements = figure.querySelectorAll('document');
+        if (docElements.length === 0) return;
+
+        // 全<document>からテキストノードと<br/>を抽出
+        const fragment = document.createDocumentFragment();
+        docElements.forEach((docElement, index) => {
+            // 2つ目以降の<document>の前に改行を挿入
+            if (index > 0 && fragment.childNodes.length > 0) {
+                fragment.appendChild(document.createElement('br'));
+            }
+            for (const child of docElement.childNodes) {
+                if (child.nodeType === Node.TEXT_NODE) {
+                    const text = child.textContent.trim();
+                    if (text) {
+                        fragment.appendChild(document.createTextNode(text));
+                    }
+                } else if (child.nodeType === Node.ELEMENT_NODE) {
+                    const tagName = child.tagName.toLowerCase();
+                    if (tagName === 'br') {
+                        fragment.appendChild(document.createElement('br'));
+                    }
+                    // figView, figDraw, figScale, docView, docDraw, docScale, text, font等のメタデータはスキップ
+                }
+            }
+        });
+
+        if (fragment.childNodes.length === 0) return;
+
+        const selection = window.getSelection();
+        if (selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            range.deleteContents();
+            range.insertNode(fragment);
+            range.collapse(false);
+            selection.removeAllRanges();
+            selection.addRange(range);
+        } else {
+            this.editor.appendChild(fragment);
+        }
+
+        this.isModified = true;
+        this.setStatus('テキストを貼り付けました');
+    }
+
+    /**
+     * figure-segmentコンテナ要素を作成（div + iframe）
+     * figure-editorを埋め込みモードで読み込み、図形描画を委譲する
+     * @param {string} xmlTad - 図形のxmlTadデータ
+     * @param {number} width - 表示幅
+     * @param {number} height - 表示高さ
+     * @param {string} [sourceRealId] - コピー元の実身ID（pixelmap等の画像ファイル参照解決用）
+     * @returns {HTMLElement} figure-segmentコンテナ
+     */
+    createFigureSegmentElement(xmlTad, width, height, sourceRealId) {
+        const container = document.createElement('div');
+        container.className = 'figure-segment';
+        container.contentEditable = 'false';
+        container.style.display = 'inline-block';
+        container.style.verticalAlign = 'middle';
+        container.style.margin = '4px';
+        container.style.width = width + 'px';
+        container.style.height = height + 'px';
+
+        const iframe = document.createElement('iframe');
+        iframe.src = '../../plugins/basic-figure-editor/index.html?embedded=true';
+        iframe.style.width = width + 'px';
+        iframe.style.height = height + 'px';
+        iframe.style.border = 'none';
+        iframe.style.pointerEvents = 'none';
+        container.appendChild(iframe);
+
+        // xmlTadをbase64エンコードしてdata属性に保持
+        const encoded = btoa(unescape(encodeURIComponent(xmlTad)));
+        container.setAttribute('data-figure-xmltad', encoded);
+
+        // コピー元の実身IDを保持（埋め込みfigure-editorでの画像ファイル参照解決用）
+        if (sourceRealId) {
+            container.setAttribute('data-source-real-id', sourceRealId);
+        }
+
+        return container;
+    }
+
+    /**
+     * 図形セグメントのiframeを初期化（load-dataメッセージ送信）
+     * 各iframeにfigure-editorのxmlTadデータを送信する
+     */
+    initFigureSegmentIframes() {
+        const segments = this.editor.querySelectorAll('.figure-segment[data-figure-xmltad]');
+        for (const container of segments) {
+            const iframe = container.querySelector('iframe');
+            if (iframe && !iframe.dataset.initialized) {
+                iframe.addEventListener('load', () => {
+                    const encoded = container.getAttribute('data-figure-xmltad');
+                    if (encoded) {
+                        const xmlTad = decodeURIComponent(escape(atob(encoded)));
+                        const sourceRealId = container.getAttribute('data-source-real-id') || '';
+                        iframe.contentWindow.postMessage({
+                            type: 'load-data',
+                            realId: sourceRealId,
+                            realObject: { xtad: xmlTad },
+                            readonly: true,
+                            noScrollbar: true
+                        }, '*');
+                    }
+                });
+                iframe.dataset.initialized = 'true';
+            }
+        }
+    }
+
+    // 図形描画はfigure-editor（iframe埋め込み）に委譲するため、
+    // renderFigureOnCanvas, renderFigureChildren, renderFigureRect,
+    // renderFigureEllipse, renderFigurePolyline, renderFigureDocument は削除済み
+
+    /**
+     * 図形セグメントをコピー
+     * @param {HTMLElement} container - figure-segmentコンテナ
+     */
+    async copyFigureSegment(container) {
+        const figureXmlTadBase64 = container.getAttribute('data-figure-xmltad');
+        if (!figureXmlTadBase64) return;
+
+        // base64デコード
+        const xmlTad = decodeURIComponent(escape(atob(figureXmlTadBase64)));
+
+        // グローバルクリップボードにfigure-segmentとして設定
+        this.setFigureSegmentClipboard(xmlTad);
+
+        // ローカルfigureSegmentClipboardにも保持（ウィンドウ内ペースト用）
+        const iframe = container.querySelector('iframe');
+        this.figureSegmentClipboard = {
+            xmlTad: xmlTad,
+            width: iframe ? parseInt(iframe.style.width) || 200 : 200,
+            height: iframe ? parseInt(iframe.style.height) || 200 : 200,
+            sourceRealId: container.getAttribute('data-source-real-id') || ''
+        };
+    }
+
+    /**
+     * 図形セグメントの選択
+     * @param {HTMLElement} container - figure-segmentコンテナ
+     */
+    selectFigureSegment(container) {
+        this.deselectFigureSegment();
+        this.deselectImage();
+        this.selectedFigureSegment = container;
+        container.style.outline = '2px solid #0078d4';
+        container.style.outlineOffset = '2px';
+    }
+
+    /**
+     * 図形セグメントの選択解除
+     */
+    deselectFigureSegment() {
+        if (this.selectedFigureSegment) {
+            this.selectedFigureSegment.style.outline = '';
+            this.selectedFigureSegment.style.outlineOffset = '';
+            this.selectedFigureSegment = null;
+        }
+    }
+
+    /**
+     * ローカルクリップボードから図形セグメントを貼り付け
+     */
+    async pasteFigureSegment() {
+        if (!this.figureSegmentClipboard) return;
+        await this.insertFigureSegment(this.figureSegmentClipboard.xmlTad, this.figureSegmentClipboard.sourceRealId);
     }
 
     /**

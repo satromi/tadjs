@@ -85,7 +85,7 @@
     </figure>
 
     <!-- BGM音声（自動再生） -->
-    <audio id="bgm" href="713b8f42-b7f6-42a8-979e-90af8b824d70_0_bgm.mp3" autoplay="true" loop="false" onended="slide:next"/>
+    <audio id="bgm" href="713b8f42-b7f6-42a8-979e-90af8b824d70_0_0.mp3" autoplay="true" loop="false" onended="slide:next"/>
 
     <realData>
         <stream number="1">

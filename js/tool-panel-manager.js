@@ -471,6 +471,11 @@ export class ToolPanelManager {
                 this.sendToToolPanelSource(source, 'popup-brush-size-change', {
                     brushSize: parseInt(e.target.value)
                 });
+            } else if (e.target.id === 'zoomLevelSelect') {
+                this.sendToToolPanelSource(source, 'popup-zoom-level-change', {
+                    zoomLevel: parseFloat(e.target.value)
+                });
+                this.hideToolPanelPopup();
             }
         };
 

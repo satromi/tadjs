@@ -119,6 +119,28 @@ export class VirtualObjectRenderer {
     }
 
     /**
+     * アイコン画像要素にソースを設定する共通処理
+     * @param {HTMLImageElement} iconImg - アイコン画像要素
+     * @param {string} realId - 実身ID
+     * @param {Object} options - オプション（iconData, iconBasePath, loadIconCallback）
+     */
+    _setupIconImage(iconImg, realId, options) {
+        if (options.iconData && options.iconData[realId]) {
+            iconImg.src = `data:image/x-icon;base64,${options.iconData[realId]}`;
+        } else if (options.iconBasePath !== undefined) {
+            iconImg.src = `${options.iconBasePath}${realId}.ico`;
+        } else if (options.loadIconCallback && typeof options.loadIconCallback === 'function') {
+            options.loadIconCallback(realId).then(iconData => {
+                if (iconData) {
+                    iconImg.src = `data:image/x-icon;base64,${iconData}`;
+                }
+            }).catch(error => {
+                logger.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
+            });
+        }
+    }
+
+    /**
      * DOM要素として仮身を作成（基本文章編集用 - インライン表示）
      * @param {Object} virtualObject - 仮身オブジェクト
      * @param {Object} options - オプション
@@ -190,25 +212,7 @@ export class VirtualObjectRenderer {
             const realId = virtualObject.link_id.replace(/_\d+\.xtad$/i, '');
 
             // アイコンを読み込む
-            if (options.iconData && options.iconData[realId]) {
-                // 事前にロードされたアイコンデータを使用（同期的に設定）
-                iconImg.src = `data:image/x-icon;base64,${options.iconData[realId]}`;
-            } else if (options.iconBasePath !== undefined) {
-                // 直接ファイルパスを使用
-                iconImg.src = `${options.iconBasePath}${realId}.ico`;
-            } else if (options.loadIconCallback && typeof options.loadIconCallback === 'function') {
-                // 従来のコールバック方式（後方互換性のため）
-                options.loadIconCallback(realId).then(iconData => {
-                    if (iconData) {
-                        iconImg.src = `data:image/x-icon;base64,${iconData}`;
-                    }
-                    // アイコンがない場合でもdisplay:noneにせず、スペースを確保
-                }).catch(error => {
-                    logger.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
-                    // エラーでもdisplay:noneにせず、スペースを確保
-                });
-            }
-            // アイコンがない場合でもスペースを確保
+            this._setupIconImage(iconImg, realId, options);
 
             vo.appendChild(iconImg);
         }
@@ -396,25 +400,7 @@ export class VirtualObjectRenderer {
             const realId = virtualObject.link_id.replace(/_\d+\.xtad$/i, '');
 
             // アイコンを読み込む
-            if (options.iconData && options.iconData[realId]) {
-                // 事前にロードされたアイコンデータを使用（同期的に設定）
-                iconImg.src = `data:image/x-icon;base64,${options.iconData[realId]}`;
-            } else if (options.iconBasePath !== undefined) {
-                // 直接ファイルパスを使用
-                iconImg.src = `${options.iconBasePath}${realId}.ico`;
-            } else if (options.loadIconCallback && typeof options.loadIconCallback === 'function') {
-                // 従来のコールバック方式（後方互換性のため）
-                options.loadIconCallback(realId).then(iconData => {
-                    if (iconData) {
-                        iconImg.src = `data:image/x-icon;base64,${iconData}`;
-                    }
-                    // アイコンがない場合でもdisplay:noneにせず、スペースを確保
-                }).catch(error => {
-                    logger.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
-                    // エラーでもdisplay:noneにせず、スペースを確保
-                });
-            }
-            // アイコンがない場合でもスペースを確保
+            this._setupIconImage(iconImg, realId, options);
 
             titleArea.appendChild(iconImg);
         }
@@ -635,32 +621,7 @@ export class VirtualObjectRenderer {
                 logger.debug('[VirtualObjectRenderer] 実身ID抽出:', realId, 'iconBasePathあり:', !!(options.iconBasePath), 'loadIconCallbackあり:', !!(options.loadIconCallback));
 
                 // アイコンを読み込む
-                if (options.iconData && options.iconData[realId]) {
-                    // 事前にロードされたアイコンデータを使用（同期的に設定）
-                    logger.debug('[VirtualObjectRenderer] 事前ロード済みアイコンを使用:', realId);
-                    iconImg.src = `data:image/x-icon;base64,${options.iconData[realId]}`;
-                } else if (options.iconBasePath !== undefined) {
-                    // 直接ファイルパスを使用
-                    const iconPath = `${options.iconBasePath}${realId}.ico`;
-                    logger.debug('[VirtualObjectRenderer] アイコンパス直接読み込み:', iconPath);
-                    iconImg.src = iconPath;
-                } else if (options.loadIconCallback && typeof options.loadIconCallback === 'function') {
-                    // 従来のコールバック方式（後方互換性のため）
-                    logger.debug('[VirtualObjectRenderer] アイコン読み込み開始:', realId);
-                    options.loadIconCallback(realId).then(iconData => {
-                        logger.debug('[VirtualObjectRenderer] アイコン読み込み完了:', realId, 'データあり:', !!iconData);
-                        if (iconData) {
-                            iconImg.src = `data:image/x-icon;base64,${iconData}`;
-                        }
-                        // アイコンがない場合でもdisplay:noneにせず、スペースを確保
-                    }).catch(error => {
-                        logger.error('[VirtualObjectRenderer] アイコン読み込みエラー:', realId, error);
-                        // エラーでもdisplay:noneにせず、スペースを確保
-                    });
-                } else {
-                    logger.warn('[VirtualObjectRenderer] loadIconCallbackが提供されていません:', virtualObject.link_id);
-                    // loadIconCallbackがない場合でもスペースを確保
-                }
+                this._setupIconImage(iconImg, realId, options);
 
                 titleBar.appendChild(iconImg);
             }

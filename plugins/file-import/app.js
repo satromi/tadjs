@@ -295,32 +295,54 @@ class FileImportApp extends window.PluginBase {
 
         // 親ウィンドウにファイルを送信
         // File オブジェクトはpostMessageでシリアライズできないため、
-        // ファイル内容をBase64エンコードして送信する
+        // Electron環境ではwebUtils.getPathForFile()でファイルパスを取得して送信する
+        // （D&Dと同じ方式: 受信側でfsから非同期読み込み）
         if (this.messageBus) {
             const fileInfos = [];
 
+            // Electron環境ではwebUtilsでファイルパスを取得（Electron 23+対応）
+            let webUtils = null;
+            try {
+                webUtils = require('electron').webUtils;
+            } catch (e) {
+                // Web環境ではrequireが使えない
+            }
+
             for (const file of this.selectedFiles) {
                 try {
-                    // ファイル内容をArrayBufferとして読み込み
-                    const arrayBuffer = await file.arrayBuffer();
-                    const uint8Array = new Uint8Array(arrayBuffer);
-
-                    // Base64エンコード
-                    let binary = '';
-                    const len = uint8Array.byteLength;
-                    for (let i = 0; i < len; i++) {
-                        binary += String.fromCharCode(uint8Array[i]);
+                    // webUtils.getPathForFile()でファイルパスを取得（D&Dと同じ方式）
+                    let filePath = null;
+                    if (webUtils) {
+                        try {
+                            filePath = webUtils.getPathForFile(file);
+                        } catch (e) {
+                            filePath = file.path || null;
+                        }
+                    } else {
+                        filePath = file.path || null;
                     }
-                    const base64Data = btoa(binary);
 
-                    fileInfos.push({
+                    const fileInfo = {
                         name: file.name,
                         size: file.size,
                         type: file.type,
-                        path: file.path || null,
-                        lastModified: file.lastModified,
-                        base64Data: base64Data  // ファイル内容をBase64で送信
-                    });
+                        path: filePath,
+                        lastModified: file.lastModified
+                    };
+
+                    // パスが取得できない場合のみBase64エンコード（Web環境フォールバック）
+                    if (!filePath) {
+                        const arrayBuffer = await file.arrayBuffer();
+                        const uint8Array = new Uint8Array(arrayBuffer);
+                        let binary = '';
+                        const len = uint8Array.byteLength;
+                        for (let i = 0; i < len; i++) {
+                            binary += String.fromCharCode(uint8Array[i]);
+                        }
+                        fileInfo.base64Data = btoa(binary);
+                    }
+
+                    fileInfos.push(fileInfo);
                 } catch (error) {
                     logger.error('[FileImport] ファイル読み込みエラー:', file.name, error);
                 }

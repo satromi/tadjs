@@ -136,7 +136,7 @@ class FileImportManager {
             } else if (file.path && this.tadjs.isElectronEnv) {
                 // Electron環境でpathがある場合はfsで読み込み
                 const fs = require('fs');
-                const buffer = fs.readFileSync(file.path);
+                const buffer = await fs.promises.readFile(file.path);
                 arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
             } else {
                 return nullResult;
@@ -365,7 +365,7 @@ class FileImportManager {
             } else if (file.path && this.tadjs.isElectronEnv) {
                 // Electron環境でファイルパスが利用可能な場合、fsで読み込む
                 const fs = require('fs');
-                const buffer = fs.readFileSync(file.path);
+                const buffer = await fs.promises.readFile(file.path);
                 uint8Array = new Uint8Array(buffer);
             } else if (typeof file.arrayBuffer === 'function') {
                 // File オブジェクトの場合、arrayBuffer()で読み込む
@@ -441,7 +441,7 @@ class FileImportManager {
             refCount: 1,
             recordCount: 1,
             editable: true,
-            deletable: false,
+            deletable: true,
             readable: true,
             maker: 'TRON User',
             window: {
@@ -554,7 +554,7 @@ class FileImportManager {
                 }
             } else if (file.path && this.tadjs.isElectronEnv) {
                 const fs = require('fs');
-                const buffer = fs.readFileSync(file.path);
+                const buffer = await fs.promises.readFile(file.path);
                 uint8Array = new Uint8Array(buffer);
             } else if (typeof file.arrayBuffer === 'function') {
                 const arrayBuffer = await file.arrayBuffer();
@@ -766,7 +766,7 @@ class FileImportManager {
                 }
             } else if (file.path && this.tadjs.isElectronEnv) {
                 const fs = require('fs');
-                const buffer = fs.readFileSync(file.path);
+                const buffer = await fs.promises.readFile(file.path);
                 uint8Array = new Uint8Array(buffer);
             } else if (typeof file.arrayBuffer === 'function') {
                 const arrayBuffer = await file.arrayBuffer();
@@ -991,7 +991,7 @@ class FileImportManager {
                 }
             } else if (file.path && this.tadjs.isElectronEnv) {
                 const fs = require('fs');
-                const buffer = fs.readFileSync(file.path);
+                const buffer = await fs.promises.readFile(file.path);
                 uint8Array = new Uint8Array(buffer);
             } else if (typeof file.arrayBuffer === 'function') {
                 const arrayBuffer = await file.arrayBuffer();

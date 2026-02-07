@@ -26,9 +26,8 @@ class BasicFigureEditor extends window.PluginBase {
 
         this.currentFile = null;
         this.tadData = null;
-        this.isFullscreen = false;
+        // this.isFullscreen は PluginBase で初期化済み
         this.viewMode = 'canvas'; // 'canvas' or 'xml'
-        this.dialogMessageId = 0; // ダイアログメッセージID
         // this.realId は基底クラスで定義済み
         this.isModified = false; // 編集状態フラグ
         this.originalContent = ''; // 保存時の内容
@@ -115,6 +114,9 @@ class BasicFigureEditor extends window.PluginBase {
         this.gridMode = 'none'; // 'none', 'show', 'snap'
         this.gridInterval = 16; // px
 
+        // ズーム倍率
+        this.zoomLevel = 1.0;
+
         // フォント設定（文字枠用）
         this.defaultFontSize = 16;
         this.defaultFontFamily = 'sans-serif';
@@ -130,6 +132,22 @@ class BasicFigureEditor extends window.PluginBase {
         this.pixelmapBrushSize = 1; // ブラシサイズ（ピクセル単位）
         this.lastPixelmapX = null; // 前回描画座標X（線補間用）
         this.lastPixelmapY = null; // 前回描画座標Y（線補間用）
+
+        // 変形モード（頂点編集）
+        this.isTransformMode = false; // 変形モード中か
+        this.transformingShape = null; // 変形中の図形
+        this.transformVertices = []; // 変形ハンドル情報 [{x, y, type, index}]
+        this.isDraggingVertex = false; // 頂点ドラッグ中か
+        this.draggedVertexIndex = -1; // ドラッグ中の頂点インデックス
+        this.vertexDragStartX = 0; // ドラッグ開始時の頂点X座標
+        this.vertexDragStartY = 0; // ドラッグ開始時の頂点Y座標
+
+        // 回転モード（Ctrl+リサイズハンドルドラッグ）
+        this.isRotating = false; // 回転中フラグ
+        this.rotationCenterX = 0; // 回転中心X
+        this.rotationCenterY = 0; // 回転中心Y
+        this.rotationStartAngle = 0; // ドラッグ開始時のマウス角度（ラジアン）
+        this.rotationOriginals = []; // 各図形の元状態 [{shape, rotation, center, startX, startY, endX, endY, ...}]
 
         // ドラッグクールダウン（連続ドラッグ防止）
         this.dragCooldown = false;
@@ -153,6 +171,16 @@ class BasicFigureEditor extends window.PluginBase {
 
         // MessageBusはPluginBaseで初期化済み
 
+        // 埋め込みモード検出（text-editor内のfigure-segment表示用）
+        const urlParams = new URLSearchParams(window.location.search);
+        this.embeddedMode = urlParams.get('embedded') === 'true';
+        if (this.embeddedMode) {
+            this.readonly = true;
+            this.toolPanelVisible = false;
+            document.body.style.overflow = 'hidden';
+            document.body.classList.add('readonly-mode');
+        }
+
         this.init();
     }
 
@@ -171,8 +199,7 @@ class BasicFigureEditor extends window.PluginBase {
 
             // fileIdを保存（拡張子を除去）
             if (data.fileData) {
-                let rawId = data.fileData.realId || data.fileData.fileId;
-                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                this.realId = this.extractRealId(data.fileData.realId || data.fileData.fileId);
                 logger.debug('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId);
 
                 // 背景色の設定
@@ -197,6 +224,11 @@ class BasicFigureEditor extends window.PluginBase {
                 if (data.fileData.realObject.window.panel !== undefined) {
                     this.toolPanelVisible = data.fileData.realObject.window.panel;
                     logger.debug('[FIGURE EDITOR] [MessageBus] 道具パネル表示状態を復元:', this.toolPanelVisible);
+                }
+
+                // ズーム倍率を復元
+                if (data.fileData.realObject.window.zoomratio !== undefined) {
+                    this.zoomLevel = data.fileData.realObject.window.zoomratio;
                 }
             }
 
@@ -228,17 +260,7 @@ class BasicFigureEditor extends window.PluginBase {
             this.handleScroll(data.scrollLeft, data.scrollTop);
         });
 
-        // input-dialog-response メッセージ（MessageBusが自動処理）
-        this.messageBus.on('input-dialog-response', (data) => {
-            logger.debug('[FIGURE EDITOR] [MessageBus] input-dialog-response受信:', data.messageId);
-            // sendWithCallback使用時は自動的にコールバックが実行される
-        });
-
-        // message-dialog-response メッセージ（MessageBusが自動処理）
-        this.messageBus.on('message-dialog-response', (data) => {
-            logger.debug('[FIGURE EDITOR] [MessageBus] message-dialog-response受信:', data.messageId);
-            // sendWithCallback使用時は自動的にコールバックが実行される
-        });
+        // input-dialog-response / message-dialog-response は MessageBus が自動処理するためハンドラ不要
 
         // ===== 道具パネル関連メッセージ =====
 
@@ -338,6 +360,16 @@ class BasicFigureEditor extends window.PluginBase {
             this.redraw();
         });
 
+        // update-zoom-level メッセージ
+        this.messageBus.on('update-zoom-level', (data) => {
+            const oldZoom = this.zoomLevel;
+            this.zoomLevel = data.zoomLevel;
+            this.resizeCanvas();
+            this.adjustScrollForZoom(oldZoom, this.zoomLevel);
+            this.updateVobjPositionsForZoom();
+            this.updateWindowConfig({ zoomratio: this.zoomLevel });
+        });
+
         // update-pixelmap-tool メッセージ
         this.messageBus.on('update-pixelmap-tool', (data) => {
             this.pixelmapTool = data.pixelmapTool;
@@ -352,9 +384,14 @@ class BasicFigureEditor extends window.PluginBase {
 
         // ===== 画材パネル関連メッセージ =====
 
-        // request-open-material-panel メッセージ（道具パネルから）
+        // request-open-material-panel メッセージ（道具パネルから）- トグル動作
         this.messageBus.on('request-open-material-panel', async (data) => {
-            await this.openMaterialPanel(data.x, data.y);
+            const existingWindowId = this.getChildPanelWindowId('material');
+            if (existingWindowId) {
+                this.closeChildPanelWindow('material');
+            } else {
+                await this.openMaterialPanel(data.x, data.y);
+            }
         });
 
         // update-font-size メッセージ
@@ -496,10 +533,9 @@ class BasicFigureEditor extends window.PluginBase {
             // 実身データを読み込む
             const realObject = data.realObject;
             if (realObject) {
-                // fileIdを保存（_数字.xtad の形式を除去して実身IDのみを取得）
-                let rawId = data.realId;
-                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
-                logger.debug('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId, '(元:', rawId, ')');
+                // 実身IDを設定
+                this.realId = this.extractRealId(data.realId);
+                logger.debug('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId);
 
                 // データを読み込む
                 this.loadFile({
@@ -536,11 +572,9 @@ class BasicFigureEditor extends window.PluginBase {
             if (realObject) {
                 // virtualObjからrealIdを取得
                 const virtualObj = data.virtualObj;
-                let rawId = virtualObj?.link_id;
-                if (rawId) {
-                    // _数字.xtad の形式を除去して実身IDのみを取得
-                    this.realId = rawId.replace(/_\d+\.xtad$/i, '');
-                    logger.debug('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId, '(元:', rawId, ')');
+                if (virtualObj?.link_id) {
+                    this.realId = this.extractRealId(virtualObj.link_id);
+                    logger.debug('[FIGURE EDITOR] [MessageBus] fileId設定:', this.realId);
                 }
 
                 // データを読み込む（完了を待つ）
@@ -567,60 +601,16 @@ class BasicFigureEditor extends window.PluginBase {
 
         // ===== その他のメッセージ =====
 
-        // image-file-path-response メッセージ（レスポンス受信）
-        // 自分宛の処理は PluginBase.getImageFilePath() の waitFor で処理
-        // 開いた仮身内のプラグインへの転送のみ行う
-        this.messageBus.on('image-file-path-response', (data) => {
-            const iframes = document.querySelectorAll('iframe');
-            iframes.forEach(iframe => {
-                if (iframe.contentWindow) {
-                    iframe.contentWindow.postMessage({
-                        type: 'image-file-path-response',
-                        ...data,
-                        _messageBus: true,
-                        _from: 'BasicFigureEditor'
-                    }, '*');
-                }
-            });
+        // 開いた仮身内プラグインとのメッセージ転送（PluginBase共通メソッド）
+        this.setupChildIframeMessageForwarding({
+            forwardToParent: ['load-data-file-request', 'get-image-file-path'],
+            forwardToChildren: ['load-data-file-response', 'image-file-path-response']
         });
 
         // user-config-updated メッセージ
         this.messageBus.on('user-config-updated', () => {
             logger.debug('[FIGURE EDITOR] [MessageBus] ユーザ環境設定更新通知を受信');
             this.loadUserConfig();
-        });
-
-        // load-data-file-request メッセージ
-        this.messageBus.on('load-data-file-request', (data) => {
-            // 開いた仮身内のプラグインからのファイル読み込み要求を親ウィンドウに転送
-            logger.debug('[FIGURE EDITOR] [MessageBus] load-data-file-request受信、親ウィンドウに転送:', data.fileName);
-            // 親ウィンドウに転送（型名を明示的に指定）
-            this.messageBus.send('load-data-file-request', data);
-        });
-
-        // load-data-file-response メッセージ
-        this.messageBus.on('load-data-file-response', (data) => {
-            // 親ウィンドウからのファイル読み込みレスポンスを開いた仮身内のプラグインに転送
-            logger.debug('[FIGURE EDITOR] [MessageBus] load-data-file-response受信、子iframeに転送:', data.fileName);
-            // すべての子iframeに転送（MessageBus形式で送信）
-            const iframes = document.querySelectorAll('iframe');
-            iframes.forEach(iframe => {
-                if (iframe.contentWindow) {
-                    iframe.contentWindow.postMessage({
-                        type: 'load-data-file-response',
-                        ...data,
-                        _messageBus: true,
-                        _from: 'BasicFigureEditor'
-                    }, '*');
-                }
-            });
-        });
-
-        // get-image-file-path メッセージ（開いた仮身内のプラグインからの画像パス取得要求を親ウィンドウに転送）
-        this.messageBus.on('get-image-file-path', (data) => {
-            logger.debug('[FIGURE EDITOR] [MessageBus] get-image-file-path受信、親ウィンドウに転送:', data.fileName);
-            // 親ウィンドウに転送（型名を明示的に指定）
-            this.messageBus.send('get-image-file-path', data);
         });
 
         logger.debug('[FIGURE EDITOR] MessageBusハンドラ登録完了');
@@ -752,14 +742,24 @@ class BasicFigureEditor extends window.PluginBase {
     resizeCanvas() {
         const container = document.querySelector('.plugin-content');
         if (container) {
-            // コンテンツサイズを計算
-            const contentSize = this.calculateContentSize();
-            const windowWidth = container.clientWidth || 800;
-            const windowHeight = container.clientHeight || 600;
+            let finalWidth, finalHeight;
 
-            // キャンバスサイズを設定（コンテンツサイズとウィンドウサイズの大きい方、最小サイズも保証）
-            const finalWidth = Math.max(contentSize.width, windowWidth, 800);
-            const finalHeight = Math.max(contentSize.height, windowHeight, 600);
+            if (this.embeddedMode && this.figView) {
+                // 埋め込みモード: figView寸法をそのまま使用（min 800x600制約なし、zoomLevel=1固定）
+                finalWidth = (this.figView.right - this.figView.left) || 200;
+                finalHeight = (this.figView.bottom - this.figView.top) || 200;
+            } else {
+                // 通常モード: コンテンツサイズとウィンドウサイズの大きい方、最小サイズも保証
+                const contentSize = this.calculateContentSize();
+                const windowWidth = container.clientWidth || 800;
+                const windowHeight = container.clientHeight || 600;
+                // 論理サイズ: ウィンドウサイズをzoomLevelで割って論理座標空間に変換
+                const logicalWidth = Math.max(contentSize.width, windowWidth / this.zoomLevel, 800);
+                const logicalHeight = Math.max(contentSize.height, windowHeight / this.zoomLevel, 600);
+                // 物理サイズ: 論理サイズ × zoomLevel
+                finalWidth = Math.ceil(logicalWidth * this.zoomLevel);
+                finalHeight = Math.ceil(logicalHeight * this.zoomLevel);
+            }
 
             this.canvas.width = finalWidth;
             this.canvas.height = finalHeight;
@@ -769,7 +769,7 @@ class BasicFigureEditor extends window.PluginBase {
             this.canvas.style.width = finalWidth + 'px';
             this.canvas.style.height = finalHeight + 'px';
 
-            logger.debug('[FIGURE EDITOR] キャンバスサイズ更新:', finalWidth, 'x', finalHeight, '(コンテンツ:', contentSize.width, 'x', contentSize.height, ', ウィンドウ:', windowWidth, 'x', windowHeight, ')');
+            logger.debug('[FIGURE EDITOR] キャンバスサイズ更新:', finalWidth, 'x', finalHeight);
 
             this.redraw();
 
@@ -949,14 +949,36 @@ class BasicFigureEditor extends window.PluginBase {
                 return;
             }
 
-            // ローカルが空の場合、グローバルクリップボードをチェック（仮身データ）
+            // ローカルが空の場合、グローバルクリップボードをチェック
             const globalClipboard = await this.getGlobalClipboard();
+
+            // 図形セグメント（xmlTAD）の場合
+            if (globalClipboard && globalClipboard.type === 'figure-segment' && globalClipboard.xmlTad) {
+                e.preventDefault();
+                await this.pasteFigureSegmentFromClipboard(globalClipboard);
+                return;
+            }
+
+            // グループ構造の場合（後方互換）
+            if (globalClipboard && globalClipboard.type === 'group' && globalClipboard.group) {
+                e.preventDefault();
+                const group = JSON.parse(JSON.stringify(globalClipboard.group));
+                this.offsetGroupCoordinates(group, 20, 20);
+                group.zIndex = this.getNextZIndex();
+                this.shapes.push(group);
+                this.selectedShapes = [group];
+                this.redraw();
+                this.isModified = true;
+                this.setStatus('グループを貼り付けました');
+                return;
+            }
+
+            // 仮身データの場合
             if (globalClipboard && globalClipboard.link_id) {
                 e.preventDefault();
-                logger.debug('[FIGURE EDITOR] グローバルクリップボードに仮身があります:', globalClipboard.link_name);
-                // キャンバス中央に配置
-                const x = this.canvas.width / 2;
-                const y = this.canvas.height / 2;
+                // 論理座標の中央に配置
+                const x = this.canvas.width / this.zoomLevel / 2;
+                const y = this.canvas.height / this.zoomLevel / 2;
                 this.insertVirtualObject(x, y, globalClipboard);
                 this.setStatus('仮身をクリップボードから貼り付けました');
                 return;
@@ -969,9 +991,9 @@ class BasicFigureEditor extends window.PluginBase {
                     e.preventDefault();
                     const blob = items[i].getAsFile();
                     logger.debug('[FIGURE EDITOR] 画像をクリップボードからペースト');
-                    // キャンバス中央に配置
-                    const x = this.canvas.width / 2;
-                    const y = this.canvas.height / 2;
+                    // 論理座標の中央に配置
+                    const x = this.canvas.width / this.zoomLevel / 2;
+                    const y = this.canvas.height / this.zoomLevel / 2;
                     await this.insertImage(x, y, blob);
                     return;
                 }
@@ -991,8 +1013,12 @@ class BasicFigureEditor extends window.PluginBase {
             const container = document.querySelector('.editor-container');
             if (container) {
                 const rect = container.getBoundingClientRect();
-                this.lastMouseX = e.clientX - rect.left + container.scrollLeft;
-                this.lastMouseY = e.clientY - rect.top + container.scrollTop;
+                // 物理座標から論理座標に変換
+                const physX = e.clientX - rect.left + container.scrollLeft;
+                const physY = e.clientY - rect.top + container.scrollTop;
+                const logical = this.physicalToLogical(physX, physY);
+                this.lastMouseX = logical.x;
+                this.lastMouseY = logical.y;
 
                 // 直線ツール選択中または線の端点ドラッグ中は再描画（コネクタ表示のため）
                 if (this.currentTool === 'line' || this.isDraggingLineEndpoint) {
@@ -1010,6 +1036,9 @@ class BasicFigureEditor extends window.PluginBase {
                 if (shape && shape.type === 'vobj') {
                     const width = Math.abs(shape.endX - shape.startX);
                     const height = Math.abs(shape.endY - shape.startY);
+                    // 論理座標を物理座標に変換してDOM配置
+                    const pos = this.logicalToPhysical(shape.startX, shape.startY);
+                    const size = this.logicalToPhysical(width, height);
 
                     const preview = document.createElement('div');
                     preview.className = 'dblclick-drag-preview';
@@ -1018,10 +1047,10 @@ class BasicFigureEditor extends window.PluginBase {
                     preview.style.backgroundColor = 'rgba(0, 120, 212, 0.1)';
                     preview.style.pointerEvents = 'none';
                     preview.style.zIndex = '10000';
-                    preview.style.width = width + 'px';
-                    preview.style.height = height + 'px';
-                    preview.style.left = shape.startX + 'px';
-                    preview.style.top = shape.startY + 'px';
+                    preview.style.width = size.x + 'px';
+                    preview.style.height = size.y + 'px';
+                    preview.style.left = pos.x + 'px';
+                    preview.style.top = pos.y + 'px';
 
                     const container = document.querySelector('.editor-container');
                     if (container) {
@@ -1038,6 +1067,7 @@ class BasicFigureEditor extends window.PluginBase {
                 const container = document.querySelector('.editor-container');
                 if (container) {
                     const rect = container.getBoundingClientRect();
+                    // プレビューDOM要素は物理座標で配置
                     const canvasX = e.clientX - rect.left + container.scrollLeft;
                     const canvasY = e.clientY - rect.top + container.scrollTop;
                     preview.style.left = canvasX + 'px';
@@ -1088,15 +1118,16 @@ class BasicFigureEditor extends window.PluginBase {
                 const dblClickedElement = this.dblClickDragState.dblClickedElement;
 
                 if (dblClickedShape && dblClickedElement && !this.readonly) {
-                    // マウスアップ位置をキャンバス座標に変換
+                    // マウスアップ位置をキャンバス座標（論理座標）に変換
                     const container = document.querySelector('.editor-container');
                     if (container) {
                         const rect = container.getBoundingClientRect();
-                        const canvasX = e.clientX - rect.left + container.scrollLeft;
-                        const canvasY = e.clientY - rect.top + container.scrollTop;
+                        const physX = e.clientX - rect.left + container.scrollLeft;
+                        const physY = e.clientY - rect.top + container.scrollTop;
+                        const logical = this.physicalToLogical(physX, physY);
 
                         // handleDoubleClickDragDuplicateメソッドを呼び出し（ドロップ位置を渡す）
-                        this.handleDoubleClickDragDuplicate(dblClickedShape, canvasX, canvasY);
+                        this.handleDoubleClickDragDuplicate(dblClickedShape, logical.x, logical.y);
                     }
 
                     // draggableをtrueに戻す
@@ -1243,7 +1274,11 @@ class BasicFigureEditor extends window.PluginBase {
 
     selectTool(tool) {
         this.currentTool = tool;
-        logger.debug('[FIGURE EDITOR] ツール選択:', tool);
+
+        // 変形モード中にツールが変更された場合は変形モードを終了
+        if (this.isTransformMode) {
+            this.exitTransformMode();
+        }
 
         // キャンバスツール以外が選択された場合、ピクセルマップモードを抜ける
         if (tool !== 'canvas' && this.isPixelmapMode) {
@@ -1284,7 +1319,8 @@ class BasicFigureEditor extends window.PluginBase {
                     lineType: this.lineType,
                     linePattern: this.linePattern, // 後方互換
                     lineConnectionType: this.lineConnectionType,
-                    cornerRadius: this.cornerRadius
+                    cornerRadius: this.cornerRadius,
+                    zoomLevel: this.zoomLevel
                 }
             }, '*');
         }
@@ -1396,8 +1432,11 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         const rect = this.canvas.getBoundingClientRect();
-        let x = e.clientX - rect.left;
-        let y = e.clientY - rect.top;
+        // 物理座標から論理座標に変換
+        const physical = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        const logical = this.physicalToLogical(physical.x, physical.y);
+        let x = logical.x;
+        let y = logical.y;
 
         // 格子点拘束を適用
         const snapped = this.snapToGrid(x, y);
@@ -1405,7 +1444,43 @@ class BasicFigureEditor extends window.PluginBase {
         this.startY = snapped.y;
         this.isDrawing = true;
 
+        // ピクセルマップモード中の処理を最優先（currentToolに関わらず）
+        if (this.isPixelmapMode) {
+            if (this.editingPixelmap && this.isPointInShape(this.startX, this.startY, this.editingPixelmap)) {
+                // 枠内クリック → 描画
+                this.handlePixelmapDraw(this.startX, this.startY);
+            } else {
+                // 枠外クリック → モード終了
+                this.exitPixelmapMode();
+                this.isDrawing = false;
+            }
+            return;
+        }
+
         if (this.currentTool === 'select') {
+            // 変形モード中の処理
+            if (this.isTransformMode) {
+                const vertexIdx = this.getVertexHandleAt(this.startX, this.startY);
+                if (vertexIdx >= 0) {
+                    // 頂点ハンドルのドラッグ開始
+                    this.isDraggingVertex = true;
+                    this.draggedVertexIndex = vertexIdx;
+                    const v = this.transformVertices[vertexIdx];
+                    this.vertexDragStartX = v.x;
+                    this.vertexDragStartY = v.y;
+                    this.saveStateForUndo();
+                    this.canvas.style.cursor = 'grabbing';
+                    return;
+                }
+                // 変形中の図形上をクリックした場合は何もしない
+                if (this.isPointInShape(this.startX, this.startY, this.transformingShape)) {
+                    return;
+                }
+                // 図形外クリック: 変形モード終了
+                this.exitTransformMode();
+                // fall through して通常の選択処理を継続
+            }
+
             // 図形選択モード
             // リサイズハンドルをクリックしたかチェック
             const resizeHandle = this.getResizeHandleAt(this.startX, this.startY);
@@ -1415,6 +1490,66 @@ class BasicFigureEditor extends window.PluginBase {
                     const protectionType = resizeHandle.shape.isBackground ? '背景化' : '固定化';
                     logger.debug('[FIGURE EDITOR] 保護されている図形のためリサイズできません:', protectionType);
                     this.setStatus(`保護されている図形のためリサイズできません (${protectionType})`);
+                    return;
+                }
+
+                // Ctrl+ハンドルドラッグ → 回転モード開始
+                if (e.ctrlKey) {
+                    this.isRotating = true;
+
+                    // 回転対象: 選択中の図形すべて（vobj, lineは除外）
+                    const rotationTargets = this.selectedShapes.filter(s => s.type !== 'vobj' && s.type !== 'line');
+                    if (rotationTargets.length === 0) {
+                        this.isRotating = false;
+                        return;
+                    }
+
+                    // 回転中心を計算（全対象図形の結合バウンディングボックスの中心）
+                    let combinedMinX = Infinity, combinedMinY = Infinity;
+                    let combinedMaxX = -Infinity, combinedMaxY = -Infinity;
+                    for (const s of rotationTargets) {
+                        const b = this.getShapeBoundingBox(s);
+                        if (!b) continue;
+                        combinedMinX = Math.min(combinedMinX, b.minX);
+                        combinedMinY = Math.min(combinedMinY, b.minY);
+                        combinedMaxX = Math.max(combinedMaxX, b.maxX);
+                        combinedMaxY = Math.max(combinedMaxY, b.maxY);
+                    }
+                    this.rotationCenterX = (combinedMinX + combinedMaxX) / 2;
+                    this.rotationCenterY = (combinedMinY + combinedMaxY) / 2;
+
+                    // ドラッグ開始角度を計算
+                    this.rotationStartAngle = Math.atan2(
+                        this.startY - this.rotationCenterY,
+                        this.startX - this.rotationCenterX
+                    );
+
+                    // 各図形の元状態を保存
+                    this.rotationOriginals = rotationTargets.map(s => {
+                        const b = this.getShapeBoundingBox(s);
+                        const cx = b ? (b.minX + b.maxX) / 2 : 0;
+                        const cy = b ? (b.minY + b.maxY) / 2 : 0;
+                        const original = {
+                            shape: s,
+                            rotation: this.getEffectiveRotationDeg(s),
+                            centerX: cx,
+                            centerY: cy
+                        };
+                        // 座標系の元値を保存
+                        if (s.points) {
+                            original.points = s.points.map(p => ({ x: p.x, y: p.y }));
+                        } else if (s.path) {
+                            original.path = s.path.map(p => ({ x: p.x, y: p.y }));
+                        }
+                        if (s.startX !== undefined) {
+                            original.startX = s.startX;
+                            original.startY = s.startY;
+                            original.endX = s.endX;
+                            original.endY = s.endY;
+                        }
+                        return original;
+                    });
+
                     return;
                 }
 
@@ -1692,12 +1827,61 @@ class BasicFigureEditor extends window.PluginBase {
 
     handleMouseMove(e) {
         const rect = this.canvas.getBoundingClientRect();
-        let currentX = e.clientX - rect.left;
-        let currentY = e.clientY - rect.top;
+        // 物理座標から論理座標に変換
+        const physical = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        const logical = this.physicalToLogical(physical.x, physical.y);
+        let currentX = logical.x;
+        let currentY = logical.y;
 
         // マウス位置を保存（コネクタ表示用）
         this.lastMouseX = currentX;
         this.lastMouseY = currentY;
+
+        // 変形モード中の処理
+        if (this.isTransformMode) {
+            if (this.isDraggingVertex) {
+                // 頂点ドラッグ中
+                let newX = currentX;
+                let newY = currentY;
+
+                // 回転された図形の場合、マウス座標を逆回転して回転前の座標系に変換
+                const wrapperRot = this.getWrapperRotation(this.transformingShape);
+                if (wrapperRot !== 0) {
+                    const bounds = this.getShapeBoundingBox(this.transformingShape);
+                    if (bounds) {
+                        const cx = (bounds.minX + bounds.maxX) / 2;
+                        const cy = (bounds.minY + bounds.maxY) / 2;
+                        const rad = -wrapperRot * Math.PI / 180;
+                        const cos = Math.cos(rad);
+                        const sin = Math.sin(rad);
+                        const dx = newX - cx;
+                        const dy = newY - cy;
+                        newX = cx + dx * cos - dy * sin;
+                        newY = cy + dx * sin + dy * cos;
+                    }
+                }
+
+                // Shift制約: 水平/垂直方向に拘束
+                if (e.shiftKey) {
+                    const dx = Math.abs(newX - this.vertexDragStartX);
+                    const dy = Math.abs(newY - this.vertexDragStartY);
+                    if (dx > dy) {
+                        newY = this.vertexDragStartY; // 水平移動
+                    } else {
+                        newX = this.vertexDragStartX; // 垂直移動
+                    }
+                }
+                // 格子点拘束を適用
+                const snapped = this.snapToGrid(newX, newY);
+                this.applyVertexDrag(this.transformingShape, this.draggedVertexIndex, snapped.x, snapped.y);
+                this.redraw();
+                return;
+            }
+            // ホバー時のカーソル変更
+            const vertexIdx = this.getVertexHandleAt(currentX, currentY);
+            this.canvas.style.cursor = vertexIdx >= 0 ? 'grab' : 'default';
+            return;
+        }
 
         // 直線ツール選択中は常にコネクタを表示するため、再描画
         if (this.currentTool === 'line' && !this.isDrawing) {
@@ -1716,9 +1900,80 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        // ピクセルマップモードでの描画
-        if (this.isPixelmapMode && this.currentTool === 'canvas') {
+        // ピクセルマップモードでの描画（currentToolに関わらず最優先）
+        if (this.isPixelmapMode) {
             this.handlePixelmapDraw(currentX, currentY);
+            return;
+        }
+
+        // 回転ドラッグ中
+        if (this.isRotating) {
+            // 現在のマウス角度を計算
+            const currentAngle = Math.atan2(
+                currentY - this.rotationCenterY,
+                currentX - this.rotationCenterX
+            );
+            let deltaAngle = (currentAngle - this.rotationStartAngle) * 180 / Math.PI;
+
+            // Ctrl+Shift: 15度スナップ
+            if (e.shiftKey) {
+                deltaAngle = Math.round(deltaAngle / 15) * 15;
+            }
+
+            const deltaRad = deltaAngle * Math.PI / 180;
+            const cosDelta = Math.cos(deltaRad);
+            const sinDelta = Math.sin(deltaRad);
+
+            // 各図形を更新
+            for (const orig of this.rotationOriginals) {
+                const s = orig.shape;
+
+                // 1. 自己回転の更新
+                const newRotation = orig.rotation + deltaAngle;
+                if (s.type === 'arc' || s.type === 'chord' || s.type === 'elliptical_arc') {
+                    s.angle = newRotation * Math.PI / 180;
+                } else {
+                    s.rotation = newRotation;
+                }
+
+                // 2. 複数図形の場合: 結合中心周りの軌道移動
+                if (this.rotationOriginals.length > 1) {
+                    // 元の図形中心から結合中心までの相対位置
+                    const relX = orig.centerX - this.rotationCenterX;
+                    const relY = orig.centerY - this.rotationCenterY;
+                    // 回転後の図形中心
+                    const newCX = this.rotationCenterX + relX * cosDelta - relY * sinDelta;
+                    const newCY = this.rotationCenterY + relX * sinDelta + relY * cosDelta;
+                    // 移動量
+                    const moveX = newCX - orig.centerX;
+                    const moveY = newCY - orig.centerY;
+
+                    // 座標を移動
+                    if (orig.points) {
+                        for (let i = 0; i < orig.points.length; i++) {
+                            s.points[i].x = orig.points[i].x + moveX;
+                            s.points[i].y = orig.points[i].y + moveY;
+                        }
+                    }
+                    if (orig.path) {
+                        for (let i = 0; i < orig.path.length; i++) {
+                            s.path[i].x = orig.path[i].x + moveX;
+                            s.path[i].y = orig.path[i].y + moveY;
+                        }
+                    }
+                    if (orig.startX !== undefined) {
+                        s.startX = orig.startX + moveX;
+                        s.startY = orig.startY + moveY;
+                        s.endX = orig.endX + moveX;
+                        s.endY = orig.endY + moveY;
+                    }
+                }
+            }
+
+            this.redraw();
+            // ステータスバーに角度表示
+            const displayAngle = ((deltaAngle % 360) + 360) % 360;
+            this.setStatus(`回転: ${displayAngle.toFixed(1)}°`);
             return;
         }
 
@@ -1746,15 +2001,31 @@ class BasicFigureEditor extends window.PluginBase {
                 // より変化量の大きい方向に合わせる
                 if (Math.abs(deltaX) > Math.abs(deltaY)) {
                     shape.endX = this.resizeOriginalBounds.endX + deltaX;
-                    shape.endY = this.resizeOriginalBounds.endY + deltaX / aspectRatio;
+                    // 格子点拘束: 主軸(X)をスナップし、副軸(Y)はアスペクト比から算出
+                    if (this.gridMode === 'snap') {
+                        const snapped = this.snapToGrid(shape.endX, 0);
+                        shape.endX = snapped.x;
+                    }
+                    shape.endY = shape.startY + (shape.endX - shape.startX) / aspectRatio;
                 } else {
                     shape.endY = this.resizeOriginalBounds.endY + deltaY;
-                    shape.endX = this.resizeOriginalBounds.endX + deltaY * aspectRatio;
+                    // 格子点拘束: 主軸(Y)をスナップし、副軸(X)はアスペクト比から算出
+                    if (this.gridMode === 'snap') {
+                        const snapped = this.snapToGrid(0, shape.endY);
+                        shape.endY = snapped.y;
+                    }
+                    shape.endX = shape.startX + (shape.endY - shape.startY) * aspectRatio;
                 }
             } else {
                 // 自由変形
                 shape.endX = this.resizeOriginalBounds.endX + deltaX;
                 shape.endY = this.resizeOriginalBounds.endY + deltaY;
+                // 格子点拘束をendX/endYに適用
+                if (this.gridMode === 'snap') {
+                    const snapped = this.snapToGrid(shape.endX, shape.endY);
+                    shape.endX = snapped.x;
+                    shape.endY = snapped.y;
+                }
             }
 
             // 最小サイズを適用
@@ -1775,12 +2046,13 @@ class BasicFigureEditor extends window.PluginBase {
                 this.updateExpandedVirtualObjectSize(shape, newWidth, newHeight);
             }
 
-            // 仮身DOM要素のサイズを更新
+            // 仮身DOM要素のサイズを更新（論理座標を物理座標に変換）
             if (shape.type === 'vobj' && shape.vobjElement) {
                 const newWidth = shape.endX - shape.startX;
                 const newHeight = shape.endY - shape.startY;
-                shape.vobjElement.style.width = `${newWidth}px`;
-                shape.vobjElement.style.height = `${newHeight}px`;
+                const resizeSize = this.logicalToPhysical(newWidth, newHeight);
+                shape.vobjElement.style.width = `${resizeSize.x}px`;
+                shape.vobjElement.style.height = `${resizeSize.y}px`;
             }
 
             // リサイズプレビュー枠を更新
@@ -1895,6 +2167,13 @@ class BasicFigureEditor extends window.PluginBase {
                     shape.startX = newStartX;
                     shape.startY = newStartY;
 
+                    // 弧系図形のcenterX/Yも連動して移動
+                    if ((shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') &&
+                        shape.centerX !== undefined) {
+                        shape.centerX += deltaX;
+                        shape.centerY += deltaY;
+                    }
+
                     // グループの場合、子図形も移動
                     if (shape.type === 'group' && shape.shapes) {
                         this.moveGroupShapes(shape, deltaX, deltaY);
@@ -1920,18 +2199,20 @@ class BasicFigureEditor extends window.PluginBase {
                     }));
                 }
 
-                // 展開された仮身のiframe位置を更新
+                // 展開された仮身のiframe位置を更新（論理座標を物理座標に変換）
                 if (shape.type === 'vobj' && shape.expanded && shape.expandedElement) {
                     const chsz = shape.virtualObject.chsz || DEFAULT_FONT_SIZE;
                     const titleBarHeight = chsz + 16;
-                    shape.expandedElement.style.left = `${shape.startX}px`;
-                    shape.expandedElement.style.top = `${shape.startY + titleBarHeight}px`;
+                    const expPos = this.logicalToPhysical(shape.startX, shape.startY + titleBarHeight);
+                    shape.expandedElement.style.left = `${expPos.x}px`;
+                    shape.expandedElement.style.top = `${expPos.y}px`;
                 }
 
-                // 仮身DOM要素の位置を更新
+                // 仮身DOM要素の位置を更新（論理座標を物理座標に変換）
                 if (shape.type === 'vobj' && shape.vobjElement) {
-                    shape.vobjElement.style.left = `${shape.startX}px`;
-                    shape.vobjElement.style.top = `${shape.startY}px`;
+                    const movePos = this.logicalToPhysical(shape.startX, shape.startY);
+                    shape.vobjElement.style.left = `${movePos.x}px`;
+                    shape.vobjElement.style.top = `${movePos.y}px`;
                 }
             });
 
@@ -1963,7 +2244,7 @@ class BasicFigureEditor extends window.PluginBase {
             this.startY = currentY;
             this.redraw();
             this.isModified = true;
-        } else if (this.isPixelmapMode && this.currentTool === 'canvas') {
+        } else if (this.isPixelmapMode) {
             // ピクセルマップモードでのドラッグ描画
             this.handlePixelmapDraw(currentX, currentY);
         } else if (this.currentTool === 'pencil' || this.currentTool === 'brush' || this.currentTool === 'curve') {
@@ -2031,6 +2312,18 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     handleMouseUp(e) {
+        // 変形モード: 頂点ドラッグ終了
+        if (this.isDraggingVertex) {
+            this.isDraggingVertex = false;
+            this.draggedVertexIndex = -1;
+            this.canvas.style.cursor = 'grab';
+            this.isDrawing = false;
+            // Undo用の状態は saveStateForUndo() でドラッグ開始時に保存済み
+            this.resizeCanvas();
+            this.redraw();
+            return;
+        }
+
         // ピクセルマップモードの描画終了時に前回座標をリセット
         if (this.isPixelmapMode) {
             this.lastPixelmapX = null;
@@ -2080,8 +2373,11 @@ class BasicFigureEditor extends window.PluginBase {
             if (this.isFirstPolygonLine) {
                 // 最初の線のドラッグ終了：2つ目の頂点を追加
                 const rect = this.canvas.getBoundingClientRect();
-                const endX = e.clientX - rect.left;
-                const endY = e.clientY - rect.top;
+                // 物理座標から論理座標に変換
+                const physEnd = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                const logEnd = this.physicalToLogical(physEnd.x, physEnd.y);
+                const endX = logEnd.x;
+                const endY = logEnd.y;
 
                 // 重複チェック: 前の頂点と同じ位置なら追加しない（ドラッグなしの場合）
                 const lastPoint = this.currentShape.points[this.currentShape.points.length - 1];
@@ -2099,6 +2395,17 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         this.isDrawing = false;
+
+        if (this.isRotating) {
+            // 回転終了
+            this.isRotating = false;
+            this.rotationOriginals = [];
+            this.isModified = true;
+            this.saveStateForUndo();
+            this.resizeCanvas();
+            this.redraw();
+            return;
+        }
 
         if (this.isResizing) {
             // リサイズ終了
@@ -2198,8 +2505,11 @@ class BasicFigureEditor extends window.PluginBase {
         }
 
         const rect = this.canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        // 物理座標から論理座標に変換
+        const physical = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        const logical = this.physicalToLogical(physical.x, physical.y);
+        const x = logical.x;
+        const y = logical.y;
 
         // ダブルクリック位置にある図形を探す
         for (let i = this.shapes.length - 1; i >= 0; i--) {
@@ -2227,6 +2537,14 @@ class BasicFigureEditor extends window.PluginBase {
                 }
                 this.openRealObjectWithDefaultApp();
                 return;
+            } else if ((shape.type === 'polygon' || shape.type === 'arc' ||
+                        shape.type === 'chord' || shape.type === 'elliptical_arc' ||
+                        shape.type === 'curve') &&
+                       this.isPointInShape(x, y, shape)) {
+                // 変形対象図形をダブルクリック: 変形モードに入る
+                if (this.readonly) return;
+                this.enterTransformMode(shape);
+                return;
             }
         }
     }
@@ -2242,7 +2560,12 @@ class BasicFigureEditor extends window.PluginBase {
 
         // 既存のコンテンツを設定（HTMLとして）
         if (shape.richContent) {
-            editor.innerHTML = shape.richContent;
+            // scriptタグ・イベント属性を除去してからinnerHTMLに設定
+            const sanitized = shape.richContent
+                .replace(/<script[\s\S]*?<\/script>/gi, '')
+                .replace(/<style[\s\S]*?<\/style>/gi, '')
+                .replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/gi, '');
+            editor.innerHTML = sanitized;
         } else {
             editor.textContent = shape.content || '';
         }
@@ -2251,13 +2574,16 @@ class BasicFigureEditor extends window.PluginBase {
         const minY = Math.min(shape.startY, shape.endY);
         const width = Math.abs(shape.endX - shape.startX);
         const height = Math.abs(shape.endY - shape.startY);
+        // 論理座標を物理座標に変換してDOM配置
+        const pos = this.logicalToPhysical(minX, minY);
+        const size = this.logicalToPhysical(width, height);
 
         editor.style.position = 'absolute';
-        editor.style.left = `${minX}px`;
-        editor.style.top = `${minY}px`;
-        editor.style.width = `${width}px`;
-        editor.style.height = `${height}px`;
-        editor.style.fontSize = `${shape.fontSize}px`;
+        editor.style.left = `${pos.x}px`;
+        editor.style.top = `${pos.y}px`;
+        editor.style.width = `${size.x}px`;
+        editor.style.height = `${size.y}px`;
+        editor.style.fontSize = `${shape.fontSize * this.zoomLevel}px`;
         editor.style.fontFamily = shape.fontFamily;
         editor.style.color = shape.textColor;
         editor.style.border = '2px solid #ff8f00';
@@ -2483,7 +2809,9 @@ class BasicFigureEditor extends window.PluginBase {
         const bounds = this.getShapeBoundingBox(shape);
         if (!bounds) return false;
 
-        return x >= bounds.minX && x <= bounds.maxX && y >= bounds.minY && y <= bounds.maxY;
+        // 回転されている図形の場合、テスト点を逆回転してから判定
+        const p = this.inverseRotatePoint(x, y, shape);
+        return p.x >= bounds.minX && p.x <= bounds.maxX && p.y >= bounds.minY && p.y <= bounds.maxY;
     }
 
     /**
@@ -2542,6 +2870,9 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     getResizeHandleAt(x, y) {
+        // 変形モード中はリサイズハンドルを無効化
+        if (this.isTransformMode) return null;
+
         // 選択中の図形のリサイズハンドルをチェック
         const handleSize = 8;
         const hitArea = handleSize + 2; // ヒット判定領域を少し大きく
@@ -2560,8 +2891,11 @@ class BasicFigureEditor extends window.PluginBase {
             const maxX = Math.max(shape.startX, shape.endX);
             const maxY = Math.max(shape.startY, shape.endY);
 
+            // 回転されている図形の場合、テスト点を逆回転してから判定
+            const p = this.inverseRotatePoint(x, y, shape);
+
             // 右下のハンドル
-            if (Math.abs(x - maxX) <= hitArea / 2 && Math.abs(y - maxY) <= hitArea / 2) {
+            if (Math.abs(p.x - maxX) <= hitArea / 2 && Math.abs(p.y - maxY) <= hitArea / 2) {
                 return { shape: shape, handle: 'bottom-right' };
             }
         }
@@ -2733,6 +3067,20 @@ class BasicFigureEditor extends window.PluginBase {
         } else {
             // 後方互換: linePatternから変換
             this.applyLinePattern(shape.linePattern || 'solid');
+        }
+
+        // 回転ラッパー: image/pixelmap/arc系/vobjは内部で回転するのでスキップ
+        const wrapperRotation = this.getWrapperRotation(shape);
+        if (wrapperRotation !== 0) {
+            const bounds = this.getShapeBoundingBox(shape);
+            if (bounds) {
+                const cx = (bounds.minX + bounds.maxX) / 2;
+                const cy = (bounds.minY + bounds.maxY) / 2;
+                this.ctx.save();
+                this.ctx.translate(cx, cy);
+                this.ctx.rotate(wrapperRotation * Math.PI / 180);
+                this.ctx.translate(-cx, -cy);
+            }
         }
 
         const width = shape.endX - shape.startX;
@@ -3006,49 +3354,6 @@ class BasicFigureEditor extends window.PluginBase {
                 }
                 break;
 
-            case 'arc':
-                // 扇形 (arc)
-                if (shape.centerX !== undefined && shape.centerY !== undefined &&
-                    shape.radiusX !== undefined && shape.radiusY !== undefined &&
-                    shape.startAngle !== undefined && shape.endAngle !== undefined) {
-                    this.ctx.beginPath();
-                    this.ctx.moveTo(shape.centerX, shape.centerY);
-                    this.ctx.lineTo(shape.startX, shape.startY);
-                    this.ctx.ellipse(shape.centerX, shape.centerY, shape.radiusX, shape.radiusY,
-                                     shape.angle || 0, shape.startAngle, shape.endAngle, false);
-                    this.ctx.lineTo(shape.centerX, shape.centerY);
-                    this.ctx.closePath();
-                    this.ctx.fill();
-                    this.ctx.stroke();
-                }
-                break;
-
-            case 'chord':
-                // 弦 (chord)
-                if (shape.centerX !== undefined && shape.centerY !== undefined &&
-                    shape.radiusX !== undefined && shape.radiusY !== undefined &&
-                    shape.startAngle !== undefined && shape.endAngle !== undefined) {
-                    this.ctx.beginPath();
-                    this.ctx.ellipse(shape.centerX, shape.centerY, shape.radiusX, shape.radiusY,
-                                     shape.angle || 0, shape.startAngle, shape.endAngle, false);
-                    this.ctx.closePath();
-                    this.ctx.fill();
-                    this.ctx.stroke();
-                }
-                break;
-
-            case 'elliptical_arc':
-                // 楕円弧 (elliptical arc) - 線のみで塗りつぶしなし
-                if (shape.centerX !== undefined && shape.centerY !== undefined &&
-                    shape.radiusX !== undefined && shape.radiusY !== undefined &&
-                    shape.startAngle !== undefined && shape.endAngle !== undefined) {
-                    this.ctx.beginPath();
-                    this.ctx.ellipse(shape.centerX, shape.centerY, shape.radiusX, shape.radiusY,
-                                     shape.angle || 0, shape.startAngle, shape.endAngle, false);
-                    this.ctx.stroke();
-                }
-                break;
-
             case 'curve':
                 // 自由曲線（ベジェ曲線）
                 if (shape.path && shape.path.length > 1) {
@@ -3115,6 +3420,11 @@ class BasicFigureEditor extends window.PluginBase {
                     this.ctx.restore();
                 }
                 break;
+        }
+
+        // 回転ラッパーの復元
+        if (wrapperRotation !== 0) {
+            this.ctx.restore();
         }
     }
 
@@ -3547,9 +3857,22 @@ class BasicFigureEditor extends window.PluginBase {
      * キャンバス再描画（即座実行版）
      */
     redrawImmediate() {
-        // キャンバスをクリア
+        // キャンバスをクリア（物理サイズでクリア、scale前に実行）
         this.ctx.fillStyle = this.bgColor;
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // ズームスケールを適用（埋め込みモードではzoomLevel=1固定なので影響なし）
+        this.ctx.save();
+        this.ctx.scale(this.zoomLevel, this.zoomLevel);
+
+        // 埋め込みモード: figViewの原点分だけキャンバスを移動
+        // figViewが(left, top)始まりの場合、図形座標を(0, 0)基準で描画するためにオフセット
+        const needsViewportTranslate = this.embeddedMode && this.figView &&
+            (this.figView.left !== 0 || this.figView.top !== 0);
+        if (needsViewportTranslate) {
+            this.ctx.save();
+            this.ctx.translate(-this.figView.left, -this.figView.top);
+        }
 
         // 格子点を描画（最後部）
         if (this.gridMode === 'show' || this.gridMode === 'snap') {
@@ -3570,6 +3893,11 @@ class BasicFigureEditor extends window.PluginBase {
         this.selectedShapes.forEach(shape => {
             this.drawSelectionHighlight(shape);
         });
+
+        // 埋め込みモード: ビューポート移動を復元
+        if (needsViewportTranslate) {
+            this.ctx.restore();
+        }
 
         // 選択中の図形にコネクタは表示しない（ユーザー要望により無効化）
         // this.selectedShapes.forEach(shape => {
@@ -3636,6 +3964,9 @@ class BasicFigureEditor extends window.PluginBase {
             this.drawShape(this.currentShape);
         }
 
+        // ズームスケールを復元
+        this.ctx.restore();
+
         // 仮身をDOM要素として描画
         this.renderVirtualObjectsAsElements();
     }
@@ -3645,9 +3976,13 @@ class BasicFigureEditor extends window.PluginBase {
      * 仮身のDOM要素は再作成せず、キャンバス上の図形と選択枠のみを再描画
      */
     redrawForSelectionBlink() {
-        // キャンバスをクリア
+        // キャンバスをクリア（物理サイズでクリア、scale前に実行）
         this.ctx.fillStyle = this.bgColor;
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // ズームスケールを適用
+        this.ctx.save();
+        this.ctx.scale(this.zoomLevel, this.zoomLevel);
 
         // 格子点を描画（最後部）
         if (this.gridMode === 'show' || this.gridMode === 'snap') {
@@ -3732,6 +4067,9 @@ class BasicFigureEditor extends window.PluginBase {
             this.drawShape(this.currentShape);
         }
 
+        // ズームスケールを復元
+        this.ctx.restore();
+
         // 注意: 仮身のDOM要素は再作成しない（パフォーマンス最適化）
         // 既存のDOM要素はそのまま維持される
     }
@@ -3740,9 +4078,13 @@ class BasicFigureEditor extends window.PluginBase {
         const interval = this.gridInterval;
         this.ctx.fillStyle = '#666666'; // より濃い色に変更
 
-        // 格子点を描画（1x1ピクセルで正確に）
-        for (let x = 0; x < this.canvas.width; x += interval) {
-            for (let y = 0; y < this.canvas.height; y += interval) {
+        // ctx.scale()が適用済みなので論理サイズで反復
+        const logicalWidth = this.canvas.width / this.zoomLevel;
+        const logicalHeight = this.canvas.height / this.zoomLevel;
+
+        // 格子点を描画（1x1論理ピクセルで正確に）
+        for (let x = 0; x < logicalWidth; x += interval) {
+            for (let y = 0; y < logicalHeight; y += interval) {
                 this.ctx.fillRect(x, y, 1, 1);
             }
         }
@@ -3758,6 +4100,91 @@ class BasicFigureEditor extends window.PluginBase {
             };
         }
         return { x, y };
+    }
+
+    /**
+     * 物理座標（Canvas上のピクセル座標）から論理座標へ変換
+     * @param {number} px - 物理X座標
+     * @param {number} py - 物理Y座標
+     * @returns {{x: number, y: number}} 論理座標
+     */
+    physicalToLogical(px, py) {
+        return {
+            x: px / this.zoomLevel,
+            y: py / this.zoomLevel
+        };
+    }
+
+    /**
+     * 論理座標から物理座標（Canvas上のピクセル座標）へ変換
+     * @param {number} lx - 論理X座標
+     * @param {number} ly - 論理Y座標
+     * @returns {{x: number, y: number}} 物理座標
+     */
+    logicalToPhysical(lx, ly) {
+        return {
+            x: lx * this.zoomLevel,
+            y: ly * this.zoomLevel
+        };
+    }
+
+    /**
+     * ズーム変更時にスクロール位置を調整（画面中央維持）
+     * @param {number} oldZoom - 変更前の倍率
+     * @param {number} newZoom - 変更後の倍率
+     */
+    adjustScrollForZoom(oldZoom, newZoom) {
+        const container = document.querySelector('.plugin-content');
+        if (!container) return;
+        const centerLogicalX = (container.scrollLeft + container.clientWidth / 2) / oldZoom;
+        const centerLogicalY = (container.scrollTop + container.clientHeight / 2) / oldZoom;
+        container.scrollLeft = centerLogicalX * newZoom - container.clientWidth / 2;
+        container.scrollTop = centerLogicalY * newZoom - container.clientHeight / 2;
+    }
+
+    /**
+     * ズーム倍率の表示ラベルを取得
+     * @param {number} zoomLevel - ズーム倍率
+     * @returns {string} 表示ラベル（例: "x1", "x1/2"）
+     */
+    getZoomDisplayLabel(zoomLevel) {
+        const labels = {
+            0.125: 'x1/8',
+            0.25: 'x1/4',
+            0.5: 'x1/2',
+            1: 'x1',
+            2: 'x2',
+            3: 'x3',
+            4: 'x4',
+            5: 'x5',
+            8: 'x8'
+        };
+        return labels[zoomLevel] || ('x' + zoomLevel);
+    }
+
+    /**
+     * ズーム変更時に全仮身のDOM位置・サイズを更新
+     */
+    updateVobjPositionsForZoom() {
+        this.shapes.forEach(shape => {
+            if (shape.type === 'vobj' && shape.vobjElement) {
+                const width = Math.abs((shape.endX || 0) - (shape.startX || 0));
+                const height = Math.abs((shape.endY || 0) - (shape.startY || 0));
+                const pos = this.logicalToPhysical(shape.startX, shape.startY);
+                const size = this.logicalToPhysical(width, height);
+                shape.vobjElement.style.left = pos.x + 'px';
+                shape.vobjElement.style.top = pos.y + 'px';
+                shape.vobjElement.style.width = size.x + 'px';
+                shape.vobjElement.style.height = size.y + 'px';
+                if (shape.expanded && shape.expandedElement) {
+                    const titleBarHeight = 20;
+                    shape.expandedElement.style.left = pos.x + 'px';
+                    shape.expandedElement.style.top = (pos.y + titleBarHeight * this.zoomLevel) + 'px';
+                    shape.expandedElement.style.width = size.x + 'px';
+                    shape.expandedElement.style.height = (size.y - titleBarHeight * this.zoomLevel) + 'px';
+                }
+            }
+        });
     }
 
     /**
@@ -4039,6 +4466,12 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     drawSelectionHighlight(shape) {
+        // 変形モード中は頂点ハンドルを描画（点滅なし、常時表示）
+        if (this.isTransformMode && shape === this.transformingShape) {
+            this.drawTransformHandles(shape);
+            return;
+        }
+
         // 点滅状態がfalseの場合は選択枠を描画しない
         if (!this.selectionBlinkState) {
             return;
@@ -4048,6 +4481,17 @@ class BasicFigureEditor extends window.PluginBase {
         const bounds = this.getShapeBoundingBox(shape);
         if (!bounds) {
             return; // バウンディングボックスが取得できない場合はスキップ
+        }
+
+        // 回転ラッパー: 選択枠も図形と同じ回転で描画
+        const rotation = this.getEffectiveRotationDeg(shape);
+        if (rotation !== 0) {
+            const cx = (bounds.minX + bounds.maxX) / 2;
+            const cy = (bounds.minY + bounds.maxY) / 2;
+            this.ctx.save();
+            this.ctx.translate(cx, cy);
+            this.ctx.rotate(rotation * Math.PI / 180);
+            this.ctx.translate(-cx, -cy);
         }
 
         this.ctx.strokeStyle = '#ff8f00';
@@ -4062,6 +4506,9 @@ class BasicFigureEditor extends window.PluginBase {
 
         // 仮身の場合は専用リサイズを使うため、通常のリサイズハンドルは描画しない
         if (shape.type === 'vobj') {
+            if (rotation !== 0) {
+                this.ctx.restore();
+            }
             return;
         }
 
@@ -4072,6 +4519,66 @@ class BasicFigureEditor extends window.PluginBase {
         this.ctx.lineWidth = this.selectionWidth; // ユーザ環境設定の太さを使用
         this.ctx.fillRect(bounds.maxX - handleSize / 2, bounds.maxY - handleSize / 2, handleSize, handleSize);
         this.ctx.strokeRect(bounds.maxX - handleSize / 2, bounds.maxY - handleSize / 2, handleSize, handleSize);
+
+        // 回転ラッパーの復元
+        if (rotation !== 0) {
+            this.ctx.restore();
+        }
+    }
+
+    /**
+     * 変形モード用の頂点ハンドルを描画
+     * @param {Object} shape - 変形中の図形
+     */
+    drawTransformHandles(shape) {
+        // 頂点情報を最新に更新
+        this.transformVertices = this.getTransformVertices(shape);
+
+        // 回転ラッパー: 図形と同じ回転で変形ハンドルを描画
+        const rotation = this.getWrapperRotation(shape);
+        if (rotation !== 0) {
+            const bounds = this.getShapeBoundingBox(shape);
+            if (bounds) {
+                const cx = (bounds.minX + bounds.maxX) / 2;
+                const cy = (bounds.minY + bounds.maxY) / 2;
+                this.ctx.save();
+                this.ctx.translate(cx, cy);
+                this.ctx.rotate(rotation * Math.PI / 180);
+                this.ctx.translate(-cx, -cy);
+            }
+        }
+
+        const handleSize = 8;
+        const halfSize = handleSize / 2;
+
+        for (const v of this.transformVertices) {
+            // 中心点は異なるスタイルで描画
+            if (v.type === 'center') {
+                this.ctx.fillStyle = '#ff8f00';
+                this.ctx.strokeStyle = '#000000';
+            } else {
+                this.ctx.fillStyle = '#ffffff';
+                this.ctx.strokeStyle = '#ff8f00';
+            }
+            this.ctx.lineWidth = this.selectionWidth;
+            this.ctx.fillRect(v.x - halfSize, v.y - halfSize, handleSize, handleSize);
+            this.ctx.strokeRect(v.x - halfSize, v.y - halfSize, handleSize, handleSize);
+        }
+
+        // 図形の輪郭線を薄く描画（変形対象の視覚的フィードバック）
+        this.ctx.strokeStyle = 'rgba(255, 143, 0, 0.5)';
+        this.ctx.lineWidth = 1;
+        this.ctx.setLineDash([3, 3]);
+        const bounds = this.getShapeBoundingBox(shape);
+        if (bounds) {
+            this.ctx.strokeRect(bounds.minX, bounds.minY, bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+        }
+        this.ctx.setLineDash([]);
+
+        // 回転ラッパーの復元
+        if (rotation !== 0) {
+            this.ctx.restore();
+        }
     }
 
     drawPixelmap(shape) {
@@ -4229,6 +4736,12 @@ class BasicFigureEditor extends window.PluginBase {
         if (e.key === 'Escape' && this.isPixelmapMode) {
             e.preventDefault();
             this.exitPixelmapMode();
+        }
+
+        // Escape: 変形モードを抜ける
+        if (e.key === 'Escape' && this.isTransformMode) {
+            e.preventDefault();
+            this.exitTransformMode();
         }
     }
 
@@ -5300,6 +5813,7 @@ class BasicFigureEditor extends window.PluginBase {
         const bottom = parseFloat(elem.getAttribute('bottom')) || 0;
         const round = parseInt(elem.getAttribute('round')) || 0;
         const angle = parseFloat(elem.getAttribute('angle')) || 0;
+        const rotation = parseFloat(elem.getAttribute('rotation')) || 0;
 
         // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
@@ -5447,6 +5961,7 @@ class BasicFigureEditor extends window.PluginBase {
             fillEnabled: fillEnabled,
             cornerRadius: cornerRadius,
             angle: angle,
+            rotation: rotation,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
@@ -5458,6 +5973,7 @@ class BasicFigureEditor extends window.PluginBase {
         const rx = parseFloat(elem.getAttribute('rx')) || 0;
         const ry = parseFloat(elem.getAttribute('ry')) || 0;
         const angle = parseFloat(elem.getAttribute('angle')) || 0;
+        const rotation = parseFloat(elem.getAttribute('rotation')) || 0;
 
         // 線パターンを取得 (0=solid, 1=dotted, 2=dashed)
         const l_pat = parseInt(elem.getAttribute('l_pat')) || 0;
@@ -5502,6 +6018,7 @@ class BasicFigureEditor extends window.PluginBase {
             linePattern: linePattern,
             fillEnabled: fillEnabled,
             angle: angle,
+            rotation: rotation,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
@@ -5691,6 +6208,9 @@ class BasicFigureEditor extends window.PluginBase {
         // 色情報を取得
         const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
+        // 回転属性を取得
+        const rotation = parseFloat(elem.getAttribute('rotation')) || 0;
+
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
 
@@ -5703,6 +6223,7 @@ class BasicFigureEditor extends window.PluginBase {
             lineType: lineType,
             linePattern: linePattern,
             fillEnabled: false,
+            rotation: rotation,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
@@ -5744,6 +6265,9 @@ class BasicFigureEditor extends window.PluginBase {
         // 色情報を取得
         const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
+        // 回転属性を取得
+        const rotation = parseFloat(elem.getAttribute('rotation')) || 0;
+
         return {
             type: 'curve',
             path: points,
@@ -5752,7 +6276,8 @@ class BasicFigureEditor extends window.PluginBase {
             lineWidth: lineWidth,
             lineType: lineType,
             linePattern: linePattern,
-            fillEnabled: false
+            fillEnabled: false,
+            rotation: rotation
         };
     }
 
@@ -5798,6 +6323,9 @@ class BasicFigureEditor extends window.PluginBase {
         const fillColor = elem.getAttribute('fillColor') || DEFAULT_BGCOL;
         const strokeColor = elem.getAttribute('strokeColor') || DEFAULT_FRCOL;
 
+        // 回転属性を取得
+        const curveRotation = parseFloat(elem.getAttribute('rotation')) || 0;
+
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
 
@@ -5810,6 +6338,7 @@ class BasicFigureEditor extends window.PluginBase {
             lineType: lineType,
             linePattern: linePattern,
             fillEnabled: fillEnabled,
+            rotation: curveRotation,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
@@ -5861,6 +6390,9 @@ class BasicFigureEditor extends window.PluginBase {
             ? parseFloat(elem.getAttribute('cornerRadius'))
             : 0;
 
+        // 回転属性を取得
+        const polygonRotation = parseFloat(elem.getAttribute('rotation')) || 0;
+
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
 
@@ -5874,6 +6406,7 @@ class BasicFigureEditor extends window.PluginBase {
             linePattern: linePattern,
             fillEnabled: fillEnabled,
             cornerRadius: cornerRadius,
+            rotation: polygonRotation,
             zIndex: zIndex !== null ? parseInt(zIndex) : null  // z-index
         };
     }
@@ -6176,10 +6709,19 @@ class BasicFigureEditor extends window.PluginBase {
         const centerY = parseFloat(elem.getAttribute('cy')) || 0;
         const radiusX = parseFloat(elem.getAttribute('rx')) || 0;
         const radiusY = parseFloat(elem.getAttribute('ry')) || 0;
-        const startX = parseFloat(elem.getAttribute('startX')) || 0;
-        const startY = parseFloat(elem.getAttribute('startY')) || 0;
-        const endX = parseFloat(elem.getAttribute('endX')) || 0;
-        const endY = parseFloat(elem.getAttribute('endY')) || 0;
+        // startX/endXがXMLに存在しない場合はcx/cy/rx/ryから計算
+        let startX, startY, endX, endY;
+        if (elem.getAttribute('startX') !== null) {
+            startX = parseFloat(elem.getAttribute('startX')) || 0;
+            startY = parseFloat(elem.getAttribute('startY')) || 0;
+            endX = parseFloat(elem.getAttribute('endX')) || 0;
+            endY = parseFloat(elem.getAttribute('endY')) || 0;
+        } else {
+            startX = centerX - radiusX;
+            startY = centerY - radiusY;
+            endX = centerX + radiusX;
+            endY = centerY + radiusY;
+        }
         const startAngle = parseFloat(elem.getAttribute('startAngle')) || 0;
         const endAngle = parseFloat(elem.getAttribute('endAngle')) || 0;
         const angle = parseFloat(elem.getAttribute('angle')) || 0;
@@ -6243,10 +6785,19 @@ class BasicFigureEditor extends window.PluginBase {
         const centerY = parseFloat(elem.getAttribute('cy')) || 0;
         const radiusX = parseFloat(elem.getAttribute('rx')) || 0;
         const radiusY = parseFloat(elem.getAttribute('ry')) || 0;
-        const startX = parseFloat(elem.getAttribute('startX')) || 0;
-        const startY = parseFloat(elem.getAttribute('startY')) || 0;
-        const endX = parseFloat(elem.getAttribute('endX')) || 0;
-        const endY = parseFloat(elem.getAttribute('endY')) || 0;
+        // startX/endXがXMLに存在しない場合はcx/cy/rx/ryから計算
+        let startX, startY, endX, endY;
+        if (elem.getAttribute('startX') !== null) {
+            startX = parseFloat(elem.getAttribute('startX')) || 0;
+            startY = parseFloat(elem.getAttribute('startY')) || 0;
+            endX = parseFloat(elem.getAttribute('endX')) || 0;
+            endY = parseFloat(elem.getAttribute('endY')) || 0;
+        } else {
+            startX = centerX - radiusX;
+            startY = centerY - radiusY;
+            endX = centerX + radiusX;
+            endY = centerY + radiusY;
+        }
         const startAngle = parseFloat(elem.getAttribute('startAngle')) || 0;
         const endAngle = parseFloat(elem.getAttribute('endAngle')) || 0;
         const angle = parseFloat(elem.getAttribute('angle')) || 0;
@@ -6310,10 +6861,19 @@ class BasicFigureEditor extends window.PluginBase {
         const centerY = parseFloat(elem.getAttribute('cy')) || 0;
         const radiusX = parseFloat(elem.getAttribute('rx')) || 0;
         const radiusY = parseFloat(elem.getAttribute('ry')) || 0;
-        const startX = parseFloat(elem.getAttribute('startX')) || 0;
-        const startY = parseFloat(elem.getAttribute('startY')) || 0;
-        const endX = parseFloat(elem.getAttribute('endX')) || 0;
-        const endY = parseFloat(elem.getAttribute('endY')) || 0;
+        // startX/endXがXMLに存在しない場合はcx/cy/rx/ryから計算
+        let startX, startY, endX, endY;
+        if (elem.getAttribute('startX') !== null) {
+            startX = parseFloat(elem.getAttribute('startX')) || 0;
+            startY = parseFloat(elem.getAttribute('startY')) || 0;
+            endX = parseFloat(elem.getAttribute('endX')) || 0;
+            endY = parseFloat(elem.getAttribute('endY')) || 0;
+        } else {
+            startX = centerX - radiusX;
+            startY = centerY - radiusY;
+            endX = centerX + radiusX;
+            endY = centerY + radiusY;
+        }
         const startAngle = parseFloat(elem.getAttribute('startAngle')) || 0;
         const endAngle = parseFloat(elem.getAttribute('endAngle')) || 0;
         const angle = parseFloat(elem.getAttribute('angle')) || 0;
@@ -6532,6 +7092,59 @@ class BasicFigureEditor extends window.PluginBase {
         }
     }
 
+    /**
+     * 指定図形をxmlTAD文字列に変換（クリップボード用）
+     * @param {Array} shapes - 変換対象の図形配列
+     * @returns {string|null} xmlTAD文字列
+     */
+    async convertSelectedShapesToXmlTad(shapes) {
+        if (!shapes || shapes.length === 0) return null;
+
+        // バウンディングボックスを計算
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const shape of shapes) {
+            if (shape.startX !== undefined) {
+                minX = Math.min(minX, Math.min(shape.startX, shape.endX));
+                minY = Math.min(minY, Math.min(shape.startY, shape.endY));
+                maxX = Math.max(maxX, Math.max(shape.startX, shape.endX));
+                maxY = Math.max(maxY, Math.max(shape.startY, shape.endY));
+            }
+            if (shape.points) {
+                for (const p of shape.points) {
+                    minX = Math.min(minX, p.x);
+                    minY = Math.min(minY, p.y);
+                    maxX = Math.max(maxX, p.x);
+                    maxY = Math.max(maxY, p.y);
+                }
+            }
+        }
+
+        const figLeft = minX === Infinity ? 0 : Math.floor(minX);
+        const figTop = minY === Infinity ? 0 : Math.floor(minY);
+        const figRight = maxX === -Infinity ? 800 : Math.ceil(maxX);
+        const figBottom = maxY === -Infinity ? 600 : Math.ceil(maxY);
+
+        const xmlParts = ['<tad version="1.0" encoding="UTF-8">\r\n'];
+        const savePromises = [];
+        xmlParts.push('<figure>\r\n');
+        xmlParts.push(`<figView top="${figTop}" left="${figLeft}" right="${figRight}" bottom="${figBottom}"/>\r\n`);
+        xmlParts.push(`<figDraw top="${figTop}" left="${figLeft}" right="${figRight}" bottom="${figBottom}"/>\r\n`);
+        xmlParts.push('<figScale hunit="-72" vunit="-72"/>\r\n');
+
+        for (let index = 0; index < shapes.length; index++) {
+            await this.shapeToXML(shapes[index], index, xmlParts, savePromises);
+        }
+
+        xmlParts.push('</figure>\r\n');
+        xmlParts.push('</tad>');
+
+        if (savePromises.length > 0) {
+            await Promise.all(savePromises);
+        }
+
+        return xmlParts.join('');
+    }
+
     async convertToXmlTad() {
         // 図形データをTAD XML形式に変換（配列を使用して高速化）
         const xmlParts = ['<tad version="1.0" encoding="UTF-8">\r\n'];
@@ -6636,7 +7249,8 @@ class BasicFigureEditor extends window.PluginBase {
                 const round = shape.cornerRadius && shape.cornerRadius > 0 ? 1 : 0;
                 const cornerRadius = shape.cornerRadius || 0;
                 const rectZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                xmlParts.push(`<rect round="${round}" cornerRadius="${cornerRadius}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}"${rectZIndexAttr} />\r\n`);
+                const rectRotation = shape.rotation || 0;
+                xmlParts.push(`<rect round="${round}" cornerRadius="${cornerRadius}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${rectRotation}" fillColor="${fillColor}" strokeColor="${strokeColor}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}"${rectZIndexAttr} />\r\n`);
                 break;
 
             case 'ellipse':
@@ -6646,7 +7260,8 @@ class BasicFigureEditor extends window.PluginBase {
                 const ry = Math.abs(shape.endY - shape.startY) / 2;
                 // tad.js形式: <ellipse l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." cx="..." cy="..." rx="..." ry="..." />
                 const ellipseZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                xmlParts.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"${ellipseZIndexAttr} />\r\n`);
+                const ellipseRotation = shape.rotation || 0;
+                xmlParts.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${ellipseRotation}" fillColor="${fillColor}" strokeColor="${strokeColor}" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"${ellipseZIndexAttr} />\r\n`);
                 break;
 
             case 'text':
@@ -6681,7 +7296,8 @@ class BasicFigureEditor extends window.PluginBase {
                 if (shape.path && shape.path.length > 0) {
                     const polylinePoints = shape.path.map(p => `${p.x},${p.y}`).join(' ');
                     const polylineZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                    xmlParts.push(`<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" strokeColor="${strokeColor}" round="0" start_arrow="0" end_arrow="0" points="${polylinePoints}"${polylineZIndexAttr} />\r\n`);
+                    const pencilRotation = shape.rotation || 0;
+                    xmlParts.push(`<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" strokeColor="${strokeColor}" round="0" start_arrow="0" end_arrow="0" rotation="${pencilRotation}" points="${polylinePoints}"${polylineZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -6690,7 +7306,8 @@ class BasicFigureEditor extends window.PluginBase {
                 if (shape.points && shape.points.length > 0) {
                     const polylinePointsStr = shape.points.map(p => `${p.x},${p.y}`).join(' ');
                     const polylineZIndexAttr2 = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                    xmlParts.push(`<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" strokeColor="${strokeColor}" round="0" start_arrow="0" end_arrow="0" points="${polylinePointsStr}"${polylineZIndexAttr2} />\r\n`);
+                    const polylineRotation = shape.rotation || 0;
+                    xmlParts.push(`<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" strokeColor="${strokeColor}" round="0" start_arrow="0" end_arrow="0" rotation="${polylineRotation}" points="${polylinePointsStr}"${polylineZIndexAttr2} />\r\n`);
                 }
                 break;
 
@@ -6699,7 +7316,8 @@ class BasicFigureEditor extends window.PluginBase {
                 if (shape.path && shape.path.length > 0) {
                     const curvePoints = shape.path.map(p => `${p.x},${p.y}`).join(' ');
                     const curveZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                    xmlParts.push(`<curve lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" fillColor="${fillColor}" strokeColor="${strokeColor}" type="0" closed="0" start_arrow="0" end_arrow="0" points="${curvePoints}"${curveZIndexAttr} />\r\n`);
+                    const curveRotation = shape.rotation || 0;
+                    xmlParts.push(`<curve lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" fillColor="${fillColor}" strokeColor="${strokeColor}" type="0" closed="0" start_arrow="0" end_arrow="0" rotation="${curveRotation}" points="${curvePoints}"${curveZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -6709,7 +7327,8 @@ class BasicFigureEditor extends window.PluginBase {
                     const polygonPoints = shape.points.map(p => `${p.x},${p.y}`).join(' ');
                     const polygonCornerRadius = shape.cornerRadius || 0;
                     const polygonZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                    xmlParts.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="${polygonCornerRadius}" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${polygonPoints}"${polygonZIndexAttr} />\r\n`);
+                    const polygonRotation = shape.rotation || 0;
+                    xmlParts.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="${polygonCornerRadius}" rotation="${polygonRotation}" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${polygonPoints}"${polygonZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -6727,7 +7346,8 @@ class BasicFigureEditor extends window.PluginBase {
                 }
 
                 const triangleZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                xmlParts.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="0" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${triangleSavePoints}"${triangleZIndexAttr} />\r\n`);
+                const triangleRotation = shape.rotation || 0;
+                xmlParts.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="0" rotation="${triangleRotation}" fillColor="${fillColor}" strokeColor="${strokeColor}" points="${triangleSavePoints}"${triangleZIndexAttr} />\r\n`);
                 break;
 
             case 'arc':
@@ -7104,76 +7724,8 @@ class BasicFigureEditor extends window.PluginBase {
             }
         ];
 
-        // 仮身が選択されている場合は仮身操作メニューを追加
-        logger.debug('[FIGURE EDITOR] getMenuDefinition: contextMenuVirtualObject:', this.contextMenuVirtualObject);
-        if (this.contextMenuVirtualObject) {
-            try {
-                logger.debug('[FIGURE EDITOR] getMenuDefinition: 仮身が選択されています realId:', this.contextMenuVirtualObject.realId);
-
-                // 仮身操作メニュー
-                const realId = this.contextMenuVirtualObject.realId;
-                const isOpened = this.openedRealObjects.has(realId);
-
-                const virtualObjSubmenu = [
-                    { label: '開く', action: 'open-real-object', disabled: isOpened },
-                    { label: '閉じる', action: 'close-real-object', disabled: !isOpened },
-                    { separator: true },
-                    { label: '属性変更', action: 'change-virtual-object-attributes' },
-                    { label: '続柄設定', action: 'set-relationship' }
-                ];
-
-                menuDef.push({
-                    label: '仮身操作',
-                    submenu: virtualObjSubmenu
-                });
-
-                // 実身操作メニュー
-                const realObjSubmenu = [
-                    { label: '実身名変更', action: 'rename-real-object' },
-                    { label: '実身複製', action: 'duplicate-real-object' },
-                    { label: '管理情報', action: 'open-realobject-config' },
-                    { label: '仮身ネットワーク', action: 'open-virtual-object-network' },
-                    { label: '実身/仮身検索', action: 'open-real-object-search' }
-                ];
-
-                menuDef.push({
-                    label: '実身操作',
-                    submenu: realObjSubmenu
-                });
-
-                // 屑実身操作メニュー
-                menuDef.push({
-                    label: '屑実身操作',
-                    action: 'open-trash-real-objects'
-                });
-
-                // 実行メニュー
-                const applistData = await this.getAppListData(this.contextMenuVirtualObject.realId);
-                logger.debug('[FIGURE EDITOR] getMenuDefinition: applistData:', applistData);
-                if (applistData && Object.keys(applistData).length > 0) {
-                    const executeSubmenu = [];
-                    for (const [pluginId, appInfo] of Object.entries(applistData)) {
-                        logger.debug('[FIGURE EDITOR] getMenuDefinition: 実行メニュー項目追加:', pluginId, appInfo);
-                        executeSubmenu.push({
-                            label: appInfo.name || pluginId,
-                            action: `execute-with-${pluginId}`
-                        });
-                    }
-
-                    menuDef.push({
-                        label: '実行',
-                        submenu: executeSubmenu
-                    });
-                    logger.debug('[FIGURE EDITOR] getMenuDefinition: 実行メニュー追加完了 項目数:', executeSubmenu.length);
-                } else {
-                    logger.warn('[FIGURE EDITOR] getMenuDefinition: applistDataが空またはnull');
-                }
-            } catch (error) {
-                logger.error('[FIGURE EDITOR] applist取得エラー:', error);
-            }
-        } else {
-            logger.debug('[FIGURE EDITOR] getMenuDefinition: 仮身が選択されていません');
-        }
+        // 仮身が選択されている場合は仮身操作メニューを追加（PluginBase共通メソッド）
+        await this.buildVirtualObjectContextMenus(menuDef);
 
         return menuDef;
     }
@@ -7456,20 +8008,30 @@ class BasicFigureEditor extends window.PluginBase {
             return copiedShape;
         });
 
-        // 仮身が含まれている場合はグローバルクリップボードにも送信
+        // グローバルクリップボードに送信
         const vobjShape = this.selectedShapes.find(shape => shape.type === 'vobj' && shape.virtualObject);
         if (vobjShape && vobjShape.virtualObject) {
-            // 仮身オブジェクト全体をコピー（virtual-object-listと同じ方式）
+            // 仮身が含まれている場合は仮身データを優先（virtual-object-listとの互換性）
             const clipboardData = JSON.parse(JSON.stringify(vobjShape.virtualObject));
             this.setClipboard(clipboardData);
         } else {
-            // 画像セグメントが含まれている場合はグローバルクリップボードにも送信
-            const imageShape = this.selectedShapes.find(shape => shape.type === 'image' && shape.imageElement);
-            if (imageShape && imageShape.imageElement) {
-                this.setImageClipboard(imageShape.imageElement, {
-                    width: imageShape.width,
-                    height: imageShape.height,
-                    name: imageShape.name || 'image.png'
+            // 選択図形をxmlTADに変換してfigure-segmentとして設定
+            const xmlTad = await this.convertSelectedShapesToXmlTad(this.selectedShapes);
+            if (xmlTad) {
+                // 選択範囲のバウンディングボックスを計算
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const shape of this.selectedShapes) {
+                    if (shape.startX !== undefined) {
+                        minX = Math.min(minX, shape.startX);
+                        minY = Math.min(minY, shape.startY);
+                        maxX = Math.max(maxX, shape.endX);
+                        maxY = Math.max(maxY, shape.endY);
+                    }
+                }
+                this.setFigureSegmentClipboard(xmlTad, {
+                    width: maxX - minX,
+                    height: maxY - minY,
+                    sourceRealId: this.realId
                 });
             }
         }
@@ -7540,7 +8102,13 @@ class BasicFigureEditor extends window.PluginBase {
             logger.debug('[FIGURE EDITOR] ローカルクリップボードが空、グローバルをチェック');
             const globalClipboard = await this.getGlobalClipboard();
 
-            // グループ構造の場合（表計算グラフ等）
+            // 図形セグメント（xmlTAD）の場合
+            if (globalClipboard && globalClipboard.type === 'figure-segment' && globalClipboard.xmlTad) {
+                await this.pasteFigureSegmentFromClipboard(globalClipboard);
+                return;
+            }
+
+            // グループ構造の場合（後方互換）
             if (globalClipboard && globalClipboard.type === 'group' && globalClipboard.group) {
                 logger.debug('[FIGURE EDITOR] グローバルクリップボードにグループがあります');
                 const group = JSON.parse(JSON.stringify(globalClipboard.group));
@@ -8037,6 +8605,53 @@ class BasicFigureEditor extends window.PluginBase {
         this.setStatus('最背面へ移動しました');
     }
 
+    // === 回転ヘルパー ===
+
+    /**
+     * drawShapeラッパー用の回転角度を返す（度数法）
+     * image/pixelmap/arc系/vobjは内部で回転を処理するため0を返す
+     */
+    getWrapperRotation(shape) {
+        if (shape.type === 'image' || shape.type === 'pixelmap') return 0;
+        if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') return 0;
+        if (shape.type === 'vobj') return 0;
+        return shape.rotation || 0;
+    }
+
+    /**
+     * 全図形タイプ統一の回転角度を返す（度数法）
+     * arc系: shape.angle（ラジアン）を度数法に変換
+     * その他: shape.rotation（度数法）
+     */
+    getEffectiveRotationDeg(shape) {
+        if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') {
+            return (shape.angle || 0) * 180 / Math.PI;
+        }
+        if (shape.type === 'vobj') return 0;
+        return shape.rotation || 0;
+    }
+
+    /**
+     * 指定座標を図形の回転中心で逆回転する
+     */
+    inverseRotatePoint(x, y, shape) {
+        const rotation = this.getEffectiveRotationDeg(shape);
+        if (rotation === 0) return { x, y };
+        const bounds = this.getShapeBoundingBox(shape);
+        if (!bounds) return { x, y };
+        const cx = (bounds.minX + bounds.maxX) / 2;
+        const cy = (bounds.minY + bounds.maxY) / 2;
+        const rad = -rotation * Math.PI / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const dx = x - cx;
+        const dy = y - cy;
+        return {
+            x: cx + dx * cos - dy * sin,
+            y: cy + dx * sin + dy * cos
+        };
+    }
+
     // === 回転・反転 ===
     rotateShapes(angle) {
         if (this.selectedShapes.length === 0) {
@@ -8060,50 +8675,11 @@ class BasicFigureEditor extends window.PluginBase {
                 return;
             }
 
-            // その他の図形は座標を回転（GeometryUtilsを使用）
-            const centerX = (shape.startX + shape.endX) / 2;
-            const centerY = (shape.startY + shape.endY) / 2;
-
-            if (window.GeometryUtils) {
-                // GeometryUtilsで回転
-                const rotatedStart = window.GeometryUtils.rotatePoint(
-                    shape.startX, shape.startY, centerX, centerY, angle
-                );
-                const rotatedEnd = window.GeometryUtils.rotatePoint(
-                    shape.endX, shape.endY, centerX, centerY, angle
-                );
-                shape.startX = rotatedStart.x;
-                shape.startY = rotatedStart.y;
-                shape.endX = rotatedEnd.x;
-                shape.endY = rotatedEnd.y;
-            } else {
-                // フォールバック：従来の実装
-                const rad = angle * Math.PI / 180;
-                const cos = Math.cos(rad);
-                const sin = Math.sin(rad);
-
-                const sx = shape.startX - centerX;
-                const sy = shape.startY - centerY;
-                shape.startX = centerX + sx * cos - sy * sin;
-                shape.startY = centerY + sx * sin + sy * cos;
-
-                const ex = shape.endX - centerX;
-                const ey = shape.endY - centerY;
-                shape.endX = centerX + ex * cos - ey * sin;
-                shape.endY = centerY + ex * sin + ey * cos;
-            }
-
-            // 座標を正規化（GeometryUtilsを使用）
-            if (window.GeometryUtils) {
-                window.GeometryUtils.normalizeCoords(shape);
-            } else {
-                if (shape.startX > shape.endX) {
-                    [shape.startX, shape.endX] = [shape.endX, shape.startX];
-                }
-                if (shape.startY > shape.endY) {
-                    [shape.startY, shape.endY] = [shape.endY, shape.startY];
-                }
-            }
+            // その他の図形はrotationプロパティを更新（Canvas回転ラッパーで描画）
+            shape.rotation = (shape.rotation || 0) + angle;
+            // -360から360の範囲に正規化
+            while (shape.rotation > 360) shape.rotation -= 360;
+            while (shape.rotation < -360) shape.rotation += 360;
         });
 
         this.redraw();
@@ -8725,6 +9301,71 @@ class BasicFigureEditor extends window.PluginBase {
         logger.debug('[FIGURE EDITOR] パターン編集');
     }
 
+    /**
+     * グローバルクリップボードのfigure-segmentデータを図形として貼り付け
+     * @param {Object} clipboardData - { type: 'figure-segment', xmlTad, width, height }
+     */
+    async pasteFigureSegmentFromClipboard(clipboardData) {
+        // parseXmlTadDataは初期読み込み用でthis.shapes等を全クリアするため、
+        // 全状態を退避し、パース後に復元してから新規図形のみ追加する
+        const prevShapes = [...this.shapes];
+        const prevFigView = this.figView ? {...this.figView} : null;
+        const prevFigDraw = this.figDraw ? {...this.figDraw} : null;
+        const prevFigScale = this.figScale ? {...this.figScale} : null;
+        const prevPaperWidth = this.paperWidth;
+        const prevPaperHeight = this.paperHeight;
+        const prevPaperSize = this.paperSize;
+        const prevPaperMargin = this.paperMargin;
+
+        // xmlTADをパースして図形データを読み込み（既存のパーサーを利用）
+        await this.parseXmlTadData(clipboardData.xmlTad);
+
+        // パースされた新規図形を取得（parseXmlTadDataがthis.shapesを差し替えているため全てが新規）
+        const newShapes = [...this.shapes];
+
+        // 全状態を復元
+        this.shapes = prevShapes;
+        if (prevFigView) this.figView = prevFigView;
+        if (prevFigDraw) this.figDraw = prevFigDraw;
+        if (prevFigScale) this.figScale = prevFigScale;
+        this.paperWidth = prevPaperWidth;
+        this.paperHeight = prevPaperHeight;
+        this.paperSize = prevPaperSize;
+        this.paperMargin = prevPaperMargin;
+
+        if (newShapes.length === 0) {
+            this.setStatus('図形セグメントの貼り付けに失敗しました');
+            return;
+        }
+
+        // 座標をオフセット（貼り付け位置調整）して既存図形配列に追加
+        for (const shape of newShapes) {
+            if (shape.startX !== undefined) shape.startX += 20;
+            if (shape.startY !== undefined) shape.startY += 20;
+            if (shape.endX !== undefined) shape.endX += 20;
+            if (shape.endY !== undefined) shape.endY += 20;
+            // polyline/curveのpoints
+            if (shape.points) {
+                for (const p of shape.points) {
+                    if (p.x !== undefined) p.x += 20;
+                    if (p.y !== undefined) p.y += 20;
+                }
+            }
+            // グループの場合は子図形も移動
+            if (shape.type === 'group' && shape.shapes) {
+                this.moveGroupShapes(shape, 20, 20);
+            }
+            // 新しいz-indexを割り当て
+            shape.zIndex = this.getNextZIndex();
+            this.shapes.push(shape);
+        }
+
+        this.selectedShapes = newShapes;
+        this.redraw();
+        this.isModified = true;
+        this.setStatus(`${newShapes.length}個の図形を貼り付けました`);
+    }
+
     // === 編集（追加） ===
     async pasteMove() {
         // ローカルクリップボードを優先チェック
@@ -8747,34 +9388,623 @@ class BasicFigureEditor extends window.PluginBase {
         this.setStatus('クリップボードが空です');
     }
 
-    alignShapes() {
-        if (this.selectedShapes.length < 2) {
-            this.setStatus('2つ以上の図形を選択してください');
+    async alignShapes() {
+        if (this.selectedShapes.length === 0) {
+            this.setStatus('図形が選択されていません');
             return;
         }
 
-        // 簡易的な左揃え
-        const minX = Math.min(...this.selectedShapes.map(s => Math.min(s.startX, s.endX)));
-        this.selectedShapes.forEach(shape => {
-            const currentMinX = Math.min(shape.startX, shape.endX);
-            const offset = minX - currentMinX;
-            shape.startX += offset;
-            shape.endX += offset;
+        const isMultiple = this.selectedShapes.length >= 2;
+        const topleftDisabled = isMultiple ? '' : 'disabled';
+        const topleftLabelClass = isMultiple ? '' : ' disabled';
+
+        const dialogHtml = `
+<div style="font-size:11px">
+    <div style="display:flex;align-items:flex-start;gap:4px;margin-bottom:8px">
+        <span style="font-weight:bold;min-width:60px">基準位置</span>
+        <div class="radio-group-vertical">
+            <label class="radio-label">
+                <input type="radio" name="reference" value="origin">
+                <span class="radio-indicator"></span>
+                <span>原点</span>
+            </label>
+            <label class="radio-label">
+                <input type="radio" name="reference" value="grid" checked>
+                <span class="radio-indicator"></span>
+                <span>格子点</span>
+            </label>
+            <label class="radio-label${topleftLabelClass}">
+                <input type="radio" name="reference" value="topleft" ${topleftDisabled}>
+                <span class="radio-indicator"></span>
+                <span>左上図形</span>
+            </label>
+        </div>
+    </div>
+    <div style="display:flex;gap:24px">
+        <div style="display:flex;align-items:flex-start;gap:4px">
+            <span style="font-weight:bold;min-width:30px">垂直</span>
+            <div class="radio-group-vertical">
+                <label class="radio-label">
+                    <input type="radio" name="vertical" value="top">
+                    <span class="radio-indicator"></span>
+                    <span>上</span>
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="vertical" value="center">
+                    <span class="radio-indicator"></span>
+                    <span>中</span>
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="vertical" value="bottom">
+                    <span class="radio-indicator"></span>
+                    <span>下</span>
+                </label>
+            </div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:4px">
+            <span style="font-weight:bold;min-width:30px">水平</span>
+            <div class="radio-group-vertical">
+                <label class="radio-label">
+                    <input type="radio" name="horizontal" value="left">
+                    <span class="radio-indicator"></span>
+                    <span>左</span>
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="horizontal" value="center">
+                    <span class="radio-indicator"></span>
+                    <span>中</span>
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="horizontal" value="right">
+                    <span class="radio-indicator"></span>
+                    <span>右</span>
+                </label>
+            </div>
+        </div>
+        <script>
+        (function() {
+            ['vertical', 'horizontal'].forEach(function(groupName) {
+                var radios = document.querySelectorAll('input[name="' + groupName + '"]');
+                var lastChecked = null;
+                radios.forEach(function(radio) {
+                    if (radio.checked) lastChecked = radio;
+                });
+                radios.forEach(function(radio) {
+                    radio.addEventListener('click', function() {
+                        if (this === lastChecked) {
+                            this.checked = false;
+                            lastChecked = null;
+                        } else {
+                            lastChecked = this;
+                        }
+                    });
+                });
+            });
+        })();
+        </script>
+    </div>
+</div>`;
+
+        const result = await this.showCustomDialog({
+            title: '位置あわせ',
+            dialogHtml: dialogHtml,
+            buttons: [
+                { label: '取消', value: 'cancel' },
+                { label: '実行', value: 'ok' }
+            ],
+            defaultButton: 1,
+            radios: {
+                reference: 'reference',
+                vertical: 'vertical',
+                horizontal: 'horizontal'
+            },
+            width: 300
         });
+
+        if (!result || result.button !== 'ok') return;
+
+        const reference = (result.radios && result.radios.reference) || 'grid';
+        const vertical = (result.radios && result.radios.vertical) || 'none';
+        const horizontal = (result.radios && result.radios.horizontal) || 'none';
+
+        if (vertical === 'none' && horizontal === 'none') return;
+
+        // ロック図形を除外した対象図形リスト
+        const targets = this.selectedShapes.filter(s => !s.isLocked && !s.isBackground);
+        if (targets.length === 0) {
+            this.setStatus('移動可能な図形がありません');
+            return;
+        }
+
+        // 各図形のバウンディングボックスを取得
+        const bboxes = targets.map(s => this.getShapeBoundingBox(s));
+
+        this.saveStateForUndo();
+
+        if (reference === 'origin') {
+            // 原点基準: 各図形を原点(0,0)に揃える
+            for (let i = 0; i < targets.length; i++) {
+                const bbox = bboxes[i];
+                if (!bbox) continue;
+                let dx = 0, dy = 0;
+                if (horizontal === 'left') dx = -bbox.minX;
+                else if (horizontal === 'center') dx = -(bbox.minX + bbox.maxX) / 2;
+                else if (horizontal === 'right') dx = -bbox.maxX;
+                if (vertical === 'top') dy = -bbox.minY;
+                else if (vertical === 'center') dy = -(bbox.minY + bbox.maxY) / 2;
+                else if (vertical === 'bottom') dy = -bbox.maxY;
+                this.moveShapeForAlignment(targets[i], dx, dy);
+            }
+        } else if (reference === 'grid') {
+            // 格子点基準: 各図形を個別に最寄り格子点に揃える
+            const interval = this.gridInterval;
+            for (let i = 0; i < targets.length; i++) {
+                const bbox = bboxes[i];
+                if (!bbox) continue;
+                let dx = 0, dy = 0;
+                if (horizontal === 'left') dx = Math.round(bbox.minX / interval) * interval - bbox.minX;
+                else if (horizontal === 'center') {
+                    const cx = (bbox.minX + bbox.maxX) / 2;
+                    dx = Math.round(cx / interval) * interval - cx;
+                } else if (horizontal === 'right') dx = Math.round(bbox.maxX / interval) * interval - bbox.maxX;
+                if (vertical === 'top') dy = Math.round(bbox.minY / interval) * interval - bbox.minY;
+                else if (vertical === 'center') {
+                    const cy = (bbox.minY + bbox.maxY) / 2;
+                    dy = Math.round(cy / interval) * interval - cy;
+                } else if (vertical === 'bottom') dy = Math.round(bbox.maxY / interval) * interval - bbox.maxY;
+                this.moveShapeForAlignment(targets[i], dx, dy);
+            }
+        } else if (reference === 'topleft') {
+            // 左上図形基準: 最上(左)の図形を基準に揃える
+            let refIdx = 0;
+            for (let i = 1; i < targets.length; i++) {
+                if (!bboxes[i]) continue;
+                if (!bboxes[refIdx] ||
+                    bboxes[i].minY < bboxes[refIdx].minY ||
+                    (bboxes[i].minY === bboxes[refIdx].minY && bboxes[i].minX < bboxes[refIdx].minX)) {
+                    refIdx = i;
+                }
+            }
+            const refBbox = bboxes[refIdx];
+            if (!refBbox) return;
+
+            for (let i = 0; i < targets.length; i++) {
+                if (i === refIdx) continue; // 基準図形は移動しない
+                const bbox = bboxes[i];
+                if (!bbox) continue;
+                let dx = 0, dy = 0;
+                if (horizontal === 'left') dx = refBbox.minX - bbox.minX;
+                else if (horizontal === 'center') dx = (refBbox.minX + refBbox.maxX) / 2 - (bbox.minX + bbox.maxX) / 2;
+                else if (horizontal === 'right') dx = refBbox.maxX - bbox.maxX;
+                if (vertical === 'top') dy = refBbox.minY - bbox.minY;
+                else if (vertical === 'center') dy = (refBbox.minY + refBbox.maxY) / 2 - (bbox.minY + bbox.maxY) / 2;
+                else if (vertical === 'bottom') dy = refBbox.maxY - bbox.maxY;
+                this.moveShapeForAlignment(targets[i], dx, dy);
+            }
+        }
 
         this.redraw();
         this.isModified = true;
         this.setStatus('図形を位置合わせしました');
     }
 
+    /**
+     * 位置あわせ用の図形移動（全座標タイプ対応）
+     * @param {Object} shape - 対象図形
+     * @param {number} dx - X方向の移動量
+     * @param {number} dy - Y方向の移動量
+     */
+    moveShapeForAlignment(shape, dx, dy) {
+        if (dx === 0 && dy === 0) return;
+
+        // 基本座標
+        if (shape.startX !== undefined) shape.startX += dx;
+        if (shape.startY !== undefined) shape.startY += dy;
+        if (shape.endX !== undefined) shape.endX += dx;
+        if (shape.endY !== undefined) shape.endY += dy;
+
+        // arc系の中心座標
+        if (shape.centerX !== undefined) shape.centerX += dx;
+        if (shape.centerY !== undefined) shape.centerY += dy;
+
+        // polygon/polyline の頂点配列
+        if (shape.points) {
+            shape.points.forEach(p => { p.x += dx; p.y += dy; });
+        }
+
+        // curve/pencil のパス配列
+        if (shape.path) {
+            shape.path.forEach(p => { p.x += dx; p.y += dy; });
+        }
+
+        // グループの子図形
+        if (shape.type === 'group' && shape.shapes) {
+            this.moveGroupShapes(shape, dx, dy);
+        }
+
+        // 仮身のDOM要素位置更新
+        if (shape.type === 'vobj' && shape.vobjElement) {
+            const pos = this.logicalToPhysical(shape.startX, shape.startY);
+            shape.vobjElement.style.left = `${pos.x}px`;
+            shape.vobjElement.style.top = `${pos.y}px`;
+        }
+        if (shape.type === 'vobj' && shape.expanded && shape.expandedElement) {
+            const chsz = (shape.virtualObject && shape.virtualObject.chsz) || 16;
+            const titleBarHeight = chsz + 16;
+            const expPos = this.logicalToPhysical(shape.startX, shape.startY + titleBarHeight);
+            shape.expandedElement.style.left = `${expPos.x}px`;
+            shape.expandedElement.style.top = `${expPos.y}px`;
+        }
+    }
+
     // === 図形操作（追加） ===
     transformShape() {
+        if (this.readonly) return;
         if (this.selectedShapes.length === 0) {
             this.setStatus('図形が選択されていません');
             return;
         }
-        this.setStatus('変形（未実装）');
-        logger.debug('[FIGURE EDITOR] 変形');
+        const shape = this.selectedShapes[0];
+        const transformableTypes = ['polygon', 'arc', 'chord', 'elliptical_arc', 'curve'];
+        if (!transformableTypes.includes(shape.type)) {
+            this.setStatus('この図形は変形できません');
+            return;
+        }
+        this.enterTransformMode(shape);
+    }
+
+    enterTransformMode(shape) {
+        if (this.isPixelmapMode || this.editingTextBox) return;
+        // 弧系図形のcenterX/Y/radiusX/radiusY正規化（描画作成時はstartX/Y/endX/Yのみ）
+        if ((shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') &&
+            shape.centerX === undefined) {
+            const width = shape.endX - shape.startX;
+            const height = shape.endY - shape.startY;
+            shape.centerX = shape.startX + width / 2;
+            shape.centerY = shape.startY + height / 2;
+            shape.radiusX = Math.abs(width / 2);
+            shape.radiusY = Math.abs(height / 2);
+            if (shape.startAngle === undefined) shape.startAngle = 0;
+            if (shape.endAngle === undefined) shape.endAngle = Math.PI / 2;
+            if (shape.angle === undefined) shape.angle = 0;
+        }
+        this.isTransformMode = true;
+        this.transformingShape = shape;
+        this.selectedShapes = [shape];
+        this.transformVertices = this.getTransformVertices(shape);
+        this.setStatus('変形モード：頂点をドラッグして移動（Shift: 水平/垂直制約）');
+        this.redraw();
+    }
+
+    exitTransformMode() {
+        if (!this.isTransformMode) return;
+        this.isTransformMode = false;
+        this.transformingShape = null;
+        this.transformVertices = [];
+        this.isDraggingVertex = false;
+        this.draggedVertexIndex = -1;
+        this.canvas.style.cursor = 'default';
+        this.setStatus('');
+        this.redraw();
+    }
+
+    /**
+     * 図形タイプ別の変形ハンドル頂点情報を取得
+     * @param {Object} shape - 対象図形
+     * @returns {Array} [{x, y, type, index}] type: 'vertex'|'center'
+     */
+    getTransformVertices(shape) {
+        const vertices = [];
+        if (shape.type === 'polygon' && shape.points) {
+            for (let i = 0; i < shape.points.length; i++) {
+                vertices.push({
+                    x: shape.points[i].x,
+                    y: shape.points[i].y,
+                    type: 'vertex',
+                    index: i
+                });
+            }
+        } else if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') {
+            // 扇形のみ中心点ハンドルを追加
+            if (shape.type === 'arc') {
+                vertices.push({
+                    x: shape.centerX,
+                    y: shape.centerY,
+                    type: 'center',
+                    index: 0
+                });
+            }
+            // 弧始点
+            const startPt = this.getArcEndpoint(shape, shape.startAngle);
+            vertices.push({
+                x: startPt.x,
+                y: startPt.y,
+                type: 'arc_start',
+                index: vertices.length
+            });
+            // 弧終点
+            const endPt = this.getArcEndpoint(shape, shape.endAngle);
+            vertices.push({
+                x: endPt.x,
+                y: endPt.y,
+                type: 'arc_end',
+                index: vertices.length
+            });
+        } else if (shape.type === 'curve' && shape.path && shape.path.length >= 2) {
+            // 曲線: 始点と終点のハンドル
+            vertices.push({
+                x: shape.path[0].x,
+                y: shape.path[0].y,
+                type: 'curve_start',
+                index: 0
+            });
+            vertices.push({
+                x: shape.path[shape.path.length - 1].x,
+                y: shape.path[shape.path.length - 1].y,
+                type: 'curve_end',
+                index: shape.path.length - 1
+            });
+        }
+        return vertices;
+    }
+
+    /**
+     * 弧端点の座標を計算（楕円パラメトリック角度→ワールド座標）
+     * @param {Object} shape - 弧系図形
+     * @param {number} angle - パラメトリック角度（ラジアン）
+     * @returns {{x: number, y: number}}
+     */
+    getArcEndpoint(shape, angle) {
+        const rotation = shape.angle || 0;
+        const cosR = Math.cos(rotation);
+        const sinR = Math.sin(rotation);
+        const lx = shape.radiusX * Math.cos(angle);
+        const ly = shape.radiusY * Math.sin(angle);
+        return {
+            x: shape.centerX + lx * cosR - ly * sinR,
+            y: shape.centerY + lx * sinR + ly * cosR
+        };
+    }
+
+    /**
+     * ワールド座標を楕円のローカル座標（中心相対、回転除去済み）に変換
+     * @param {Object} shape - 弧系図形
+     * @param {number} px - ワールドX
+     * @param {number} py - ワールドY
+     * @returns {{lx: number, ly: number}}
+     */
+    worldToArcLocal(shape, px, py) {
+        const rotation = shape.angle || 0;
+        const cosR = Math.cos(-rotation);
+        const sinR = Math.sin(-rotation);
+        const dx = px - shape.centerX;
+        const dy = py - shape.centerY;
+        return {
+            lx: dx * cosR - dy * sinR,
+            ly: dx * sinR + dy * cosR
+        };
+    }
+
+    /**
+     * 2つの端点位置から楕円パラメータ(rx, ry, startAngle, endAngle)を再計算
+     * 固定端点とドラッグ端点のローカル座標から新しい楕円を求める
+     * @param {Object} shape - 弧系図形
+     * @param {{lx: number, ly: number}} fixedLocal - 固定端点のローカル座標
+     * @param {{lx: number, ly: number}} draggedLocal - ドラッグ端点のローカル座標
+     * @returns {{radiusX: number, radiusY: number, fixedAngle: number, draggedAngle: number}|null}
+     */
+    solveEllipseFromTwoPoints(shape, fixedLocal, draggedLocal) {
+        const flx = fixedLocal.lx, fly = fixedLocal.ly;
+        const dlx = draggedLocal.lx, dly = draggedLocal.ly;
+
+        // 連立方程式: flx²*A + fly²*B = 1, dlx²*A + dly²*B = 1
+        // A = 1/rx², B = 1/ry²
+        const denom = dly * dly * flx * flx - dlx * dlx * fly * fly;
+
+        if (Math.abs(denom) < 1e-6) {
+            // 退化ケース: 角度のみ変更
+            return null;
+        }
+
+        const B = (flx * flx - dlx * dlx) / denom;
+        const A = (Math.abs(flx) > 1e-6) ?
+            (1 - fly * fly * B) / (flx * flx) :
+            (1 - dly * dly * B) / (dlx * dlx);
+
+        if (A <= 0 || B <= 0) {
+            // 有効な楕円が存在しない: 角度のみ変更
+            return null;
+        }
+
+        const newRx = 1 / Math.sqrt(A);
+        const newRy = 1 / Math.sqrt(B);
+
+        // 最小半径制限
+        const minRadius = 1;
+        if (newRx < minRadius || newRy < minRadius) {
+            return null;
+        }
+
+        // 新しいパラメトリック角度を計算
+        const fixedAngle = Math.atan2(fly / newRy, flx / newRx);
+        const draggedAngle = Math.atan2(dly / newRy, dlx / newRx);
+
+        return {
+            radiusX: newRx,
+            radiusY: newRy,
+            fixedAngle: fixedAngle,
+            draggedAngle: draggedAngle
+        };
+    }
+
+    /**
+     * 頂点ハンドルのヒットテスト
+     * @param {number} x - 論理座標X
+     * @param {number} y - 論理座標Y
+     * @returns {number} ヒットした頂点インデックス、なければ-1
+     */
+    getVertexHandleAt(x, y) {
+        const handleSize = 8;
+        const hitArea = handleSize / 2 + 2;
+
+        // 回転された図形の場合、テスト点を逆回転してから判定
+        let testX = x, testY = y;
+        if (this.transformingShape) {
+            const rotation = this.getWrapperRotation(this.transformingShape);
+            if (rotation !== 0) {
+                const bounds = this.getShapeBoundingBox(this.transformingShape);
+                if (bounds) {
+                    const cx = (bounds.minX + bounds.maxX) / 2;
+                    const cy = (bounds.minY + bounds.maxY) / 2;
+                    const rad = -rotation * Math.PI / 180;
+                    const cos = Math.cos(rad);
+                    const sin = Math.sin(rad);
+                    const dx = x - cx;
+                    const dy = y - cy;
+                    testX = cx + dx * cos - dy * sin;
+                    testY = cy + dx * sin + dy * cos;
+                }
+            }
+        }
+
+        for (let i = 0; i < this.transformVertices.length; i++) {
+            const v = this.transformVertices[i];
+            if (Math.abs(testX - v.x) <= hitArea && Math.abs(testY - v.y) <= hitArea) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 変形後のバウンディングボックスを再計算・更新
+     * @param {Object} shape - 対象図形
+     */
+    updateBoundingBoxAfterTransform(shape) {
+        if (shape.type === 'polygon' && shape.points && shape.points.length > 0) {
+            // polygonのbounding boxはpointsから自動計算されるので不要
+            return;
+        }
+        if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') {
+            // centerX/Y + radiusX/Y から bounding box を再計算
+            const rotation = shape.angle || 0;
+            if (Math.abs(rotation) < 1e-6) {
+                // 回転なし: 単純な計算
+                shape.startX = shape.centerX - shape.radiusX;
+                shape.startY = shape.centerY - shape.radiusY;
+                shape.endX = shape.centerX + shape.radiusX;
+                shape.endY = shape.centerY + shape.radiusY;
+            } else {
+                // 回転あり: 4隅を計算
+                const cosR = Math.cos(rotation);
+                const sinR = Math.sin(rotation);
+                const corners = [
+                    { lx: -shape.radiusX, ly: -shape.radiusY },
+                    { lx: shape.radiusX, ly: -shape.radiusY },
+                    { lx: shape.radiusX, ly: shape.radiusY },
+                    { lx: -shape.radiusX, ly: shape.radiusY }
+                ];
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const c of corners) {
+                    const wx = shape.centerX + c.lx * cosR - c.ly * sinR;
+                    const wy = shape.centerY + c.lx * sinR + c.ly * cosR;
+                    minX = Math.min(minX, wx);
+                    minY = Math.min(minY, wy);
+                    maxX = Math.max(maxX, wx);
+                    maxY = Math.max(maxY, wy);
+                }
+                shape.startX = minX;
+                shape.startY = minY;
+                shape.endX = maxX;
+                shape.endY = maxY;
+            }
+        }
+    }
+
+    /**
+     * 頂点ドラッグを適用
+     * @param {Object} shape - 対象図形
+     * @param {number} vertexIndex - transformVertices配列内のインデックス
+     * @param {number} newX - 新しいX座標（論理座標）
+     * @param {number} newY - 新しいY座標（論理座標）
+     */
+    applyVertexDrag(shape, vertexIndex, newX, newY) {
+        const vertex = this.transformVertices[vertexIndex];
+        if (!vertex) return;
+
+        if (shape.type === 'polygon') {
+            // 多角形: 頂点座標を直接更新
+            if (shape.points && shape.points[vertex.index]) {
+                shape.points[vertex.index].x = newX;
+                shape.points[vertex.index].y = newY;
+            }
+        } else if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') {
+            if (vertex.type === 'center') {
+                // 中心点ドラッグ: 全体移動
+                const dx = newX - shape.centerX;
+                const dy = newY - shape.centerY;
+                shape.centerX = newX;
+                shape.centerY = newY;
+                shape.startX += dx;
+                shape.startY += dy;
+                shape.endX += dx;
+                shape.endY += dy;
+            } else {
+                // 弧端点ドラッグ: 自由移動 → 楕円パラメータ再計算
+                const draggedLocal = this.worldToArcLocal(shape, newX, newY);
+
+                // 固定端点を特定
+                let fixedAngle;
+                if (vertex.type === 'arc_start') {
+                    fixedAngle = shape.endAngle;
+                } else {
+                    fixedAngle = shape.startAngle;
+                }
+                const fixedPt = this.getArcEndpoint(shape, fixedAngle);
+                const fixedLocal = this.worldToArcLocal(shape, fixedPt.x, fixedPt.y);
+
+                // 2点から楕円パラメータを再計算
+                const result = this.solveEllipseFromTwoPoints(shape, fixedLocal, draggedLocal);
+
+                if (result) {
+                    // 楕円パラメータを更新
+                    shape.radiusX = result.radiusX;
+                    shape.radiusY = result.radiusY;
+                    if (vertex.type === 'arc_start') {
+                        shape.startAngle = result.draggedAngle;
+                        shape.endAngle = result.fixedAngle;
+                    } else {
+                        shape.startAngle = result.fixedAngle;
+                        shape.endAngle = result.draggedAngle;
+                    }
+                } else {
+                    // 退化ケース: 角度のみ変更（幾何学的角度を使用）
+                    const geomAngle = Math.atan2(
+                        newY - shape.centerY,
+                        newX - shape.centerX
+                    );
+                    if (vertex.type === 'arc_start') {
+                        shape.startAngle = geomAngle;
+                    } else {
+                        shape.endAngle = geomAngle;
+                    }
+                }
+
+                // バウンディングボックスを更新
+                this.updateBoundingBoxAfterTransform(shape);
+            }
+        } else if (shape.type === 'curve' && shape.path) {
+            // 曲線: 始点または終点の座標を更新
+            if (vertex.type === 'curve_start') {
+                shape.path[0].x = newX;
+                shape.path[0].y = newY;
+            } else if (vertex.type === 'curve_end') {
+                shape.path[shape.path.length - 1].x = newX;
+                shape.path[shape.path.length - 1].y = newY;
+            }
+        }
+
+        this.isModified = true;
     }
 
     invertColor() {
@@ -8804,12 +10034,143 @@ class BasicFigureEditor extends window.PluginBase {
     }
 
     burnShape() {
+        // 選択がピクセルマップ1つであることを確認
         if (this.selectedShapes.length === 0) {
             this.setStatus('図形が選択されていません');
             return;
         }
-        this.setStatus('焼き付け（未実装）');
-        logger.debug('[FIGURE EDITOR] 焼き付け');
+        if (this.selectedShapes.length !== 1) {
+            this.setStatus('ピクセルマップを1つ選択してください');
+            return;
+        }
+        const pixelmap = this.selectedShapes[0];
+        if (pixelmap.type !== 'pixelmap') {
+            this.setStatus('ピクセルマップを選択してください');
+            return;
+        }
+
+        // ピクセルマップの枠領域を算出
+        const pmMinX = Math.min(pixelmap.startX, pixelmap.endX);
+        const pmMinY = Math.min(pixelmap.startY, pixelmap.endY);
+        const pmMaxX = Math.max(pixelmap.startX, pixelmap.endX);
+        const pmMaxY = Math.max(pixelmap.startY, pixelmap.endY);
+        const pmWidth = pmMaxX - pmMinX;
+        const pmHeight = pmMaxY - pmMinY;
+
+        if (pmWidth <= 0 || pmHeight <= 0) {
+            this.setStatus('ピクセルマップのサイズが不正です');
+            return;
+        }
+
+        // ピクセルマップより前面（shapes配列で後ろ）にある図形から、枠と重なるものを抽出
+        const pmIndex = this.shapes.indexOf(pixelmap);
+        const overlappingShapes = [];
+        for (let i = pmIndex + 1; i < this.shapes.length; i++) {
+            const shape = this.shapes[i];
+            if (shape.type === 'vobj') continue; // 仮身はCanvas描画されないため除外
+            const bounds = this.getShapeBoundingBox(shape);
+            if (!bounds) continue;
+            // AABB重なり判定
+            if (bounds.maxX > pmMinX && bounds.minX < pmMaxX &&
+                bounds.maxY > pmMinY && bounds.minY < pmMaxY) {
+                overlappingShapes.push(shape);
+            }
+        }
+
+        if (overlappingShapes.length === 0) {
+            this.setStatus('焼き付ける部品がありません');
+            return;
+        }
+
+        // Undo用に状態を保存
+        this.saveStateForUndo();
+
+        // 一時Canvas作成（枠サイズ基準）
+        const burnCanvas = document.createElement('canvas');
+        burnCanvas.width = pmWidth;
+        burnCanvas.height = pmHeight;
+        const burnCtx = burnCanvas.getContext('2d');
+
+        // 1. 既存のImageDataを描画
+        if (pixelmap.imageData) {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = pixelmap.imageData.width;
+            tempCanvas.height = pixelmap.imageData.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.putImageData(pixelmap.imageData, 0, 0);
+            // ImageDataサイズ → 枠サイズに拡大/縮小描画
+            burnCtx.drawImage(tempCanvas, 0, 0, pmWidth, pmHeight);
+        } else {
+            // ImageDataがない場合は背景色で初期化
+            burnCtx.fillStyle = pixelmap.backgroundColor || DEFAULT_BGCOL;
+            burnCtx.fillRect(0, 0, pmWidth, pmHeight);
+        }
+
+        // 2. 重なっている部品を焼き付けCanvasに描画
+        //    ctxを一時的に差し替えて既存のdrawShape()を再利用する
+        const originalCtx = this.ctx;
+        const originalZoomLevel = this.zoomLevel;
+        const originalSelectedShapes = this.selectedShapes;
+        const originalCurrentShape = this.currentShape;
+
+        this.ctx = burnCtx;
+        this.zoomLevel = 1;
+        this.selectedShapes = []; // 選択枠の描画を防ぐ
+        this.currentShape = null; // 作成中枠の描画を防ぐ
+
+        burnCtx.save();
+
+        // ピクセルマップの回転・反転がある場合、逆変換を適用
+        // 焼き付ける部品を「ピクセルマップのImageData座標系」に変換する
+        const hasRotation = pixelmap.rotation && pixelmap.rotation !== 0;
+        const hasFlip = pixelmap.flipH || pixelmap.flipV;
+
+        if (hasRotation || hasFlip) {
+            // ピクセルマップの中心を基準に逆変換
+            burnCtx.translate(pmWidth / 2, pmHeight / 2);
+
+            // 逆回転（回転の逆）
+            if (hasRotation) {
+                burnCtx.rotate(-pixelmap.rotation * Math.PI / 180);
+            }
+
+            // 逆反転（反転は自身が逆関数）
+            if (hasFlip) {
+                const invScaleX = pixelmap.flipH ? -1 : 1;
+                const invScaleY = pixelmap.flipV ? -1 : 1;
+                burnCtx.scale(invScaleX, invScaleY);
+            }
+
+            burnCtx.translate(-pmWidth / 2, -pmHeight / 2);
+        }
+
+        // 座標オフセット：ピクセルマップの左上を原点にする
+        burnCtx.translate(-pmMinX, -pmMinY);
+
+        // クリッピング：ピクセルマップ枠の範囲内のみ描画
+        burnCtx.beginPath();
+        burnCtx.rect(pmMinX, pmMinY, pmWidth, pmHeight);
+        burnCtx.clip();
+
+        for (const shape of overlappingShapes) {
+            this.drawShape(shape);
+        }
+
+        burnCtx.restore();
+
+        // ctxと状態を元に戻す
+        this.ctx = originalCtx;
+        this.zoomLevel = originalZoomLevel;
+        this.selectedShapes = originalSelectedShapes;
+        this.currentShape = originalCurrentShape;
+
+        // 3. 焼き付け結果のImageDataを取得してピクセルマップを更新
+        pixelmap.imageData = burnCtx.getImageData(0, 0, pmWidth, pmHeight);
+
+        // 再描画・変更フラグ設定
+        this.redraw();
+        this.isModified = true;
+        this.setStatus('焼き付けを実行しました');
     }
 
     // === 保護（追加） ===
@@ -9511,6 +10872,13 @@ class BasicFigureEditor extends window.PluginBase {
         this.lastPixelmapX = null;
         this.lastPixelmapY = null;
 
+        // キャンバスツールに切り替え（ダブルクリック等でモードに入った場合に必要）
+        this.currentTool = 'canvas';
+        this.canvas.style.cursor = 'crosshair';
+
+        // 選択状態をクリア（選択枠の表示を防ぐ）
+        this.selectedShapes = [];
+
         // ピクセルマップ枠に対応するImageDataを初期化（まだない場合）
         if (!pixelmapShape.imageData) {
             // オフスクリーンCanvasを作成してImageDataを初期化
@@ -9597,10 +10965,9 @@ class BasicFigureEditor extends window.PluginBase {
      * @param {number} y - 表示Y座標
      */
     async openMaterialPanel(x, y) {
-        // 既に開いている場合はトグル
+        // 既に開いている場合はそのまま（トグルしない）
         const existingWindowId = this.getChildPanelWindowId('material');
         if (existingWindowId) {
-            this.closeChildPanelWindow('material');
             return;
         }
 
@@ -10210,9 +11577,10 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        // DOM要素全体のサイズを更新
-        shape.vobjElement.style.width = `${width}px`;
-        shape.vobjElement.style.height = `${height}px`;
+        // DOM要素全体のサイズを更新（論理座標を物理座標に変換）
+        const expandSize = this.logicalToPhysical(width, height);
+        shape.vobjElement.style.width = `${expandSize.x}px`;
+        shape.vobjElement.style.height = `${expandSize.y}px`;
 
         // 内部のiframeもVirtualObjectRendererによって自動的にリサイズされる
     }
@@ -10246,28 +11614,33 @@ class BasicFigureEditor extends window.PluginBase {
         // 既存のプレビュー枠がある場合は削除
         this.removeResizePreviewBox();
 
-        // Canvas の座標を画面座標に変換
+        // Canvas の論理座標を物理座標に変換し、さらに画面座標に変換
         const rect = this.canvas.getBoundingClientRect();
-        const canvasX = shape.startX;
-        const canvasY = shape.startY;
-        const canvasWidth = shape.endX - shape.startX;
-        const canvasHeight = shape.endY - shape.startY;
+        const physPos = this.logicalToPhysical(shape.startX, shape.startY);
+        const physSize = this.logicalToPhysical(shape.endX - shape.startX, shape.endY - shape.startY);
 
-        const screenX = rect.left + canvasX;
-        const screenY = rect.top + canvasY;
+        const screenX = rect.left + physPos.x;
+        const screenY = rect.top + physPos.y;
 
         // プレビュー枠を作成
         const previewBox = document.createElement('div');
         previewBox.style.position = 'fixed'; // キャンバス外でも表示されるようにfixedを使用
         previewBox.style.left = `${screenX}px`;
         previewBox.style.top = `${screenY}px`;
-        previewBox.style.width = `${canvasWidth}px`;
-        previewBox.style.height = `${canvasHeight}px`;
+        previewBox.style.width = `${physSize.x}px`;
+        previewBox.style.height = `${physSize.y}px`;
         previewBox.style.border = '2px dashed rgba(0, 123, 255, 0.8)';
         previewBox.style.backgroundColor = 'rgba(0, 123, 255, 0.1)';
         previewBox.style.pointerEvents = 'none';
         previewBox.style.zIndex = '2147483647'; // 最大のz-index値（32bit整数の最大値）
         previewBox.style.boxSizing = 'border-box';
+
+        // 図形の回転をCSS transformで適用
+        const rotation = this.getEffectiveRotationDeg(shape);
+        if (rotation !== 0) {
+            previewBox.style.transformOrigin = 'center center';
+            previewBox.style.transform = `rotate(${rotation}deg)`;
+        }
 
         // document.body に直接追加
         document.body.appendChild(previewBox);
@@ -10286,21 +11659,28 @@ class BasicFigureEditor extends window.PluginBase {
             return;
         }
 
-        // Canvas の座標を画面座標に変換
+        // Canvas の論理座標を物理座標に変換し、さらに画面座標に変換
         const rect = this.canvas.getBoundingClientRect();
-        const canvasX = shape.startX;
-        const canvasY = shape.startY;
-        const canvasWidth = shape.endX - shape.startX;
-        const canvasHeight = shape.endY - shape.startY;
+        const physPos = this.logicalToPhysical(shape.startX, shape.startY);
+        const physSize = this.logicalToPhysical(shape.endX - shape.startX, shape.endY - shape.startY);
 
-        const screenX = rect.left + canvasX;
-        const screenY = rect.top + canvasY;
+        const screenX = rect.left + physPos.x;
+        const screenY = rect.top + physPos.y;
 
         // プレビュー枠のサイズと位置を更新
         this.resizePreviewBox.style.left = `${screenX}px`;
         this.resizePreviewBox.style.top = `${screenY}px`;
-        this.resizePreviewBox.style.width = `${canvasWidth}px`;
-        this.resizePreviewBox.style.height = `${canvasHeight}px`;
+        this.resizePreviewBox.style.width = `${physSize.x}px`;
+        this.resizePreviewBox.style.height = `${physSize.y}px`;
+
+        // 図形の回転をCSS transformで適用
+        const rotation = this.getEffectiveRotationDeg(shape);
+        if (rotation !== 0) {
+            this.resizePreviewBox.style.transformOrigin = 'center center';
+            this.resizePreviewBox.style.transform = `rotate(${rotation}deg)`;
+        } else {
+            this.resizePreviewBox.style.transform = '';
+        }
     }
 
     /**
@@ -10393,7 +11773,9 @@ class BasicFigureEditor extends window.PluginBase {
                 // shape座標のheight（endY - startY）はborderを含まないTAD保存値
                 const domHeight = height + VOBJ_BORDER_WIDTH;
 
-                // 位置、サイズ、z-indexが変わっている場合は更新
+                // 位置、サイズ、z-indexが変わっている場合は更新（論理座標を物理座標に変換）
+                const updPos = this.logicalToPhysical(shape.startX, shape.startY);
+                const updSize = this.logicalToPhysical(width, domHeight);
                 const currentLeft = parseInt(shape.vobjElement.style.left) || 0;
                 const currentTop = parseInt(shape.vobjElement.style.top) || 0;
                 const currentWidth = parseInt(shape.vobjElement.style.width) || 0;
@@ -10401,12 +11783,12 @@ class BasicFigureEditor extends window.PluginBase {
                 const currentZIndex = parseInt(shape.vobjElement.style.zIndex) || 0;
                 const newZIndex = shape.zIndex !== null && shape.zIndex !== undefined ? shape.zIndex : 0;
 
-                if (currentLeft !== shape.startX || currentTop !== shape.startY ||
-                    currentWidth !== width || currentHeight !== domHeight || currentZIndex !== newZIndex) {
-                    shape.vobjElement.style.left = shape.startX + 'px';
-                    shape.vobjElement.style.top = shape.startY + 'px';
-                    shape.vobjElement.style.width = width + 'px';
-                    shape.vobjElement.style.height = domHeight + 'px';
+                if (currentLeft !== Math.round(updPos.x) || currentTop !== Math.round(updPos.y) ||
+                    currentWidth !== Math.round(updSize.x) || currentHeight !== Math.round(updSize.y) || currentZIndex !== newZIndex) {
+                    shape.vobjElement.style.left = updPos.x + 'px';
+                    shape.vobjElement.style.top = updPos.y + 'px';
+                    shape.vobjElement.style.width = updSize.x + 'px';
+                    shape.vobjElement.style.height = updSize.y + 'px';
                     shape.vobjElement.style.zIndex = String(newZIndex);
                 }
             } else {
@@ -10462,14 +11844,16 @@ class BasicFigureEditor extends window.PluginBase {
         // クラスを追加
         vobjElement.classList.add('virtual-object-element');
 
-        // 位置とサイズを設定
+        // 位置とサイズを設定（論理座標を物理座標に変換）
         // DOM要素はbox-sizing: border-boxなので、border込みの高さを設定する
         // shape座標のheight（endY - startY）はborderを含まないTAD保存値
+        const vobjPos = this.logicalToPhysical(shape.startX, shape.startY);
+        const vobjSize = this.logicalToPhysical(width, height + VOBJ_BORDER_WIDTH);
         vobjElement.style.position = 'absolute';
-        vobjElement.style.left = shape.startX + 'px';
-        vobjElement.style.top = shape.startY + 'px';
-        vobjElement.style.width = width + 'px';
-        vobjElement.style.height = (height + VOBJ_BORDER_WIDTH) + 'px';
+        vobjElement.style.left = vobjPos.x + 'px';
+        vobjElement.style.top = vobjPos.y + 'px';
+        vobjElement.style.width = vobjSize.x + 'px';
+        vobjElement.style.height = vobjSize.y + 'px';
         vobjElement.style.cursor = 'move';
         // z-indexをshapeのzIndexプロパティから設定
         // Canvasのz-indexは0なので、負の値はCanvasより背面、正の値は前面になる
@@ -11213,9 +12597,12 @@ class BasicFigureEditor extends window.PluginBase {
                 // カーソルを元に戻す
                 vobjElement.style.cursor = 'move';
 
-                // 最終的なサイズを取得（プレビュー枠のサイズを使用）
-                const finalWidth = Math.round(currentWidth);
-                const finalHeight = Math.round(currentHeight);
+                // 最終的なサイズを取得（プレビュー枠のサイズは物理ピクセル、論理座標に変換）
+                const finalPhysWidth = Math.round(currentWidth);
+                const finalPhysHeight = Math.round(currentHeight);
+                const finalLogical = this.physicalToLogical(finalPhysWidth, finalPhysHeight);
+                const finalWidth = Math.round(finalLogical.x);
+                const finalHeight = Math.round(finalLogical.y);
 
                 // shapeのサイズを更新
                 // 注: DOM要素の高さ（finalHeight）はborderを含む（box-sizing: border-box）
@@ -11274,9 +12661,10 @@ class BasicFigureEditor extends window.PluginBase {
                         this.isRecreatingVirtualObject = false;
                     }, 150);
                 } else {
-                    // 判定が変わらない場合は、DOM要素のサイズだけ更新
-                    vobjElement.style.width = `${finalWidth}px`;
-                    vobjElement.style.height = `${finalHeight}px`;
+                    // 判定が変わらない場合は、DOM要素のサイズだけ更新（論理座標を物理座標に変換）
+                    const finalSize = this.logicalToPhysical(finalWidth, finalHeight);
+                    vobjElement.style.width = `${finalSize.x}px`;
+                    vobjElement.style.height = `${finalSize.y}px`;
                 }
 
                 // draggableを再び有効化（リサイズ開始時に無効化したため）
