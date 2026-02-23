@@ -1,6 +1,6 @@
 # TADjs Desktop ユーザーマニュアル
 
-Ver0.36
+Ver0.37
 
 ## 目次
 1. [TADjs Desktopについて](#tadjs-desktopについて)

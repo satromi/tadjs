@@ -440,6 +440,20 @@ class SystemConfigApp extends window.PluginBase {
     async loadVersionList() {
         logger.info('[SystemConfig] バージョンリスト読み込み');
 
+        // package.jsonからシステムバージョンを取得して表示
+        try {
+            const response = await fetch('../../package.json');
+            if (response.ok) {
+                const pkg = await response.json();
+                const versionEl = document.getElementById('system-version');
+                if (versionEl) {
+                    versionEl.textContent = `Ver${pkg.version}`;
+                }
+            }
+        } catch (e) {
+            logger.warn('[SystemConfig] package.json読み込みエラー:', e.message);
+        }
+
         // 親ウィンドウからプラグイン情報を取得
         this.messageBus.send('get-plugin-list', {});
     }

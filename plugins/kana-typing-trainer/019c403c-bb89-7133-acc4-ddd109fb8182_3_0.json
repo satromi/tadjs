@@ -1,0 +1,43 @@
+{
+    "meta": {
+        "name": "Dvorak (ファームウェア)",
+        "version": "1.0",
+        "type": "keycode-translation",
+        "description": "QMK等のファームウェアでDvorak配列を実装している場合のキーコード変換マップ"
+    },
+    "keycodeTranslation": {
+        "Semicolon": "KeyQ",
+        "Comma": "KeyW",
+        "Period": "KeyE",
+        "KeyP": "KeyR",
+        "KeyY": "KeyT",
+        "KeyF": "KeyY",
+        "KeyG": "KeyU",
+        "KeyC": "KeyI",
+        "KeyR": "KeyO",
+        "KeyL": "KeyP",
+        "Minus": "Quote",
+        "Backslash": "BracketRight",
+        "KeyA": "KeyA",
+        "KeyO": "KeyS",
+        "KeyE": "KeyD",
+        "KeyU": "KeyF",
+        "KeyI": "KeyG",
+        "KeyD": "KeyH",
+        "KeyH": "KeyJ",
+        "KeyT": "KeyK",
+        "KeyN": "KeyL",
+        "KeyS": "Semicolon",
+        "Quote": "BracketLeft",
+        "Equal": "KeyZ",
+        "KeyQ": "KeyX",
+        "KeyJ": "KeyC",
+        "KeyK": "KeyV",
+        "KeyX": "KeyB",
+        "KeyB": "KeyN",
+        "KeyM": "KeyM",
+        "KeyW": "Comma",
+        "KeyV": "Period",
+        "KeyZ": "Slash"
+    }
+}

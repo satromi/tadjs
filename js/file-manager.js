@@ -145,7 +145,7 @@ export class FileManager {
                 }
             }
 
-            logger.error('[FileManager] ファイルが見つかりません:', fileName);
+            logger.debug('[FileManager] ファイルが見つかりません:', fileName);
             return null;
         }
 

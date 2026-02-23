@@ -242,9 +242,11 @@ class RequestQueueManager {
         // 重複防止マップに登録
         if (requestKey) {
             this._pendingRequests.set(requestKey, promise);
+            // finally()は新しいPromiseを生成するため、元のrejectが伝播して
+            // Uncaught (in promise) エラーになる。catch()で抑制する。
             promise.finally(() => {
                 this._pendingRequests.delete(requestKey);
-            });
+            }).catch(() => {});
         }
 
         // キュー処理を開始

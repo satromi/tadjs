@@ -402,6 +402,31 @@ export class RealObjectSystem {
             logger.debug(`PNGファイルの検索中にエラー:`, error);
         }
 
+        // 追加レコード情報ファイルもコピー（存在する場合のみ）
+        // かな入力練習プラグインなどで使用される追加レコード情報
+        // ファイル名パターン: realId_1_0.json, realId_2_1.json など
+        try {
+            const files = this.fs.readdirSync(basePath);
+            const jsonPattern = new RegExp(`^${sourceRealId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}_\\d+_\\d+\\.json$`);
+
+            for (const file of files) {
+                if (jsonPattern.test(file)) {
+                    const sourceJsonPath = this.path.join(basePath, file);
+                    const newJsonFile = file.replace(sourceRealId, newRealId);
+                    const newJsonPath = this.path.join(basePath, newJsonFile);
+
+                    try {
+                        this.fs.copyFileSync(sourceJsonPath, newJsonPath);
+                        logger.debug(`追加レコードJSONコピー成功: ${file} -> ${newJsonFile}`);
+                    } catch (error) {
+                        logger.error(`追加レコードJSONのコピーに失敗: ${file}`, error);
+                    }
+                }
+            }
+        } catch (error) {
+            logger.debug(`追加レコードJSONの検索中にエラー:`, error);
+        }
+
         logger.debug(`実身コピー完了: ${sourceRealId} -> ${newRealId}`);
         return newRealId;
     }

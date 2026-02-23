@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NET仮身一覧</title>
+    <link rel="stylesheet" href="../../tadjs-desktop.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body tabindex="0">
+    <!-- cloudAPI: preload.jsで定義されたcloudAPIはメインウィンドウにのみ設定される -->
+    <!-- iframe内のプラグインからアクセスできるよう、親ウィンドウから参照を取得 -->
+    <script>
+        if (!window.cloudAPI && window.parent && window.parent.cloudAPI) {
+            window.cloudAPI = window.parent.cloudAPI;
+        }
+    </script>
+
+    <!-- 管理モード: 接続設定パネル -->
+    <div id="management-mode">
+        <!-- 接続設定パネル -->
+        <div id="config-panel" class="panel">
+            <div class="panel-header">接続設定</div>
+            <div class="panel-body">
+                <div class="form-group">
+                    <label for="supabase-url">Supabase URL:</label>
+                    <input type="text" id="supabase-url" placeholder="https://xxxxxx.supabase.co">
+                </div>
+                <div class="form-group">
+                    <label for="supabase-key">Anon Key:</label>
+                    <input type="text" id="supabase-key" placeholder="eyJ...">
+                </div>
+                <div class="button-row">
+                    <button id="btn-connect" class="btn">接続</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ログインパネル -->
+        <div id="login-panel" class="panel" style="display:none;">
+            <div class="panel-header">ログイン</div>
+            <div class="panel-body">
+                <div id="internal-tenant-info" class="internal-tenant-info" style="display:none;"></div>
+                <div class="form-group">
+                    <label for="login-email">メールアドレス:</label>
+                    <input type="email" id="login-email" placeholder="user@example.com">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">パスワード:</label>
+                    <input type="password" id="login-password">
+                </div>
+                <div class="button-row">
+                    <button id="btn-browse" class="btn" style="display:none;">参照</button>
+                    <button id="btn-login" class="btn">ログイン</button>
+                    <button id="btn-back-config" class="btn">戻る</button>
+                </div>
+                <div class="login-divider"><span>または</span></div>
+                <div class="button-row" style="justify-content:center;">
+                    <button id="btn-google-login" class="btn">Googleでログイン</button>
+                </div>
+                <div class="signup-link">
+                    <a href="#" id="btn-signup-with-invite">招待コードで新規登録</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- メインパネル（実身一覧） -->
+        <div id="main-panel" class="panel" style="display:none;">
+            <div class="panel-header">
+                <span id="user-info"></span>
+                <button id="btn-logout" class="btn btn-small">ログアウト</button>
+            </div>
+            <div class="tenant-bar">
+                <label for="tenant-select">テナント:</label>
+                <select id="tenant-select"></select>
+                <button id="btn-create-tenant" class="btn btn-small" title="新規テナント作成">＋</button>
+                <button id="btn-tenant-settings" class="btn btn-small" title="テナント設定">設定</button>
+                <button id="btn-manage-members" class="btn btn-small" title="メンバー管理">メンバー</button>
+                <button id="btn-user-management" class="btn btn-small" title="ユーザー管理" style="display:none;">ユーザー</button>
+            </div>
+            <div class="list-container" id="real-object-list">
+                <div class="empty-message">テナントを選択してください</div>
+            </div>
+            <div class="button-row">
+                <button id="btn-open" class="btn" disabled>開く</button>
+                <button id="btn-upload" class="btn" disabled>アップロード</button>
+                <button id="btn-download" class="btn" disabled>ダウンロード</button>
+                <button id="btn-share" class="btn" disabled>共有</button>
+                <button id="btn-delete" class="btn" disabled>削除</button>
+                <button id="btn-refresh" class="btn">更新</button>
+                <button id="btn-quota" class="btn" disabled>容量</button>
+                <button id="btn-history" class="btn" disabled>履歴</button>
+                <button id="btn-login-to-edit" class="btn" style="display:none;">ログインして編集</button>
+            </div>
+        </div>
+
+        <!-- ステータスバー -->
+        <div id="status-bar" class="status-bar"></div>
+
+    </div>
+
+    <!-- ビューモード: XTAD描画 -->
+    <div id="view-mode" style="display:none;">
+        <div class="plugin-content">
+            <div class="viewer-container">
+                <div class="virtual-list" id="virtualList">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ES6モジュール: グローバル化 -->
+    <!-- ロガー -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <!-- アイコンキャッシュマネージャー -->
+    <script type="module">
+        import { IconCacheManager } from '../../js/icon-cache-manager.js';
+        window.IconCacheManager = IconCacheManager;
+    </script>
+    <!-- グローバル設定 -->
+    <script type="module">
+        import { CONFIG } from '../../js/config.js';
+        window.TADjsConfig = CONFIG;
+    </script>
+    <!-- VirtualObjectRenderer -->
+    <script type="module">
+        import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
+        window.VirtualObjectRenderer = VirtualObjectRenderer;
+    </script>
+    <!-- 共通ユーティリティと定数 -->
+    <script type="module">
+        import {
+            convertPtToPx, rgbToHex, hexToRgb, invertColor,
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, ERROR_CHECK_TIMEOUT_MS,
+            VOBJ_BORDER_WIDTH, DEFAULT_FONT_SIZE, DEFAULT_VOBJ_HEIGHT,
+            DEFAULT_FRCOL, DEFAULT_CHCOL, DEFAULT_TBCOL, DEFAULT_BGCOL,
+            VOBJ_SELECTION_COLOR, LIST_SELECTED_BG_COLOR, PREVIEW_BORDER_COLOR,
+            MAX_CHILD_UPLOAD_OBJECTS
+        } from '../../js/util.js';
+        window.convertPtToPx = convertPtToPx;
+        window.rgbToHex = rgbToHex;
+        window.hexToRgb = hexToRgb;
+        window.invertColor = invertColor;
+        window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+        window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
+        window.ICON_LOAD_TIMEOUT_MS = ICON_LOAD_TIMEOUT_MS;
+        window.ERROR_CHECK_TIMEOUT_MS = ERROR_CHECK_TIMEOUT_MS;
+        window.VOBJ_BORDER_WIDTH = VOBJ_BORDER_WIDTH;
+        window.DEFAULT_FONT_SIZE = DEFAULT_FONT_SIZE;
+        window.DEFAULT_VOBJ_HEIGHT = DEFAULT_VOBJ_HEIGHT;
+        window.DEFAULT_FRCOL = DEFAULT_FRCOL;
+        window.DEFAULT_CHCOL = DEFAULT_CHCOL;
+        window.DEFAULT_TBCOL = DEFAULT_TBCOL;
+        window.DEFAULT_BGCOL = DEFAULT_BGCOL;
+        window.VOBJ_SELECTION_COLOR = VOBJ_SELECTION_COLOR;
+        window.LIST_SELECTED_BG_COLOR = LIST_SELECTED_BG_COLOR;
+        window.PREVIEW_BORDER_COLOR = PREVIEW_BORDER_COLOR;
+        window.MAX_CHILD_UPLOAD_OBJECTS = MAX_CHILD_UPLOAD_OBJECTS;
+    </script>
+    <!-- パフォーマンス最適化ユーティリティ -->
+    <script type="module">
+        import { debounce, throttle, throttleRAF } from '../../js/performance-utils.js';
+        window.debounce = debounce;
+        window.throttle = throttle;
+        window.throttleRAF = throttleRAF;
+    </script>
+    <!-- メッセージバス -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <!-- UUID v7 ジェネレータ（RealObjectSystemが依存） -->
+    <script src="../../js/uuid-v7.js"></script>
+    <!-- 実身仮身システム -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
+    </script>
+    <!-- 図形境界計算ユーティリティ -->
+    <script type="module">
+        import { calculateFigureContentBounds, updateFigViewToContentBounds } from '../../js/figure-bounds.js';
+        window.calculateFigureContentBounds = calculateFigureContentBounds;
+        window.updateFigViewToContentBounds = updateFigViewToContentBounds;
+    </script>
+    <!-- プラグイン共通基底クラス -->
+    <script type="module">
+        import { PluginBase } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+    </script>
+    <script src="dialog-templates.js"></script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>

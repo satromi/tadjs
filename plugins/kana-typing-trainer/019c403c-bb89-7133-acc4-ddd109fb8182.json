@@ -1,0 +1,43 @@
+{
+  "name": "かな入力練習",
+  "relationship": [],
+  "linktype": false,
+  "makeDate": "2026-02-09T00:00:00Z",
+  "updateDate": "2026-02-09T00:00:00Z",
+  "accessDate": "2026-02-09T00:00:00Z",
+  "periodDate": null,
+  "refCount": 1,
+  "recordCount": 4,
+  "editable": true,
+  "deletable": true,
+  "readable": true,
+  "maker": "TRON User",
+  "window": {
+    "pos": { "x": 100, "y": 100 },
+    "width": 850,
+    "height": 650,
+    "minWidth": 600,
+    "minHeight": 400,
+    "resizable": true,
+    "scrollable": false,
+    "maximize": false,
+    "maximizable": true,
+    "minimizable": true,
+    "closable": true,
+    "alwaysOnTop": false,
+    "skipTaskbar": false,
+    "frame": true,
+    "transparent": false,
+    "backgroundColor": "#dedede"
+  },
+  "applist": {
+    "kana-typing-trainer": {
+      "name": "かな入力練習",
+      "defaultOpen": true
+    },
+    "basic-text-editor": {
+      "name": "基本文章編集",
+      "defaultOpen": false
+    }
+  }
+}

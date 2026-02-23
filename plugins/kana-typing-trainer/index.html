@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>かな入力練習</title>
+    <link rel="stylesheet" href="../../tadjs-desktop.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="typing-trainer-container">
+        <div id="text-display" class="text-display">
+            <div id="question-text" class="question-text">
+                <span class="placeholder-message">問題文を読み込んでいます...</span>
+            </div>
+            <div id="input-display" class="input-display"></div>
+        </div>
+        <div id="keyboard-display" class="keyboard-display">
+            <div id="keyboard-container" class="keyboard-container"></div>
+        </div>
+        <div id="stats-display" class="stats-display">
+            <div class="stat-item">
+                <span class="stat-label">速度</span>
+                <span id="stat-speed" class="stat-value">0 文字/分</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">正誤率</span>
+                <span id="stat-accuracy" class="stat-value">100%</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">左右率</span>
+                <span id="stat-hand-ratio" class="stat-value">0:0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">シフト率</span>
+                <span id="stat-shift-ratio" class="stat-value">0%</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">移動距離</span>
+                <span id="stat-distance" class="stat-value">0 u/字</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">総移動距離</span>
+                <span id="stat-total-distance" class="stat-value">0 u</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">問題</span>
+                <span id="stat-progress" class="stat-value">1/5</span>
+            </div>
+        </div>
+    </div>
+
+    <script src="../../js/uuid-v7.js"></script>
+    <script src="keyboard-renderer.js"></script>
+    <script src="typing-engine.js"></script>
+    <!-- ロガーをグローバル変数として読み込み -->
+    <script type="module">
+        import { getLogger, LogLevel, logManager } from '../../js/logger.js';
+        window.getLogger = getLogger;
+        window.LogLevel = LogLevel;
+        window.logManager = logManager;
+    </script>
+    <!-- グローバル設定 -->
+    <script type="module">
+        import { CONFIG } from '../../js/config.js';
+        window.TADjsConfig = CONFIG;
+    </script>
+    <!-- メッセージバスをグローバル変数として読み込み -->
+    <script type="module">
+        import { MessageBus } from '../../js/message-bus.js';
+        window.MessageBus = MessageBus;
+    </script>
+    <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
+    <script type="module">
+        import { PluginBase } from '../../js/plugin-base.js';
+        window.PluginBase = PluginBase;
+    </script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -51,6 +51,7 @@ class TADjsDesktop {
         this.closeConfirmCallbacks = {}; // ウィンドウクローズ確認コールバック
         this.closingWindows = new Set(); // 現在クローズ処理中のウィンドウID（重複防止）
         this.openedRealObjects = new Map(); // 開いている実身ID -> ウィンドウIDのマッピング
+        this._windowCloudContexts = new Map(); // ウィンドウID -> cloudContext（クラウドコンテキスト伝播用）
         this.currentUser = null; // 現在の使用者名（xtad更新時のmakerフィールドに使用）
 
         // グローバルイベントハンドラー保存用（クリーンアップ時に使用）
@@ -181,9 +182,6 @@ class TADjsDesktop {
                 togglePaperMode: this.togglePaperMode.bind(this),
                 setDisplayMode: this.setDisplayMode.bind(this),
                 toggleWrapAtWindowWidth: this.toggleWrapAtWindowWidth.bind(this),
-                showWindowList: this.showWindowList.bind(this),
-                clearDesktop: this.clearDesktop.bind(this),
-                showSystemInfo: this.showSystemInfo.bind(this),
                 showWindowProperties: this.showWindowProperties.bind(this),
                 launchPluginForFile: this.launchPluginForFile.bind(this),
                 openTADFile: this.openTADFile.bind(this),
@@ -470,9 +468,23 @@ class TADjsDesktop {
         logger.info('[TADjs] 親MessageBusハンドラ登録開始');
 
         // activate-window: ウィンドウをアクティブ化
-        this.parentMessageBus.on('activate-window', (_data, event) => {
-            const windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
+        // data.windowIdが指定されていれば任意のウィンドウをアクティブ化（close-windowと同パターン）
+        this.parentMessageBus.on('activate-window', (data, event) => {
+            let windowId = data.windowId;
+            if (!windowId) {
+                windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
+            }
             if (windowId) {
+                // 明示的なwindowId指定で既にアクティブなウインドウへの要求時はiframe.focus()のみ実行
+                // （setActiveWindowは重複呼び出し防止でearly returnするため）
+                if (data.windowId && this.activeWindow === windowId) {
+                    const win = this.windows.get(windowId);
+                    if (win) {
+                        const iframe = win.element.querySelector('iframe');
+                        if (iframe) iframe.focus();
+                    }
+                    return;
+                }
                 this.setActiveWindow(windowId);
             } else {
                 logger.warn('[TADjs] activate-window: windowIdが見つかりません');
@@ -981,6 +993,54 @@ class TADjsDesktop {
         }
         logger.warn('[TADjs] FileManagerが利用できません');
         return false;
+    }
+
+    /**
+     * クラウド実身をダウンロードしてローカルデータフォルダに保存
+     * @param {string} tenantId - テナントID
+     * @param {string} realId - 実身ID
+     * @returns {Promise<boolean>} 保存成功の場合true
+     */
+    async downloadCloudRealObjectToLocal(tenantId, realId) {
+        try {
+            const result = await window.cloudAPI.downloadRealObject(tenantId, realId);
+            if (!result.success || !result.files) {
+                logger.warn('[TADjs] クラウド実身ダウンロード失敗:', realId, result.error);
+                return false;
+            }
+
+            const files = result.files;
+            let savedCount = 0;
+
+            // JSONファイル
+            if (files.json) {
+                const jsonBytes = new Uint8Array(files.json);
+                if (await this.saveDataFile(`${realId}.json`, jsonBytes)) savedCount++;
+            }
+            // XTADファイル
+            if (files.xtad) {
+                const xtadBytes = new Uint8Array(files.xtad);
+                if (await this.saveDataFile(`${realId}_0.xtad`, xtadBytes)) savedCount++;
+            }
+            // アイコンファイル
+            if (files.ico) {
+                const icoBytes = new Uint8Array(files.ico);
+                if (await this.saveDataFile(`${realId}.ico`, icoBytes)) savedCount++;
+            }
+            // 画像ファイル
+            if (files.images && files.images.length > 0) {
+                for (const img of files.images) {
+                    const imgBytes = new Uint8Array(img.data);
+                    if (await this.saveDataFile(img.name, imgBytes)) savedCount++;
+                }
+            }
+
+            logger.info('[TADjs] クラウド実身をローカルに保存完了:', realId, `(${savedCount}ファイル)`);
+            return savedCount > 0;
+        } catch (error) {
+            logger.error('[TADjs] クラウド実身のローカル保存エラー:', realId, error);
+            return false;
+        }
     }
 
     /**
@@ -1960,6 +2020,32 @@ class TADjsDesktop {
                 } catch (error) {
                     logger.warn('[TADjs] PNG検索エラー:', error.message);
                 }
+
+                // 追加レコード情報ファイルをコピー（_N_M.json形式、存在する場合）
+                try {
+                    const basePath = this.realObjectSystem.getDataBasePath();
+                    const fs = require('fs');
+                    const path = require('path');
+                    const files = fs.readdirSync(basePath);
+                    const jsonPattern = new RegExp(`^${sourceRealId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}_\\d+_\\d+\\.json$`);
+
+                    for (const file of files) {
+                        if (jsonPattern.test(file)) {
+                            const sourceJsonPath = path.join(basePath, file);
+                            const newJsonFile = file.replace(sourceRealId, newRealId);
+                            const newJsonPath = path.join(basePath, newJsonFile);
+
+                            try {
+                                fs.copyFileSync(sourceJsonPath, newJsonPath);
+                                logger.debug('[TADjs] 追加レコードJSONコピー成功:', file, '->', newJsonFile);
+                            } catch (error) {
+                                logger.warn('[TADjs] 追加レコードJSONコピーエラー:', file, error.message);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    logger.warn('[TADjs] 追加レコードJSON検索エラー:', error.message);
+                }
             }
 
             logger.debug('[TADjs] ユーザ原紙から新しい実身を作成しました:', newRealId, newName);
@@ -2108,7 +2194,7 @@ class TADjsDesktop {
                 const metadata = {
                     realId: newRealId,
                     name: newName,
-                    recordCount: 1,
+                    recordCount: basefileJson.recordCount || 1,
                     refCount: 1,  // 新規作成時は1
                     createdAt: new Date().toISOString(),
                     modifiedAt: new Date().toISOString()
@@ -2166,6 +2252,31 @@ class TADjsDesktop {
                 }
             } catch (error) {
                 logger.warn('[TADjs] アイコンファイルコピー中のエラー:', error.message);
+            }
+        }
+
+        // 追加レコード情報ファイルをコピー（_N_M.json形式、recordCountに基づく）
+        if (this.isElectronEnv && basefileJson.recordCount > 1) {
+            try {
+                const fs = require('fs');
+                const path = require('path');
+                const baseRealId = basefileJsonName.replace('.json', '');
+                const pluginDir = path.join(this._programBasePath, 'plugins', pluginId);
+                const files = fs.readdirSync(pluginDir);
+                const jsonPattern = new RegExp(`^${baseRealId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}_\\d+_\\d+\\.json$`);
+                for (const file of files) {
+                    if (jsonPattern.test(file)) {
+                        const srcPath = path.join(pluginDir, file);
+                        const content = fs.readFileSync(srcPath, 'utf-8');
+                        const newFileName = file.replace(baseRealId, newRealId);
+                        const saved = await this.saveDataFile(newFileName, content);
+                        if (saved) {
+                            logger.debug('[TADjs] 追加レコードファイルをコピー:', file, '->', newFileName);
+                        }
+                    }
+                }
+            } catch (error) {
+                logger.warn('[TADjs] 追加レコードファイルのコピー中にエラー:', error.message);
             }
         }
 
@@ -2818,7 +2929,7 @@ ${url}
      * 仮身（仮想オブジェクト）を開く
      * @param {Object} link - リンク情報オブジェクト
      */
-    async openVirtualObject(linkIdOrObject, linkName = null) {
+    async openVirtualObject(linkIdOrObject, linkName = null, cloudContext = null) {
         // linkIdとlinkNameが個別に渡された場合（仮身一覧から呼ばれた場合）
         if (typeof linkIdOrObject === 'string' && linkName !== null) {
             const linkId = linkIdOrObject;
@@ -2830,7 +2941,17 @@ ${url}
             // 実身管理用JSONを読み込む
             try {
                 const jsonFileName = window.RealObjectSystem.getRealObjectJsonFileName(realId);
-                const jsonFile = await this.loadDataFileAsFile(jsonFileName);
+                let jsonFile = await this.loadDataFileAsFile(jsonFileName);
+
+                // ローカルにファイルが無い場合、クラウドからダウンロードしてローカルに保存
+                if (!jsonFile && cloudContext && cloudContext.tenantId && window.cloudAPI) {
+                    logger.info('[TADjs] ローカルにJSONが無いためクラウドからダウンロード:', realId);
+                    const saved = await this.downloadCloudRealObjectToLocal(cloudContext.tenantId, realId);
+                    if (saved) {
+                        jsonFile = await this.loadDataFileAsFile(jsonFileName);
+                    }
+                }
+
                 if (!jsonFile) {
                     throw new Error(`JSONファイルが見つかりません: ${jsonFileName}`);
                 }
@@ -2862,7 +2983,7 @@ ${url}
                     link_name: linkName
                 };
 
-                await this.openVirtualObjectReal(virtualObj, defaultPlugin, null, null);
+                await this.openVirtualObjectReal(virtualObj, defaultPlugin, null, null, cloudContext);
 
             } catch (error) {
                 logger.error('[TADjs] 仮身を開く際のエラー:', error);
@@ -3598,6 +3719,9 @@ ${url}
             }
         }
 
+        // クラウドコンテキストを削除
+        this._windowCloudContexts.delete(windowId);
+
         this.parentMessageBus.unregisterChild(windowId);
         logger.info(`[TADjs] Phase 2: 子を解除 windowId=${windowId}`);
 
@@ -4318,7 +4442,7 @@ ${url}
      * @param {Object} virtualObj - 仮身オブジェクト（link_idは実身のファイルID）
      * @param {string} pluginId - 起動するプラグインID
      */
-    async openVirtualObjectReal(virtualObj, pluginId, messageId, source) {
+    async openVirtualObjectReal(virtualObj, pluginId, messageId, source, cloudContext = null) {
         logger.debug('[TADjs] 仮身の実身を開く:', virtualObj.link_id, 'with', pluginId);
 
         try {
@@ -4557,7 +4681,8 @@ ${url}
                 realObject: jsonData,        // 実身管理用セグメント（JSON）
                 windowConfig: jsonData.window || null, // ウィンドウ設定
                 name: jsonData.name || virtualObj.link_name || realId,  // 実身名
-                displayName: jsonData.name || virtualObj.link_name || realId
+                displayName: jsonData.name || virtualObj.link_name || realId,
+                cloudContext: cloudContext || null  // クラウドコンテキスト（伝播用）
             };
 
             // プラグインを起動
@@ -4569,6 +4694,11 @@ ${url}
                 // 開いたウィンドウを記録
                 if (windowId) {
                     this.openedRealObjects.set(realId, windowId);
+
+                    // クラウドコンテキストを記録（子プラグインへの伝播用）
+                    if (cloudContext) {
+                        this._windowCloudContexts.set(windowId, cloudContext);
+                    }
 
                     // ウィンドウのアイコンを設定（DOMが準備されるまで少し待つ）
                     const iconPath = `${realId}.ico`;
@@ -5010,62 +5140,6 @@ ${url}
     }
 
     /**
-     * 開いているウィンドウの一覧を表示
-     */
-    showWindowList() {
-        const esc = window.escapeHtml || ((s) => String(s));
-        let content = '<h3>開いているウインドウ</h3>';
-
-        if (this.windows.size === 0) {
-            content += '<p>開いているウインドウはありません</p>';
-        } else {
-            content += '<ul>';
-            this.windows.forEach((win, id) => {
-                const activeText = id === this.activeWindow ? ' (アクティブ)' : '';
-                content += `<li onclick="window.tadjsDesktop.setActiveWindow('${esc(id)}')" style="cursor: pointer; padding: 2px;">${esc(win.title)}${activeText}</li>`;
-            });
-            content += '</ul>';
-        }
-        
-        this.createWindow('ウインドウ一覧', content, {
-            width: 250,
-            height: 200
-        });
-    }
-
-    /**
-     * デスクトップ上のファイルアイコンをクリア
-     */
-    clearDesktop() {
-        // ファイルアイコンをクリア
-        const fileIcons = document.getElementById('file-icons');
-        if (fileIcons) {
-            fileIcons.innerHTML = '';
-        }
-        this.fileObjects = {};
-        this.setStatusMessage('デスクトップをクリアしました');
-    }
-
-    showSystemInfo() {
-        const content = `
-            <h3>システム情報</h3>
-            <p><strong>TADjs Desktop Environment</strong></p>
-            <p>Version: 1.0</p>
-            <p>ブラウザ: ${navigator.userAgent.split(' ')[0]}</p>
-            <p>画面解像度: ${screen.width} x ${screen.height}</p>
-            <p>開いているウインドウ: ${this.windows.size}個</p>
-            <p>TAD.js: ${typeof tadRawArray !== 'undefined' ? '利用可能' : '見つかりません'}</p>
-        `;
-        
-        this.createWindow('システム情報', content, {
-            width: 300,
-            height: 250,
-            resizable: false
-        });
-    }
-
-
-    /**
      * スクロールバーのイベントを設定
      * @param {string} windowId - ウィンドウID
      * @param {string} direction - スクロール方向
@@ -5408,11 +5482,13 @@ ${url}
      * @param {Array<{label: string, value: any}>} buttons - ボタン定義の配列
      * @param {number} defaultButton - デフォルトボタンのインデックス (0始まり)
      * @param {Object} inputs - 入力要素のID {checkbox: 'id1', text: 'id2', radios: {key: 'radioName'}}
+     * @param {Object} options - オプション
+     * @param {number} options.width - ダイアログ幅（px）
      * @returns {Promise<{button: any, checkbox: boolean, input: string, radios: Object, inputs: Object, dialogElement: Element}>}
      */
-    showCustomDialog(dialogHtml, buttons, defaultButton = 0, inputs = {}) {
+    showCustomDialog(dialogHtml, buttons, defaultButton = 0, inputs = {}, options = {}) {
         if (this.dialogManager) {
-            return this.dialogManager.showCustomDialog(dialogHtml, buttons, defaultButton, inputs);
+            return this.dialogManager.showCustomDialog(dialogHtml, buttons, defaultButton, inputs, options);
         }
         logger.warn('[TADjs] DialogManagerが利用できません');
         return Promise.resolve({ button: 'cancel', checkbox: false, input: '', radios: {}, inputs: {}, dialogElement: null });
@@ -5738,11 +5814,13 @@ ${url}
                     logger.info('[TADjs] Input dialog result:', result);
                     break;
                 case 'custom':
+                    logger.info('[TADjs] Custom dialog showing:', { title: params.title, hasHtml: !!params.dialogHtml, buttonCount: params.buttons?.length, width: params.width });
                     result = await this.showCustomDialog(
                         params.dialogHtml,
                         params.buttons,
                         params.defaultButton || 0,
-                        { ...(params.inputs || {}), radios: params.radios }
+                        { ...(params.inputs || {}), radios: params.radios },
+                        { width: params.width, title: params.title }
                     );
 
                     // カスタムダイアログの特殊処理
@@ -5764,6 +5842,8 @@ ${url}
 
                     // dialogElement は postMessage で送信できないため除外
                     const { dialogElement, ...resultWithoutElement } = result;
+
+                    logger.info('[TADjs] Custom dialog response:', { button: resultWithoutElement.button, hasFormData: !!resultWithoutElement.formData, hasRadios: !!resultWithoutElement.radios, formDataKeys: resultWithoutElement.formData ? Object.keys(resultWithoutElement.formData) : [] });
 
                     // selectedItemIndex を結果に追加（後方互換性のためselectedFontIndexも維持）
                     this.respondSuccess(event.source, responseType, {
@@ -5932,7 +6012,13 @@ ${url}
             { autoResponse: false }
         );
 
-        logger.info('[TADjs] Phase 3: ファイル・データ操作系ハンドラー登録完了 (5件)');
+        this.messageRouter.register(
+            'get-window-list',
+            this.handleGetWindowList.bind(this),
+            { autoResponse: false }
+        );
+
+        logger.info('[TADjs] Phase 3: ファイル・データ操作系ハンドラー登録完了 (6件)');
 
         // Phase 4 Batch 1: 単方向メッセージハンドラー登録
         this.messageRouter.register(
@@ -6017,6 +6103,18 @@ ${url}
         );
 
         this.messageRouter.register(
+            'cache-cloud-icons',
+            this.handleCacheCloudIcons.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
+            'download-cloud-to-local',
+            this.handleDownloadCloudToLocal.bind(this),
+            { autoResponse: false }
+        );
+
+        this.messageRouter.register(
             'get-clipboard',
             this.handleGetClipboard.bind(this),
             { autoResponse: false }
@@ -6028,7 +6126,7 @@ ${url}
             { autoResponse: false }
         );
 
-        logger.info('[TADjs] Phase 4 Batch 2: ファイル・データ取得系ハンドラー登録完了 (7件)');
+        logger.info('[TADjs] Phase 4 Batch 2: ファイル・データ取得系ハンドラー登録完了 (8件)');
 
         // Phase 4 Batch 3: 実身/仮身操作系ハンドラー登録
         this.messageRouter.register(
@@ -6393,6 +6491,30 @@ ${url}
         const plugins = this.getPluginListInfo();
         this.respondSuccess(event.source, 'plugin-list-response', {
             plugins: plugins
+        }, data.messageId);
+    }
+
+    /**
+     * get-window-list ハンドラー
+     * 開いているウィンドウの一覧を返す
+     * @param {Object} data - メッセージデータ
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleGetWindowList(data, event) {
+        const windowList = [];
+        this.windows.forEach((win, id) => {
+            const iframe = win.element.querySelector('iframe[data-plugin-id]');
+            windowList.push({
+                windowId: id,
+                title: win.title,
+                isActive: id === this.activeWindow,
+                pluginId: iframe ? iframe.dataset.pluginId : null,
+                isMaximized: win.isMaximized || false
+            });
+        });
+        this.respondSuccess(event.source, 'window-list-response', {
+            windows: windowList
         }, data.messageId);
     }
 
@@ -7974,6 +8096,72 @@ ${url}
     }
 
     /**
+     * cache-cloud-icons ハンドラー
+     * クラウドからアイコンファイルをダウンロードしてローカルにキャッシュする
+     * @param {Object} data - { tenantId, realIds, messageId }
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleCacheCloudIcons(data, event) {
+        const { tenantId, realIds, messageId } = data;
+        logger.debug('[TADjs] cache-cloud-icons受信:', tenantId, realIds?.length, '件');
+
+        let cachedCount = 0;
+        try {
+            if (tenantId && realIds && realIds.length > 0 && window.cloudAPI) {
+                const promises = realIds.map(async (realId) => {
+                    try {
+                        const result = await window.cloudAPI.downloadFile(tenantId, realId, `${realId}.ico`);
+                        if (result.success && result.data) {
+                            const bytes = new Uint8Array(result.data);
+                            if (await this.saveDataFile(`${realId}.ico`, bytes)) {
+                                cachedCount++;
+                            }
+                        }
+                    } catch (e) {
+                        // 個別のアイコンダウンロード失敗は無視
+                    }
+                });
+                await Promise.all(promises);
+            }
+        } catch (error) {
+            logger.error('[TADjs] クラウドアイコンキャッシュエラー:', error);
+        }
+
+        logger.debug('[TADjs] クラウドアイコンキャッシュ完了:', cachedCount, '件');
+
+        if (event.source) {
+            this.parentMessageBus.respondTo(event.source, 'cloud-icons-cached', {
+                messageId,
+                cachedCount
+            });
+        }
+    }
+
+    /**
+     * download-cloud-to-local ハンドラー
+     * プラグインからのリクエストでクラウド実身をローカルにダウンロード保存する
+     * @param {Object} data - { tenantId, realId, messageId }
+     * @param {MessageEvent} event - メッセージイベント
+     * @returns {Promise<void>}
+     */
+    async handleDownloadCloudToLocal(data, event) {
+        const { tenantId, realId, messageId } = data;
+        let success = false;
+        try {
+            success = await this.downloadCloudRealObjectToLocal(tenantId, realId);
+        } catch (error) {
+            // エラーはdownloadCloudRealObjectToLocal内でログ済み
+        }
+        if (event.source) {
+            this.parentMessageBus.respondTo(event.source, 'download-cloud-to-local-response', {
+                messageId: messageId,
+                success: success
+            });
+        }
+    }
+
+    /**
      * get-clipboard ハンドラー
      * @param {Object} data - メッセージデータ
      * @param {MessageEvent} event - メッセージイベント
@@ -8324,7 +8512,12 @@ ${url}
      */
     async handleOpenVirtualObject(data, event) {
         logger.info('[TADjs] 仮身を開く要求:', data);
-        this.openVirtualObject(data.linkId, data.linkName);
+        // cloudContext: メッセージに含まれていなければ送信元ウィンドウから継承
+        let cloudContext = data.cloudContext || null;
+        if (!cloudContext && data.sourceWindowId) {
+            cloudContext = this._windowCloudContexts.get(data.sourceWindowId) || null;
+        }
+        this.openVirtualObject(data.linkId, data.linkName, cloudContext);
     }
 
     /**
@@ -8335,7 +8528,12 @@ ${url}
      */
     async handleOpenVirtualObjectReal(data, event) {
         logger.debug('[TADjs] 仮身の実身を開く要求:', data);
-        this.openVirtualObjectReal(data.virtualObj, data.pluginId, data.messageId, event.source);
+        // cloudContext: メッセージに含まれていなければ送信元ウィンドウから継承
+        let cloudContext = data.cloudContext || null;
+        if (!cloudContext && data.sourceWindowId) {
+            cloudContext = this._windowCloudContexts.get(data.sourceWindowId) || null;
+        }
+        this.openVirtualObjectReal(data.virtualObj, data.pluginId, data.messageId, event.source, cloudContext);
     }
 
     /**

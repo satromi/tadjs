@@ -77,6 +77,15 @@ class SearchResultViewerApp {
 
         // ウィンドウクローズ要求
         this.messageBus.on('window-close-request', () => {
+            // リスナー・ResizeObserverクリーンアップ
+            if (this._resizeObserver) {
+                this._resizeObserver.disconnect();
+                this._resizeObserver = null;
+            }
+            const container = document.getElementById('results-container');
+            if (container && this._scrollHandler) {
+                container.removeEventListener('scroll', this._scrollHandler);
+            }
             this.messageBus.send('close-window', { windowId: this.windowId });
         });
 
@@ -138,23 +147,24 @@ class SearchResultViewerApp {
         };
 
         let scrollTimer = null;
-        container.addEventListener('scroll', () => {
+        this._scrollHandler = () => {
             if (scrollTimer) return;
             scrollTimer = setTimeout(() => {
                 scrollTimer = null;
                 sendScrollState();
             }, 16);
-        });
+        };
+        container.addEventListener('scroll', this._scrollHandler);
 
         // 初期スクロール状態を送信
         sendScrollState();
 
         // ResizeObserverでコンテンツサイズ変更を検知
         if (window.ResizeObserver) {
-            const resizeObserver = new ResizeObserver(() => {
+            this._resizeObserver = new ResizeObserver(() => {
                 sendScrollState();
             });
-            resizeObserver.observe(container);
+            this._resizeObserver.observe(container);
         }
 
         // sendScrollStateを保存して後から呼べるようにする

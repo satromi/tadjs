@@ -22,9 +22,6 @@ export class ContextMenuManager {
      * @param {Function} options.togglePaperMode - 用紙モードトグル関数
      * @param {Function} options.setDisplayMode - 表示モード設定関数
      * @param {Function} options.toggleWrapAtWindowWidth - ウィンドウ幅折り返しトグル関数
-     * @param {Function} options.showWindowList - ウィンドウ一覧表示関数
-     * @param {Function} options.clearDesktop - デスクトップクリア関数
-     * @param {Function} options.showSystemInfo - システム情報表示関数
      * @param {Function} options.showWindowProperties - ウィンドウプロパティ表示関数
      * @param {Function} options.launchPluginForFile - プラグイン起動関数
      * @param {Function} options.openTADFile - TADファイルを開く関数
@@ -42,9 +39,6 @@ export class ContextMenuManager {
         this.togglePaperMode = options.togglePaperMode;
         this.setDisplayMode = options.setDisplayMode;
         this.toggleWrapAtWindowWidth = options.toggleWrapAtWindowWidth;
-        this.showWindowList = options.showWindowList;
-        this.clearDesktop = options.clearDesktop;
-        this.showSystemInfo = options.showSystemInfo;
         this.showWindowProperties = options.showWindowProperties;
         this.launchPluginForFile = options.launchPluginForFile;
         this.openTADFile = options.openTADFile;
@@ -138,8 +132,16 @@ export class ContextMenuManager {
         const items = [];
         const windows = this.getWindows();
 
-        if (target.closest('.window')) {
-            const windowElement = target.closest('.window');
+        // ウインドウ要素を特定（デスクトップの場合はアクティブウインドウにフォールバック）
+        let windowElement = target.closest('.window');
+        if (!windowElement) {
+            const activeWindowId = this.getActiveWindow();
+            if (activeWindowId) {
+                windowElement = document.getElementById(activeWindowId);
+            }
+        }
+
+        if (windowElement) {
             const windowId = windowElement.id;
             const windowInfo = windows.get(windowId);
 
@@ -256,12 +258,6 @@ export class ContextMenuManager {
             }
         } else {
             // デスクトップのメニュー
-            items.push(
-                { text: 'ウインドウ一覧', action: 'window-list' },
-                { text: 'デスクトップをクリア', action: 'clear-desktop' },
-                { separator: true }
-            );
-
             // 「小物」タイプのプラグインをサブメニューとして追加
             if (window.pluginManager) {
                 const accessoryPlugins = window.pluginManager.getAccessoryPlugins();
@@ -277,18 +273,12 @@ export class ContextMenuManager {
                         text: '小物',
                         submenu: accessorySubmenu
                     });
-
-                    items.push({ separator: true });
                 } else {
                     logger.warn('[ContextMenuManager] 小物プラグインが見つかりません');
                 }
             } else {
                 logger.warn('[ContextMenuManager] プラグインマネージャーが見つかりません');
             }
-
-            items.push(
-                { text: 'システム情報', action: 'system-info' }
-            );
         }
 
         return items;
@@ -547,22 +537,10 @@ export class ContextMenuManager {
                 }
                 break;
 
-            case 'window-list':
-                this.showWindowList();
-                break;
-
-            case 'clear-desktop':
-                this.clearDesktop();
-                break;
-
             case 'launch-accessory':
                 if (data && data.pluginId && window.pluginManager) {
                     window.pluginManager.launchPlugin(data.pluginId);
                 }
-                break;
-
-            case 'system-info':
-                this.showSystemInfo();
                 break;
 
             case 'window-properties':

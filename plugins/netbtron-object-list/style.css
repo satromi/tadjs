@@ -1,0 +1,515 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+}
+
+body {
+    background: #dedede;
+    font-family: 'Noto Sans JP', 'MS Gothic', 'Meiryo', sans-serif;
+    font-size: 11px;
+    overflow: hidden;
+    user-select: none;
+}
+
+/* ========================================
+   管理モードスタイル
+   ======================================== */
+
+#management-mode {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-sizing: border-box;
+    padding-bottom: 22px;
+    padding-right: 16px;
+}
+
+/* パネル共通 */
+.panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+}
+
+.panel-header {
+    padding: 6px 10px;
+    background: #e0e0e0;
+    border-bottom: 1px solid #808080;
+    font-weight: bold;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.panel-body {
+    padding: 12px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* フォーム */
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.form-group label {
+    font-size: 11px;
+    color: #333;
+}
+
+.form-group input,
+.form-group select {
+    padding: 3px 6px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px inset #c0c0c0;
+    background: #ffffff;
+}
+
+/* ボタン */
+.btn {
+    padding: 3px 12px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+    min-width: 60px;
+}
+
+.btn:active:not(:disabled) {
+    border-style: inset;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-small {
+    padding: 2px 8px;
+    min-width: auto;
+    font-size: 11px;
+}
+
+.button-row {
+    display: flex;
+    gap: 6px;
+    padding: 6px 10px;
+    justify-content: flex-end;
+}
+
+/* テナントバー */
+.tenant-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: #e0e0e0;
+    border-bottom: 1px solid #808080;
+    font-size: 11px;
+}
+
+.tenant-bar select {
+    flex: 1;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px inset #c0c0c0;
+    background: #ffffff;
+}
+
+/* 実身リスト */
+.list-container {
+    flex: 1;
+    border: 1px inset #c0c0c0;
+    background: #dedede;
+    overflow-y: auto;
+    margin: 6px 10px;
+    padding: 4px;
+}
+
+/* BTRON風 実身アイテム（閉仮身スタイル） */
+.real-object-item {
+    position: relative;
+    box-sizing: border-box;
+    cursor: pointer;
+    margin-bottom: 2px;
+    overflow: visible;
+}
+
+.real-object-item:hover {
+    box-shadow: 0 0 4px rgba(0, 0, 128, 0.5);
+}
+
+.real-object-item.selected {
+    box-shadow: 0 0 6px rgba(0, 0, 128, 0.7);
+}
+
+/* タイトルエリア（アイコン＋名前＋日時） */
+.real-object-title-area {
+    display: flex;
+    align-items: center;
+    padding: 4px;
+    gap: 4px;
+    overflow: hidden;
+    border: 1px solid #808080;
+    background: #dedede;
+}
+
+.real-object-item.selected .real-object-title-area {
+    background: #c0c0ff;
+}
+
+/* アイコン */
+.real-object-icon {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+    flex-shrink: 0;
+}
+
+/* 名前テキスト */
+.real-object-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #000000;
+    font-size: 11px;
+    line-height: 1.2;
+}
+
+.real-object-name:hover {
+    text-decoration: underline;
+}
+
+/* メタ情報（レコード数） */
+.real-object-meta {
+    flex-shrink: 0;
+    color: #404040;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+/* 更新日時 */
+.real-object-date {
+    flex-shrink: 0;
+    color: #404040;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+/* 空メッセージ */
+.empty-message {
+    padding: 20px;
+    text-align: center;
+    color: #808080;
+    font-size: 11px;
+}
+
+/* ステータスバー */
+.status-bar {
+    padding: 3px 10px;
+    background: #e0e0e0;
+    border-top: 1px solid #808080;
+    font-size: 10px;
+    color: #333;
+    min-height: 16px;
+}
+
+/* カスタムダイアログ内リスト */
+.dialog-list {
+    border: 1px inset #c0c0c0;
+    background: #ffffff;
+    min-height: 80px;
+    max-height: 200px;
+    overflow-y: auto;
+    margin: 4px 0;
+}
+
+.dialog-list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 3px 6px;
+    border-bottom: 1px solid #e0e0e0;
+    font-size: 11px;
+}
+
+.dialog-list-item:last-child {
+    border-bottom: none;
+}
+
+.dialog-list-item .item-info {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dialog-list-item .item-role {
+    color: #404040;
+    font-size: 10px;
+    margin: 0 6px;
+    flex-shrink: 0;
+}
+
+.dialog-list-item .item-action {
+    flex-shrink: 0;
+}
+
+.dialog-list-item .item-action button {
+    padding: 1px 6px;
+    font-size: 10px;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+}
+
+.dialog-list-empty {
+    padding: 10px;
+    text-align: center;
+    color: #808080;
+    font-size: 11px;
+}
+
+/* ダイアログ内フォーム行 */
+.dialog-form-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.dialog-form-row input {
+    flex: 1;
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px inset #c0c0c0;
+    background: #ffffff;
+}
+
+.dialog-form-row select {
+    padding: 2px 4px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px inset #c0c0c0;
+    background: #ffffff;
+}
+
+.dialog-form-row button {
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px outset #c0c0c0;
+    background: #c0c0c0;
+    cursor: pointer;
+}
+
+/* ログイン区切り線 */
+.login-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #808080;
+    font-size: 10px;
+    margin: 4px 0;
+}
+.login-divider::before,
+.login-divider::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid #c0c0c0;
+}
+
+/* 招待コードリンク */
+.signup-link {
+    text-align: center;
+    font-size: 10px;
+    margin-top: 4px;
+}
+.signup-link a {
+    color: #0066cc;
+}
+
+/* Internalテナント案内メッセージ */
+.internal-tenant-info {
+    padding: 6px 8px;
+    background: #e8f4fd;
+    border: 1px solid #b8daff;
+    color: #004085;
+    font-size: 10px;
+    margin-bottom: 4px;
+    line-height: 1.4;
+}
+
+/* ========================================
+   ビューモードスタイル（virtual-object-list同等）
+   ======================================== */
+
+#view-mode {
+    height: 100%;
+}
+
+#view-mode .plugin-content {
+    overflow: auto;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* カスタムスクロールバーを使用するためブラウザ標準のスクロールバーを非表示 */
+#view-mode .plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+#view-mode .plugin-content {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.viewer-container {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+}
+
+.virtual-list {
+    flex: 1;
+    overflow: visible;
+    padding: 0;
+}
+
+.virtual-canvas {
+    position: relative;
+    border: none;
+    margin: 0;
+    box-sizing: border-box;
+}
+
+/* 閉じた仮身のスタイル */
+.virtual-object-closed {
+    position: absolute;
+    box-sizing: border-box;
+    cursor: pointer;
+    overflow: visible;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+}
+
+.virtual-object-closed:hover {
+    box-shadow: 0 0 4px rgba(0, 0, 128, 0.5);
+}
+
+/* 開いた仮身のスタイル */
+.virtual-object-opened {
+    position: absolute;
+    box-sizing: border-box;
+    cursor: pointer;
+}
+
+.virtual-object-opened:hover {
+    box-shadow: 0 0 6px rgba(0, 0, 128, 0.7);
+}
+
+/* 背景化された開いた仮身はホバー表示を無効化 */
+.virtual-object-opened.background-protected:hover {
+    box-shadow: none;
+}
+
+/* 読み取り専用モード */
+body.readonly-mode .virtual-object-closed:hover {
+    box-shadow: none;
+}
+
+body.readonly-mode .virtual-object-opened:hover {
+    box-shadow: none;
+}
+
+body.readonly-mode .virtual-object-title:hover {
+    text-decoration: none;
+}
+
+/* 仮身タイトルテキスト */
+.virtual-object-title {
+    text-decoration: none;
+    word-break: break-all;
+    overflow: hidden;
+    line-height: 1.2;
+}
+
+.virtual-object-title:hover {
+    text-decoration: underline;
+}
+
+/* 開いた仮身の内容エリア */
+.virtual-object-content {
+    position: absolute;
+    overflow: auto;
+    padding: 5px;
+}
+
+.virtual-object-content p {
+    margin: 0.5em 0;
+}
+
+/* 開いた仮身の内容エリアのスクロールバー */
+.virtual-object-content::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.virtual-object-content::-webkit-scrollbar-track {
+    background: #f0f0f0;
+}
+
+.virtual-object-content::-webkit-scrollbar-thumb {
+    background: #c0c0c0;
+    border: 1px solid #808080;
+}
+
+.virtual-object-content::-webkit-scrollbar-thumb:hover {
+    background: #a0a0a0;
+}
+
+/* ========================================
+   図形要素スタイル
+   ======================================== */
+
+/* 図形コンテナ */
+.figure-content {
+    position: absolute;
+    left: 0;
+    top: 0;
+    pointer-events: none;
+}
+
+/* 矩形要素 */
+.figure-rect {
+    box-sizing: border-box;
+}
+
+/* テキスト要素 */
+.figure-document {
+    font-family: 'Noto Sans JP', sans-serif;
+    line-height: 1.2;
+}
+
+/* 線要素 */
+.figure-line {
+    /* 線はbackground-colorで描画 */
+}

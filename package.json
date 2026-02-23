@@ -1,6 +1,6 @@
 {
   "name": "tadjs-desktop",
-  "version": "0.36.0",
+  "version": "0.37.0",
   "description": "TADjs Desktop Environment with Plugin System",
   "main": "electron/main.js",
   "scripts": {
@@ -14,7 +14,8 @@
     "package": "electron-packager . \"TADjs Desktop\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=tadjs.ico --executable-name=tadjs_desktop --ignore=\"^/dist$|^/\\.git$|^/\\.vscode$|^/\\.serena$|^/\\.claude$|^/designlog$|^/xtaddata$|^/scripts$|^/upload$|^/encoding\\.js-|^/ecl_array\\.js-master$|^/CLAUDE\\.md$|^/DEVELOPMENT_NOTES\\.md$|tmpclaude|\\.ps1$\" --prune=true && node scripts/postpackage.js",
     "package:mac": "electron-builder --mac --x64 --dir",
     "package:mac-arm": "electron-builder --mac --arm64 --dir",
-    "postinstall": "node scripts/patch-font-list.js"
+    "postinstall": "node scripts/patch-font-list.js",
+    "version": "node scripts/update-version.js"
   },
   "keywords": [
     "tadjs",
@@ -31,7 +32,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
-    "electron": "^40.2.1",
+    "electron": "^40.6.0",
     "electron-builder": "^24.9.1",
     "electron-packager": "^17.1.2",
     "jsmediatags": "^3.9.7",
@@ -97,8 +98,10 @@
     "forceCodeSigning": false
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.95.3",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
+    "diff-match-patch": "^1.0.5",
     "font-list": "^2.0.1",
     "fontkit": "^2.0.4"
   },

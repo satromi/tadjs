@@ -16,9 +16,10 @@ if (typeof electron === 'string') {
     process.exit(1);
 }
 
-const { app, BrowserWindow, ipcMain, Menu, dialog } = electron;
+const { app, BrowserWindow, ipcMain, Menu, dialog, shell } = electron;
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 const { execSync } = require('child_process');
 const fontList = require('font-list');
 const fontkit = require('fontkit');
@@ -48,6 +49,18 @@ if (process.platform === 'win32') {
     } catch (e) {
         console.warn('winreg module not available');
     }
+}
+
+// CloudAccessManager（Net-BTRONクラウド実身共有）
+let cloudAccessManager = null;
+try {
+    const { CloudAccessManager } = require('./cloud-access-manager');
+    cloudAccessManager = new CloudAccessManager();
+    // セッション永続化用のファイルパスを設定
+    cloudAccessManager._sessionFilePath = path.join(app.getPath('userData'), 'net-btron-session');
+    logger.info('CloudAccessManager loaded successfully');
+} catch (e) {
+    logger.warn('CloudAccessManager not available:', e.message);
 }
 
 let mainWindow;
@@ -852,6 +865,606 @@ ipcMain.handle('pty-kill', async (event, { windowId }) => {
         return { success: true };
     }
     return { success: false, error: 'PTY not found' };
+});
+
+// =============================================================
+// IPC通信: Net-BTRON クラウド実身共有
+// =============================================================
+
+// IPC入力バリデーション関数 (H-5)
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isValidUUID(value) {
+    return typeof value === 'string' && UUID_REGEX.test(value);
+}
+function validateUUID(value, label) {
+    if (!isValidUUID(value)) {
+        return { success: false, error: `無効な${label}形式です` };
+    }
+    return null;
+}
+function validateString(value, label, maxLength = 255) {
+    if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) {
+        return { success: false, error: `無効な${label}です（空または長すぎます）` };
+    }
+    return null;
+}
+function validateEnum(value, label, allowedValues) {
+    if (!allowedValues.includes(value)) {
+        return { success: false, error: `無効な${label}です` };
+    }
+    return null;
+}
+
+// クラウド初期化
+ipcMain.handle('cloud-initialize', async (event, config) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    // CR-1: Supabase URL検証（悪意あるURLによる認証情報窃取を防止）
+    if (!config || !config.url) {
+        return { success: false, error: '接続設定が不足しています' };
+    }
+    try {
+        const parsedUrl = new URL(config.url);
+        if (parsedUrl.protocol !== 'https:' && parsedUrl.hostname !== 'localhost') {
+            return { success: false, error: '接続先URLはHTTPSである必要があります' };
+        }
+        if (!parsedUrl.hostname.endsWith('.supabase.co') && !parsedUrl.hostname.endsWith('.supabase.in') && parsedUrl.hostname !== 'localhost') {
+            return { success: false, error: '許可されていない接続先です。Supabase URLを指定してください' };
+        }
+    } catch (e) {
+        return { success: false, error: '無効なURLです' };
+    }
+    return await cloudAccessManager.initialize(config);
+});
+
+// クラウド認証: ログイン
+ipcMain.handle('cloud-sign-in', async (event, { email, password }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    // ME-2: 入力バリデーション追加（cloud-sign-upと同等）
+    let err;
+    if ((err = validateString(email, 'メールアドレス', 255))) return err;
+    if ((err = validateString(password, 'パスワード', 255))) return err;
+    return await cloudAccessManager.signIn(email, password);
+});
+
+// クラウド認証: OAuthログイン（システムブラウザ + ローカルHTTPサーバーでコールバック受信）
+ipcMain.handle('cloud-sign-in-oauth', async (event, { provider }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    // LO-2: プロバイダをホワイトリスト検証
+    if ((err = validateEnum(provider, 'OAuthプロバイダ', ['google', 'github', 'azure', 'gitlab']))) return err;
+
+    return new Promise((resolve) => {
+        let resolved = false;
+        let server = null;
+        let timeoutId = null;
+
+        const cleanup = () => {
+            if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; }
+            if (server) { try { server.close(); } catch (e) {} server = null; }
+        };
+
+        // ローカルHTTPサーバーを起動してOAuthコールバックを受信
+        server = http.createServer(async (req, res) => {
+            const reqUrl = new URL(req.url, 'http://127.0.0.1');
+
+            if (reqUrl.pathname === '/auth/callback') {
+                // ハッシュフラグメント（#access_token=...）はサーバーに届かないため、
+                // HTMLページでJavaScriptを使い、クエリパラメータに変換してリダイレクトする
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end('<!DOCTYPE html><html><head><title>認証処理中</title></head><body>' +
+                    '<p>認証処理中...</p>' +
+                    '<script>' +
+                    'var h=window.location.hash.substring(1);' +
+                    'if(h){window.location.href="/auth/complete?"+h;}' +
+                    'else{document.body.innerHTML="<h3>認証に失敗しました</h3><p>このタブを閉じてやり直してください。</p>";}' +
+                    '</script></body></html>');
+            } else if (reqUrl.pathname === '/auth/complete') {
+                const accessToken = reqUrl.searchParams.get('access_token');
+                const refreshToken = reqUrl.searchParams.get('refresh_token');
+
+                if (accessToken && refreshToken && !resolved) {
+                    resolved = true;
+                    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                    res.end('<!DOCTYPE html><html><head><title>認証完了</title></head><body>' +
+                        '<h3>認証が完了しました</h3>' +
+                        '<p>このタブを閉じてアプリに戻ってください。</p></body></html>');
+                    const sessionResult = await cloudAccessManager.setSessionFromTokens(accessToken, refreshToken);
+                    cleanup();
+                    resolve(sessionResult);
+                } else {
+                    res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+                    res.end('<!DOCTYPE html><html><body><h3>認証に失敗しました</h3></body></html>');
+                    if (!resolved) {
+                        resolved = true;
+                        cleanup();
+                        resolve({ success: false, error: 'トークンの取得に失敗しました' });
+                    }
+                }
+            } else {
+                res.writeHead(404);
+                res.end();
+            }
+        });
+
+        server.listen(0, '127.0.0.1', async () => {
+            const port = server.address().port;
+            const redirectUrl = `http://127.0.0.1:${port}/auth/callback`;
+
+            // OAuth URLを取得（ローカルサーバーをリダイレクト先に指定）
+            const urlResult = await cloudAccessManager.signInWithOAuth(provider, redirectUrl);
+            if (!urlResult.success) {
+                cleanup();
+                resolve(urlResult);
+                return;
+            }
+
+            // タイムアウト（5分）
+            timeoutId = setTimeout(() => {
+                if (!resolved) {
+                    resolved = true;
+                    cleanup();
+                    resolve({ success: false, cancelled: true, error: 'ログインがタイムアウトしました（5分経過）' });
+                }
+            }, 5 * 60 * 1000);
+
+            // システムブラウザでOAuth認証画面を開く
+            shell.openExternal(urlResult.url);
+        });
+
+        server.on('error', (serverErr) => {
+            if (!resolved) {
+                resolved = true;
+                cleanup();
+                resolve({ success: false, error: 'ローカルサーバー起動失敗: ' + serverErr.message });
+            }
+        });
+    });
+});
+
+// クラウド認証: 新規ユーザー登録
+ipcMain.handle('cloud-sign-up', async (event, { email, password }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateString(email, 'メールアドレス', 255))) return err;
+    if ((err = validateString(password, 'パスワード', 255))) return err;
+    return await cloudAccessManager.signUp(email, password);
+});
+
+// クラウド認証: ログアウト
+ipcMain.handle('cloud-sign-out', async () => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    return await cloudAccessManager.signOut();
+});
+
+// クラウド認証: セッション取得
+ipcMain.handle('cloud-get-session', async () => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    return await cloudAccessManager.getSession();
+});
+
+// クラウド招待: 招待作成
+ipcMain.handle('cloud-create-invite', async (event, { tenantId, email, role }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateEnum(role, 'ロール', ['admin', 'member', 'readonly']))) return err;
+    return await cloudAccessManager.createInvite(tenantId, email || '', role);
+});
+
+// クラウド招待: トークンで招待情報取得
+ipcMain.handle('cloud-get-invite-by-token', async (event, { token }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateString(token, '招待トークン', 200))) return err;
+    return await cloudAccessManager.getInviteByToken(token);
+});
+
+// クラウド招待: 招待消費（テナント参加）
+ipcMain.handle('cloud-consume-invite', async (event, { token }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateString(token, '招待トークン', 200))) return err;
+    return await cloudAccessManager.consumeInvite(token);
+});
+
+// クラウド招待: 招待一覧
+ipcMain.handle('cloud-list-invites', async (event, { tenantId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    return await cloudAccessManager.listInvites(tenantId);
+});
+
+// クラウド招待: 招待取消
+ipcMain.handle('cloud-revoke-invite', async (event, { inviteId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(inviteId, 'inviteId'))) return err;
+    return await cloudAccessManager.revokeInvite(inviteId);
+});
+
+// クラウド: 自分のプロフィール取得（system_role含む）
+ipcMain.handle('cloud-get-my-profile', async () => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    return await cloudAccessManager.getMyProfile();
+});
+
+// クラウド: ユーザーのシステムロール変更（system_adminのみ）
+ipcMain.handle('cloud-update-user-system-role', async (event, { userId, role }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(userId, 'userId'))) return err;
+    if ((err = validateEnum(role, 'システムロール', ['system_admin', 'tenant_creator', 'user']))) return err;
+    return await cloudAccessManager.updateUserSystemRole(userId, role);
+});
+
+// クラウド: 全ユーザー一覧取得（system_admin用）
+ipcMain.handle('cloud-list-users', async () => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    return await cloudAccessManager.listUsers();
+});
+
+// クラウド: テナント一覧取得
+ipcMain.handle('cloud-get-tenants', async () => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    return await cloudAccessManager.getTenants();
+});
+
+// クラウド: テナント作成
+ipcMain.handle('cloud-create-tenant', async (event, { name, visibility }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateString(name, 'テナント名', 100))) return err;
+    if ((err = validateEnum(visibility, '公開範囲', ['private', 'internal']))) return err;
+    return await cloudAccessManager.createTenant(name, visibility);
+});
+
+// クラウド: テナント公開範囲変更
+ipcMain.handle('cloud-update-tenant-visibility', async (event, { tenantId, visibility }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateEnum(visibility, '公開範囲', ['private', 'internal']))) return err;
+    return await cloudAccessManager.updateTenantVisibility(tenantId, visibility);
+});
+
+// クラウド: テナント名でテナント情報取得
+ipcMain.handle('cloud-get-tenant-by-name', async (event, { name }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    // LO-6: 入力バリデーション追加
+    let err;
+    if ((err = validateString(name, 'テナント名', 255))) return err;
+    return await cloudAccessManager.getTenantByName(name);
+});
+
+// クラウド: テナント削除
+ipcMain.handle('cloud-delete-tenant', async (event, { tenantId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    return await cloudAccessManager.deleteTenant(tenantId);
+});
+
+// クラウド: 実身一覧取得
+ipcMain.handle('cloud-list-real-objects', async (event, { tenantId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    return await cloudAccessManager.listRealObjects(tenantId);
+});
+
+// クラウド: テナントメンバー一覧
+ipcMain.handle('cloud-list-tenant-members', async (event, { tenantId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    return await cloudAccessManager.listTenantMembers(tenantId);
+});
+
+// クラウド: テナントメンバー追加
+ipcMain.handle('cloud-add-tenant-member', async (event, { tenantId, email, role }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateString(email, 'メールアドレス', 254))) return err;
+    if ((err = validateEnum(role, 'ロール', ['admin', 'member', 'readonly']))) return err;
+    return await cloudAccessManager.addTenantMember(tenantId, email, role);
+});
+
+// クラウド: テナントメンバー削除
+ipcMain.handle('cloud-remove-tenant-member', async (event, { tenantId, userId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateUUID(userId, 'userId'))) return err;
+    return await cloudAccessManager.removeTenantMember(tenantId, userId);
+});
+
+// クラウド: 実身アップロード
+ipcMain.handle('cloud-upload-real-object', async (event, { tenantId, realObject, files }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    const _metadata = realObject.metadata || realObject;
+    const _realId = _metadata.realId || _metadata.id;
+    if ((err = validateUUID(_realId, 'realId'))) return err;
+    // ファイルデータをBufferに変換
+    const bufferFiles = {};
+    if (files.json) bufferFiles.json = Buffer.from(files.json);
+    if (files.xtad) bufferFiles.xtad = Buffer.from(files.xtad);
+    if (files.ico) bufferFiles.ico = Buffer.from(files.ico);
+    if (files.images && Array.isArray(files.images)) {
+        bufferFiles.images = files.images.map(img => ({
+            name: img.name,
+            data: Buffer.from(img.data)
+        }));
+    }
+    return await cloudAccessManager.uploadRealObject(tenantId, realObject, bufferFiles);
+});
+
+// クラウド: 楽観的排他制御付き実身アップロード
+ipcMain.handle('cloud-upload-real-object-versioned', async (event, { tenantId, realObject, files, expectedVersion }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    const _metadata = realObject.metadata || realObject;
+    const _realId = _metadata.realId || _metadata.id;
+    if ((err = validateUUID(_realId, 'realId'))) return err;
+    if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+        return { success: false, error: 'expectedVersionは非負整数である必要があります' };
+    }
+    const bufferFiles = {};
+    if (files.json) bufferFiles.json = Buffer.from(files.json);
+    if (files.xtad) bufferFiles.xtad = Buffer.from(files.xtad);
+    if (files.ico) bufferFiles.ico = Buffer.from(files.ico);
+    if (files.images && Array.isArray(files.images)) {
+        bufferFiles.images = files.images.map(img => ({
+            name: img.name,
+            data: Buffer.from(img.data)
+        }));
+    }
+    return await cloudAccessManager.uploadRealObjectVersioned(tenantId, realObject, bufferFiles, expectedVersion);
+});
+
+// クラウド: 実身ダウンロード
+ipcMain.handle('cloud-download-real-object', async (event, { tenantId, realId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateUUID(realId, 'realId'))) return err;
+    return await cloudAccessManager.downloadRealObject(tenantId, realId);
+});
+
+// クラウド: 個別ファイルダウンロード
+ipcMain.handle('cloud-download-file', async (event, { tenantId, realId, fileName }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateUUID(realId, 'realId'))) return err;
+    if ((err = validateString(fileName, 'ファイル名'))) return err;
+    return await cloudAccessManager.downloadFile(tenantId, realId, fileName);
+});
+
+// クラウド: 実身削除
+ipcMain.handle('cloud-delete-real-object', async (event, { tenantId, realId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateUUID(realId, 'realId'))) return err;
+    return await cloudAccessManager.deleteRealObject(tenantId, realId);
+});
+
+// クラウド: 複数実身メタデータ一括取得
+ipcMain.handle('cloud-get-real-objects-metadata', async (event, { tenantId, realIds }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if (!Array.isArray(realIds) || !realIds.every(isValidUUID)) {
+        return { success: false, error: '無効なrealIds形式です' };
+    }
+    return await cloudAccessManager.getRealObjectsMetadata(tenantId, realIds);
+});
+
+// クラウド: 実身とその子孫を再帰的に削除
+ipcMain.handle('cloud-delete-real-object-with-children', async (event, { tenantId, realId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateUUID(realId, 'realId'))) return err;
+    return await cloudAccessManager.deleteRealObjectWithChildren(tenantId, realId);
+});
+
+// クラウド: 共有一覧取得
+ipcMain.handle('cloud-list-shares', async (event, { objectId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(objectId, 'objectId'))) return err;
+    return await cloudAccessManager.listShares(objectId);
+});
+
+// クラウド: 共有作成
+ipcMain.handle('cloud-create-share', async (event, { objectId, email, permission }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(objectId, 'objectId'))) return err;
+    if ((err = validateString(email, 'メールアドレス', 254))) return err;
+    if ((err = validateEnum(permission, '権限', ['read', 'write', 'admin']))) return err;
+    return await cloudAccessManager.createShare(objectId, email, permission);
+});
+
+// クラウド: 共有削除
+ipcMain.handle('cloud-delete-share', async (event, { shareId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(shareId, 'shareId'))) return err;
+    return await cloudAccessManager.deleteShare(shareId);
+});
+
+// クラウド: バージョン管理付き実身保存
+ipcMain.handle('cloud-save-real-object-with-version', async (event, { tenantId, realObject, files, expectedVersion }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    const _metadata = realObject.metadata || realObject;
+    const _realId = _metadata.realId || _metadata.id;
+    if ((err = validateUUID(_realId, 'realId'))) return err;
+    if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+        return { success: false, error: 'expectedVersionは非負整数である必要があります' };
+    }
+    return await cloudAccessManager.saveRealObjectWithVersion(tenantId, realObject, files, expectedVersion);
+});
+
+// クラウド: バージョン履歴取得
+ipcMain.handle('cloud-get-version-history', async (event, { tenantId, realId, limit }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateUUID(realId, 'realId'))) return err;
+    return await cloudAccessManager.getVersionHistory(tenantId, realId, limit);
+});
+
+// クラウド: バージョンファイルダウンロード（復元用）
+ipcMain.handle('cloud-download-version-files', async (event, { tenantId, realId, version }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateUUID(realId, 'realId'))) return err;
+    // ME-3: versionパラメータの型チェック
+    if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
+        return { success: false, error: 'バージョン番号が不正です' };
+    }
+    return await cloudAccessManager.downloadVersionFiles(tenantId, realId, version);
+});
+
+// クラウド: バージョン差分取得
+ipcMain.handle('cloud-get-version-diff', async (event, { tenantId, realId, version }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    if ((err = validateUUID(realId, 'realId'))) return err;
+    // ME-3: versionパラメータの型チェック
+    if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
+        return { success: false, error: 'バージョン番号が不正です' };
+    }
+    return await cloudAccessManager.getVersionDiff(tenantId, realId, version);
+});
+
+// クラウド: テナント容量情報取得
+ipcMain.handle('cloud-get-tenant-quota', async (event, { tenantId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    return await cloudAccessManager.getTenantQuota(tenantId);
+});
+
+// クラウド: 自分に共有された実身一覧
+ipcMain.handle('cloud-list-shared-with-me', async () => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    return await cloudAccessManager.listSharedWithMe();
+});
+
+// クラウド: リアルタイム購読
+ipcMain.handle('cloud-subscribe-tenant', async (event, { tenantId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    return cloudAccessManager.subscribeToTenant(tenantId, (payload) => {
+        // メインプロセスからレンダラーにイベントを転送
+        const win = BrowserWindow.fromWebContents(event.sender);
+        if (win && !win.isDestroyed()) {
+            win.webContents.send('cloud-realtime-event', payload);
+        }
+    });
+});
+
+// クラウド: リアルタイム購読解除
+ipcMain.handle('cloud-unsubscribe-tenant', async (event, { tenantId }) => {
+    if (!cloudAccessManager) {
+        return { success: false, error: 'CloudAccessManager が利用できません' };
+    }
+    let err;
+    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
+    return cloudAccessManager.unsubscribeFromTenant(tenantId);
 });
 
 // アプリ終了時に全PTYプロセスを終了

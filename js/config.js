@@ -37,11 +37,6 @@ window.TADjsConfig = {
     },
 
     /**
-     * バージョン情報
-     */
-    version: '1.0.0',
-
-    /**
      * パフォーマンス設定
      */
     performance: {

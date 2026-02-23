@@ -1,0 +1,16 @@
+{
+    "id": "window-list-viewer",
+    "name": "ウインドウ一覧",
+    "version": "1.0.0",
+    "description": "開いているウインドウの一覧表示",
+    "type": "accessory",
+    "needsCloseConfirmation": false,
+    "window": {
+        "width": 250,
+        "height": 300,
+        "resizable": true,
+        "scrollable": true,
+        "singleInstance": true,
+        "openable": true
+    }
+}

@@ -1,0 +1,35 @@
+{
+    "id": "netbtron-object-list",
+    "name": "NET仮身一覧",
+    "version": "0.2.0",
+    "type": "base",
+    "basefile": {
+        "json": "019c65e6-88b2-7d0c-a120-8c30cf1faacf.json",
+        "xmltad": "019c65e6-88b2-7d0c-a120-8c30cf1faacf_0.xtad",
+        "ico": "019c65e6-88b2-7d0c-a120-8c30cf1faacf.ico"
+    },
+    "description": "クラウド上の実身を管理するNet-BTRONプラグイン",
+    "icon": "☁️",
+    "author": "satromi",
+    "main": "index.html",
+    "needsCloseConfirmation": true,
+    "contextMenu": [
+        {
+            "label": "NET仮身一覧",
+            "fileTypes": ["tad", "TAD", "bpk", "BPK", "xtad", "XTAD"],
+            "action": "open-editor"
+        }
+    ],
+    "window": {
+        "width": 600,
+        "height": 500,
+        "resizable": true,
+        "scrollable": true,
+        "singleInstance": true,
+        "openable": true
+    },
+    "permissions": [
+        "file-read",
+        "file-write"
+    ]
+}

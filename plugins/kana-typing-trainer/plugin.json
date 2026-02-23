@@ -1,0 +1,20 @@
+{
+  "id": "kana-typing-trainer",
+  "name": "かな入力練習",
+  "version": "1.0.0",
+  "description": "かな入力のタイピング練習アプリ。次に打つべきキーをキーボード上で視覚的に表示します。",
+  "type": "base",
+  "basefile": {
+    "json": "019c403c-bb89-7133-acc4-ddd109fb8182.json",
+    "xmltad": "019c403c-bb89-7133-acc4-ddd109fb8182_0.xtad",
+    "ico": "019c403c-bb89-7133-acc4-ddd109fb8182.ico"
+  },
+  "needsCloseConfirmation": true,
+  "window": {
+    "width": 850,
+    "height": 650,
+    "resizable": true,
+    "scrollable": false,
+    "openable": true
+  }
+}

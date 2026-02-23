@@ -274,6 +274,7 @@ export class DialogManager {
 
             // カラーピッカーオプションが有効な場合
             let colorPicker = null;
+            let inputFieldColorSyncHandler = null;
             if (options.colorPicker) {
                 colorPicker = document.createElement('input');
                 colorPicker.type = 'color';
@@ -288,11 +289,12 @@ export class DialogManager {
                     inputField.value = colorPicker.value;
                 });
                 // テキスト入力→カラーピッカーの同期
-                inputField.addEventListener('input', () => {
+                inputFieldColorSyncHandler = () => {
                     if (/^#[0-9A-Fa-f]{6}$/.test(inputField.value)) {
                         colorPicker.value = inputField.value;
                     }
-                });
+                };
+                inputField.addEventListener('input', inputFieldColorSyncHandler);
             }
 
             // 結果を生成する関数
@@ -311,6 +313,10 @@ export class DialogManager {
             const closeAndResolve = (buttonValue) => {
                 if (keyboardHandler) {
                     document.removeEventListener('keydown', keyboardHandler);
+                }
+                // カラーピッカー同期リスナーのクリーンアップ
+                if (inputFieldColorSyncHandler) {
+                    inputField.removeEventListener('input', inputFieldColorSyncHandler);
                 }
                 this.hideInputDialog();
                 resolve(getResult(buttonValue));
@@ -364,9 +370,11 @@ export class DialogManager {
      * @param {Array<{label: string, value: any}>} buttons - ボタン定義の配列
      * @param {number} defaultButton - デフォルトボタンのインデックス (0始まり)
      * @param {Object} inputs - 入力要素のID {checkbox: 'id1', text: 'id2', radios: {key: 'radioName'}}
+     * @param {Object} options - オプション
+     * @param {number} options.width - ダイアログ幅（px）
      * @returns {Promise<{button: any, checkbox: boolean, input: string, radios: Object, inputs: Object, dialogElement: Element}>}
      */
-    showCustomDialog(dialogHtml, buttons, defaultButton = 0, inputs = {}) {
+    showCustomDialog(dialogHtml, buttons, defaultButton = 0, inputs = {}, options = {}) {
         return new Promise((resolve) => {
             const overlay = document.getElementById('dialog-overlay');
             const dialog = document.getElementById('input-dialog');
@@ -393,7 +401,7 @@ export class DialogManager {
             messageText.innerHTML = dialogHtml;
 
             // ダイアログリストボックスにカスタムスクロールバーを適用
-            this._initDialogListboxScrollbars(messageText);
+            const scrollbarCleanup = this._initDialogListboxScrollbars(messageText);
 
             // innerHTML で挿入された script タグは実行されないため、新しいscript要素として再構築
             // DOM要素が準備された後に実行するため setTimeout を使用
@@ -404,7 +412,7 @@ export class DialogManager {
                 setTimeout(() => {
                     try {
                         const newScript = document.createElement('script');
-                        newScript.textContent = scriptContent;
+                        newScript.textContent = `(function() {\n${scriptContent}\n})();`;
                         messageText.appendChild(newScript);
                     } catch (e) {
                         console.error('ダイアログスクリプト実行エラー:', e);
@@ -444,8 +452,10 @@ export class DialogManager {
 
                 // ダイアログ内の全入力要素を自動収集 (formData)
                 const formData = {};
-                // テキスト入力、数値入力、hidden入力
-                messageText.querySelectorAll('input[id][type="text"], input[id][type="number"], input[id][type="hidden"], input[id]:not([type])').forEach(el => {
+                // テキスト系入力（checkbox/radioを除く全input）
+                messageText.querySelectorAll('input[id]').forEach(el => {
+                    const type = (el.type || '').toLowerCase();
+                    if (type === 'checkbox' || type === 'radio') return;
                     formData[el.id] = el.value;
                 });
                 // セレクトボックス
@@ -489,6 +499,12 @@ export class DialogManager {
                 if (keyboardHandler) {
                     document.removeEventListener('keydown', keyboardHandler);
                 }
+                // スクロールバー関連のリスナー・Observerをクリーンアップ
+                if (scrollbarCleanup) {
+                    scrollbarCleanup();
+                }
+                // widthスタイルをリセット（次回のダイアログに影響しないように）
+                dialog.style.width = '';
                 const formData = collectFormData();
                 this.hideInputDialog();
                 resolve({
@@ -514,6 +530,11 @@ export class DialogManager {
 
             // プラグインにダイアログ表示を通知
             this.notifyDialogOpened();
+
+            // widthオプションの適用
+            if (options.width) {
+                dialog.style.width = `${options.width}px`;
+            }
 
             // ダイアログを表示
             overlay.style.display = 'block';
@@ -715,6 +736,7 @@ export class DialogManager {
      */
     _initDialogListboxScrollbars(container) {
         const listboxes = container.querySelectorAll('.dialog-listbox');
+        const cleanups = [];
 
         listboxes.forEach(listbox => {
             // 既に初期化済みの場合はスキップ
@@ -731,8 +753,9 @@ export class DialogManager {
             wrapper.appendChild(listbox);
 
             // カスタムスクロールバーを作成
-            const scrollbar = this._createDialogScrollbar(listbox);
+            const { scrollbar, cleanup: dragCleanup } = this._createDialogScrollbar(listbox);
             wrapper.appendChild(scrollbar);
+            cleanups.push(dragCleanup);
 
             // スクロールイベントでツマミ位置を同期
             listbox.addEventListener('scroll', () => {
@@ -753,13 +776,19 @@ export class DialogManager {
                 });
             });
             observer.observe(listbox, { childList: true, subtree: true });
+            cleanups.push(() => observer.disconnect());
         });
+
+        // 全クリーンアップをまとめた関数を返す
+        return () => {
+            cleanups.forEach(fn => fn());
+        };
     }
 
     /**
      * ダイアログ用カスタムスクロールバーを作成
      * @param {HTMLElement} listbox - リストボックス要素
-     * @returns {HTMLElement} スクロールバー要素
+     * @returns {{scrollbar: HTMLElement, cleanup: Function}} スクロールバー要素とクリーンアップ関数
      * @private
      */
     _createDialogScrollbar(listbox) {
@@ -780,7 +809,7 @@ export class DialogManager {
         scrollbar.appendChild(track);
 
         // ツマミドラッグ処理
-        this._setupDialogScrollbarDrag(listbox, thumb);
+        const dragCleanup = this._setupDialogScrollbarDrag(listbox, thumb);
 
         // トラッククリック処理
         track.addEventListener('click', (e) => {
@@ -795,7 +824,7 @@ export class DialogManager {
             listbox.scrollTop = scrollRatio * maxScroll;
         });
 
-        return scrollbar;
+        return { scrollbar, cleanup: dragCleanup };
     }
 
     /**
@@ -840,6 +869,7 @@ export class DialogManager {
      * ツマミのドラッグ処理を設定
      * @param {HTMLElement} listbox - リストボックス要素
      * @param {HTMLElement} thumb - ツマミ要素
+     * @returns {Function} クリーンアップ関数
      * @private
      */
     _setupDialogScrollbarDrag(listbox, thumb) {
@@ -881,5 +911,12 @@ export class DialogManager {
         thumb.addEventListener('mousedown', onMouseDown);
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
+
+        // クリーンアップ関数を返す
+        return () => {
+            thumb.removeEventListener('mousedown', onMouseDown);
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
     }
 }

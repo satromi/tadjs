@@ -1,0 +1,58 @@
+{
+  "meta": {
+    "name": "日本語109キー",
+    "author": "TADjs Desktop",
+    "version": "1.0",
+    "format": "kle-extended"
+  },
+  "layout": [
+    [
+      {"id":"Escape"}, "Esc",
+      {"x":0.5,"id":"F1"}, "F1", {"id":"F2"}, "F2", {"id":"F3"}, "F3", {"id":"F4"}, "F4",
+      {"x":0.5,"id":"F5"}, "F5", {"id":"F6"}, "F6", {"id":"F7"}, "F7", {"id":"F8"}, "F8",
+      {"x":0.5,"id":"F9"}, "F9", {"id":"F10"}, "F10", {"id":"F11"}, "F11", {"id":"F12"}, "F12"
+    ],
+    [
+      {"y":0.5,"id":"Backquote"}, "半/全",
+      {"id":"Digit1"}, "!\n1", {"id":"Digit2"}, "\"\n2", {"id":"Digit3"}, "#\n3",
+      {"id":"Digit4"}, "$\n4", {"id":"Digit5"}, "%\n5", {"id":"Digit6"}, "&\n6",
+      {"id":"Digit7"}, "'\n7", {"id":"Digit8"}, "(\n8", {"id":"Digit9"}, ")\n9",
+      {"id":"Digit0"}, "\n0", {"id":"Minus"}, "=\n-", {"id":"Equal"}, "~\n^",
+      {"id":"IntlYen"}, "|\n¥", {"id":"Backspace"}, "BS"
+    ],
+    [
+      {"id":"Tab","w":1.5}, "Tab",
+      {"id":"KeyQ"}, "Q", {"id":"KeyW"}, "W", {"id":"KeyE"}, "E",
+      {"id":"KeyR"}, "R", {"id":"KeyT"}, "T", {"id":"KeyY"}, "Y",
+      {"id":"KeyU"}, "U", {"id":"KeyI"}, "I", {"id":"KeyO"}, "O",
+      {"id":"KeyP"}, "P", {"id":"BracketLeft"}, "@", {"id":"BracketRight"}, "[",
+      {"id":"Enter","x":0.25,"w":1.25,"h":2}, "Enter"
+    ],
+    [
+      {"id":"CapsLock","w":1.75}, "英数",
+      {"id":"KeyA"}, "A", {"id":"KeyS"}, "S", {"id":"KeyD"}, "D",
+      {"id":"KeyF"}, "F", {"id":"KeyG"}, "G", {"id":"KeyH"}, "H",
+      {"id":"KeyJ"}, "J", {"id":"KeyK"}, "K", {"id":"KeyL"}, "L",
+      {"id":"Semicolon"}, ";", {"id":"Quote"}, ":", {"id":"Backslash"}, "]"
+    ],
+    [
+      {"id":"ShiftLeft","w":2.25}, "Shift",
+      {"id":"KeyZ"}, "Z", {"id":"KeyX"}, "X", {"id":"KeyC"}, "C",
+      {"id":"KeyV"}, "V", {"id":"KeyB"}, "B", {"id":"KeyN"}, "N",
+      {"id":"KeyM"}, "M", {"id":"Comma"}, ",", {"id":"Period"}, ".",
+      {"id":"Slash"}, "/", {"id":"IntlRo"}, "\\",
+      {"id":"ShiftRight","w":1.75}, "Shift"
+    ],
+    [
+      {"id":"ControlLeft","w":1.5}, "Ctrl",
+      {"id":"MetaLeft"}, "Win",
+      {"id":"AltLeft","w":1.25}, "Alt",
+      {"id":"NonConvert","w":1.25}, "無変換",
+      {"id":"Space","w":4}, "",
+      {"id":"Convert","w":1.25}, "変換",
+      {"id":"KanaMode","w":1.25}, "かな",
+      {"id":"AltRight"}, "Alt",
+      {"id":"ControlRight","w":1.5}, "Ctrl"
+    ]
+  ]
+}

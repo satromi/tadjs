@@ -1,0 +1,59 @@
+/* ウインドウ一覧プラグイン スタイルシート */
+
+body {
+    margin: 0;
+    padding: 0;
+    background: #dedede;
+    font-family: 'MS Gothic', 'Meiryo', monospace;
+    overflow: hidden;
+    user-select: none;
+}
+
+#window-list-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    box-sizing: border-box;
+}
+
+#window-list {
+    flex: 1;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #808080;
+    margin: 4px;
+}
+
+.window-item {
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 12px;
+    border-bottom: 1px solid #e0e0e0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.window-item:last-child {
+    border-bottom: none;
+}
+
+.window-item:hover {
+    background: #e8e8ff;
+}
+
+.window-item.active {
+    background: #c0c0ff;
+    font-weight: bold;
+}
+
+.window-item .window-title {
+    display: inline;
+}
+
+.empty-message {
+    padding: 8px;
+    color: #999;
+    font-size: 12px;
+    text-align: center;
+}

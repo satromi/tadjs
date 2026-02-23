@@ -289,6 +289,11 @@ export const LIST_SELECTED_BG_COLOR = '#e8f4f8';
  */
 export const PREVIEW_BORDER_COLOR = '#0078d4';
 
+/**
+ * 子実身アップロードの最大オブジェクト数
+ */
+export const MAX_CHILD_UPLOAD_OBJECTS = 10000;
+
 // ========================================
 // ユーティリティ関数
 // ========================================

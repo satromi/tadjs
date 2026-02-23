@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "name": "TRONかな配列",
+    "author": "TADjs Desktop",
+    "version": "1.0",
+    "description": "TRONプロジェクト準拠のかな入力配列。左右シフト同時打鍵方式。",
+    "reference": "https://www.personal-media.co.jp/utronkb/tron-layout.html"
+  },
+  "mapping": {
+    "KeyQ":  { "normal": "ら", "leftShift": "ひ", "rightShift": "び" },
+    "KeyW":  { "normal": "る", "leftShift": "そ", "rightShift": "ぞ" },
+    "KeyE":  { "normal": "こ", "leftShift": "・", "rightShift": "ご" },
+    "KeyR":  { "normal": "は", "leftShift": "ゃ", "rightShift": "ば" },
+    "KeyT":  { "normal": "ょ", "leftShift": "ほ", "rightShift": "ぼ" },
+
+    "KeyY":  { "normal": "き", "leftShift": "え", "rightShift": "ぎ" },
+    "KeyU":  { "normal": "の", "leftShift": "け", "rightShift": "げ" },
+    "KeyI":  { "normal": "く", "leftShift": "め", "rightShift": "ぐ" },
+    "KeyO":  { "normal": "あ", "leftShift": "む", "rightShift": "○" },
+    "KeyP":  { "normal": "れ", "leftShift": "ろ", "rightShift": "ゐ" },
+
+    "KeyA":  { "normal": "た", "leftShift": "ぬ", "rightShift": "だ" },
+    "KeyS":  { "normal": "と", "leftShift": "ね", "rightShift": "ど" },
+    "KeyD":  { "normal": "か", "leftShift": "ゅ", "rightShift": "が" },
+    "KeyF":  { "normal": "て", "leftShift": "よ", "rightShift": "で" },
+    "KeyG":  { "normal": "も", "leftShift": "ふ", "rightShift": "ぶ" },
+
+    "KeyH":  { "normal": "を", "leftShift": "お", "rightShift": "゛" },
+    "KeyJ":  { "normal": "い", "leftShift": "ち", "rightShift": "ぢ" },
+    "KeyK":  { "normal": "う", "leftShift": "ー", "rightShift": "ヴ" },
+    "KeyL":  { "normal": "し", "leftShift": "み", "rightShift": "じ" },
+    "Semicolon": { "normal": "ん", "leftShift": "や", "rightShift": "ゑ" },
+    "Quote": { "normal": "ー" },
+
+    "KeyZ":  { "normal": "ま", "leftShift": "ぇ", "rightShift": "ヵ" },
+    "KeyX":  { "normal": "り", "leftShift": "ぉ", "rightShift": "ヶ" },
+    "KeyC":  { "normal": "に", "leftShift": "せ", "rightShift": "ぜ" },
+    "KeyV":  { "normal": "さ", "leftShift": "ゆ", "rightShift": "ざ" },
+    "KeyB":  { "normal": "な", "leftShift": "へ", "rightShift": "べ" },
+
+    "KeyN":  { "normal": "す", "leftShift": "わ", "rightShift": "ず" },
+    "KeyM":  { "normal": "つ", "leftShift": "ぃ", "rightShift": "づ" },
+    "Comma": { "normal": "、", "leftShift": "ぁ", "rightShift": "，" },
+    "Period":{ "normal": "。", "leftShift": "゜", "rightShift": "．" },
+    "Slash": { "normal": "っ", "leftShift": "ぅ", "rightShift": "ゎ" }
+  },
+  "reverseMapping": {
+    "_auto": true
+  },
+  "handAssignment": {
+    "left": [
+      "Backquote", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5",
+      "Tab", "KeyQ", "KeyW", "KeyE", "KeyR", "KeyT",
+      "CapsLock", "KeyA", "KeyS", "KeyD", "KeyF", "KeyG",
+      "ShiftLeft", "KeyZ", "KeyX", "KeyC", "KeyV", "KeyB",
+      "ControlLeft", "MetaLeft", "AltLeft", "NonConvert"
+    ],
+    "right": [
+      "Digit6", "Digit7", "Digit8", "Digit9", "Digit0", "Minus", "Equal", "IntlYen", "Backspace",
+      "KeyY", "KeyU", "KeyI", "KeyO", "KeyP", "BracketLeft", "BracketRight", "Enter",
+      "KeyH", "KeyJ", "KeyK", "KeyL", "Semicolon", "Quote", "Backslash",
+      "KeyN", "KeyM", "Comma", "Period", "Slash", "IntlRo", "ShiftRight",
+      "Space", "Convert", "KanaMode", "AltRight", "ControlRight"
+    ]
+  },
+  "fingerAssignment": {
+    "left_pinky":  ["Backquote", "Digit1", "Tab", "KeyQ", "CapsLock", "KeyA", "ShiftLeft", "KeyZ", "ControlLeft"],
+    "left_ring":   ["Digit2", "KeyW", "KeyS", "KeyX"],
+    "left_middle": ["Digit3", "KeyE", "KeyD", "KeyC"],
+    "left_index":  ["Digit4", "Digit5", "KeyR", "KeyT", "KeyF", "KeyG", "KeyV", "KeyB"],
+    "left_thumb":  ["MetaLeft", "AltLeft", "NonConvert"],
+    "right_index": ["Digit6", "Digit7", "KeyY", "KeyU", "KeyH", "KeyJ", "KeyN", "KeyM"],
+    "right_middle":["Digit8", "KeyI", "KeyK", "Comma"],
+    "right_ring":  ["Digit9", "KeyO", "KeyL", "Period"],
+    "right_pinky": ["Digit0", "Minus", "Equal", "IntlYen", "Backspace", "KeyP", "BracketLeft", "BracketRight", "Enter", "Semicolon", "Quote", "Backslash", "Slash", "IntlRo", "ShiftRight"],
+    "right_thumb": ["Space", "Convert", "KanaMode", "AltRight", "ControlRight"]
+  }
+}
