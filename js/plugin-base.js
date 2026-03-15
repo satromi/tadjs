@@ -19,285 +19,17 @@ import {
 } from './util.js';
 import { getLogger } from './logger.js';
 import { throttle } from './performance-utils.js';
+import { DEFAULT_PATTERNS, resolvePatternColor } from './pattern-utils.js';
 import { PaperSize, PaperMargin, PAPER_SIZES, getPaperSizeOptions, pointsToMm, mmToPoints } from './paper-size.js';
+import { applyScrollbarMethods } from './plugin-base-scrollbar.js';
+import { applyVobjDragMethods } from './plugin-base-vobj-drag.js';
+import { TextStyleStateManager } from './text-style-manager.js';
+import { RequestQueueManager } from './request-queue-manager.js';
 
 const logger = getLogger('PluginBase');
 
-/**
- * テキストスタイル状態管理クラス
- * xmlTADの<font>/<text>タグの効果を段落間で維持するために使用
- */
-export class TextStyleStateManager {
-    constructor() {
-        this.reset();
-    }
-
-    /**
-     * 状態をデフォルト値にリセット
-     */
-    reset() {
-        // フォント属性
-        this.size = String(DEFAULT_FONT_SIZE);
-        this.color = DEFAULT_CHCOL;
-        this.face = '';
-        this.style = DEFAULT_FONT_STYLE;
-        this.weight = DEFAULT_FONT_WEIGHT;
-        this.stretch = DEFAULT_FONT_STRETCH;
-        // 文字送り属性
-        this.direction = '0';          // 文字送り方向 (0:横, 1:縦)
-        this.kerning = '0';            // カーニング (0:無効, 1:有効)
-        this.pattern = '0';            // 文字送りパターン
-        this.space = DEFAULT_LETTER_SPACING;  // 文字間隔
-        // テキスト属性
-        this.align = 'left';
-        this.lineHeight = '1';         // 行の高さ
-        this.textDirection = '0';      // テキスト方向 (0:横書き, 1:縦書き)
-    }
-
-    /**
-     * 属性を更新
-     * @param {string} attr - 属性名
-     * @param {string} value - 値（空文字列はデフォルトにリセット）
-     */
-    update(attr, value) {
-        const defaults = {
-            size: String(DEFAULT_FONT_SIZE),
-            color: DEFAULT_CHCOL,
-            face: '',
-            style: DEFAULT_FONT_STYLE,
-            weight: DEFAULT_FONT_WEIGHT,
-            stretch: DEFAULT_FONT_STRETCH,
-            direction: '0',
-            kerning: '0',
-            pattern: '0',
-            space: DEFAULT_LETTER_SPACING,
-            align: 'left',
-            lineHeight: '1',
-            textDirection: '0'
-        };
-
-        if (value === '' || value === null || value === undefined) {
-            this[attr] = defaults[attr];
-        } else {
-            this[attr] = value;
-        }
-    }
-
-    /**
-     * <font>タグから属性を更新
-     * @param {Object} attrs - 属性オブジェクト { size, color, face, style, weight, stretch, direction, kerning, pattern, space }
-     */
-    updateFromFontTag(attrs) {
-        if (attrs.size !== undefined) this.update('size', attrs.size);
-        if (attrs.color !== undefined) this.update('color', attrs.color);
-        if (attrs.face !== undefined) this.update('face', attrs.face);
-        if (attrs.style !== undefined) this.update('style', attrs.style);
-        if (attrs.weight !== undefined) this.update('weight', attrs.weight);
-        if (attrs.stretch !== undefined) this.update('stretch', attrs.stretch);
-        if (attrs.direction !== undefined) this.update('direction', attrs.direction);
-        if (attrs.kerning !== undefined) this.update('kerning', attrs.kerning);
-        if (attrs.pattern !== undefined) this.update('pattern', attrs.pattern);
-        if (attrs.space !== undefined) this.update('space', attrs.space);
-    }
-
-    /**
-     * <text>タグから属性を更新
-     * @param {Object} attrs - 属性オブジェクト { align, 'line-height', direction }
-     */
-    updateFromTextTag(attrs) {
-        if (attrs.align !== undefined) this.update('align', attrs.align);
-        if (attrs['line-height'] !== undefined) this.update('lineHeight', attrs['line-height']);
-        if (attrs.direction !== undefined) this.update('textDirection', attrs.direction);
-    }
-
-    /**
-     * 現在のフォント状態をCSSスタイル文字列として取得
-     * デフォルト値と異なる属性のみ出力
-     * @returns {string} CSSスタイル文字列
-     */
-    toCssStyle() {
-        let style = '';
-        if (this.size !== String(DEFAULT_FONT_SIZE)) style += `font-size: ${this.size}pt;`;
-        if (this.color !== DEFAULT_CHCOL) style += `color: ${this.color};`;
-        if (this.face) style += `font-family: ${this.face};`;
-        if (this.style !== DEFAULT_FONT_STYLE) style += `font-style: ${this.style};`;
-        if (this.weight !== DEFAULT_FONT_WEIGHT) style += `font-weight: ${this.weight};`;
-        if (this.stretch !== DEFAULT_FONT_STRETCH) style += `font-stretch: ${this.stretch};`;
-        if (this.space !== DEFAULT_LETTER_SPACING) style += `letter-spacing: ${this.space}px;`;
-        return style;
-    }
-
-    /**
-     * 現在のテキスト揃えをCSSスタイル文字列として取得
-     * @returns {string} CSSスタイル文字列
-     */
-    toAlignCssStyle() {
-        if (this.align !== 'left') {
-            return `text-align: ${this.align};`;
-        }
-        return '';
-    }
-
-    /**
-     * デフォルト以外のスタイルがあるか確認
-     * @returns {boolean} デフォルト以外のスタイルがあればtrue
-     */
-    hasNonDefaultStyle() {
-        return this.size !== String(DEFAULT_FONT_SIZE) ||
-               this.color !== DEFAULT_CHCOL ||
-               this.face !== '' ||
-               this.style !== DEFAULT_FONT_STYLE ||
-               this.weight !== DEFAULT_FONT_WEIGHT ||
-               this.stretch !== DEFAULT_FONT_STRETCH ||
-               this.space !== DEFAULT_LETTER_SPACING;
-    }
-
-    /**
-     * 現在の状態のコピーを作成
-     * @returns {TextStyleStateManager} コピー
-     */
-    clone() {
-        const copy = new TextStyleStateManager();
-        copy.size = this.size;
-        copy.color = this.color;
-        copy.face = this.face;
-        copy.style = this.style;
-        copy.weight = this.weight;
-        copy.stretch = this.stretch;
-        copy.direction = this.direction;
-        copy.kerning = this.kerning;
-        copy.pattern = this.pattern;
-        copy.space = this.space;
-        copy.align = this.align;
-        copy.lineHeight = this.lineHeight;
-        copy.textDirection = this.textDirection;
-        return copy;
-    }
-}
-
-/**
- * リクエストキュー管理クラス
- * - 並列実行数の制限
- * - 処理開始時からのタイムアウト計算
- * - 同一キーのリクエスト重複防止
- */
-class RequestQueueManager {
-    constructor() {
-        // 処理タイプ別のキュー
-        // Map<string, { queue: Array, active: number, maxConcurrent: number }>
-        this._queues = new Map();
-
-        // 同一キーのリクエスト重複防止用
-        // Map<string, Promise>
-        this._pendingRequests = new Map();
-    }
-
-    /**
-     * キュー設定を登録
-     * @param {string} queueType - キュータイプ（例: 'load-data-file', 'load-real-object'）
-     * @param {number} maxConcurrent - 最大同時実行数
-     */
-    registerQueue(queueType, maxConcurrent = 10) {
-        this._queues.set(queueType, {
-            queue: [],
-            active: 0,
-            maxConcurrent: maxConcurrent
-        });
-    }
-
-    /**
-     * リクエストをキューに追加して実行
-     * @param {string} queueType - キュータイプ
-     * @param {string} requestKey - リクエストの一意キー（重複防止用、nullで重複防止無効）
-     * @param {Function} requestFn - 実行する非同期関数
-     * @param {number} timeout - タイムアウト（ms）
-     * @returns {Promise} 処理結果
-     */
-    async enqueue(queueType, requestKey, requestFn, timeout) {
-        // 同一キーのリクエストが実行中なら、そのPromiseを返す（重複防止）
-        if (requestKey && this._pendingRequests.has(requestKey)) {
-            return this._pendingRequests.get(requestKey);
-        }
-
-        const queueInfo = this._queues.get(queueType);
-        if (!queueInfo) {
-            // 未登録のキュータイプは直接実行
-            return this._executeWithTimeout(requestFn, timeout);
-        }
-
-        // Promiseを作成してキューに追加
-        let resolvePromise, rejectPromise;
-        const promise = new Promise((resolve, reject) => {
-            resolvePromise = resolve;
-            rejectPromise = reject;
-        });
-
-        queueInfo.queue.push({
-            requestFn,
-            timeout,
-            resolve: resolvePromise,
-            reject: rejectPromise
-        });
-
-        // 重複防止マップに登録
-        if (requestKey) {
-            this._pendingRequests.set(requestKey, promise);
-            // finally()は新しいPromiseを生成するため、元のrejectが伝播して
-            // Uncaught (in promise) エラーになる。catch()で抑制する。
-            promise.finally(() => {
-                this._pendingRequests.delete(requestKey);
-            }).catch(() => {});
-        }
-
-        // キュー処理を開始
-        this._processQueue(queueType);
-
-        return promise;
-    }
-
-    /**
-     * キューから次のリクエストを処理
-     * @private
-     */
-    _processQueue(queueType) {
-        const queueInfo = this._queues.get(queueType);
-        if (!queueInfo) return;
-
-        // 最大同時実行数に達している場合は待機
-        while (queueInfo.active < queueInfo.maxConcurrent && queueInfo.queue.length > 0) {
-            const request = queueInfo.queue.shift();
-            queueInfo.active++;
-
-            // 処理開始時からタイムアウトを計算
-            this._executeWithTimeout(request.requestFn, request.timeout)
-                .then(request.resolve)
-                .catch(request.reject)
-                .finally(() => {
-                    queueInfo.active--;
-                    this._processQueue(queueType);
-                });
-        }
-    }
-
-    /**
-     * タイムアウト付きで関数を実行
-     * @private
-     */
-    async _executeWithTimeout(fn, timeout) {
-        if (!timeout || timeout <= 0) {
-            return fn();
-        }
-
-        return Promise.race([
-            fn(),
-            new Promise((_, reject) => {
-                setTimeout(() => {
-                    reject(new Error(`Request timeout after ${timeout}ms`));
-                }, timeout);
-            })
-        ]);
-    }
-}
+// TextStyleStateManager を再エクスポート（後方互換性）
+export { TextStyleStateManager };
 
 /**
  * プラグイン共通基底クラス
@@ -431,6 +163,38 @@ export class PluginBase {
     }
 
     /**
+     * 共通初期化セットアップ（テンプレートメソッド）
+     * プラグインのinit()から呼び出すことで、定型的な初期化処理をまとめて実行する。
+     * initializeCommonComponents + setupMessageBusHandlers + setupWindowActivation + setupContextMenu を一括実行。
+     *
+     * @param {string} logPrefix - ログプレフィックス（例: '[TextEditor]'）
+     * @param {Object} [options={}] - オプション
+     * @param {boolean} [options.contextMenu=true] - コンテキストメニューを設定するか
+     * @param {boolean} [options.windowActivation=true] - ウィンドウアクティベーションを設定するか
+     */
+    initCommonSetup(logPrefix = '', options = {}) {
+        const { contextMenu = true, windowActivation = true } = options;
+
+        // 共通コンポーネントの初期化
+        this.initializeCommonComponents(logPrefix);
+
+        // MessageBusハンドラの登録
+        if (this.messageBus && typeof this.setupMessageBusHandlers === 'function') {
+            this.setupMessageBusHandlers();
+        }
+
+        // ウィンドウアクティベーションの設定
+        if (windowActivation && typeof this.setupWindowActivation === 'function') {
+            this.setupWindowActivation();
+        }
+
+        // コンテキストメニューの設定
+        if (contextMenu && typeof this.setupContextMenu === 'function') {
+            this.setupContextMenu();
+        }
+    }
+
+    /**
      * 共通コンポーネントを初期化
      * 各プラグインのinit()から呼び出すこと
      * @param {string} logPrefix - IconCacheManagerのログプレフィックス（例: '[EDITOR]'）
@@ -453,21 +217,7 @@ export class PluginBase {
         this._initScrollbarWidthVariable();
     }
 
-    /**
-     * スクロールバー幅のCSS変数をiframe内に設定
-     * localStorageから読み取り、--scrollbar-width変数を設定
-     * @private
-     */
-    _initScrollbarWidthVariable() {
-        try {
-            const scrollbarWidth = localStorage.getItem('scrollbar-width') || '12';
-            document.documentElement.style.setProperty('--scrollbar-width', scrollbarWidth + 'px');
-            logger.debug(`[${this.pluginName}] Scrollbar width CSS variable set: ${scrollbarWidth}px`);
-        } catch (error) {
-            // localStorageアクセスエラー時はデフォルト値を使用
-            document.documentElement.style.setProperty('--scrollbar-width', '12px');
-        }
-    }
+    // _initScrollbarWidthVariable() → plugin-base-scrollbar.js に移動
 
     // ========================================
     // 実身データアクセス
@@ -555,16 +305,7 @@ export class PluginBase {
                 if (jsonFile) {
                     const jsonText = await jsonFile.text();
                     const jsonData = JSON.parse(jsonText);
-
-                    virtualObj.applist = jsonData.applist || {};
-                    virtualObj.metadata = jsonData;
-                    virtualObj.updateDate = jsonData.updateDate;
-
-                    // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
-                    if (jsonData.name && virtualObj.link_name !== jsonData.name) {
-                        virtualObj.link_name = jsonData.name;
-                    }
-
+                    this._applyMetadataToVirtualObj(virtualObj, jsonData);
                     return;
                 }
             }
@@ -574,15 +315,7 @@ export class PluginBase {
                 const jsonFile = await this.loadDataFileFromParent(jsonFileName);
                 const jsonText = await jsonFile.text();
                 const jsonData = JSON.parse(jsonText);
-                virtualObj.applist = jsonData.applist || {};
-                virtualObj.metadata = jsonData;
-                virtualObj.updateDate = jsonData.updateDate;
-
-                // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
-                if (jsonData.name && virtualObj.link_name !== jsonData.name) {
-                    virtualObj.link_name = jsonData.name;
-                }
-
+                this._applyMetadataToVirtualObj(virtualObj, jsonData);
                 return;
             } catch (loadError) {
                 // MessageBus経由でも失敗した場合はデフォルト値を設定
@@ -594,6 +327,23 @@ export class PluginBase {
         } catch (error) {
             logger.debug(`[${this.pluginName}] loadVirtualObjectMetadata エラー:`, error.message);
             virtualObj.applist = virtualObj.applist || {};
+        }
+    }
+
+    /**
+     * メタデータJSONを仮身オブジェクトに適用する共通処理
+     * @param {Object} virtualObj - 仮身オブジェクト
+     * @param {Object} jsonData - パース済みJSONデータ
+     * @private
+     */
+    _applyMetadataToVirtualObj(virtualObj, jsonData) {
+        virtualObj.applist = jsonData.applist || {};
+        virtualObj.metadata = jsonData;
+        virtualObj.updateDate = jsonData.updateDate;
+
+        // 実身名とlink_nameの同期: JSON.nameが存在し異なる場合はJSON.nameを優先
+        if (jsonData.name && virtualObj.link_name !== jsonData.name) {
+            virtualObj.link_name = jsonData.name;
         }
     }
 
@@ -773,6 +523,52 @@ export class PluginBase {
             logger.error(`[${this.pluginName}] expandVirtualObject エラー:`, error);
             return null;
         }
+    }
+
+    // ========================================
+    // UIヘルパー
+    // ========================================
+
+    /**
+     * タブ切り替えUIを初期化する共通メソッド
+     * .tab要素のクリックで対応する.tab-panel要素を表示切替する。
+     * @param {Object} options - オプション
+     * @param {string} options.tabSelector - タブ要素のCSSセレクタ（デフォルト: '.tab'）
+     * @param {string} options.panelSelector - パネル要素のCSSセレクタ（デフォルト: '.tab-panel'）
+     * @param {string} options.dataAttribute - タブのdata属性名（デフォルト: 'tab'、つまりdata-tab）
+     * @param {Function|null} options.onTabChange - タブ切替時のコールバック（引数: targetTab文字列）
+     */
+    initTabSwitcher(options = {}) {
+        const {
+            tabSelector = '.tab',
+            panelSelector = '.tab-panel',
+            dataAttribute = 'tab',
+            onTabChange = null
+        } = options;
+
+        const tabs = document.querySelectorAll(tabSelector);
+        const panels = document.querySelectorAll(panelSelector);
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const targetTab = tab.dataset[dataAttribute];
+
+                // 全タブの選択を解除
+                tabs.forEach(t => t.classList.remove('active'));
+                panels.forEach(p => p.classList.remove('active'));
+
+                // クリックしたタブを選択
+                tab.classList.add('active');
+                const panel = document.getElementById(targetTab + '-panel');
+                if (panel) {
+                    panel.classList.add('active');
+                }
+
+                if (onTabChange) {
+                    onTabChange(targetTab);
+                }
+            });
+        });
     }
 
     // ========================================
@@ -1313,12 +1109,51 @@ export class PluginBase {
     }
 
     /**
+     * 仮身ネットワークウィンドウを開く
+     * contextMenuVirtualObjectからrealIdを取得して開く
+     */
+    openVirtualObjectNetwork() {
+        if (!this.contextMenuVirtualObject) {
+            logger.warn(`[${this.pluginName}] 仮身が選択されていません`);
+            this.setStatus('仮身を選択してください');
+            return;
+        }
+
+        const realId = this.contextMenuVirtualObject.realId;
+        if (!realId) {
+            logger.warn(`[${this.pluginName}] 実身IDが取得できません`);
+            this.setStatus('実身IDが取得できません');
+            return;
+        }
+
+        window.RealObjectSystem.openVirtualObjectNetwork(this, realId);
+    }
+
+    /**
+     * 実身/仮身検索ウィンドウを開く
+     */
+    openRealObjectSearch() {
+        window.RealObjectSystem.openRealObjectSearch(this);
+    }
+
+    /**
      * linkIdから実身IDを抽出
      * @param {string} linkId - リンクID
      * @returns {string} 実身ID
      */
     extractRealId(linkId) {
         return window.RealObjectSystem.extractRealId(linkId);
+    }
+
+    /**
+     * HTMLエスケープ
+     * @param {string} text - エスケープする文字列
+     * @returns {string} エスケープ済みHTML
+     */
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = String(text);
+        return div.innerHTML;
     }
 
     // ========================================
@@ -1409,6 +1244,45 @@ export class PluginBase {
      *
      * @param {number} x 元のX座標
      * @param {number} y 元のY座標
+     * HTMLをサニタイズして安全な文字列を返す
+     * DOMParserで解析し、危険な要素・属性を除去する
+     * @param {string} html サニタイズ対象のHTML文字列
+     * @returns {string} サニタイズ済みHTML
+     */
+    sanitizeHtml(html) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        // 危険なタグを除去
+        const dangerousTags = ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'button', 'link', 'meta', 'base'];
+        dangerousTags.forEach(tag => {
+            const elements = doc.body.querySelectorAll(tag);
+            elements.forEach(el => el.remove());
+        });
+
+        // 全要素からイベント属性を除去
+        const allElements = doc.body.querySelectorAll('*');
+        allElements.forEach(el => {
+            const attrs = Array.from(el.attributes);
+            attrs.forEach(attr => {
+                // on* イベント属性を除去
+                if (attr.name.toLowerCase().startsWith('on')) {
+                    el.removeAttribute(attr.name);
+                }
+                // javascript: URIスキームを除去
+                if (['href', 'src', 'action', 'xlink:href'].includes(attr.name.toLowerCase())) {
+                    const val = attr.value.trim().toLowerCase();
+                    if (val.startsWith('javascript:') || val.startsWith('data:text/html') || val.startsWith('vbscript:')) {
+                        el.removeAttribute(attr.name);
+                    }
+                }
+            });
+        });
+
+        return doc.body.innerHTML;
+    }
+
+    /**
      * @param {Object} transform 変換パラメータ
      * @param {number} transform.dh 水平移動量
      * @param {number} transform.dv 垂直移動量
@@ -1725,425 +1599,16 @@ export class PluginBase {
      * サブクラスのinit()から呼び出すこと
      */
     setupWindowActivation() {
-        document.addEventListener('mousedown', () => {
+        if (this._windowActivationSetup) return;
+        this._windowActivationSetup = true;
+
+        this._windowActivationHandler = () => {
             this.activateWindow();
-        });
-    }
-
-    // ========================================
-    // スクロール通知機能（MessageBus経由）
-    // ========================================
-
-    /**
-     * スクロール通知機能を初期化
-     * スクロールコンテナのscrollイベントを監視し、MessageBus経由で親に通知
-     *
-     * サブクラスのinit()から呼び出すこと
-     * scrollContainerSelectorで対象を指定可能（デフォルト: .plugin-content）
-     */
-    initScrollNotification() {
-        const container = document.querySelector(this.scrollContainerSelector);
-        if (!container) {
-            logger.warn(`[${this.pluginName}] スクロールコンテナが見つかりません: ${this.scrollContainerSelector}`);
-            return;
-        }
-
-        if (!this.messageBus) {
-            logger.warn(`[${this.pluginName}] MessageBusが未初期化のためスクロール通知をスキップ`);
-            return;
-        }
-
-        // スクロールコンテナをキャッシュ（onInit()での初期送信用）
-        this._scrollContainer = container;
-
-        // スクロールイベントをthrottle（16ms ≒ 60fps）
-        const throttledHandler = throttle(() => {
-            this._sendScrollState(container);
-        }, 16);
-
-        container.addEventListener('scroll', throttledHandler);
-
-        this._scrollNotificationEnabled = true;
-
-        // 既にwindowIdが設定されている場合は即座に送信
-        // （通常はonInit()で送信されるため、ここでは既存windowIdがある場合のみ）
-        if (this.windowId) {
-            this._sendScrollState(container);
-        }
-    }
-
-    /**
-     * スクロール状態変更を親ウィンドウに手動通知
-     * プログラムによるスクロール（scrollIntoView等）後に呼び出すこと
-     *
-     * 使用例:
-     *   this.scrollCellIntoView(cell);
-     *   this.notifyScrollChange();
-     */
-    notifyScrollChange() {
-        if (!this._scrollNotificationEnabled || !this._scrollContainer) {
-            return;
-        }
-        this._sendScrollState(this._scrollContainer);
-    }
-
-    /**
-     * スクロール状態をMessageBus経由で親に送信
-     * @param {HTMLElement} container - スクロールコンテナ
-     * @private
-     */
-    _sendScrollState(container) {
-        if (!this.messageBus || !this.windowId) return;
-
-        const state = {
-            scrollTop: container.scrollTop,
-            scrollLeft: container.scrollLeft,
-            scrollHeight: container.scrollHeight,
-            scrollWidth: container.scrollWidth,
-            clientHeight: container.clientHeight,
-            clientWidth: container.clientWidth
         };
-
-        // 前回と同じ状態なら送信しない
-        if (this._lastScrollState &&
-            this._lastScrollState.scrollTop === state.scrollTop &&
-            this._lastScrollState.scrollLeft === state.scrollLeft &&
-            this._lastScrollState.scrollHeight === state.scrollHeight &&
-            this._lastScrollState.scrollWidth === state.scrollWidth &&
-            this._lastScrollState.clientHeight === state.clientHeight &&
-            this._lastScrollState.clientWidth === state.clientWidth) {
-            return;
-        }
-
-        this._lastScrollState = state;
-
-        this.messageBus.send('scroll-state-update', {
-            windowId: this.windowId,
-            ...state
-        });
+        document.addEventListener('mousedown', this._windowActivationHandler);
     }
 
-    /**
-     * 親からのスクロール位置設定要求を処理
-     * @param {Object} data - { scrollTop?: number, scrollLeft?: number }
-     */
-    handleSetScrollPosition(data) {
-        const container = document.querySelector(this.scrollContainerSelector);
-        if (!container) return;
-
-        if (typeof data.scrollTop === 'number') {
-            container.scrollTop = data.scrollTop;
-        }
-        if (typeof data.scrollLeft === 'number') {
-            container.scrollLeft = data.scrollLeft;
-        }
-    }
-
-    // ========================================
-    // カスタムスクロールバー機能
-    // ========================================
-
-    /**
-     * カスタムスクロールバーを初期化
-     * btron-desktop.cssのスクロールバースタイルを使用してカスタムスクロールバーを表示
-     *
-     * @param {string} containerSelector - スクロールコンテナのCSSセレクタ
-     * @param {Object} options - オプション
-     * @param {boolean} options.vertical - 縦スクロールバーを表示（デフォルト: true）
-     * @param {boolean} options.horizontal - 横スクロールバーを表示（デフォルト: false）
-     *
-     * @example
-     * // 縦スクロールバーのみ
-     * this.initCustomScrollbar('.tab-content');
-     *
-     * // 縦横両方
-     * this.initCustomScrollbar('.content', { vertical: true, horizontal: true });
-     */
-    initCustomScrollbar(containerSelector, options = {}) {
-        const { vertical = true, horizontal = false } = options;
-        const container = document.querySelector(containerSelector);
-
-        if (!container) {
-            logger.warn(`[${this.pluginName}] カスタムスクロールバー: コンテナが見つかりません: ${containerSelector}`);
-            return;
-        }
-
-        // ラッパーを作成してコンテナを囲む
-        const wrapper = document.createElement('div');
-        wrapper.className = 'plugin-scrollbar-wrapper';
-
-        // コンテナの親に挿入し、コンテナをラッパーに移動
-        container.parentNode.insertBefore(wrapper, container);
-        wrapper.appendChild(container);
-
-        // コンテナにスクロールコンテンツ用クラス追加
-        container.classList.add('plugin-scrollbar-content');
-
-        // 既存のObserverを切断（再初期化対策）
-        if (this._scrollbarResizeObserver) {
-            this._scrollbarResizeObserver.disconnect();
-        }
-        if (this._scrollbarMutationObserver) {
-            this._scrollbarMutationObserver.disconnect();
-        }
-
-        // カスタムスクロールバー状態を保存
-        this._customScrollbars = this._customScrollbars || {};
-        this._scrollbarWrapper = wrapper;
-        this._scrollContainer = container;
-
-        // 縦スクロールバー（ラッパーに追加）
-        if (vertical) {
-            this._createCustomScrollbar(wrapper, container, 'vertical');
-        }
-
-        // 横スクロールバー（ラッパーに追加）
-        if (horizontal) {
-            this._createCustomScrollbar(wrapper, container, 'horizontal');
-        }
-
-        // スクロールコーナー（縦横両方の場合）
-        if (vertical && horizontal) {
-            this._createScrollCorner(wrapper);
-        }
-
-        // スクロールイベントでツマミ位置を同期
-        container.addEventListener('scroll', throttle(() => {
-            this._updateScrollbarThumbPosition(container, 'vertical');
-            this._updateScrollbarThumbPosition(container, 'horizontal');
-        }, 16));
-
-        // ResizeObserverでコンテナサイズ変更を監視
-        this._scrollbarResizeObserver = new ResizeObserver(() => {
-            this._updateScrollbarVisibility(container, 'vertical');
-            this._updateScrollbarVisibility(container, 'horizontal');
-            this._updateScrollbarThumbPosition(container, 'vertical');
-            this._updateScrollbarThumbPosition(container, 'horizontal');
-        });
-        this._scrollbarResizeObserver.observe(container);
-
-        // MutationObserverでコンテンツ変更・属性変更を監視
-        this._scrollbarMutationObserver = new MutationObserver(() => {
-            // レイアウト再計算を待ってから更新
-            requestAnimationFrame(() => {
-                this._updateScrollbarVisibility(container, 'vertical');
-                this._updateScrollbarVisibility(container, 'horizontal');
-                this._updateScrollbarThumbPosition(container, 'vertical');
-                this._updateScrollbarThumbPosition(container, 'horizontal');
-            });
-        });
-        // childList: コンテンツ追加/削除, attributes: class変更（タブ切替）, subtree: 子孫要素も監視
-        this._scrollbarMutationObserver.observe(container, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['class', 'style']
-        });
-
-        // 初期状態を設定（即座に実行してチラつきを防ぐ）
-        this._updateScrollbarVisibility(container, 'vertical');
-        this._updateScrollbarVisibility(container, 'horizontal');
-        this._updateScrollbarThumbPosition(container, 'vertical');
-        this._updateScrollbarThumbPosition(container, 'horizontal');
-
-        logger.debug(`[${this.pluginName}] カスタムスクロールバー初期化完了: ${containerSelector}`);
-    }
-
-    /**
-     * カスタムスクロールバーDOM要素を作成
-     * @param {HTMLElement} wrapper - スクロールバーを配置するラッパー要素
-     * @param {HTMLElement} scrollContainer - スクロールコンテナ
-     * @param {string} direction - 'vertical' | 'horizontal'
-     * @private
-     */
-    _createCustomScrollbar(wrapper, scrollContainer, direction) {
-        const scrollbar = document.createElement('div');
-        scrollbar.className = `custom-scrollbar ${direction}`;
-
-        const track = document.createElement('div');
-        track.className = 'scroll-track';
-
-        const thumb = document.createElement('div');
-        thumb.className = 'scroll-thumb';
-
-        const indicator = document.createElement('div');
-        indicator.className = 'scroll-thumb-indicator';
-
-        thumb.appendChild(indicator);
-        track.appendChild(thumb);
-        scrollbar.appendChild(track);
-        wrapper.appendChild(scrollbar);  // ラッパーに追加（スクロール領域の外）
-
-        // ツマミドラッグイベントを設定
-        this._setupThumbDrag(scrollContainer, thumb, direction);
-
-        // トラッククリックでスクロール
-        track.addEventListener('click', (e) => {
-            if (e.target === thumb || thumb.contains(e.target)) return;
-            this._handleTrackClick(scrollContainer, track, e, direction);
-        });
-
-        // 状態を保存
-        this._customScrollbars[direction] = { scrollbar, track, thumb };
-    }
-
-    /**
-     * スクロールコーナーを作成
-     * @param {HTMLElement} container - スクロールコンテナ
-     * @private
-     */
-    _createScrollCorner(container) {
-        const corner = document.createElement('div');
-        corner.className = 'scroll-corner';
-        container.appendChild(corner);
-        this._customScrollbars.corner = corner;
-    }
-
-    /**
-     * ツマミのドラッグイベントを設定
-     * @param {HTMLElement} container - スクロールコンテナ
-     * @param {HTMLElement} thumb - ツマミ要素
-     * @param {string} direction - 'vertical' | 'horizontal'
-     * @private
-     */
-    _setupThumbDrag(container, thumb, direction) {
-        let isDragging = false;
-        let startPos = 0;
-        let startScroll = 0;
-
-        const onMouseDown = (e) => {
-            e.preventDefault();
-            isDragging = true;
-            thumb.classList.add('dragging');
-            startPos = direction === 'vertical' ? e.clientY : e.clientX;
-            startScroll = direction === 'vertical' ? container.scrollTop : container.scrollLeft;
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', onMouseUp);
-        };
-
-        const onMouseMove = (e) => {
-            if (!isDragging) return;
-
-            const scrollbarData = this._customScrollbars[direction];
-            if (!scrollbarData) return;
-
-            const track = scrollbarData.track;
-            const trackRect = track.getBoundingClientRect();
-            const currentPos = direction === 'vertical' ? e.clientY : e.clientX;
-            const delta = currentPos - startPos;
-
-            // トラックサイズに対するスクロール量を計算
-            const trackSize = direction === 'vertical' ? trackRect.height : trackRect.width;
-            const contentSize = direction === 'vertical' ? container.scrollHeight : container.scrollWidth;
-            const viewportSize = direction === 'vertical' ? container.clientHeight : container.clientWidth;
-
-            const scrollRatio = contentSize / trackSize;
-            const newScroll = startScroll + (delta * scrollRatio);
-
-            if (direction === 'vertical') {
-                container.scrollTop = Math.max(0, Math.min(newScroll, contentSize - viewportSize));
-            } else {
-                container.scrollLeft = Math.max(0, Math.min(newScroll, contentSize - viewportSize));
-            }
-        };
-
-        const onMouseUp = () => {
-            isDragging = false;
-            thumb.classList.remove('dragging');
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
-        };
-
-        thumb.addEventListener('mousedown', onMouseDown);
-    }
-
-    /**
-     * トラッククリック時のスクロール処理
-     * @param {HTMLElement} container - スクロールコンテナ
-     * @param {HTMLElement} track - トラック要素
-     * @param {MouseEvent} e - クリックイベント
-     * @param {string} direction - 'vertical' | 'horizontal'
-     * @private
-     */
-    _handleTrackClick(container, track, e, direction) {
-        const trackRect = track.getBoundingClientRect();
-        const clickPos = direction === 'vertical'
-            ? e.clientY - trackRect.top
-            : e.clientX - trackRect.left;
-        const trackSize = direction === 'vertical' ? trackRect.height : trackRect.width;
-
-        const contentSize = direction === 'vertical' ? container.scrollHeight : container.scrollWidth;
-        const viewportSize = direction === 'vertical' ? container.clientHeight : container.clientWidth;
-
-        const scrollRatio = clickPos / trackSize;
-        const targetScroll = (contentSize - viewportSize) * scrollRatio;
-
-        if (direction === 'vertical') {
-            container.scrollTop = targetScroll;
-        } else {
-            container.scrollLeft = targetScroll;
-        }
-    }
-
-    /**
-     * スクロールバーのツマミ位置を更新
-     * @param {HTMLElement} container - スクロールコンテナ
-     * @param {string} direction - 'vertical' | 'horizontal'
-     * @private
-     */
-    _updateScrollbarThumbPosition(container, direction) {
-        const scrollbarData = this._customScrollbars?.[direction];
-        if (!scrollbarData) return;
-
-        const { track, thumb } = scrollbarData;
-        const trackRect = track.getBoundingClientRect();
-        const trackSize = direction === 'vertical' ? trackRect.height : trackRect.width;
-
-        const contentSize = direction === 'vertical' ? container.scrollHeight : container.scrollWidth;
-        const viewportSize = direction === 'vertical' ? container.clientHeight : container.clientWidth;
-        const scrollPos = direction === 'vertical' ? container.scrollTop : container.scrollLeft;
-
-        // ツマミサイズ（最小20px）
-        const thumbSize = Math.max(20, (viewportSize / contentSize) * trackSize);
-
-        // ツマミ位置
-        const maxScroll = contentSize - viewportSize;
-        const scrollRatio = maxScroll > 0 ? scrollPos / maxScroll : 0;
-        const thumbPos = scrollRatio * (trackSize - thumbSize);
-
-        if (direction === 'vertical') {
-            thumb.style.height = `${thumbSize}px`;
-            thumb.style.top = `${thumbPos}px`;
-        } else {
-            thumb.style.width = `${thumbSize}px`;
-            thumb.style.left = `${thumbPos}px`;
-        }
-    }
-
-    /**
-     * スクロールバーの表示/非表示を更新
-     * @param {HTMLElement} container - スクロールコンテナ
-     * @param {string} direction - 'vertical' | 'horizontal'
-     * @private
-     */
-    _updateScrollbarVisibility(container, direction) {
-        const scrollbarData = this._customScrollbars?.[direction];
-        if (!scrollbarData) return;
-
-        const { scrollbar } = scrollbarData;
-        const contentSize = direction === 'vertical' ? container.scrollHeight : container.scrollWidth;
-        const viewportSize = direction === 'vertical' ? container.clientHeight : container.clientWidth;
-
-        // スクロール可能な場合のみ表示（常に表示する場合はコメントアウト）
-        const needsScrollbar = contentSize > viewportSize;
-        scrollbar.style.display = needsScrollbar ? 'block' : 'none';
-
-        // ツマミも表示/非表示を切り替え
-        const thumb = scrollbarData.thumb;
-        if (thumb) {
-            thumb.style.display = needsScrollbar ? 'flex' : 'none';
-        }
-    }
+    // スクロール通知・カスタムスクロールバー機能 → plugin-base-scrollbar.js に移動
 
     /**
      * コンテキストメニューハンドラを設定
@@ -2153,7 +1618,10 @@ export class PluginBase {
      * カスタム処理が必要な場合は onContextMenu(e) をオーバーライド
      */
     setupContextMenu() {
-        document.addEventListener('contextmenu', (e) => {
+        if (this._contextMenuSetup) return;
+        this._contextMenuSetup = true;
+
+        this._contextMenuHandler = (e) => {
             e.preventDefault();
 
             // サブクラスでカスタム処理を行うフック
@@ -2161,11 +1629,12 @@ export class PluginBase {
 
             // コンテキストメニュー要求を送信（共通メソッドを使用）
             this.showContextMenuAtEvent(e);
-        });
-
-        document.addEventListener('click', () => {
+        };
+        this._contextMenuClickHandler = () => {
             this.closeContextMenu();
-        });
+        };
+        document.addEventListener('contextmenu', this._contextMenuHandler);
+        document.addEventListener('click', this._contextMenuClickHandler);
     }
 
     /**
@@ -2448,517 +1917,9 @@ export class PluginBase {
         });
     }
 
-    // ========================================
-    // ドラッグ関連の共通メソッド
-    // ========================================
+    // ドラッグ関連の共通メソッド → plugin-base-vobj-drag.js に移動
 
-    /**
-     * ダブルクリック+ドラッグ候補を設定
-     * @param {HTMLElement} element - ダブルクリックされた要素
-     * @param {MouseEvent} event - マウスイベント
-     */
-    setDoubleClickDragCandidate(element, event) {
-        this.dblClickDragState.isDblClickDragCandidate = true;
-        this.dblClickDragState.dblClickedElement = element;
-        this.dblClickDragState.startX = event.clientX;
-        this.dblClickDragState.startY = event.clientY;
-    }
-
-    /**
-     * ダブルクリックタイマーをリセット（通常のクリック時）
-     */
-    resetDoubleClickTimer() {
-        this.dblClickDragState.lastClickTime = Date.now();
-        this.dblClickDragState.isDblClickDragCandidate = false;
-    }
-
-    /**
-     * ダブルクリック+ドラッグを開始すべきか判定
-     * @param {MouseEvent} event - マウスイベント
-     * @param {number} threshold - ドラッグ開始のしきい値（px）
-     * @returns {boolean} ドラッグを開始すべきならtrue
-     */
-    shouldStartDblClickDrag(event, threshold = 5) {
-        // ダブルクリック候補でない、または既にドラッグ中の場合はfalse
-        if (!this.dblClickDragState.isDblClickDragCandidate || this.dblClickDragState.isDblClickDrag) {
-            return false;
-        }
-
-        const deltaX = event.clientX - this.dblClickDragState.startX;
-        const deltaY = event.clientY - this.dblClickDragState.startY;
-
-        // しきい値以上移動した場合、ドラッグ開始
-        if (Math.abs(deltaX) > threshold || Math.abs(deltaY) > threshold) {
-            this.dblClickDragState.isDblClickDrag = true;
-            this.dblClickDragState.isDblClickDragCandidate = false;
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * ダブルクリック+ドラッグ状態をクリーンアップ
-     * 各プラグインは、このメソッドを呼び出した後、固有のプロパティをクリーンアップすること
-     * （例: dragPreview, dblClickedShape, dblClickedObject など）
-     */
-    cleanupDblClickDragState() {
-        this.dblClickDragState.isDblClickDrag = false;
-        this.dblClickDragState.isDblClickDragCandidate = false;
-        this.dblClickDragState.dblClickedElement = null;
-    }
-
-    // ========================================
-    // 仮身ドラッグ関連の共通メソッド
-    // ========================================
-
-    /**
-     * 仮身ドラッグ用の右ボタンイベントハンドラーを設定
-     * documentレベルでmousedown/mouseupを監視し、コピーモードを制御
-     *
-     * サブクラスは init() で this.setupVirtualObjectRightButtonHandlers() を呼び出すこと
-     *
-     * 動作:
-     * - 右ボタン押下時: isRightButtonPressedフラグをtrue、ドラッグ中ならコピーモードに切り替え
-     * - 右ボタン解放時: isRightButtonPressedフラグをfalse
-     * - 左ボタン解放時: 右ボタンが押されたままならコピーモードに切り替え
-     */
-    setupVirtualObjectRightButtonHandlers() {
-        // mousedown: 右ボタン押下検出
-        document.addEventListener('mousedown', (e) => {
-            if (e.button === 2) {
-                this.virtualObjectDragState.isRightButtonPressed = true;
-
-                // ドラッグ中かつ移動済みならコピーモードに即座に切り替え
-                if (this.virtualObjectDragState.isDragging &&
-                    this.virtualObjectDragState.hasMoved) {
-                    this.virtualObjectDragState.dragMode = 'copy';
-                    this.onDragModeChanged?.('copy'); // サブクラスフック
-                }
-            }
-        });
-
-        // mouseup: 右ボタン解放検出
-        document.addEventListener('mouseup', (e) => {
-            if (e.button === 2) {
-                this.virtualObjectDragState.isRightButtonPressed = false;
-
-                // コピーモードのドラッグ中なら左ボタンmouseupを待つ
-                if (this.virtualObjectDragState.isDragging &&
-                    this.virtualObjectDragState.dragMode === 'copy') {
-                    return;
-                }
-            }
-
-            // 左ボタンmouseup時の最終判定
-            if (e.button === 0 && this.virtualObjectDragState.isDragging) {
-                const isRightStillPressed = (e.buttons & 2) !== 0 ||
-                                           this.virtualObjectDragState.isRightButtonPressed;
-
-                if (this.virtualObjectDragState.hasMoved && isRightStillPressed) {
-                    this.virtualObjectDragState.dragMode = 'copy';
-                    this.onDragModeChanged?.('copy'); // サブクラスフック
-                    return;
-                }
-            }
-        });
-    }
-
-    /**
-     * 仮身ドラッグ開始時の共通処理
-     * サブクラスのdragstartハンドラーから呼び出す
-     *
-     * 実行内容:
-     * - ドラッグ状態を初期化（dragMode, hasMoved, isDragging, startX/Y）
-     * - 右ボタンが既に押されている場合はコピーモードに設定
-     * - dataTransfer.effectAllowedを設定
-     *
-     * @param {DragEvent} e - dragstartイベント
-     * @returns {Object} ドラッグデータ { dragMode, hasMoved }
-     */
-    initializeVirtualObjectDragStart(e) {
-        // ドラッグ状態を初期化
-        this.virtualObjectDragState.dragMode = 'move'; // デフォルト
-        this.virtualObjectDragState.hasMoved = false;
-        this.virtualObjectDragState.isDragging = true;
-        this.virtualObjectDragState.startX = e.clientX;
-        this.virtualObjectDragState.startY = e.clientY;
-
-        // 右ボタンの実際の状態を確認（e.buttonsビットマスク: 2 = 右ボタン）
-        // これにより、isRightButtonPressedの状態が古い場合も正しく同期される
-        const isRightActuallyPressed = (e.buttons & 2) !== 0;
-        this.virtualObjectDragState.isRightButtonPressed = isRightActuallyPressed;
-
-        // 右ボタンが実際に押されている場合はコピーモード
-        if (isRightActuallyPressed) {
-            this.virtualObjectDragState.dragMode = 'copy';
-        }
-
-        // effectAllowedを設定（DragEventの場合のみ）
-        if (e.dataTransfer) {
-            e.dataTransfer.effectAllowed =
-                this.virtualObjectDragState.dragMode === 'copy' ? 'copy' : 'move';
-        }
-
-        return {
-            dragMode: this.virtualObjectDragState.dragMode,
-            hasMoved: this.virtualObjectDragState.hasMoved
-        };
-    }
-
-    /**
-     * ドラッグ中の移動を検出
-     * サブクラスのdragoverハンドラーから呼び出す
-     *
-     * しきい値（dragThreshold, デフォルト5px）以上移動した場合にtrue
-     *
-     * @param {DragEvent} e - dragoverイベント
-     * @returns {boolean} 移動が検出されたらtrue
-     */
-    detectVirtualObjectDragMove(e) {
-        if (!this.virtualObjectDragState.isDragging) return false;
-        if (this.virtualObjectDragState.hasMoved) return true; // 既に検出済み
-
-        const deltaX = e.clientX - this.virtualObjectDragState.startX;
-        const deltaY = e.clientY - this.virtualObjectDragState.startY;
-
-        if (Math.abs(deltaX) > this.virtualObjectDragState.dragThreshold ||
-            Math.abs(deltaY) > this.virtualObjectDragState.dragThreshold) {
-            this.virtualObjectDragState.hasMoved = true;
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * 仮身ドラッグ終了時のクリーンアップ
-     * サブクラスのdragend/dropハンドラーから呼び出す
-     *
-     * 注意: isRightButtonPressedはmouseupハンドラおよびinitializeVirtualObjectDragStart()で管理されます
-     */
-    cleanupVirtualObjectDragState() {
-        this.virtualObjectDragState.isDragging = false;
-        this.virtualObjectDragState.hasMoved = false;
-        this.virtualObjectDragState.dragMode = 'move'; // 次のドラッグのためにデフォルトに戻す
-        // isRightButtonPressedはmouseupハンドラおよびinitializeVirtualObjectDragStart()で管理
-    }
-
-    /**
-     * ダブルクリックドラッグ時の実身複製処理（共通メソッド）
-     * サブクラスのdropハンドラーから呼び出す
-     *
-     * dragData.isDuplicateDragがtrueの場合に実身を複製し、
-     * 新しいlink_idとlink_nameを持つ仮身オブジェクトを返す
-     *
-     * @param {Object} virtualObject - 元の仮身オブジェクト
-     * @returns {Promise<Object>} 複製された仮身オブジェクト（link_id, link_nameが更新される）
-     * @throws {Error} 実身複製に失敗した場合
-     *
-     * @example
-     * // dropハンドラーでの使用例
-     * if (dragData.isDuplicateDrag) {
-     *     try {
-     *         targetVirtualObject = await this.duplicateRealObjectForDrag(virtualObject);
-     *     } catch (error) {
-     *         logger.error('実身複製エラー:', error);
-     *         continue; // 次の仮身へ
-     *     }
-     * }
-     */
-    async duplicateRealObjectForDrag(virtualObject) {
-        const sourceRealId = window.RealObjectSystem.extractRealId(virtualObject.link_id);
-        const messageId = this.generateMessageId('duplicate');
-
-        this.messageBus.send('duplicate-real-object', {
-            realId: sourceRealId,
-            messageId: messageId
-        });
-
-        const result = await this.messageBus.waitFor('real-object-duplicated',
-            DEFAULT_TIMEOUT_MS, (data) => data.messageId === messageId);
-
-        if (!result.success) {
-            throw new Error(result.error || '実身複製失敗');
-        }
-
-        return {
-            ...virtualObject,
-            link_id: result.newRealId,
-            link_name: result.newName
-        };
-    }
-
-    /**
-     * 原紙箱からのドロップ処理（共通メソッド）
-     * サブクラスのdropハンドラーから呼び出す
-     *
-     * base-file-managerからドロップされたファイルを親ウィンドウに処理を委譲する
-     *
-     * @param {Object} dragData - ドラッグデータ
-     * @param {number} clientX - ドロップ位置のX座標
-     * @param {number} clientY - ドロップ位置のY座標
-     * @param {Object} [additionalData] - 追加データ（オプション）
-     *
-     * @example
-     * // dropハンドラーでの使用例
-     * if (dragData.type === 'base-file-copy' && dragData.source === 'base-file-manager') {
-     *     this.handleBaseFileDrop(dragData, e.clientX, e.clientY);
-     *     return;
-     * }
-     */
-    handleBaseFileDrop(dragData, clientX, clientY, additionalData = {}) {
-        this.messageBus.send('base-file-drop-request', {
-            dragData: dragData,
-            clientX: clientX,
-            clientY: clientY,
-            ...additionalData
-        });
-    }
-
-    /**
-     * DataTransferからURLを抽出
-     * ブラウザからのURLドラッグ対応
-     *
-     * @param {DataTransfer} dataTransfer - ドロップイベントのdataTransfer
-     * @returns {string|null} 抽出したURL、またはnull
-     *
-     * @example
-     * // dropハンドラーでの使用例
-     * const url = this.extractUrlFromDataTransfer(e.dataTransfer);
-     * if (url) {
-     *     this.checkAndHandleUrlDrop(e, dropX, dropY);
-     * }
-     */
-    extractUrlFromDataTransfer(dataTransfer) {
-        // text/uri-listを優先（標準的なURL転送形式）
-        const uriList = dataTransfer.getData('text/uri-list');
-        if (uriList) {
-            // 改行区切り、#で始まる行はコメント
-            const urls = uriList.split('\n')
-                .map(line => line.trim())
-                .filter(line => line && !line.startsWith('#'));
-            if (urls.length > 0) {
-                return urls[0];
-            }
-        }
-
-        // text/plainでURLパターンをチェック
-        const plainText = dataTransfer.getData('text/plain');
-        if (plainText && /^https?:\/\/.+/i.test(plainText.trim())) {
-            return plainText.trim();
-        }
-
-        return null;
-    }
-
-    /**
-     * URLドロップをチェックし、検出した場合は親ウィンドウに転送
-     * サブクラスのdropハンドラーから呼び出す
-     *
-     * ブラウザからドロップされたURLを検出し、親ウィンドウに処理を委譲する
-     *
-     * @param {DragEvent} e - ドロップイベント
-     * @param {number} dropX - ドロップ位置X（iframe内座標）
-     * @param {number} dropY - ドロップ位置Y（iframe内座標）
-     * @returns {boolean} URLドロップを検出・処理した場合はtrue
-     *
-     * @example
-     * // dropハンドラーでの使用例（先頭で呼び出す）
-     * handleDrop(e) {
-     *     e.preventDefault();
-     *     const dropX = e.offsetX || e.clientX;
-     *     const dropY = e.offsetY || e.clientY;
-     *     if (this.checkAndHandleUrlDrop(e, dropX, dropY)) {
-     *         return; // URLドロップは親ウィンドウで処理
-     *     }
-     *     // 以下、既存のドロップ処理...
-     * }
-     */
-    checkAndHandleUrlDrop(e, dropX, dropY) {
-        const url = this.extractUrlFromDataTransfer(e.dataTransfer);
-        if (!url) {
-            return false;
-        }
-
-        // 親ウィンドウにURL処理を依頼
-        this.messageBus.send('url-drop-request', {
-            url: url,
-            dropX: dropX,
-            dropY: dropY,
-            windowId: this.windowId
-        });
-
-        e.preventDefault();
-        e.stopPropagation();
-        return true;
-    }
-
-    /**
-     * 開いた仮身のiframe pointer-eventsを無効化
-     * ドラッグ中に開いた仮身内へのドロップを防ぐ
-     * サブクラスのdragstartハンドラーから呼び出す
-     *
-     * @example
-     * // dragstartハンドラーでの使用例
-     * this.disableIframePointerEvents();
-     */
-    disableIframePointerEvents() {
-        const allIframes = document.querySelectorAll('.virtual-object-content');
-        allIframes.forEach(iframe => {
-            iframe.style.pointerEvents = 'none';
-        });
-    }
-
-    /**
-     * 開いた仮身のiframe pointer-eventsを再有効化
-     * ドラッグ終了時に開いた仮身内のインタラクションを復元
-     * サブクラスのdragendハンドラーから呼び出す
-     *
-     * @example
-     * // dragendハンドラーでの使用例
-     * this.enableIframePointerEvents();
-     */
-    enableIframePointerEvents() {
-        const allIframes = document.querySelectorAll('.virtual-object-content');
-        allIframes.forEach(iframe => {
-            iframe.style.pointerEvents = 'auto';
-        });
-    }
-
-    /**
-     * ドロップ時のdataTransferからJSONデータをパース
-     * サブクラスのdropハンドラーから呼び出す
-     *
-     * @param {DataTransfer} dataTransfer - e.dataTransfer
-     * @returns {Object|null} パースされたJSONオブジェクト、失敗時はnull
-     *
-     * @example
-     * // dropハンドラーでの使用例
-     * const dragData = this.parseDragData(e.dataTransfer);
-     * if (!dragData) return;
-     * if (dragData.type === 'virtual-object-drag') { ... }
-     */
-    parseDragData(dataTransfer) {
-        const data = dataTransfer.getData('text/plain');
-        if (!data) return null;
-
-        try {
-            return JSON.parse(data);
-        } catch (_jsonError) {
-            return null;
-        }
-    }
-
-    /**
-     * 仮身ドラッグデータを構築してdataTransferに設定
-     * サブクラスのdragstartハンドラーから呼び出す
-     *
-     * @param {DragEvent} e - dragstartイベント
-     * @param {Array<Object>} virtualObjects - 仮身オブジェクト配列
-     * @param {string} sourceName - ドラッグ元プラグイン名（例: 'basic-text-editor'）
-     * @param {boolean} [isDuplicateDrag=false] - ダブルクリックドラッグ（実身複製）フラグ
-     * @returns {Object} 構築されたdragDataオブジェクト
-     *
-     * @example
-     * // dragstartハンドラーでの使用例
-     * const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
-     * this.setVirtualObjectDragData(e, [virtualObj], 'basic-text-editor');
-     */
-    setVirtualObjectDragData(e, virtualObjects, sourceName, isDuplicateDrag = false) {
-        const dragData = {
-            type: 'virtual-object-drag',
-            source: sourceName,
-            sourceWindowId: this.windowId,
-            mode: this.virtualObjectDragState.dragMode,
-            virtualObjects: virtualObjects,
-            virtualObject: virtualObjects[0], // 後方互換性のため
-            isDuplicateDrag: isDuplicateDrag
-        };
-
-        e.dataTransfer.setData('text/plain', JSON.stringify(dragData));
-        return dragData;
-    }
-
-    /**
-     * DOM要素のdatasetから仮身オブジェクトを構築
-     * data-link-* 属性を link_* 形式に変換し、短い形式のプロパティも追加
-     *
-     * @param {DOMStringMap} dataset - DOM要素のdataset（element.dataset）
-     * @returns {Object} 仮身オブジェクト（link_id, link_name, tbcol, frcol, chsz等を含む）
-     *
-     * @example
-     * // dragstartハンドラーでの使用例
-     * const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
-     * this.setVirtualObjectDragData(e, [virtualObj], 'basic-text-editor');
-     *
-     * @example
-     * // 仮身を開く際の使用例
-     * const virtualObj = this.buildVirtualObjFromDataset(vo.dataset);
-     * this.openVirtualObjectReal(virtualObj, pluginId);
-     */
-    buildVirtualObjFromDataset(dataset) {
-        const virtualObj = {};
-
-        // data-link-* 形式の属性を抽出（dataset.linkXxx形式）
-        for (const key in dataset) {
-            if (key.startsWith('link')) {
-                const attrName = key.replace(/^link/, '').toLowerCase();
-                virtualObj['link_' + attrName] = dataset[key];
-            }
-        }
-
-        // 仮身属性を短い形式でも追加（仮身一覧プラグインとの互換性のため）
-        // 色属性（link_tbcol → tbcol）
-        if (virtualObj.link_tbcol) virtualObj.tbcol = virtualObj.link_tbcol;
-        if (virtualObj.link_frcol) virtualObj.frcol = virtualObj.link_frcol;
-        if (virtualObj.link_chcol) virtualObj.chcol = virtualObj.link_chcol;
-        if (virtualObj.link_bgcol) virtualObj.bgcol = virtualObj.link_bgcol;
-
-        // サイズ・レイアウト属性
-        if (virtualObj.link_chsz) virtualObj.chsz = parseFloat(virtualObj.link_chsz);
-        if (virtualObj.link_width) virtualObj.width = parseInt(virtualObj.link_width);
-        if (virtualObj.link_heightpx) virtualObj.heightPx = parseInt(virtualObj.link_heightpx);
-        if (virtualObj.link_dlen) virtualObj.dlen = parseInt(virtualObj.link_dlen);
-
-        // 座標属性
-        if (virtualObj.link_vobjleft) virtualObj.vobjleft = parseInt(virtualObj.link_vobjleft);
-        if (virtualObj.link_vobjtop) virtualObj.vobjtop = parseInt(virtualObj.link_vobjtop);
-        if (virtualObj.link_vobjright) virtualObj.vobjright = parseInt(virtualObj.link_vobjright);
-        if (virtualObj.link_vobjbottom) virtualObj.vobjbottom = parseInt(virtualObj.link_vobjbottom);
-
-        // 表示属性
-        if (virtualObj.link_framedisp) virtualObj.framedisp = virtualObj.link_framedisp;
-        if (virtualObj.link_namedisp) virtualObj.namedisp = virtualObj.link_namedisp;
-        if (virtualObj.link_pictdisp) virtualObj.pictdisp = virtualObj.link_pictdisp;
-        if (virtualObj.link_roledisp) virtualObj.roledisp = virtualObj.link_roledisp;
-        if (virtualObj.link_typedisp) virtualObj.typedisp = virtualObj.link_typedisp;
-        if (virtualObj.link_updatedisp) virtualObj.updatedisp = virtualObj.link_updatedisp;
-
-        // applist属性（data-applist形式で直接設定されている）
-        if (dataset.applist) {
-            try {
-                virtualObj.applist = JSON.parse(dataset.applist);
-            } catch (e) {
-                virtualObj.applist = {};
-            }
-        }
-
-        // autoopen属性
-        if (dataset.autoopen) {
-            virtualObj.autoopen = dataset.autoopen;
-        }
-
-        // 仮身固有の続柄（link要素のrelationship属性）
-        // data-link-relationship -> link_relationship (string) -> linkRelationship (array)
-        if (virtualObj.link_relationship) {
-            virtualObj.linkRelationship = virtualObj.link_relationship.split(/\s+/).filter(t => t);
-        } else {
-            virtualObj.linkRelationship = [];
-        }
-
-        return virtualObj;
-    }
+    // 仮身ドラッグ関連の共通メソッド → plugin-base-vobj-drag.js に移動
 
     // ========================================
     // 共通MessageBusハンドラ登録
@@ -2994,6 +1955,33 @@ export class PluginBase {
         // 初期スクロール状態を送信（スクロール通知が有効な場合）
         if (this._scrollNotificationEnabled && this._scrollContainer) {
             this._sendScrollState(this._scrollContainer);
+        }
+    }
+
+    /**
+     * initメッセージの共通処理
+     * 各プラグインのinitハンドラの先頭で呼び出す
+     *
+     * @param {object} data - initデータ
+     *
+     * @example
+     * this.messageBus.on('init', (data) => {
+     *     this.handleInitData(data);
+     *     // プラグイン固有の初期化処理...
+     * });
+     */
+    handleInitData(data) {
+        this.onInit(data);
+
+        if (data.fileData) {
+            this.realId = this.extractRealId(data.fileData.realId || data.fileData.fileId);
+
+            // 背景色の復元
+            if (data.fileData.bgcol) {
+                this.applyBackgroundColor(data.fileData.bgcol);
+            } else if (data.fileData.windowConfig && data.fileData.windowConfig.backgroundColor) {
+                this.applyBackgroundColor(data.fileData.windowConfig.backgroundColor);
+            }
         }
     }
 
@@ -3128,33 +2116,7 @@ export class PluginBase {
         }
     }
 
-    /**
-     * cross-window-drop-successの共通ハンドラーを設定
-     * moveモード時に onDeleteSourceVirtualObject() フックを呼び出す
-     *
-     * サブクラスは setupMessageBusHandlers() でこのメソッドを呼び出すこと
-     *
-     * 動作:
-     * - moveモード: onDeleteSourceVirtualObject()フックを呼び出して元のオブジェクトを削除
-     * - copyモード: 何もしない
-     * - ドラッグ状態をクリーンアップ
-     * - onCrossWindowDropSuccess()フックを呼び出す（サブクラス固有の処理）
-     */
-    setupCrossWindowDropSuccessHandler() {
-        this.messageBus.on('cross-window-drop-success', (data) => {
-            if (data.mode === 'move') {
-                // moveモード: サブクラスで元のオブジェクトを削除
-                this.onDeleteSourceVirtualObject?.(data);
-            }
-            // copyモードの場合は何もしない
-
-            // ドラッグ状態をクリーンアップ
-            this.cleanupVirtualObjectDragState();
-
-            // サブクラス固有のクリーンアップ
-            this.onCrossWindowDropSuccess?.(data);
-        });
-    }
+    // setupCrossWindowDropSuccessHandler() → plugin-base-vobj-drag.js に移動
 
     /**
      * ウィンドウリサイズ完了時のフック（サブクラスでオーバーライド）
@@ -3269,6 +2231,9 @@ export class PluginBase {
      */
     respondCloseRequest(windowId, allowClose) {
         logger.debug(`[${this.pluginName}] クローズ応答送信, windowId:`, windowId, ', allowClose:', allowClose);
+        if (allowClose) {
+            this.destroy();
+        }
         if (this.messageBus) {
             this.messageBus.send('window-close-response', {
                 windowId: windowId,
@@ -3277,71 +2242,35 @@ export class PluginBase {
         }
     }
 
-    // ========================================
-    // スクロール位置管理
-    // ========================================
-
     /**
-     * 現在のスクロール位置を取得（サブクラスでオーバーライド可能）
-     * デフォルトでは .plugin-content 要素のスクロール位置を返す
-     * @returns {Object|null} { x, y } または null
+     * プラグインのクリーンアップ処理
+     * イベントリスナーの解除、オブザーバーの切断など
+     * サブクラスでオーバーライドして追加のクリーンアップを行う場合はsuper.destroy()を呼ぶこと
      */
-    getScrollPosition() {
-        const pluginContent = document.querySelector('.plugin-content');
-        if (pluginContent) {
-            return {
-                x: pluginContent.scrollLeft,
-                y: pluginContent.scrollTop
-            };
+    destroy() {
+        // setupWindowActivation のリスナー解除
+        if (this._windowActivationHandler) {
+            document.removeEventListener('mousedown', this._windowActivationHandler);
+            this._windowActivationHandler = null;
+            this._windowActivationSetup = false;
         }
-        return null;
-    }
-
-    /**
-     * スクロール位置を設定（サブクラスでオーバーライド可能）
-     * キャンバスサイズが縮小した場合は最大スクロール可能位置に制限
-     * @param {Object} scrollPos - { x, y }
-     */
-    setScrollPosition(scrollPos) {
-        if (!scrollPos) return;
-        const pluginContent = document.querySelector('.plugin-content');
-        if (pluginContent) {
-            const maxScrollLeft = Math.max(0, pluginContent.scrollWidth - pluginContent.clientWidth);
-            const maxScrollTop = Math.max(0, pluginContent.scrollHeight - pluginContent.clientHeight);
-            pluginContent.scrollLeft = Math.min(scrollPos.x || 0, maxScrollLeft);
-            pluginContent.scrollTop = Math.min(scrollPos.y || 0, maxScrollTop);
+        // setupContextMenu のリスナー解除
+        if (this._contextMenuHandler) {
+            document.removeEventListener('contextmenu', this._contextMenuHandler);
+            this._contextMenuHandler = null;
+        }
+        if (this._contextMenuClickHandler) {
+            document.removeEventListener('click', this._contextMenuClickHandler);
+            this._contextMenuClickHandler = null;
+            this._contextMenuSetup = false;
+        }
+        // MessageBus の停止
+        if (this.messageBus) {
+            this.messageBus.stop();
         }
     }
 
-    /**
-     * スクロール位置を保存してウィンドウ設定に反映
-     * 自動保存や明示的保存時に呼び出す
-     */
-    saveScrollPosition() {
-        const scrollPos = this.getScrollPosition();
-        if (scrollPos) {
-            this.updateWindowConfig({ scrollPos });
-        }
-    }
-
-    /**
-     * スクロール位置を保持しながら要素にフォーカス
-     * 一部のブラウザでfocus()呼び出し時にスクロール位置がリセットされる問題を回避
-     *
-     * @param {HTMLElement} element - フォーカスする要素
-     */
-    focusWithScrollPreservation(element) {
-        if (!element) return;
-        const scrollPos = {
-            x: element.scrollLeft,
-            y: element.scrollTop
-        };
-        element.focus();
-        requestAnimationFrame(() => {
-            element.scrollLeft = scrollPos.x;
-            element.scrollTop = scrollPos.y;
-        });
-    }
+    // スクロール位置管理 → plugin-base-scrollbar.js に移動
 
     /**
      * 現在の選択範囲（カーソル位置）を保存
@@ -3637,6 +2566,9 @@ export class PluginBase {
                 fontFamily = `'${fontFamily}'`;
             }
             styleAttr = `font-family: ${fontFamily};`;
+        } else if (attr === 'space') {
+            // 文字間隔（BTRON文字間隔値 → CSS letter-spacing em単位）
+            styleAttr = `letter-spacing: ${value}em;`;
         }
 
         return `<span style="${styleAttr}">`;
@@ -3660,6 +2592,9 @@ export class PluginBase {
             return style.fontSize.replace('pt', '').replace('px', '');
         } else if (attr === 'face' && style.fontFamily) {
             return style.fontFamily;
+        } else if (attr === 'space' && style.letterSpacing) {
+            // em単位を除去して数値を返す
+            return style.letterSpacing.replace('em', '');
         }
 
         return null;
@@ -3765,71 +2700,6 @@ export class PluginBase {
         return mapping[linePattern] || 0;
     }
 
-    /**
-     * polyline要素を生成
-     * @param {string} points - 座標文字列 "x1,y1 x2,y2 ..."
-     * @param {Object} options - オプション
-     * @param {number} options.lineType - 線種（デフォルト: 0）
-     * @param {number} options.lineWidth - 線幅（デフォルト: 1）
-     * @param {number} options.l_pat - 線パターン（デフォルト: 0）
-     * @param {number} options.round - 角丸（デフォルト: 0）
-     * @param {number} options.start_arrow - 始点矢印（デフォルト: 0）
-     * @param {number} options.end_arrow - 終点矢印（デフォルト: 0）
-     * @param {string} options.strokeColor - 線色（デフォルト: '#000000'）
-     * @param {number} options.zIndex - zIndex（省略可）
-     * @returns {string} xmlTADタグ文字列
-     */
-    generatePolylineElement(points, options = {}) {
-        const {
-            lineType = 0,
-            lineWidth = 1,
-            l_pat = 0,
-            round = 0,
-            start_arrow = 0,
-            end_arrow = 0,
-            strokeColor = DEFAULT_FRCOL,
-            zIndex
-        } = options;
-        const zIndexAttr = zIndex !== undefined ? ` zIndex="${zIndex}"` : '';
-        return `<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" round="${round}" ` +
-               `start_arrow="${start_arrow}" end_arrow="${end_arrow}" ` +
-               `strokeColor="${strokeColor}" points="${points}"${zIndexAttr}/>\r\n`;
-    }
-
-    /**
-     * ellipse要素を生成（円の場合はrx=ryで呼び出す）
-     * @param {number} cx - 中心X座標
-     * @param {number} cy - 中心Y座標
-     * @param {number} rx - X方向半径
-     * @param {number} ry - Y方向半径
-     * @param {Object} options - オプション
-     * @param {number} options.lineType - 線種（デフォルト: 0）
-     * @param {number} options.lineWidth - 線幅（デフォルト: 0）
-     * @param {number} options.l_pat - 線パターン（デフォルト: 0）
-     * @param {number} options.f_pat - 塗りパターン（デフォルト: 1）
-     * @param {number} options.angle - 回転角度（デフォルト: 0）
-     * @param {string} options.strokeColor - 線色（デフォルト: '#000000'）
-     * @param {string} options.fillColor - 塗り色（デフォルト: '#000000'）
-     * @param {number} options.zIndex - zIndex（省略可）
-     * @returns {string} xmlTADタグ文字列
-     */
-    generateEllipseElement(cx, cy, rx, ry, options = {}) {
-        const {
-            lineType = 0,
-            lineWidth = 0,
-            l_pat = 0,
-            f_pat = 1,
-            angle = 0,
-            strokeColor = DEFAULT_FRCOL,
-            fillColor = DEFAULT_FRCOL,
-            zIndex
-        } = options;
-        const zIndexAttr = zIndex !== undefined ? ` zIndex="${zIndex}"` : '';
-        return `<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" ` +
-               `cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" ` +
-               `strokeColor="${strokeColor}" fillColor="${fillColor}"${zIndexAttr}/>\r\n`;
-    }
-
     // ========================================
     // アイコン読み込みヘルパー
     // ========================================
@@ -3871,7 +2741,9 @@ export class PluginBase {
                         this.iconData[realId] = iconData;
                     }
                 })
-                .catch(() => {})
+                .catch(error => {
+                    logger.warn(`アイコン読み込み失敗: ${realId}`, error.message || error);
+                })
         );
 
         await Promise.all(promises);
@@ -3949,122 +2821,7 @@ export class PluginBase {
         document.body.style.backgroundColor = color;
     }
 
-    // ========================================
-    // 仮身ドラッグ関連のフックメソッド
-    // ========================================
-
-    /**
-     * ドラッグモードが変更された時のフック（サブクラスでオーバーライド）
-     * setupVirtualObjectRightButtonHandlers()で右ボタン操作時に呼ばれる
-     *
-     * @param {string} newMode - 新しいモード ('move' | 'copy')
-     *
-     * @example
-     * // basic-figure-editorでの実装例
-     * onDragModeChanged(newMode) {
-     *     logger.debug('[FIGURE EDITOR] ドラッグモード変更:', newMode);
-     *     // プレビュー表示の更新など
-     * }
-     */
-    onDragModeChanged(newMode) {
-        // デフォルト実装は空（サブクラスで必要に応じてオーバーライド）
-    }
-
-    /**
-     * 元の仮身オブジェクトを削除するフック（サブクラスで実装必須）
-     * cross-window-drop-successでmoveモード時に呼ばれる
-     *
-     * @param {Object} data - ドロップ成功データ
-     * @param {string} data.mode - ドラッグモード ('move')
-     * @param {string} data.source - ドラッグ元プラグイン名
-     * @param {string} data.sourceWindowId - ドラッグ元ウィンドウID
-     * @param {Array} data.virtualObjects - 仮身オブジェクト配列
-     * @param {string} data.virtualObjectId - 仮身ID
-     *
-     * @example
-     * // virtual-object-listでの実装例
-     * onDeleteSourceVirtualObject(data) {
-     *     const linkId = data.virtualObjectId || data.virtualObjects[0]?.link_id;
-     *     this.removeVirtualObjectFromList(linkId);
-     * }
-     *
-     * // basic-calc-editorでの実装例
-     * onDeleteSourceVirtualObject(data) {
-     *     if (this.dragSourceCell) {
-     *         const { col, row } = this.dragSourceCell;
-     *         this.clearCell(col, row);
-     *     }
-     * }
-     *
-     * // basic-text-editorでの実装例
-     * onDeleteSourceVirtualObject(data) {
-     *     if (this.draggingVirtualObject && this.draggingVirtualObject.parentNode) {
-     *         this.draggingVirtualObject.parentNode.removeChild(this.draggingVirtualObject);
-     *     }
-     * }
-     */
-    onDeleteSourceVirtualObject(data) {
-        // デフォルト実装は空（サブクラスで必ず実装すること）
-        logger.warn(`[${this.pluginName}] onDeleteSourceVirtualObject が実装されていません`);
-    }
-
-    /**
-     * cross-window-drop-success処理完了後のフック（サブクラスでオーバーライド）
-     * ドラッグ状態のクリーンアップ後に呼ばれる
-     *
-     * @param {Object} data - ドロップ成功データ
-     *
-     * @example
-     * // プラグイン固有の状態クリア
-     * onCrossWindowDropSuccess(data) {
-     *     this.dragSourceCell = null;
-     *     this.draggingVirtualObject = null;
-     * }
-     */
-    onCrossWindowDropSuccess(data) {
-        // デフォルト実装は空（サブクラスで必要に応じてオーバーライド）
-    }
-
-    // ========================================
-    // 仮身refCount管理（共通メソッド）
-    // ========================================
-
-    /**
-     * 仮身コピー要求（refCount+1）
-     * 新しい仮身参照が作成された時に呼び出す
-     * - コピーモードドロップ時
-     * - クリップボードからペースト時
-     *
-     * 注意: 移動モードでは呼ばないこと（参照が移動するだけなので）
-     *
-     * @param {string} linkId - 仮身のlink_id
-     */
-    requestCopyVirtualObject(linkId) {
-        const realId = this.extractRealId(linkId);
-        this.messageBus.send('copy-virtual-object', {
-            realId: realId,
-            messageId: this.generateMessageId('copy-virtual')
-        });
-    }
-
-    /**
-     * 仮身削除要求（refCount-1）
-     * 仮身参照が削除された時に呼び出す
-     * - ユーザーによる明示的削除時（メニュー/キー）
-     * - カット操作時
-     *
-     * 注意: 移動モードクロスウィンドウドロップでは呼ばないこと
-     *       （ターゲット側で+1されず、ソース側で-1すると不整合になる）
-     *
-     * @param {string} linkId - 仮身のlink_id
-     */
-    requestDeleteVirtualObject(linkId) {
-        const realId = this.extractRealId(linkId);
-        this.messageBus.send('delete-virtual-object', {
-            realId: realId,
-            messageId: this.generateMessageId('delete-virtual')
-        });
-    }
+    // 仮身ドラッグ関連のフック・refCount管理 → plugin-base-vobj-drag.js に移動
 
     // ========================================
     // ステータスメッセージ（共通実装）
@@ -4158,6 +2915,74 @@ export class PluginBase {
     }
 
     /**
+     * 共通メニューアクションを実行
+     * executeMenuAction()の先頭で呼び出し、共通アクションを処理する
+     *
+     * @param {string} action - アクション名
+     * @param {object} [additionalData] - 追加データ
+     * @returns {boolean} 処理した場合true、未処理の場合false
+     *
+     * @example
+     * async executeMenuAction(action, additionalData) {
+     *     if (await this.executeCommonMenuAction(action, additionalData)) return;
+     *     // プラグイン固有のアクション処理...
+     * }
+     */
+    async executeCommonMenuAction(action, additionalData) {
+        // execute-with-* アクション（仮身を指定アプリで開く）
+        if (this.handleExecuteWithAction(action)) {
+            return true;
+        }
+
+        switch (action) {
+            case 'save-as-new':
+                this.saveAsNewRealObject();
+                return true;
+            case 'close':
+                this.requestCloseWindow();
+                return true;
+            case 'toggle-fullscreen':
+                this.toggleFullscreen();
+                return true;
+            case 'change-bg-color':
+                await this.changeBgColor();
+                return true;
+            case 'rename-real-object':
+                this.renameRealObject();
+                return true;
+            case 'duplicate-real-object':
+                this.duplicateRealObject();
+                return true;
+            case 'open-realobject-config':
+                this.openRealObjectConfig();
+                return true;
+            case 'open-trash-real-objects':
+                this.openTrashRealObjects();
+                return true;
+            case 'open-virtual-object-network':
+                this.openVirtualObjectNetwork();
+                return true;
+            case 'open-real-object-search':
+                this.openRealObjectSearch();
+                return true;
+            case 'open-real-object':
+                this.openRealObjectWithDefaultApp();
+                return true;
+            case 'close-real-object':
+                this.closeRealObject();
+                return true;
+            case 'change-virtual-object-attributes':
+                this.changeVirtualObjectAttributes();
+                return true;
+            case 'set-relationship':
+                this.setRelationship();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
      * 実行サブメニューをapplistから生成
      *
      * @param {Object} applistData - applistデータ { pluginId: { name, ... }, ... }
@@ -4231,14 +3056,6 @@ export class PluginBase {
     // ========================================
     // 実身操作（共通実装）
     // ========================================
-
-    /**
-     * 選択中の仮身が指し示す開いている実身を閉じる
-     * contextMenuVirtualObjectが設定されている前提
-     */
-    closeRealObject() {
-        window.RealObjectSystem.closeRealObject(this);
-    }
 
     /**
      * 仮身選択時のコンテキストメニュー項目を構築してmenuDefに追加
@@ -4449,7 +3266,7 @@ export class PluginBase {
             this.messageBus.send('save-image-file', {
                 messageId: messageId,
                 fileName: fileName,
-                imageData: Array.from(bytes),
+                imageData: bytes,
                 mimeType: detectedMimeType
             });
 
@@ -4472,55 +3289,61 @@ export class PluginBase {
     }
 
     /**
+     * CanvasのPNGデータをファイルとして保存（共通処理）
+     * @param {HTMLCanvasElement} canvas - 保存するCanvas
+     * @param {string} fileName - 保存先ファイル名
+     * @param {string} label - ログ用ラベル
+     * @returns {Promise<boolean>} 成功時true
+     * @private
+     */
+    async _saveCanvasAsPng(canvas, fileName, label) {
+        try {
+            const blob = await new Promise((resolve) => {
+                canvas.toBlob(resolve, 'image/png');
+            });
+
+            const arrayBuffer = await blob.arrayBuffer();
+            const buffer = new Uint8Array(arrayBuffer);
+
+            const messageId = this.generateMessageId(`save-${label}`);
+
+            this.messageBus.send('save-image-file', {
+                messageId: messageId,
+                fileName: fileName,
+                imageData: buffer,
+                mimeType: 'image/png'
+            });
+
+            const result = await this.messageBus.waitFor('save-image-result', 10000,
+                (data) => data.messageId === messageId
+            );
+
+            if (!result.success) {
+                logger.error(`[${this.pluginName}] ${label}保存失敗:`, fileName);
+                return false;
+            }
+
+            logger.debug(`[${this.pluginName}] ${label}保存完了:`, fileName);
+            return true;
+        } catch (error) {
+            logger.error(`[${this.pluginName}] ${label}保存エラー:`, error);
+            return false;
+        }
+    }
+
+    /**
      * ImageDataからPNG画像ファイルを保存
      * @param {ImageData} imageData - 保存するImageData
      * @param {string} fileName - 保存先ファイル名
      * @returns {Promise<boolean>} 成功時true
      */
     async savePixelmapImageFile(imageData, fileName) {
-        try {
-            // ImageDataをPNG形式のBlobに変換
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = imageData.width;
-            tempCanvas.height = imageData.height;
-            const tempCtx = tempCanvas.getContext('2d');
-            tempCtx.putImageData(imageData, 0, 0);
-
-            // CanvasからBlobを取得
-            const blob = await new Promise((resolve) => {
-                tempCanvas.toBlob(resolve, 'image/png');
-            });
-
-            // BlobをArrayBufferに変換
-            const arrayBuffer = await blob.arrayBuffer();
-            const buffer = new Uint8Array(arrayBuffer);
-
-            const messageId = this.generateMessageId('save-pixelmap');
-
-            // 親ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
-            this.messageBus.send('save-image-file', {
-                messageId: messageId,
-                fileName: fileName,
-                imageData: Array.from(buffer),
-                mimeType: 'image/png'
-            });
-
-            // レスポンスを待つ
-            const result = await this.messageBus.waitFor('save-image-result', 10000,
-                (data) => data.messageId === messageId
-            );
-
-            if (!result.success) {
-                logger.error(`[${this.pluginName}] ピクセルマップ保存失敗:`, fileName);
-                return false;
-            }
-
-            logger.debug(`[${this.pluginName}] ピクセルマップ保存完了:`, fileName);
-            return true;
-        } catch (error) {
-            logger.error(`[${this.pluginName}] ピクセルマップ画像ファイル保存エラー:`, error);
-            return false;
-        }
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = imageData.width;
+        tempCanvas.height = imageData.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.putImageData(imageData, 0, 0);
+        return this._saveCanvasAsPng(tempCanvas, fileName, 'ピクセルマップ');
     }
 
     /**
@@ -4530,49 +3353,12 @@ export class PluginBase {
      * @returns {Promise<boolean>} 成功時true
      */
     async saveImageFromElement(imageElement, fileName) {
-        try {
-            // 画像をCanvasに描画してPNGに変換
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = imageElement.naturalWidth || imageElement.width;
-            tempCanvas.height = imageElement.naturalHeight || imageElement.height;
-            const tempCtx = tempCanvas.getContext('2d');
-            tempCtx.drawImage(imageElement, 0, 0);
-
-            // CanvasからBlobを取得
-            const blob = await new Promise((resolve) => {
-                tempCanvas.toBlob(resolve, 'image/png');
-            });
-
-            // BlobをArrayBufferに変換
-            const arrayBuffer = await blob.arrayBuffer();
-            const buffer = new Uint8Array(arrayBuffer);
-
-            const messageId = this.generateMessageId('save-image-element');
-
-            // 親ウィンドウ(tadjs-desktop.js)にファイル保存を依頼
-            this.messageBus.send('save-image-file', {
-                messageId: messageId,
-                fileName: fileName,
-                imageData: Array.from(buffer),
-                mimeType: 'image/png'
-            });
-
-            // レスポンスを待つ
-            const result = await this.messageBus.waitFor('save-image-result', 10000,
-                (data) => data.messageId === messageId
-            );
-
-            if (!result.success) {
-                logger.error(`[${this.pluginName}] 画像ファイル保存失敗(Element):`, fileName);
-                return false;
-            }
-
-            logger.debug(`[${this.pluginName}] 画像ファイル保存完了(Element):`, fileName);
-            return true;
-        } catch (error) {
-            logger.error(`[${this.pluginName}] 画像ファイル保存エラー(Element):`, error);
-            return false;
-        }
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = imageElement.naturalWidth || imageElement.width;
+        tempCanvas.height = imageElement.naturalHeight || imageElement.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(imageElement, 0, 0);
+        return this._saveCanvasAsPng(tempCanvas, fileName, '画像(Element)');
     }
 
     /**
@@ -4896,11 +3682,13 @@ export class PluginBase {
      * @returns {number} 幅（ピクセル、切り上げ）
      */
     _measureVobjTextWidth(text, fontSizePx) {
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
+        if (!this._measureCanvas) {
+            this._measureCanvas = document.createElement('canvas');
+            this._measureContext = this._measureCanvas.getContext('2d');
+        }
         // 仮身表示で使用するフォントファミリー
-        context.font = `${fontSizePx}px 'Noto Sans JP', 'Yu Gothic', 'Meiryo', sans-serif`;
-        return Math.ceil(context.measureText(text).width);
+        this._measureContext.font = `${fontSizePx}px 'Noto Sans JP', 'Yu Gothic', 'Meiryo', sans-serif`;
+        return Math.ceil(this._measureContext.measureText(text).width);
     }
 
     /**
@@ -4981,9 +3769,11 @@ export class PluginBase {
         const right = parseFloat(rectEl.getAttribute('right')) || 0;
         const bottom = parseFloat(rectEl.getAttribute('bottom')) || 0;
 
-        // スタイル属性取得
-        const fillColor = rectEl.getAttribute('fillColor') || DEFAULT_BGCOL;
-        const strokeColor = rectEl.getAttribute('strokeColor') || DEFAULT_FRCOL;
+        // スタイル属性取得（l_pat/f_patベースで色解決）
+        const f_pat = parseInt(rectEl.getAttribute('f_pat')) || 0;
+        const l_pat = parseInt(rectEl.getAttribute('l_pat')) || 0;
+        const fillColor = (f_pat >= 1 ? resolvePatternColor(f_pat, this._figureCustomPatterns) : null) || DEFAULT_BGCOL;
+        const strokeColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
         const lineWidth = parseFloat(rectEl.getAttribute('lineWidth')) || 1;
         const round = parseFloat(rectEl.getAttribute('round')) || 0;
         const zIndex = parseInt(rectEl.getAttribute('zIndex')) || 0;
@@ -5137,8 +3927,9 @@ export class PluginBase {
         const right = parseFloat(lineEl.getAttribute('right')) || 0;
         const bottom = parseFloat(lineEl.getAttribute('bottom')) || 0;
 
-        // スタイル属性取得
-        const strokeColor = lineEl.getAttribute('strokeColor') || DEFAULT_FRCOL;
+        // スタイル属性取得（l_patベースで色解決）
+        const l_pat = parseInt(lineEl.getAttribute('l_pat')) || 0;
+        const strokeColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
         const lineWidth = parseFloat(lineEl.getAttribute('lineWidth')) || 1;
         const zIndex = parseInt(lineEl.getAttribute('zIndex')) || 0;
 
@@ -5194,9 +3985,11 @@ export class PluginBase {
         const right = parseFloat(circleEl.getAttribute('right')) || 0;
         const bottom = parseFloat(circleEl.getAttribute('bottom')) || 0;
 
-        // スタイル属性取得
-        const fillColor = circleEl.getAttribute('fillColor') || DEFAULT_BGCOL;
-        const lineColor = circleEl.getAttribute('lineColor') || DEFAULT_FRCOL;
+        // スタイル属性取得（l_pat/f_patベースで色解決）
+        const f_pat = parseInt(circleEl.getAttribute('f_pat')) || 0;
+        const l_pat = parseInt(circleEl.getAttribute('l_pat')) || 0;
+        const fillColor = (f_pat >= 1 ? resolvePatternColor(f_pat, this._figureCustomPatterns) : null) || DEFAULT_BGCOL;
+        const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
         const lineWidth = parseFloat(circleEl.getAttribute('lineWidth')) || 1;
         const zIndex = parseInt(circleEl.getAttribute('zIndex')) || 0;
 
@@ -5246,9 +4039,11 @@ export class PluginBase {
         const right = parseFloat(polygonEl.getAttribute('right')) || 0;
         const bottom = parseFloat(polygonEl.getAttribute('bottom')) || 0;
 
-        // スタイル属性取得
-        const fillColor = polygonEl.getAttribute('fillColor') || DEFAULT_BGCOL;
-        const lineColor = polygonEl.getAttribute('lineColor') || DEFAULT_FRCOL;
+        // スタイル属性取得（l_pat/f_patベースで色解決）
+        const f_pat = parseInt(polygonEl.getAttribute('f_pat')) || 0;
+        const l_pat = parseInt(polygonEl.getAttribute('l_pat')) || 0;
+        const fillColor = (f_pat >= 1 ? resolvePatternColor(f_pat, this._figureCustomPatterns) : null) || DEFAULT_BGCOL;
+        const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
         const lineWidth = parseFloat(polygonEl.getAttribute('lineWidth')) || 1;
         const zIndex = parseInt(polygonEl.getAttribute('zIndex')) || 0;
         const pointsAttr = polygonEl.getAttribute('points') || '';
@@ -5316,9 +4111,11 @@ export class PluginBase {
         const right = parseFloat(ellipseEl.getAttribute('right')) || 0;
         const bottom = parseFloat(ellipseEl.getAttribute('bottom')) || 0;
 
-        // スタイル属性取得
-        const fillColor = ellipseEl.getAttribute('fillColor') || DEFAULT_BGCOL;
-        const lineColor = ellipseEl.getAttribute('lineColor') || ellipseEl.getAttribute('strokeColor') || DEFAULT_FRCOL;
+        // スタイル属性取得（l_pat/f_patベースで色解決）
+        const f_pat = parseInt(ellipseEl.getAttribute('f_pat')) || 0;
+        const l_pat = parseInt(ellipseEl.getAttribute('l_pat')) || 0;
+        const fillColor = (f_pat >= 1 ? resolvePatternColor(f_pat, this._figureCustomPatterns) : null) || DEFAULT_BGCOL;
+        const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
         const lineWidth = parseFloat(ellipseEl.getAttribute('lineWidth')) || 1;
         const zIndex = parseInt(ellipseEl.getAttribute('zIndex')) || 0;
 
@@ -5359,32 +4156,38 @@ export class PluginBase {
     }
 
     /**
-     * 円弧要素（<arc>）をDOM要素として描画
-     * SVGで扇形を描画
-     * @param {Element} arcEl - arc XML要素
+     * 円弧系要素の共通レンダリング処理
+     * @param {Element} el - XML要素
      * @param {HTMLElement} container - 描画先コンテナ
+     * @param {string} className - CSSクラス名
+     * @param {Function} pathBuilder - SVGパス文字列を生成するコールバック
+     *   引数: { cx, cy, rx, ry, x1, y1, x2, y2, largeArc }
+     *   戻り値: { d: string, fill: string }
      * @returns {HTMLElement} 作成されたDOM要素
+     * @private
      */
-    renderArcElement(arcEl, container) {
+    _renderArcVariant(el, container, className, pathBuilder) {
         const div = document.createElement('div');
-        div.className = 'figure-arc';
+        div.className = className;
 
-        const id = arcEl.getAttribute('id');
+        const id = el.getAttribute('id');
         if (id) {
             div.dataset.id = id;
         }
 
-        const left = parseFloat(arcEl.getAttribute('left')) || 0;
-        const top = parseFloat(arcEl.getAttribute('top')) || 0;
-        const right = parseFloat(arcEl.getAttribute('right')) || 0;
-        const bottom = parseFloat(arcEl.getAttribute('bottom')) || 0;
-        const startAngle = parseFloat(arcEl.getAttribute('startAngle')) || 0;
-        const endAngle = parseFloat(arcEl.getAttribute('endAngle')) || 90;
+        const left = parseFloat(el.getAttribute('left')) || 0;
+        const top = parseFloat(el.getAttribute('top')) || 0;
+        const right = parseFloat(el.getAttribute('right')) || 0;
+        const bottom = parseFloat(el.getAttribute('bottom')) || 0;
+        const startAngle = parseFloat(el.getAttribute('startAngle')) || 0;
+        const endAngle = parseFloat(el.getAttribute('endAngle')) || 90;
 
-        const fillColor = arcEl.getAttribute('fillColor') || DEFAULT_BGCOL;
-        const lineColor = arcEl.getAttribute('lineColor') || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(arcEl.getAttribute('lineWidth')) || 1;
-        const zIndex = parseInt(arcEl.getAttribute('zIndex')) || 0;
+        const f_pat = parseInt(el.getAttribute('f_pat')) || 0;
+        const l_pat = parseInt(el.getAttribute('l_pat')) || 0;
+        const fillColor = (f_pat >= 1 ? resolvePatternColor(f_pat, this._figureCustomPatterns) : null) || DEFAULT_BGCOL;
+        const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
+        const lineWidth = parseFloat(el.getAttribute('lineWidth')) || 1;
+        const zIndex = parseInt(el.getAttribute('zIndex')) || 0;
 
         const width = right - left;
         const height = bottom - top;
@@ -5406,16 +4209,16 @@ export class PluginBase {
         // 大円弧フラグ
         const largeArc = (endAngle - startAngle) > 180 ? 1 : 0;
 
+        const { d, fill } = pathBuilder({ cx, cy, rx, ry, x1, y1, x2, y2, largeArc, fillColor });
+
         const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         svg.setAttribute('width', width);
         svg.setAttribute('height', height);
         svg.style.overflow = 'visible';
 
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        // 扇形パス（中心から始点、弧、中心へ戻る）
-        const d = `M ${cx} ${cy} L ${x1} ${y1} A ${rx} ${ry} 0 ${largeArc} 1 ${x2} ${y2} Z`;
         path.setAttribute('d', d);
-        path.setAttribute('fill', fillColor);
+        path.setAttribute('fill', fill);
         path.setAttribute('stroke', lineColor);
         path.setAttribute('stroke-width', lineWidth);
 
@@ -5433,6 +4236,21 @@ export class PluginBase {
         }
 
         return div;
+    }
+
+    /**
+     * 円弧要素（<arc>）をDOM要素として描画
+     * SVGで扇形を描画
+     * @param {Element} arcEl - arc XML要素
+     * @param {HTMLElement} container - 描画先コンテナ
+     * @returns {HTMLElement} 作成されたDOM要素
+     */
+    renderArcElement(arcEl, container) {
+        return this._renderArcVariant(arcEl, container, 'figure-arc', (p) => ({
+            // 扇形パス（中心から始点、弧、中心へ戻る）
+            d: `M ${p.cx} ${p.cy} L ${p.x1} ${p.y1} A ${p.rx} ${p.ry} 0 ${p.largeArc} 1 ${p.x2} ${p.y2} Z`,
+            fill: p.fillColor
+        }));
     }
 
     /**
@@ -5443,70 +4261,11 @@ export class PluginBase {
      * @returns {HTMLElement} 作成されたDOM要素
      */
     renderChordElement(chordEl, container) {
-        const div = document.createElement('div');
-        div.className = 'figure-chord';
-
-        const id = chordEl.getAttribute('id');
-        if (id) {
-            div.dataset.id = id;
-        }
-
-        const left = parseFloat(chordEl.getAttribute('left')) || 0;
-        const top = parseFloat(chordEl.getAttribute('top')) || 0;
-        const right = parseFloat(chordEl.getAttribute('right')) || 0;
-        const bottom = parseFloat(chordEl.getAttribute('bottom')) || 0;
-        const startAngle = parseFloat(chordEl.getAttribute('startAngle')) || 0;
-        const endAngle = parseFloat(chordEl.getAttribute('endAngle')) || 90;
-
-        const fillColor = chordEl.getAttribute('fillColor') || DEFAULT_BGCOL;
-        const lineColor = chordEl.getAttribute('lineColor') || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(chordEl.getAttribute('lineWidth')) || 1;
-        const zIndex = parseInt(chordEl.getAttribute('zIndex')) || 0;
-
-        const width = right - left;
-        const height = bottom - top;
-        const rx = width / 2;
-        const ry = height / 2;
-        const cx = rx;
-        const cy = ry;
-
-        const startRad = (startAngle * Math.PI) / 180;
-        const endRad = (endAngle * Math.PI) / 180;
-
-        const x1 = cx + rx * Math.cos(startRad);
-        const y1 = cy + ry * Math.sin(startRad);
-        const x2 = cx + rx * Math.cos(endRad);
-        const y2 = cy + ry * Math.sin(endRad);
-
-        const largeArc = (endAngle - startAngle) > 180 ? 1 : 0;
-
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.setAttribute('width', width);
-        svg.setAttribute('height', height);
-        svg.style.overflow = 'visible';
-
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        // 弦パス（始点から弧を描き、直線で始点へ戻る）
-        const d = `M ${x1} ${y1} A ${rx} ${ry} 0 ${largeArc} 1 ${x2} ${y2} Z`;
-        path.setAttribute('d', d);
-        path.setAttribute('fill', fillColor);
-        path.setAttribute('stroke', lineColor);
-        path.setAttribute('stroke-width', lineWidth);
-
-        svg.appendChild(path);
-
-        div.style.position = 'absolute';
-        div.style.left = `${left}px`;
-        div.style.top = `${top}px`;
-        div.style.zIndex = zIndex;
-        div.style.pointerEvents = 'none';
-        div.appendChild(svg);
-
-        if (container) {
-            container.appendChild(div);
-        }
-
-        return div;
+        return this._renderArcVariant(chordEl, container, 'figure-chord', (p) => ({
+            // 弦パス（始点から弧を描き、直線で始点へ戻る）
+            d: `M ${p.x1} ${p.y1} A ${p.rx} ${p.ry} 0 ${p.largeArc} 1 ${p.x2} ${p.y2} Z`,
+            fill: p.fillColor
+        }));
     }
 
     /**
@@ -5517,69 +4276,11 @@ export class PluginBase {
      * @returns {HTMLElement} 作成されたDOM要素
      */
     renderEllipticalArcElement(ellArcEl, container) {
-        const div = document.createElement('div');
-        div.className = 'figure-elliptical-arc';
-
-        const id = ellArcEl.getAttribute('id');
-        if (id) {
-            div.dataset.id = id;
-        }
-
-        const left = parseFloat(ellArcEl.getAttribute('left')) || 0;
-        const top = parseFloat(ellArcEl.getAttribute('top')) || 0;
-        const right = parseFloat(ellArcEl.getAttribute('right')) || 0;
-        const bottom = parseFloat(ellArcEl.getAttribute('bottom')) || 0;
-        const startAngle = parseFloat(ellArcEl.getAttribute('startAngle')) || 0;
-        const endAngle = parseFloat(ellArcEl.getAttribute('endAngle')) || 90;
-
-        const lineColor = ellArcEl.getAttribute('lineColor') || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(ellArcEl.getAttribute('lineWidth')) || 1;
-        const zIndex = parseInt(ellArcEl.getAttribute('zIndex')) || 0;
-
-        const width = right - left;
-        const height = bottom - top;
-        const rx = width / 2;
-        const ry = height / 2;
-        const cx = rx;
-        const cy = ry;
-
-        const startRad = (startAngle * Math.PI) / 180;
-        const endRad = (endAngle * Math.PI) / 180;
-
-        const x1 = cx + rx * Math.cos(startRad);
-        const y1 = cy + ry * Math.sin(startRad);
-        const x2 = cx + rx * Math.cos(endRad);
-        const y2 = cy + ry * Math.sin(endRad);
-
-        const largeArc = (endAngle - startAngle) > 180 ? 1 : 0;
-
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        svg.setAttribute('width', width);
-        svg.setAttribute('height', height);
-        svg.style.overflow = 'visible';
-
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        // 弧のみ（塗りつぶしなし）
-        const d = `M ${x1} ${y1} A ${rx} ${ry} 0 ${largeArc} 1 ${x2} ${y2}`;
-        path.setAttribute('d', d);
-        path.setAttribute('fill', 'none');
-        path.setAttribute('stroke', lineColor);
-        path.setAttribute('stroke-width', lineWidth);
-
-        svg.appendChild(path);
-
-        div.style.position = 'absolute';
-        div.style.left = `${left}px`;
-        div.style.top = `${top}px`;
-        div.style.zIndex = zIndex;
-        div.style.pointerEvents = 'none';
-        div.appendChild(svg);
-
-        if (container) {
-            container.appendChild(div);
-        }
-
-        return div;
+        return this._renderArcVariant(ellArcEl, container, 'figure-elliptical-arc', (p) => ({
+            // 弧のみ（塗りつぶしなし）
+            d: `M ${p.x1} ${p.y1} A ${p.rx} ${p.ry} 0 ${p.largeArc} 1 ${p.x2} ${p.y2}`,
+            fill: 'none'
+        }));
     }
 
     /**
@@ -5603,7 +4304,8 @@ export class PluginBase {
         const bottom = parseFloat(polylineEl.getAttribute('bottom')) || 0;
         const pointsAttr = polylineEl.getAttribute('points') || '';
 
-        const lineColor = polylineEl.getAttribute('lineColor') || polylineEl.getAttribute('strokeColor') || DEFAULT_FRCOL;
+        const l_pat = parseInt(polylineEl.getAttribute('l_pat')) || 0;
+        const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
         const lineWidth = parseFloat(polylineEl.getAttribute('lineWidth')) || 1;
         const zIndex = parseInt(polylineEl.getAttribute('zIndex')) || 0;
 
@@ -5666,7 +4368,8 @@ export class PluginBase {
         const pointsAttr = curveEl.getAttribute('points') || '';
         const curveType = curveEl.getAttribute('type') || 'spline';
 
-        const lineColor = curveEl.getAttribute('lineColor') || DEFAULT_FRCOL;
+        const l_pat = parseInt(curveEl.getAttribute('l_pat')) || 0;
+        const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
         const lineWidth = parseFloat(curveEl.getAttribute('lineWidth')) || 1;
         const zIndex = parseInt(curveEl.getAttribute('zIndex')) || 0;
 
@@ -5821,97 +4524,74 @@ export class PluginBase {
         figureContainer.style.width = `${figWidth}px`;
         figureContainer.style.height = `${figHeight}px`;
 
+        // <patterns>セクションからカスタムパターンを解析（render系メソッドで使用）
+        this._figureCustomPatterns = this._parseCustomPatternsForRender(figureEl);
+
+        // タグ名→レンダーメソッドのディスパッチマップ
+        const renderDispatch = {
+            'rect': (el) => this.renderRectElement(el, figureContainer),
+            'line': (el) => this.renderLineElement(el, figureContainer),
+            'circle': (el) => this.renderCircleElement(el, figureContainer),
+            'polygon': (el) => this.renderPolygonElement(el, figureContainer),
+            'ellipse': (el) => this.renderEllipseElement(el, figureContainer),
+            'arc': (el) => this.renderArcElement(el, figureContainer),
+            'chord': (el) => this.renderChordElement(el, figureContainer),
+            'elliptical_arc': (el) => this.renderEllipticalArcElement(el, figureContainer),
+            'polyline': (el) => this.renderPolylineElement(el, figureContainer),
+            'curve': (el) => this.renderCurveElement(el, figureContainer),
+            'image': (el) => this.renderImageElement(el, figureContainer),
+            'document': (el) => this.renderDocumentTextElement(el, figureContainer)
+        };
+
         let elementCount = 0;
 
-        // rect要素を描画
-        const rectElements = figureEl.querySelectorAll('rect');
-        rectElements.forEach(rectEl => {
-            this.renderRectElement(rectEl, figureContainer);
-            elementCount++;
-        });
-
-        // line要素を描画
-        const lineElements = figureEl.querySelectorAll('line');
-        lineElements.forEach(lineEl => {
-            this.renderLineElement(lineEl, figureContainer);
-            elementCount++;
-        });
-
-        // circle要素を描画
-        const circleElements = figureEl.querySelectorAll('circle');
-        circleElements.forEach(circleEl => {
-            this.renderCircleElement(circleEl, figureContainer);
-            elementCount++;
-        });
-
-        // polygon要素を描画
-        const polygonElements = figureEl.querySelectorAll('polygon');
-        polygonElements.forEach(polygonEl => {
-            this.renderPolygonElement(polygonEl, figureContainer);
-            elementCount++;
-        });
-
-        // ellipse要素（楕円）を描画
-        const ellipseElements = figureEl.querySelectorAll('ellipse');
-        ellipseElements.forEach(ellipseEl => {
-            this.renderEllipseElement(ellipseEl, figureContainer);
-            elementCount++;
-        });
-
-        // arc要素（円弧）を描画
-        const arcElements = figureEl.querySelectorAll('arc');
-        arcElements.forEach(arcEl => {
-            this.renderArcElement(arcEl, figureContainer);
-            elementCount++;
-        });
-
-        // chord要素（弦）を描画
-        const chordElements = figureEl.querySelectorAll('chord');
-        chordElements.forEach(chordEl => {
-            this.renderChordElement(chordEl, figureContainer);
-            elementCount++;
-        });
-
-        // elliptical_arc要素（楕円弧）を描画
-        const ellipticalArcElements = figureEl.querySelectorAll('elliptical_arc');
-        ellipticalArcElements.forEach(ellipticalArcEl => {
-            this.renderEllipticalArcElement(ellipticalArcEl, figureContainer);
-            elementCount++;
-        });
-
-        // polyline要素（折れ線）を描画
-        const polylineElements = figureEl.querySelectorAll('polyline');
-        polylineElements.forEach(polylineEl => {
-            this.renderPolylineElement(polylineEl, figureContainer);
-            elementCount++;
-        });
-
-        // curve要素（曲線）を描画
-        const curveElements = figureEl.querySelectorAll('curve');
-        curveElements.forEach(curveEl => {
-            this.renderCurveElement(curveEl, figureContainer);
-            elementCount++;
-        });
-
-        // image要素（画像）を描画
-        const imageElements = figureEl.querySelectorAll('image');
-        imageElements.forEach(imageEl => {
-            this.renderImageElement(imageEl, figureContainer);
-            elementCount++;
-        });
-
-        // document要素（テキストボックス）を描画
-        const docElements = figureEl.querySelectorAll('document');
-        docElements.forEach(docEl => {
-            this.renderDocumentTextElement(docEl, figureContainer);
-            elementCount++;
-        });
+        try {
+            // 1回のDOM走査で全図形要素をz-order順に描画
+            for (const child of figureEl.children) {
+                const tagName = child.tagName.toLowerCase();
+                const renderer = renderDispatch[tagName];
+                if (renderer) {
+                    renderer(child);
+                    elementCount++;
+                }
+            }
+        } finally {
+            // パターン参照を確実にクリーンアップ
+            this._figureCustomPatterns = null;
+        }
 
         if (container) {
             container.appendChild(figureContainer);
         }
 
         return { figureContainer, elementCount };
+    }
+
+    /**
+     * <patterns>セクションからカスタムパターン定義を簡易パースする（render系メソッド用）
+     * ソリッドカラーパターン（ncol=1の単色）をtype='solid'として登録する。
+     * @param {Element} figureEl - figure要素
+     * @returns {Object} カスタムパターン定義（ID→{type, color, fgcolors}）
+     */
+    _parseCustomPatternsForRender(figureEl) {
+        const customPatterns = {};
+        const patternsEl = figureEl.querySelector('patterns');
+        if (!patternsEl) return customPatterns;
+        const patternElems = patternsEl.querySelectorAll('pattern');
+        patternElems.forEach(patElem => {
+            const id = parseInt(patElem.getAttribute('id'));
+            if (id < 1) return;
+            const ncol = parseInt(patElem.getAttribute('ncol')) || 0;
+            const fgcolors = patElem.getAttribute('fgcolors') || '';
+            if (ncol === 1 && fgcolors) {
+                // ソリッドカラーパターン
+                customPatterns[id] = { type: 'solid', color: fgcolors };
+            } else if (fgcolors) {
+                // マルチカラーパターン（前景色で近似）
+                customPatterns[id] = { type: 'pattern', fgcolors: fgcolors };
+            }
+        });
+        return customPatterns;
     }
 
     /**
@@ -5993,19 +4673,19 @@ export class PluginBase {
                 height: parseInt(linkElement.getAttribute('height')) || 0,
                 // スタイル属性
                 chsz: parseInt(linkElement.getAttribute('chsz')) || DEFAULT_FONT_SIZE,
-                frcol: linkElement.getAttribute('frcol') || DEFAULT_FRCOL,
-                chcol: linkElement.getAttribute('chcol') || DEFAULT_CHCOL,
-                tbcol: linkElement.getAttribute('tbcol') || DEFAULT_TBCOL,
-                bgcol: linkElement.getAttribute('bgcol') || DEFAULT_BGCOL,
+                frcol: linkElement.getAttribute('frcol') || PluginBase.VOBJ_DEFAULT_ATTRS.frcol,
+                chcol: linkElement.getAttribute('chcol') || PluginBase.VOBJ_DEFAULT_ATTRS.chcol,
+                tbcol: linkElement.getAttribute('tbcol') || PluginBase.VOBJ_DEFAULT_ATTRS.tbcol,
+                bgcol: linkElement.getAttribute('bgcol') || PluginBase.VOBJ_DEFAULT_ATTRS.bgcol,
                 dlen: parseInt(linkElement.getAttribute('dlen')) || 0,
                 // 表示属性
-                pictdisp: linkElement.getAttribute('pictdisp') || 'true',
-                namedisp: linkElement.getAttribute('namedisp') || 'true',
-                roledisp: linkElement.getAttribute('roledisp') || 'false',
-                typedisp: linkElement.getAttribute('typedisp') || 'false',
-                updatedisp: linkElement.getAttribute('updatedisp') || 'false',
-                framedisp: linkElement.getAttribute('framedisp') || 'true',
-                autoopen: linkElement.getAttribute('autoopen') || 'false',
+                pictdisp: linkElement.getAttribute('pictdisp') || PluginBase.VOBJ_DEFAULT_ATTRS.pictdisp,
+                namedisp: linkElement.getAttribute('namedisp') || PluginBase.VOBJ_DEFAULT_ATTRS.namedisp,
+                roledisp: linkElement.getAttribute('roledisp') || PluginBase.VOBJ_DEFAULT_ATTRS.roledisp,
+                typedisp: linkElement.getAttribute('typedisp') || PluginBase.VOBJ_DEFAULT_ATTRS.typedisp,
+                updatedisp: linkElement.getAttribute('updatedisp') || PluginBase.VOBJ_DEFAULT_ATTRS.updatedisp,
+                framedisp: linkElement.getAttribute('framedisp') || PluginBase.VOBJ_DEFAULT_ATTRS.framedisp,
+                autoopen: linkElement.getAttribute('autoopen') || PluginBase.VOBJ_DEFAULT_ATTRS.autoopen,
                 // 仮身固有の続柄（link要素のrelationship属性）
                 linkRelationship: this.parseLinkRelationship(linkElement)
             };
@@ -6053,19 +4733,19 @@ export class PluginBase {
             heightPx: baseData.heightPx !== undefined ? baseData.heightPx : DEFAULT_VOBJ_HEIGHT,
             // スタイル属性
             chsz: baseData.chsz !== undefined ? baseData.chsz : DEFAULT_FONT_SIZE,
-            frcol: baseData.frcol || DEFAULT_FRCOL,
-            chcol: baseData.chcol || DEFAULT_CHCOL,
-            tbcol: baseData.tbcol || DEFAULT_TBCOL,
-            bgcol: baseData.bgcol || DEFAULT_BGCOL,
+            frcol: baseData.frcol || PluginBase.VOBJ_DEFAULT_ATTRS.frcol,
+            chcol: baseData.chcol || PluginBase.VOBJ_DEFAULT_ATTRS.chcol,
+            tbcol: baseData.tbcol || PluginBase.VOBJ_DEFAULT_ATTRS.tbcol,
+            bgcol: baseData.bgcol || PluginBase.VOBJ_DEFAULT_ATTRS.bgcol,
             dlen: baseData.dlen !== undefined ? baseData.dlen : 0,
-            // 表示属性（文字列として）
-            pictdisp: baseData.pictdisp !== undefined ? baseData.pictdisp : 'true',
-            namedisp: baseData.namedisp !== undefined ? baseData.namedisp : 'true',
-            roledisp: baseData.roledisp !== undefined ? baseData.roledisp : 'false',
-            typedisp: baseData.typedisp !== undefined ? baseData.typedisp : 'false',
-            updatedisp: baseData.updatedisp !== undefined ? baseData.updatedisp : 'false',
-            framedisp: baseData.framedisp !== undefined ? baseData.framedisp : 'true',
-            autoopen: baseData.autoopen !== undefined ? baseData.autoopen : 'false',
+            // 表示属性（文字列として、VOBJ_DEFAULT_ATTRSを参照）
+            pictdisp: baseData.pictdisp !== undefined ? baseData.pictdisp : PluginBase.VOBJ_DEFAULT_ATTRS.pictdisp,
+            namedisp: baseData.namedisp !== undefined ? baseData.namedisp : PluginBase.VOBJ_DEFAULT_ATTRS.namedisp,
+            roledisp: baseData.roledisp !== undefined ? baseData.roledisp : PluginBase.VOBJ_DEFAULT_ATTRS.roledisp,
+            typedisp: baseData.typedisp !== undefined ? baseData.typedisp : PluginBase.VOBJ_DEFAULT_ATTRS.typedisp,
+            updatedisp: baseData.updatedisp !== undefined ? baseData.updatedisp : PluginBase.VOBJ_DEFAULT_ATTRS.updatedisp,
+            framedisp: baseData.framedisp !== undefined ? baseData.framedisp : PluginBase.VOBJ_DEFAULT_ATTRS.framedisp,
+            autoopen: baseData.autoopen !== undefined ? baseData.autoopen : PluginBase.VOBJ_DEFAULT_ATTRS.autoopen,
             // 仮身固有の続柄（link要素のrelationship属性）
             linkRelationship: baseData.linkRelationship || []
         };
@@ -6086,20 +4766,21 @@ export class PluginBase {
         linkElement.setAttribute('vobjbottom', (virtualObj.vobjbottom || 40).toString());
         linkElement.setAttribute('height', (virtualObj.heightPx || DEFAULT_VOBJ_HEIGHT).toString());
         linkElement.setAttribute('chsz', (virtualObj.chsz || DEFAULT_FONT_SIZE).toString());
-        linkElement.setAttribute('frcol', virtualObj.frcol || DEFAULT_FRCOL);
-        linkElement.setAttribute('chcol', virtualObj.chcol || DEFAULT_CHCOL);
-        linkElement.setAttribute('tbcol', virtualObj.tbcol || DEFAULT_TBCOL);
-        linkElement.setAttribute('bgcol', virtualObj.bgcol || DEFAULT_BGCOL);
+        const da = PluginBase.VOBJ_DEFAULT_ATTRS;
+        linkElement.setAttribute('frcol', virtualObj.frcol || da.frcol);
+        linkElement.setAttribute('chcol', virtualObj.chcol || da.chcol);
+        linkElement.setAttribute('tbcol', virtualObj.tbcol || da.tbcol);
+        linkElement.setAttribute('bgcol', virtualObj.bgcol || da.bgcol);
         linkElement.setAttribute('dlen', (virtualObj.dlen || 0).toString());
 
-        // 表示属性（デフォルト値を設定）
-        linkElement.setAttribute('pictdisp', virtualObj.pictdisp !== undefined ? virtualObj.pictdisp.toString() : 'true');
-        linkElement.setAttribute('namedisp', virtualObj.namedisp !== undefined ? virtualObj.namedisp.toString() : 'true');
-        linkElement.setAttribute('roledisp', virtualObj.roledisp !== undefined ? virtualObj.roledisp.toString() : 'false');
-        linkElement.setAttribute('typedisp', virtualObj.typedisp !== undefined ? virtualObj.typedisp.toString() : 'false');
-        linkElement.setAttribute('updatedisp', virtualObj.updatedisp !== undefined ? virtualObj.updatedisp.toString() : 'false');
-        linkElement.setAttribute('framedisp', virtualObj.framedisp !== undefined ? virtualObj.framedisp.toString() : 'true');
-        linkElement.setAttribute('autoopen', virtualObj.autoopen !== undefined ? virtualObj.autoopen.toString() : 'false');
+        // 表示属性（VOBJ_DEFAULT_ATTRSを参照）
+        linkElement.setAttribute('pictdisp', virtualObj.pictdisp !== undefined ? virtualObj.pictdisp.toString() : da.pictdisp);
+        linkElement.setAttribute('namedisp', virtualObj.namedisp !== undefined ? virtualObj.namedisp.toString() : da.namedisp);
+        linkElement.setAttribute('roledisp', virtualObj.roledisp !== undefined ? virtualObj.roledisp.toString() : da.roledisp);
+        linkElement.setAttribute('typedisp', virtualObj.typedisp !== undefined ? virtualObj.typedisp.toString() : da.typedisp);
+        linkElement.setAttribute('updatedisp', virtualObj.updatedisp !== undefined ? virtualObj.updatedisp.toString() : da.updatedisp);
+        linkElement.setAttribute('framedisp', virtualObj.framedisp !== undefined ? virtualObj.framedisp.toString() : da.framedisp);
+        linkElement.setAttribute('autoopen', virtualObj.autoopen !== undefined ? virtualObj.autoopen.toString() : da.autoopen);
 
         // 仮身固有の続柄（link要素のrelationship属性）
         if (virtualObj.linkRelationship && virtualObj.linkRelationship.length > 0) {
@@ -6248,9 +4929,14 @@ export class PluginBase {
      * @returns {number} line-height（px）
      */
     calculateLineHeight(fontSize, ratio = 1.5) {
-        return fontSize * ratio;
+        // fontSizeはpt単位、戻り値はpx単位（pt→px変換: ×4/3）
+        return fontSize * (4 / 3) * ratio;
     }
 }
+
+// 分離モジュールのメソッドをPluginBaseに適用
+applyScrollbarMethods(PluginBase);
+applyVobjDragMethods(PluginBase);
 
 // ========================================
 // 仮身属性の静的定数

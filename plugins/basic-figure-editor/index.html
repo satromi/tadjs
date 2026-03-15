@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>基本図形編集</title>
+    <link rel="stylesheet" href="../common/btron-theme.css">
     <link rel="stylesheet" href="style.css?v=20251023">
 </head>
 <body>
@@ -44,7 +45,8 @@
             DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS,
             VOBJ_BORDER_WIDTH, DEFAULT_FONT_SIZE, DEFAULT_VOBJ_HEIGHT,
             DEFAULT_FRCOL, DEFAULT_CHCOL, DEFAULT_TBCOL, DEFAULT_BGCOL,
-            LIST_SELECTED_BG_COLOR, GRAY_COLOR
+            LIST_SELECTED_BG_COLOR, GRAY_COLOR,
+            DEFAULT_MASK_DEFINITIONS
         } from '../../js/util.js';
         window.convertPtToPx = convertPtToPx;
         window.rgbToHex = rgbToHex;
@@ -62,6 +64,7 @@
         window.DEFAULT_BGCOL = DEFAULT_BGCOL;
         window.LIST_SELECTED_BG_COLOR = LIST_SELECTED_BG_COLOR;
         window.GRAY_COLOR = GRAY_COLOR;
+        window.DEFAULT_MASK_DEFINITIONS = DEFAULT_MASK_DEFINITIONS;
     </script>
     <!-- 図形計算ユーティリティをグローバル変数として読み込み -->
     <script type="module">
@@ -100,6 +103,29 @@
         import { PluginBase } from '../../js/plugin-base.js';
         window.PluginBase = PluginBase;
     </script>
+    <!-- Mixinモジュールをグローバル変数として読み込み -->
+    <script type="module">
+        import { FigureXmlParserMixin } from './figure-xml-parser.js';
+        import { FigureXmlSerializerMixin } from './figure-xml-serializer.js';
+        import { FigurePropertyApplierMixin } from './figure-property-applier.js';
+        import { FigureConnectorMixin } from './figure-connector-mixin.js';
+        import { FigureToolPanelMixin } from './figure-tool-panel-mixin.js';
+        import { FigureSelectionMixin } from './figure-selection-mixin.js';
+        import { FigureClipboardMixin } from './figure-clipboard-mixin.js';
+        import { FigureEventHandlerMixin } from './figure-event-handler-mixin.js';
+        import { FigureVirtualObjectMixin } from './figure-virtual-object-mixin.js';
+        window.FigureXmlParserMixin = FigureXmlParserMixin;
+        window.FigureXmlSerializerMixin = FigureXmlSerializerMixin;
+        window.FigurePropertyApplierMixin = FigurePropertyApplierMixin;
+        window.FigureConnectorMixin = FigureConnectorMixin;
+        window.FigureToolPanelMixin = FigureToolPanelMixin;
+        window.FigureSelectionMixin = FigureSelectionMixin;
+        window.FigureClipboardMixin = FigureClipboardMixin;
+        window.FigureEventHandlerMixin = FigureEventHandlerMixin;
+        window.FigureVirtualObjectMixin = FigureVirtualObjectMixin;
+    </script>
+    <!-- パターン定義（js/pattern-utils.jsからグローバル変数に登録） -->
+    <script type="module" src="default-patterns.js"></script>
     <script type="module" src="editor.js?v=20251023"></script>
 </body>
 </html>

@@ -16,7 +16,7 @@ body {
 }
 
 .plugin-content {
-    overflow: auto; /* スクロール可能 */
+    overflow: auto;
     position: absolute;
     top: 0;
     left: 0;

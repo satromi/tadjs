@@ -18,6 +18,7 @@ body {
     align-items: center;
     background: #000;
     overflow: hidden;
+    position: relative;  /* .plugin-contentのabsolute配置の基準 */
     /* 初期状態では非表示（全画面化完了後にJSで表示） */
     visibility: hidden;
 }
@@ -44,12 +45,16 @@ body {
     position: relative;  /* メディアコンテナのabsolute配置の基準 */
     background: #fff;
     overflow: hidden;
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
     margin: 0;
     padding: 0;
     /* 基本文章編集のmin-height: 100%を無効化（JavaScript側で高さを制御） */
     min-height: auto;
     height: auto;
+}
+
+/* 非プレゼン時のみbox-shadow（プレゼン時は黒背景なので不要） */
+#slide-wrapper:not(.fullscreen) .editor-container {
+    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
 }
 
 /* エディタ本体 */

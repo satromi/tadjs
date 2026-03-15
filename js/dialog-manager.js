@@ -404,18 +404,24 @@ export class DialogManager {
             const scrollbarCleanup = this._initDialogListboxScrollbars(messageText);
 
             // innerHTML で挿入された script タグは実行されないため、新しいscript要素として再構築
-            // DOM要素が準備された後に実行するため setTimeout を使用
+            // セキュリティ対策: 危険なAPIへのアクセスを含むスクリプトはブロック
+            const dangerousScriptPattern = /\b(require|import\s*\(|process\.|child_process|fs\.|path\.|eval\s*\(|Function\s*\(|window\.open|fetch\s*\(|XMLHttpRequest|WebSocket|Worker|__proto__|constructor\s*\[)\b/;
             const scripts = messageText.querySelectorAll('script');
             scripts.forEach(script => {
                 const scriptContent = script.textContent;
                 script.remove();
+                // 危険なパターンを含むスクリプトはブロック
+                if (dangerousScriptPattern.test(scriptContent)) {
+                    logger.error('[DialogManager] 危険なスクリプトをブロックしました');
+                    return;
+                }
                 setTimeout(() => {
                     try {
                         const newScript = document.createElement('script');
-                        newScript.textContent = `(function() {\n${scriptContent}\n})();`;
+                        newScript.textContent = `(function() {"use strict";\n${scriptContent}\n})();`;
                         messageText.appendChild(newScript);
                     } catch (e) {
-                        console.error('ダイアログスクリプト実行エラー:', e);
+                        logger.error('[DialogManager] ダイアログスクリプト実行エラー:', e);
                     }
                 }, 0);
             });

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>予定表</title>
     <link rel="stylesheet" href="../../tadjs-desktop.css">
+    <link rel="stylesheet" href="../common/btron-theme.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body tabindex="0">
@@ -122,6 +123,11 @@
         window.SATURDAY_COLOR = SATURDAY_COLOR;
         window.CALENDAR_VOBJ_BGCOL = CALENDAR_VOBJ_BGCOL;
         window.CALENDAR_VOBJ_FRCOL = CALENDAR_VOBJ_FRCOL;
+    </script>
+    <!-- パターンユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import { findSolidColorPatternId } from '../../js/pattern-utils.js';
+        window.findSolidColorPatternId = findSolidColorPatternId;
     </script>
     <!-- パフォーマンス最適化ユーティリティをグローバル変数として読み込み -->
     <script type="module">

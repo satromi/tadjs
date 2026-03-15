@@ -7,6 +7,8 @@
  * @version 1.0.0
  */
 
+const logger = window.getLogger('BaseCalendar');
+
 class BaseCalendarApp extends window.PluginBase {
     constructor() {
         super('BaseCalendar');
@@ -15,8 +17,9 @@ class BaseCalendarApp extends window.PluginBase {
         this.xmlData = null;
 
         // カレンダー状態
-        this.currentYear = new Date().getFullYear();
-        this.currentMonth = new Date().getMonth() + 1; // 1-12
+        const now = new Date();
+        this.currentYear = now.getFullYear();
+        this.currentMonth = now.getMonth() + 1; // 1-12
         this.currentMonthRealId = null;  // 現在表示中の年月実身ID
         this.currentMonthXmlData = null; // 現在表示中の年月実身のXMLデータ
 
@@ -305,10 +308,9 @@ class BaseCalendarApp extends window.PluginBase {
         const yearSelect = document.getElementById('yearSelect');
         if (!yearSelect) return;
 
-        const currentYear = new Date().getFullYear();
         yearSelect.innerHTML = '';
 
-        for (let year = currentYear - 50; year <= currentYear + 50; year++) {
+        for (let year = this.currentYear - 50; year <= this.currentYear + 50; year++) {
             const option = document.createElement('option');
             option.value = year;
             option.textContent = year;
@@ -330,7 +332,7 @@ class BaseCalendarApp extends window.PluginBase {
 
             const realIdValue = this.fileData ? (this.fileData.realId || this.fileData.fileId) : null;
             if (realIdValue) {
-                this.realId = realIdValue.replace(/_\d+\.xtad$/i, '');
+                this.realId = this.extractRealId(realIdValue);
             } else {
                 this.realId = null;
             }
@@ -390,11 +392,11 @@ class BaseCalendarApp extends window.PluginBase {
     async handleParentDropEvent(data) {
         // dragDataがない場合は処理しない
         if (!data.dragData) {
-            console.warn('[BaseCalendar] parent-drop-event: dragDataがありません');
+            logger.warn('[BaseCalendar] parent-drop-event: dragDataがありません');
             return;
         }
 
-        console.log('[BaseCalendar] parent-drop-event受信:', data.dragData.type);
+        logger.debug('[BaseCalendar] parent-drop-event受信:', data.dragData.type);
 
         // dropイベントをエミュレート（virtual-object-listと同様のパターン）
         const dropEvent = new CustomEvent('drop', { bubbles: true, cancelable: true });
@@ -559,7 +561,7 @@ class BaseCalendarApp extends window.PluginBase {
             // 座標更新用にlink_nameを返す
             return virtualObj.link_name;
         } catch (error) {
-            // エラー時は何もしない
+            logger.debug('[BaseCalendar] エラー:', error.message);
             return null;
         }
     }
@@ -575,18 +577,15 @@ class BaseCalendarApp extends window.PluginBase {
             const xmlDoc = parser.parseFromString(this.xmlData, 'text/xml');
             const linkElements = xmlDoc.getElementsByTagName('link');
 
-            this.monthVirtualObjects = [];
+            // 仮身メタデータを並列読み込み
+            const virtualObjs = Array.from(linkElements)
+                .map(link => this.parseLinkElement(link))
+                .filter(Boolean);
 
-            for (const link of linkElements) {
-                const virtualObj = this.parseLinkElement(link);
-                if (virtualObj) {
-                    // 自己閉じタグ対応: JSONから実身名を読み込み
-                    await this.loadVirtualObjectMetadata(virtualObj);
-                    this.monthVirtualObjects.push(virtualObj);
-                }
-            }
+            await Promise.all(virtualObjs.map(vo => this.loadVirtualObjectMetadata(vo)));
+            this.monthVirtualObjects = virtualObjs;
         } catch (error) {
-            // エラー時は空配列のまま
+            logger.debug('[BaseCalendar] エラー:', error.message);
         }
     }
 
@@ -660,7 +659,7 @@ class BaseCalendarApp extends window.PluginBase {
                     }
                 }
             } catch (error) {
-                // パースエラー時はフォールバック
+                logger.debug('[BaseCalendar] パースエラー:', error.message);
             }
         }
 
@@ -680,7 +679,7 @@ class BaseCalendarApp extends window.PluginBase {
             const xtadContent = typeof xtadFile === 'string' ? xtadFile : await xtadFile.text();
             this.holidayMap = this.parseHolidayXtad(xtadContent);
         } catch (error) {
-            // 読み込み失敗時は空のマップのまま
+            logger.debug('[BaseCalendar] 読み込み失敗:', error.message);
             this.holidayMap = {};
         }
     }
@@ -718,7 +717,7 @@ class BaseCalendarApp extends window.PluginBase {
                 }
             }
         } catch (error) {
-            // パース失敗時は空のマップを返す
+            logger.debug('[BaseCalendar] パース失敗:', error.message);
         }
 
         return holidayMap;
@@ -952,6 +951,46 @@ class BaseCalendarApp extends window.PluginBase {
     }
 
     /**
+     * カレンダーで使用する色からパターンIDマッピングとpatterns XMLを構築
+     * @param {string[]} colors - 使用する色の配列
+     * @returns {{ getPatternId: function, patternsXml: string }}
+     */
+    _buildColorPatternMapping(colors) {
+        const colorPatternMap = {};
+        const customPatterns = [];
+        let nextPatternId = 128;
+
+        for (const color of colors) {
+            if (!color || color === 'transparent' || colorPatternMap[color] !== undefined) continue;
+            const defaultId = (typeof findSolidColorPatternId === 'function') ? findSolidColorPatternId(color) : 0;
+            if (defaultId > 0) {
+                colorPatternMap[color] = defaultId;
+            } else {
+                const id = nextPatternId++;
+                colorPatternMap[color] = id;
+                customPatterns.push({ id, color });
+            }
+        }
+
+        let patternsXml = '';
+        if (customPatterns.length > 0) {
+            patternsXml = '<patterns>\n';
+            for (const p of customPatterns) {
+                patternsXml += `<pattern id="${p.id}" width="1" height="1" ncol="1" fgcolors="${p.color}" bgcolor="#ffffff"/>\n`;
+            }
+            patternsXml += '</patterns>\n';
+        }
+
+        return {
+            getPatternId: (color) => {
+                if (!color || color === 'transparent') return 0;
+                return colorPatternMap[color] || 0;
+            },
+            patternsXml
+        };
+    }
+
+    /**
      * カレンダー図形セグメントを含むxmlTADを生成
      * @param {number} year - 年
      * @param {number} month - 月
@@ -988,13 +1027,19 @@ class BaseCalendarApp extends window.PluginBase {
         const isCurrentMonth = today.getFullYear() === year && (today.getMonth() + 1) === month;
         const todayDate = today.getDate();
 
+        // 色→パターンIDマッピング構築
+        const { getPatternId, patternsXml } = this._buildColorPatternMapping([
+            HOVER_BG_COLOR, GRAY_COLOR, DESKTOP_BG_COLOR,
+            DEFAULT_BGCOL, DIALOG_BG_COLOR, TODAY_CELL_COLOR
+        ]);
+
         let xmlTAD = `<tad version="1.0" filename="${monthName}" encoding="UTF-8">
 <figure>
 <figView top="0" left="0" right="${BASE_WIDTH}" bottom="${BASE_HEIGHT}"/>
 <figDraw top="0" left="0" right="${BASE_WIDTH}" bottom="${BASE_HEIGHT}"/>
 <figScale hunit="-72" vunit="-72"/>
-<!-- ナビゲーションバー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${HOVER_BG_COLOR}" strokeColor="${GRAY_COLOR}" left="0" top="0" right="${BASE_WIDTH}" bottom="${NAV_HEIGHT}" zIndex="1"/>
+${patternsXml}<!-- ナビゲーションバー背景 -->
+<rect round="0" lineType="0" lineWidth="1" f_pat="${getPatternId(HOVER_BG_COLOR)}" l_pat="${getPatternId(GRAY_COLOR)}" left="0" top="0" right="${BASE_WIDTH}" bottom="${NAV_HEIGHT}" zIndex="1"/>
 <!-- 年月表示テキスト -->
 <document>
 <docView viewleft="350" viewtop="5" viewright="450" viewbottom="35"/>
@@ -1007,7 +1052,7 @@ class BaseCalendarApp extends window.PluginBase {
 ${monthName}
 </document>
 <!-- 曜日ヘッダー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${HOVER_BG_COLOR}" strokeColor="${GRAY_COLOR}" left="0" top="${NAV_HEIGHT}" right="${BASE_WIDTH}" bottom="${GRID_TOP}" zIndex="3"/>
+<rect round="0" lineType="0" lineWidth="1" f_pat="${getPatternId(HOVER_BG_COLOR)}" l_pat="${getPatternId(GRAY_COLOR)}" left="0" top="${NAV_HEIGHT}" right="${BASE_WIDTH}" bottom="${GRID_TOP}" zIndex="3"/>
 `;
 
         // 曜日ヘッダーテキスト
@@ -1048,6 +1093,7 @@ ${WEEKDAYS[i]}
                 let cellColor = DEFAULT_BGCOL;
                 let isOtherMonth = false;
                 let currentDay = null;  // 休日チェック用
+                let holidayName = null; // 休日名（重複呼び出し防止用）
 
                 if (cellIndex < startDayOfWeek) {
                     // 前月
@@ -1066,7 +1112,7 @@ ${WEEKDAYS[i]}
                         dayColor = SATURDAY_COLOR; // 土曜
                     }
                     // 休日の場合は色を赤に変更
-                    const holidayName = this.getHolidayName(year, month, dayCounter);
+                    holidayName = this.getHolidayName(year, month, dayCounter);
                     if (holidayName) {
                         dayColor = SUNDAY_COLOR;
                     }
@@ -1084,7 +1130,7 @@ ${WEEKDAYS[i]}
                 }
 
                 // セル背景
-                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${cellColor}" strokeColor="${DESKTOP_BG_COLOR}" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`;
+                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="${getPatternId(cellColor)}" l_pat="${getPatternId(DESKTOP_BG_COLOR)}" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`;
                 zIndex++;
 
                 // 日付テキスト（左上に配置）
@@ -1105,19 +1151,16 @@ ${dayText}
 `;
                 zIndex++;
 
-                // 当月の休日の場合、休日名documentを追加
-                if (!isOtherMonth && currentDay) {
-                    const holidayName = this.getHolidayName(year, month, currentDay);
-                    if (holidayName) {
-                        const holidayPosition = {
-                            left: left + 30,
-                            top: top + 2,
-                            right: right - 4,
-                            bottom: top + 18
-                        };
-                        xmlTAD += this.buildHolidayNameDocument(holidayName, holidayPosition, zIndex);
-                        zIndex++;
-                    }
+                // 当月の休日の場合、休日名documentを追加（holidayNameは上で取得済み）
+                if (!isOtherMonth && currentDay && holidayName) {
+                    const holidayPosition = {
+                        left: left + 30,
+                        top: top + 2,
+                        right: right - 4,
+                        bottom: top + 18
+                    };
+                    xmlTAD += this.buildHolidayNameDocument(holidayName, holidayPosition, zIndex);
+                    zIndex++;
                 }
             }
         }
@@ -1227,13 +1270,19 @@ ${dayText}
         const isCurrentMonth = today.getFullYear() === this.currentYear && (today.getMonth() + 1) === this.currentMonth;
         const todayDate = today.getDate();
 
+        // 色→パターンIDマッピング構築
+        const { getPatternId, patternsXml } = this._buildColorPatternMapping([
+            HOVER_BG_COLOR, GRAY_COLOR, DESKTOP_BG_COLOR,
+            DEFAULT_BGCOL, DIALOG_BG_COLOR, TODAY_CELL_COLOR
+        ]);
+
         let xmlTAD = `<tad version="1.0" filename="${monthName}" encoding="UTF-8">
 <figure>
 <figView top="0" left="0" right="${layout.BASE_WIDTH}" bottom="${layout.BASE_HEIGHT}"/>
 <figDraw top="0" left="0" right="${layout.BASE_WIDTH}" bottom="${layout.BASE_HEIGHT}"/>
 <figScale hunit="-72" vunit="-72"/>
-<!-- ナビゲーションバー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${HOVER_BG_COLOR}" strokeColor="${GRAY_COLOR}" left="0" top="0" right="${layout.BASE_WIDTH}" bottom="${layout.NAV_HEIGHT}" zIndex="1"/>
+${patternsXml}<!-- ナビゲーションバー背景 -->
+<rect round="0" lineType="0" lineWidth="1" f_pat="${getPatternId(HOVER_BG_COLOR)}" l_pat="${getPatternId(GRAY_COLOR)}" left="0" top="0" right="${layout.BASE_WIDTH}" bottom="${layout.NAV_HEIGHT}" zIndex="1"/>
 <!-- 年月表示テキスト -->
 <document>
 <docView viewleft="350" viewtop="5" viewright="450" viewbottom="35"/>
@@ -1247,7 +1296,7 @@ ${monthName}
 </document>
 
 <!-- 曜日ヘッダー背景 -->
-<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${HOVER_BG_COLOR}" strokeColor="${GRAY_COLOR}" left="0" top="${layout.NAV_HEIGHT}" right="${layout.BASE_WIDTH}" bottom="${layout.GRID_TOP}" zIndex="3"/>
+<rect round="0" lineType="0" lineWidth="1" f_pat="${getPatternId(HOVER_BG_COLOR)}" l_pat="${getPatternId(GRAY_COLOR)}" left="0" top="${layout.NAV_HEIGHT}" right="${layout.BASE_WIDTH}" bottom="${layout.GRID_TOP}" zIndex="3"/>
 
 `;
 
@@ -1290,6 +1339,7 @@ ${WEEKDAYS[i]}
                 let cellColor = DEFAULT_BGCOL;
                 let isOtherMonth = false;
                 let currentDay = null;  // 休日チェック用
+                let holidayName = null; // 休日名（重複呼び出し防止用）
 
                 if (cellIndex < startDayOfWeek) {
                     const day = daysInPrevMonth - startDayOfWeek + cellIndex + 1;
@@ -1306,7 +1356,7 @@ ${WEEKDAYS[i]}
                         dayColor = SATURDAY_COLOR;
                     }
                     // 休日の場合は色を赤に変更
-                    const holidayName = this.getHolidayName(this.currentYear, this.currentMonth, dayCounter);
+                    holidayName = this.getHolidayName(this.currentYear, this.currentMonth, dayCounter);
                     if (holidayName) {
                         dayColor = SUNDAY_COLOR;
                     }
@@ -1323,7 +1373,7 @@ ${WEEKDAYS[i]}
                 }
 
                 // セル背景
-                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="0" fillColor="${cellColor}" strokeColor="${DESKTOP_BG_COLOR}" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`;
+                xmlTAD += `<rect round="0" lineType="0" lineWidth="1" f_pat="${getPatternId(cellColor)}" l_pat="${getPatternId(DESKTOP_BG_COLOR)}" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`;
                 zIndex++;
 
                 // 日付テキスト
@@ -1344,19 +1394,16 @@ ${dayText}
 `;
                 zIndex++;
 
-                // 当月の休日の場合、休日名documentを追加
-                if (!isOtherMonth && currentDay) {
-                    const holidayName = this.getHolidayName(this.currentYear, this.currentMonth, currentDay);
-                    if (holidayName) {
-                        const holidayPosition = {
-                            left: left + 30,
-                            top: top + 2,
-                            right: right - 4,
-                            bottom: top + 18
-                        };
-                        xmlTAD += this.buildHolidayNameDocument(holidayName, holidayPosition, zIndex);
-                        zIndex++;
-                    }
+                // 当月の休日の場合、休日名documentを追加（holidayNameは上で取得済み）
+                if (!isOtherMonth && currentDay && holidayName) {
+                    const holidayPosition = {
+                        left: left + 30,
+                        top: top + 2,
+                        right: right - 4,
+                        bottom: top + 18
+                    };
+                    xmlTAD += this.buildHolidayNameDocument(holidayName, holidayPosition, zIndex);
+                    zIndex++;
                 }
             }
         }
@@ -1552,7 +1599,7 @@ ${dayText}
 
             this.isModified = true;
         } catch (error) {
-            // エラー時は何もしない
+            logger.debug('[BaseCalendar] エラー:', error.message);
         }
     }
 
@@ -1570,16 +1617,13 @@ ${dayText}
             const xmlDoc = parser.parseFromString(this.currentMonthXmlData, 'text/xml');
             const linkElements = xmlDoc.getElementsByTagName('link');
 
-            this.virtualObjects = [];
+            // 仮身メタデータを並列読み込み
+            const virtualObjs = Array.from(linkElements)
+                .map(link => this.parseLinkElement(link))
+                .filter(Boolean);
 
-            for (const link of linkElements) {
-                const virtualObj = this.parseLinkElement(link);
-                if (virtualObj) {
-                    // 自己閉じタグ対応: JSONから実身名を読み込み
-                    await this.loadVirtualObjectMetadata(virtualObj);
-                    this.virtualObjects.push(virtualObj);
-                }
-            }
+            await Promise.all(virtualObjs.map(vo => this.loadVirtualObjectMetadata(vo)));
+            this.virtualObjects = virtualObjs;
         } catch (error) {
             this.virtualObjects = [];
         }
@@ -1910,7 +1954,7 @@ ${dayText}
                         noScrollbar: true,
                         bgcol: vobj.bgcol
                     }).catch(err => {
-                        console.error('[BaseCalendar] 開いた仮身の展開エラー:', err);
+                        logger.error('[BaseCalendar] 開いた仮身の展開エラー:', err);
                     });
                 }, 0);
             }
@@ -2069,7 +2113,7 @@ ${dayText}
         iframes.forEach(iframe => {
             iframe.style.pointerEvents = enabled ? 'auto' : 'none';
         });
-        console.log('[BaseCalendar] iframeのpointer-events:', enabled ? '有効化' : '無効化', 'iframe数:', iframes.length);
+        logger.debug('[BaseCalendar] iframeのpointer-events:', enabled ? '有効化' : '無効化', 'iframe数:', iframes.length);
     }
 
     /**
@@ -2123,7 +2167,7 @@ ${dayText}
 
             // リサイズ中は新しいリサイズを開始しない
             if (this.isResizing) {
-                console.log('[BaseCalendar] リサイズ中のため、新しいリサイズを無視');
+                logger.debug('[BaseCalendar] リサイズ中のため、新しいリサイズを無視');
                 return;
             }
 
@@ -2167,7 +2211,7 @@ ${dayText}
                 currentHeight = startHeight;
             }
 
-            console.log('[BaseCalendar] 仮身リサイズ開始:', obj.link_name, 'startWidth:', startWidth, 'startHeight:', startHeight);
+            logger.debug('[BaseCalendar] 仮身リサイズ開始:', obj.link_name, 'startWidth:', startWidth, 'startHeight:', startHeight);
 
             // リサイズプレビュー枠を作成
             const previewBox = document.createElement('div');
@@ -2245,7 +2289,7 @@ ${dayText}
                 obj.vobjright = obj.vobjleft + finalWidth;
                 obj.vobjbottom = obj.vobjtop + heightForSave;
 
-                console.log('[BaseCalendar] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
+                logger.debug('[BaseCalendar] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
 
                 // 年月実身を保存
                 this.saveMonthToFile();
@@ -2260,7 +2304,7 @@ ${dayText}
                 const isNowOpen = finalHeight > minClosedHeight_resize;
 
                 if (wasOpen !== isNowOpen) {
-                    console.log('[BaseCalendar] 開いた仮身/閉じた仮身の判定が変わりました。再描画します。');
+                    logger.debug('[BaseCalendar] 開いた仮身/閉じた仮身の判定が変わりました。再描画します。');
 
                     // 既存のタイマーをクリア
                     if (this.recreateVirtualObjectTimer) {
@@ -2354,25 +2398,25 @@ ${dayText}
 
         const dragData = this.parseDragData(e.dataTransfer);
         if (!dragData) {
-            console.warn('[BaseCalendar] handleDropEvent: dragDataをパースできません');
+            logger.warn('[BaseCalendar] handleDropEvent: dragDataをパースできません');
             return;
         }
 
-        console.log('[BaseCalendar] handleDropEvent:', dragData.type);
+        logger.debug('[BaseCalendar] handleDropEvent:', dragData.type);
 
         if (dragData.type === 'virtual-object-drag') {
             const virtualObjects = dragData.virtualObjects || [dragData.virtualObject];
-            console.log('[BaseCalendar] 仮身ドロップ:', virtualObjects.length, '個');
+            logger.debug('[BaseCalendar] 仮身ドロップ:', virtualObjects.length, '個');
 
             for (const vobj of virtualObjects) {
                 // 自由仮身として追加（名前は変更しない）
                 const result = await this.addFreeVirtualObjectToMonth(vobj, e.clientX, e.clientY);
-                console.log('[BaseCalendar] addFreeVirtualObjectToMonth結果:', result ? '成功' : '失敗');
+                logger.debug('[BaseCalendar] addFreeVirtualObjectToMonth結果:', result ? '成功' : '失敗');
             }
 
             // クロスウィンドウドロップ成功を通知
             if (dragData.sourceWindowId && dragData.sourceWindowId !== this.windowId) {
-                console.log('[BaseCalendar] クロスウィンドウドロップ成功通知送信');
+                logger.debug('[BaseCalendar] クロスウィンドウドロップ成功通知送信');
                 this.notifyCrossWindowDropSuccess(dragData, virtualObjects);
             }
 
@@ -2616,7 +2660,7 @@ ${dayText}
 
         if (templateVobj) {
             // テンプレートがある場合: テンプレートを読み込んで日付を適用
-            const realIdFromLink = templateVobj.link_id.replace(/_\d+\.xtad$/i, '');
+            const realIdFromLink = this.extractRealId(templateVobj.link_id);
             const templateXtad = await this.loadRealObjectXtad(realIdFromLink);
             if (templateXtad) {
                 initialXtad = this.applyDateToTemplate(templateXtad, dayName);
@@ -2669,7 +2713,7 @@ ${dayText}
                 this.renderCalendarGrid();
             }
         } catch (error) {
-            // エラー時は何もしない
+            logger.debug('[BaseCalendar] エラー:', error.message);
         }
     }
 
@@ -2768,7 +2812,7 @@ ${dayText}
 
             this.isModified = true;
         } catch (error) {
-            // エラー時は何もしない
+            logger.debug('[BaseCalendar] エラー:', error.message);
         }
     }
 
@@ -3070,23 +3114,14 @@ ${dayText}
     }
 
     /**
-     * 背景色を変更
+     * 背景色をUIに適用する（PluginBaseオーバーライド）
+     * @param {string} color - 背景色
      */
-    async changeBgColor() {
-        const currentColor = document.body.style.backgroundColor || DEFAULT_BGCOL;
-        const result = await this.showInputDialog(
-            '背景色を入力してください（例: #ffffff, rgb(255,255,255)）',
-            currentColor,
-            200
-        );
-
-        if (result) {
-            document.body.style.backgroundColor = result;
-            const container = document.querySelector('.calendar-container');
-            if (container) {
-                container.style.backgroundColor = result;
-            }
-            this.setStatus('背景色を変更しました');
+    applyBackgroundColor(color) {
+        super.applyBackgroundColor(color);
+        const container = document.querySelector('.calendar-container');
+        if (container) {
+            container.style.backgroundColor = color;
         }
     }
 
@@ -3255,7 +3290,7 @@ ${dayText}
             this.saveMonthToFile();
             this.isModified = true;
         } catch (error) {
-            // エラー時は何もしない
+            logger.debug('[BaseCalendar] エラー:', error.message);
         }
     }
 
@@ -3329,7 +3364,7 @@ ${dayText}
             this.saveMonthToFile();
             this.isModified = true;
         } catch (error) {
-            // エラー時は何もしない
+            logger.debug('[BaseCalendar] エラー:', error.message);
         }
     }
 

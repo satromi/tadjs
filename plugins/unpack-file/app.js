@@ -45,6 +45,9 @@ class UnpackFileManager extends window.PluginBase {
      * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
+        // 共通ハンドラを登録
+        this.setupCommonMessageBusHandlers();
+
         // 初期化メッセージ
         this.messageBus.on('init', async (data) => {
             logger.info('[UnpackFile] init受信', data);
@@ -61,59 +64,11 @@ class UnpackFileManager extends window.PluginBase {
 
                 // realIdを保存（拡張子を除去）
                 let rawId = data.fileData.realId || data.fileData.fileId;
-                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                this.realId = rawId ? this.extractRealId(rawId) : null;
 
                 // BPKファイルのヘッダーのみ読み込み（解凍は行わない）
                 this.loadArchiveHeader(this.rawData, this.fileName);
             }
-        });
-
-        // ウィンドウ移動
-        this.messageBus.on('window-moved', (data) => {
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-        });
-
-        // ウィンドウリサイズ
-        this.messageBus.on('window-resized-end', (data) => {
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-        });
-
-        // 全画面表示切り替え
-        this.messageBus.on('window-maximize-toggled', (data) => {
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height,
-                maximize: data.maximize
-            });
-        });
-
-        // メニュー定義要求
-        this.messageBus.on('get-menu-definition', (data) => {
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: [
-                    {
-                        text: '編集',
-                        submenu: [
-                            { text: '再読込', action: 'reload' }
-                        ]
-                    }
-                ]
-            });
-        });
-
-        // メニューアクション
-        this.messageBus.on('menu-action', (data) => {
-            this.handleMenuAction(data.action);
         });
 
         // アーカイブドロップ検出
@@ -129,7 +84,18 @@ class UnpackFileManager extends window.PluginBase {
         });
     }
 
-    handleMenuAction(action) {
+    getMenuDefinition() {
+        return [
+            {
+                text: '編集',
+                submenu: [
+                    { text: '再読込', action: 'reload' }
+                ]
+            }
+        ];
+    }
+
+    executeMenuAction(action) {
         switch (action) {
             case 'reload':
                 if (this.rawData) {
@@ -345,7 +311,7 @@ class UnpackFileManager extends window.PluginBase {
 
                 // 次のチャンクを送る前に少し待機（処理の負荷を軽減）
                 if (!isLastChunk) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                    await new Promise(resolve => setTimeout(resolve, UI_UPDATE_DELAY_MS));
                 }
             }
 

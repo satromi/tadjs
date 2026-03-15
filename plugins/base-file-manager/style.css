@@ -8,6 +8,28 @@ html, body {
 
 body {
     background: #ffffff;
+    overflow: hidden;
+}
+
+.plugin-content {
+    overflow: auto;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* カスタムスクロールバーを使用するためブラウザ標準のスクロールバーを非表示 */
+.plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.plugin-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE, Edge */
 }
 
 .manager-container {

@@ -71,24 +71,7 @@ class RealObjectConfigApp extends PluginBase {
      * タブ切り替えを設定
      */
     setupTabs() {
-        const tabs = document.querySelectorAll('.tab');
-        const panels = document.querySelectorAll('.tab-panel');
-
-        tabs.forEach(tab => {
-            tab.addEventListener('click', () => {
-                // 全タブの選択を解除
-                tabs.forEach(t => t.classList.remove('active'));
-                panels.forEach(p => p.classList.remove('active'));
-
-                // クリックしたタブを選択
-                tab.classList.add('active');
-                const panelId = tab.dataset.tab + '-panel';
-                const panel = document.getElementById(panelId);
-                if (panel) {
-                    panel.classList.add('active');
-                }
-            });
-        });
+        this.initTabSwitcher();
     }
 
     /**
@@ -218,7 +201,7 @@ class RealObjectConfigApp extends PluginBase {
      */
     async loadFilePath() {
         try {
-            const messageId = `get-info-${Date.now()}-${Math.random()}`;
+            const messageId = this.generateMessageId('get-info');
             this.messageBus.send('get-real-object-info', {
                 realId: this.realId,
                 messageId: messageId
@@ -514,7 +497,7 @@ class RealObjectConfigApp extends PluginBase {
 
         try {
             // 1. 実身を読み込む
-            const loadMessageId = `load-real-object-${Date.now()}-${Math.random()}`;
+            const loadMessageId = this.generateMessageId('load-real-object');
             this.messageBus.send('load-real-object', {
                 realId: this.realId,
                 messageId: loadMessageId
@@ -541,7 +524,7 @@ class RealObjectConfigApp extends PluginBase {
             realObject.metadata.deletable = !notDeletableChecked;
 
             // 3. 実身を保存する
-            const saveMessageId = `save-real-object-${Date.now()}-${Math.random()}`;
+            const saveMessageId = this.generateMessageId('save-real-object');
             this.messageBus.send('save-real-object', {
                 realId: this.realId,
                 realObject: realObject,
@@ -579,7 +562,7 @@ class RealObjectConfigApp extends PluginBase {
     async onSaveBeforeClose() {
         try {
             // 1. 実身を読み込む
-            const loadMessageId = `load-real-object-${Date.now()}-${Math.random()}`;
+            const loadMessageId = this.generateMessageId('load-real-object');
             this.messageBus.send('load-real-object', {
                 realId: this.realId,
                 messageId: loadMessageId
@@ -602,7 +585,7 @@ class RealObjectConfigApp extends PluginBase {
             realObject.metadata.deletable = !notDeletableChecked;
 
             // 3. 実身を保存する
-            const saveMessageId = `save-real-object-${Date.now()}-${Math.random()}`;
+            const saveMessageId = this.generateMessageId('save-real-object');
             this.messageBus.send('save-real-object', {
                 realId: this.realId,
                 realObject: realObject,

@@ -1,7 +1,7 @@
 /**
  * LH5 decompression implementation
- * Based on the LHA compression algorithm
- * Ver0.01
+ * Based on the unpack reference implementation
+ * Faithfully ported from io.c, huf.c, maketbl.c, decode.c
  */
 
 // Constants from ar.h
@@ -15,42 +15,42 @@ const CHAR_BIT = 8;
 const UCHAR_MAX = 255;
 const NC = UCHAR_MAX + MAXMATCH + 2 - THRESHOLD;
 const CBIT = 9;
-const BITBUFSIZ = 31;
+const BITBUFSIZ = 32;  // CHAR_BIT * sizeof(uint) = 32
 
 // Huffman coding parameters
-const H_NP = DICBIT + 1;  // 14
+const H_NP = DICBIT + 1;   // 14
 const H_NT = CODE_BIT + 3; // 19
 const PBIT = 4;
 const TBIT = 5;
 const NPT = H_NT > H_NP ? H_NT : H_NP;
 
 /**
- * LH5 unified class - combines LH5Decoder and GlobalDecompressedStream
+ * LH5 Decoder - faithful port of unpack reference implementation
  */
 class LH5Decoder {
     constructor() {
-        // From original LH5Decoder
-        this.bitbuf = 0;      // buffer
-        this.bitremain = 0;   // Remaining bits in buffer
+        // Bitstream state (from io.c)
+        this.bitbuf = 0;       // uint bitbuf
+        this.subbitbuf = 0;    // static uint subbitbuf
+        this.bitcount = 0;     // static int bitcount
         this.compsize = 0;
         this.origsize = 0;
-        this.crc = 0;
-        
-        // Huffman tables
+
+        // Huffman tables (from huf.c)
         this.left = new Uint16Array(2 * NC - 1);
         this.right = new Uint16Array(2 * NC - 1);
         this.c_len = new Uint8Array(NC);
         this.pt_len = new Uint8Array(NPT);
-        this.c_table = new Uint16Array(65536);
-        this.pt_table = new Uint16Array(65536);
-        
-        // From GlobalDecompressedStream
-        this.buffer = new Uint8Array(8192);
-        this.rpos = 0;
-        this.wpos = 0;
-        this.pos = 0;
+        this.c_table = new Uint16Array(4096);   // tablebits=12
+        this.pt_table = new Uint16Array(256);    // tablebits=8
         this.blocksize = 0;
-        
+
+        // Decode state (from decode.c)
+        this.dtext = new Uint8Array(DICSIZ);     // sliding window
+        this.r = 0;              // write position in sliding window
+        this.decode_j = 0;       // remaining match bytes (static int j)
+        this.decode_i = 0;       // match source position (static uint i)
+
         // File data
         this.fileData = null;
         this.filePos = 0;
@@ -60,350 +60,303 @@ class LH5Decoder {
      * Initialize decoder with file data
      */
     init(fileData, startPos, compsize, origsize) {
+        if (!fileData || fileData.length === 0) {
+            throw new Error('LH5: 入力データが空です');
+        }
+        if (startPos < 0 || startPos >= fileData.length) {
+            throw new Error(`LH5: 開始位置が不正です: ${startPos}`);
+        }
         this.fileData = fileData;
         this.filePos = startPos;
         this.compsize = compsize;
         this.origsize = origsize;
-        
-        // Reset stream state
-        this.rpos = 0;
-        this.wpos = 0;
-        this.pos = 0;
+
+        // Reset decode state (decode_start)
         this.blocksize = 0;
-        
-        // Initialize bitstream
-        this.init_getbits();
-    }
+        this.r = 0;
+        this.decode_j = 0;
+        this.decode_i = 0;
+        this.dtext.fill(0);
 
-    /**
-     * Port of init_getbits() from io.c
-     */
-    init_getbits() {
+        // Reset Huffman tables
+        this.left.fill(0);
+        this.right.fill(0);
+        this.c_len.fill(0);
+        this.pt_len.fill(0);
+        this.c_table.fill(0);
+        this.pt_table.fill(0);
+
+        // init_getbits (io.c:140-144)
         this.bitbuf = 0;
-        this.bitremain = 0;
-        this.fillbuf();
+        this.subbitbuf = 0;
+        this.bitcount = 0;
+        this.fillbuf(BITBUFSIZ);
     }
 
     /**
-     * fillbuf() implementation
+     * Port of fillbuf(int n) from io.c:48-70
+     * Shift bitbuf n bits left, read n bits
      */
-    fillbuf() {
-        while (this.bitremain <= (BITBUFSIZ - CHAR_BIT)) {
-            if (this.filePos >= this.fileData.length || this.compsize <= 0) {
-                //console.debug("End of file in fillbuf - no more data available");
-                return false;
+    fillbuf(n) {
+        this.bitbuf = (n < 32) ? (this.bitbuf << n) : 0;
+        while (n > this.bitcount) {
+            n -= this.bitcount;
+            this.bitbuf |= (n < 32) ? (this.subbitbuf << n) : 0;
+            if (this.compsize > 0) {
+                this.compsize--;
+                this.subbitbuf = this.fileData[this.filePos++] & 0xFF;
+            } else {
+                this.subbitbuf = 0;
             }
-            
-            const subbitbuf = this.fileData[this.filePos++] & 0xFF;
-            this.compsize--;
-            
-            this.bitbuf |= (subbitbuf << (BITBUFSIZ - CHAR_BIT - this.bitremain)) & 0x7fffffff;
-            this.bitremain += CHAR_BIT;
+            this.bitcount = CHAR_BIT;
         }
-        return true;
+        this.bitbuf |= this.subbitbuf >>> (this.bitcount -= n);
     }
 
     /**
-     * Get bits from bitstream
+     * Port of getbits(int n) from io.c:72-89
      */
     getbits(n) {
-        if (n > BITBUFSIZ) {
-            console.error("getbits: len > 31 not supported");
-            return 0;
-        }
-        
-        if (!this.fillbuf()) {
-            return 0; // EOF
-        }
-        
-        const x = this.bitbuf >>> (BITBUFSIZ - n);
-        
-        this.bitbuf = (this.bitbuf << n) & 0x7fffffff;
-        this.bitremain -= n;
-        
-        if (this.bitremain < 0) {
-            console.warn(`bitremain went negative: ${this.bitremain}, len=${n}. Resetting to 0.`);
-            this.bitremain = 0;
-        }
-        
+        const sh = BITBUFSIZ - n;
+        const x = (sh >= 32) ? 0 : this.bitbuf >>> sh;
+        this.fillbuf(n);
         return x;
     }
 
     /**
-     * Make table for decoding
+     * Port of make_table() from maketbl.c:7-65
+     * Builds decoding table with tree traversal for long codes
      */
-    make_table(nchar, bitlen, table) {
-        const count = {};
-        const start = {};
+    make_table(nchar, bitlen, tablebits, table) {
+        const count = new Uint16Array(17);
+        const weight = new Uint16Array(17);
+        const start = new Uint32Array(18);
 
-        for (let i = 0; i < nchar; i++) {
-            const bitleni = bitlen[i];
-            if (bitleni > 0) {
-                count[bitleni] = (count[bitleni] || 0) + 1;
-            }
-        }
-        
+        for (let i = 1; i <= 16; i++) count[i] = 0;
+        for (let i = 0; i < nchar; i++) count[bitlen[i]]++;
+
         start[1] = 0;
         for (let i = 1; i <= 16; i++) {
-            const countI = count[i] || 0;
-            start[i + 1] = start[i] + (countI << (16 - i));
+            start[i + 1] = start[i] + (count[i] << (16 - i));
         }
-
-        if (start[17] !== 0x10000) {
-            console.error(`FATAL: start[17]=${start[17]}, expected=65536`);
-            
-            // Fill table with zeros as fallback
-            for (let i = 0; i < table.length; i++) {
-                table[i] = 0;
-            }
+        if ((start[17] & 0xFFFF) !== 0) {
+            console.error(`make_table: Bad table (start[17]=${start[17]})`);
             return;
         }
-        
-        // Initialize table
-        for (let i = 0; i < table.length; i++) {
-            table[i] = 0;
+
+        const jutbits = 16 - tablebits;
+        for (let i = 1; i <= tablebits; i++) {
+            start[i] >>>= jutbits;
+            weight[i] = 1 << (tablebits - i);
         }
-        
+        for (let i = tablebits + 1; i <= 16; i++) {
+            weight[i] = 1 << (16 - i);
+        }
+
+        let i = start[tablebits + 1] >>> jutbits;
+        if ((i & 0xFFFF) !== 0) {
+            const k = 1 << tablebits;
+            while (i < k) table[i++] = 0;
+        }
+
+        let avail = nchar;
+        const mask = 1 << (15 - tablebits);
         for (let ch = 0; ch < nchar; ch++) {
             const len = bitlen[ch];
             if (len === 0) continue;
-            
-            let i = start[len];
-            const nextcode = i + (1 << (16 - len));
-            
-            while (i < nextcode) {
-                if (i >= 0 && i < table.length) {
-                    table[i] = ch;
+            const nextcode = start[len] + weight[len];
+            if (len <= tablebits) {
+                for (let ii = start[len]; ii < nextcode; ii++) {
+                    table[ii] = ch;
                 }
-                i++;
-            }   
+            } else {
+                // Tree traversal for codes longer than tablebits
+                // In C, p is a pointer that traverses table[], left[], right[]
+                // In JS, we track the array and index separately
+                let k = start[len];
+                let pArr = table;              // which array p points into
+                let pIdx = k >>> jutbits;      // index within that array
+                let ii = len - tablebits;
+                while (ii !== 0) {
+                    if (pArr[pIdx] === 0) {
+                        this.right[avail] = this.left[avail] = 0;
+                        pArr[pIdx] = avail++;
+                    }
+                    const nodeIdx = pArr[pIdx];
+                    if (k & mask) {
+                        pArr = this.right;
+                    } else {
+                        pArr = this.left;
+                    }
+                    pIdx = nodeIdx;
+                    k <<= 1;
+                    ii--;
+                }
+                pArr[pIdx] = ch;
+            }
             start[len] = nextcode;
         }
     }
 
     /**
-     * Read pattern length
+     * Port of read_pt_len() from huf.c:213-242
      */
     read_pt_len(nn, nbit, i_special) {
         const n = this.getbits(nbit);
-        
         if (n === 0) {
             const c = this.getbits(nbit);
-            
-            for (let i = 0; i < nn; i++) {
-                this.pt_len[i] = 0;
-            }
-            
-            for (let i = 0; i < 65536; i++) {
-                this.pt_table[i] = c;
-            }
-            return;
-        }
-        
-        let i = 0;
-        while (i < n) {
-            let c = this.getbits(3);
-            if (c === 7) {
-                while (this.getbits(1)) {
-                    c++;
+            for (let i = 0; i < nn; i++) this.pt_len[i] = 0;
+            for (let i = 0; i < 256; i++) this.pt_table[i] = c;
+        } else {
+            let i = 0;
+            while (i < n) {
+                // Peek top 3 bits without consuming
+                let c = this.bitbuf >>> (BITBUFSIZ - 3);
+                if (c === 7) {
+                    let mask = 1 << (BITBUFSIZ - 1 - 3);
+                    while (mask & this.bitbuf) {
+                        mask >>>= 1;
+                        c++;
+                    }
+                }
+                this.fillbuf((c < 7) ? 3 : c - 3);
+                this.pt_len[i++] = c;
+                if (i === i_special) {
+                    let cc = this.getbits(2);
+                    while (--cc >= 0) this.pt_len[i++] = 0;
                 }
             }
-            
-            this.pt_len[i++] = c;
-            
-            if (i === i_special) {
-                let c = this.getbits(2);
-                while (--c >= 0) {
-                    this.pt_len[i++] = 0;
-                }
-            }
+            while (i < nn) this.pt_len[i++] = 0;
+            this.make_table(nn, this.pt_len, 8, this.pt_table);
         }
-        
-        while (i < nn) {
-            this.pt_len[i++] = 0;
-        }
-        
-        this.make_table(nn, this.pt_len, this.pt_table);
     }
 
     /**
-     * Read character length
+     * Port of read_c_len() from huf.c:244-278
      */
-    read_c_len() {       
+    read_c_len() {
         const n = this.getbits(CBIT);
-        
         if (n === 0) {
             const c = this.getbits(CBIT);
-            
-            for (let i = 0; i < NC; i++) {
-                this.c_len[i] = 0;
-            }
-
-            for (let i = 0; i < 65536; i++) {
-                this.c_table[i] = c;
-            }
-            return;
-        }
-        
-        const c_len = [];
-        let i = 0;
-        let count;
-        
-        while (i < n) {
-            const c = this.get_from_pt_table();
-            
-            if (c <= 2) {
-                if (c === 0) {
-                    count = 1;
-                } else if (c === 1) {
-                    count = this.getbits(4) + 3;
-                } else if (c === 2) {
-                    count = this.getbits(CBIT) + 20;
+            for (let i = 0; i < NC; i++) this.c_len[i] = 0;
+            for (let i = 0; i < 4096; i++) this.c_table[i] = c;
+        } else {
+            let i = 0;
+            while (i < n) {
+                // PT table lookup with tree traversal
+                let c = this.pt_table[this.bitbuf >>> (BITBUFSIZ - 8)];
+                if (c >= H_NT) {
+                    let mask = 1 << (BITBUFSIZ - 1 - 8);
+                    do {
+                        if (this.bitbuf & mask) c = this.right[c];
+                        else                    c = this.left[c];
+                        mask >>>= 1;
+                    } while (c >= H_NT);
                 }
-                while (count-- > 0) {
-                    c_len[i++] = 0;
+                this.fillbuf(this.pt_len[c]);
+                if (c <= 2) {
+                    if (c === 0) {
+                        c = 1;
+                    } else if (c === 1) {
+                        c = this.getbits(4) + 3;
+                    } else {
+                        c = this.getbits(CBIT) + 20;
+                    }
+                    while (--c >= 0) this.c_len[i++] = 0;
+                } else {
+                    this.c_len[i++] = c - 2;
                 }
-            } else {
-                c_len[i++] = c - 2;
             }
+            while (i < NC) this.c_len[i++] = 0;
+            this.make_table(NC, this.c_len, 12, this.c_table);
         }
-        
-        while (i < NC) {
-            c_len[i++] = 0;
-        }
-        
-        for (let i = 0; i < NC; i++) {
-            this.c_len[i] = c_len[i] || 0;
-        }
-        
-        this.make_table(NC, this.c_len, this.c_table);
-    }
-    
-    /**
-     * Decode character from PT table
-     */
-    get_from_pt_table() {
-        if (!this.fillbuf()) {
-            return 0;
-        }
-        
-        const tableIndex = this.bitbuf >>> (BITBUFSIZ - 16); // Get top 16 bits
-        const val = this.pt_table[tableIndex] || 0;
-        
-        const bitLen = this.pt_len[val] || 0;
-        if (bitLen > 0) {
-            this.getbits(bitLen);
-        }
-        
-        return val;
     }
 
     /**
-     * decode_c() with better error handling
+     * Port of decode_c() from huf.c:280-303
      */
     decode_c() {
-        if (this.blocksize <= 0) {
+        if (this.blocksize === 0) {
             this.blocksize = this.getbits(16);
-            
-            if (this.blocksize === 0) {
-                return false; // EOF
-            }
-
             this.read_pt_len(H_NT, TBIT, 3);
             this.read_c_len();
             this.read_pt_len(H_NP, PBIT, -1);
         }
-        
         this.blocksize--;
 
-        if (!this.fillbuf()) {
-            return UCHAR_MAX + 1; // EOF
+        // C table lookup with tree traversal
+        let j = this.c_table[this.bitbuf >>> (BITBUFSIZ - 12)];
+        if (j >= NC) {
+            let mask = 1 << (BITBUFSIZ - 1 - 12);
+            do {
+                if (this.bitbuf & mask) j = this.right[j];
+                else                    j = this.left[j];
+                mask >>>= 1;
+            } while (j >= NC);
         }
-        
-        const j = this.c_table[this.bitbuf >>> (BITBUFSIZ - 16)] || 0;
-        
-        const bitLen = this.c_len[j] || 0;
-        if (bitLen > 0) {
-            this.getbits(bitLen);
-        } else {
-            this.getbits(1); // Safety fallback
-        }
-        
+        this.fillbuf(this.c_len[j]);
         return j;
     }
 
     /**
-     * Decode position
+     * Port of decode_p() from huf.c:305-322
      */
     decode_p() {
-        if (!this.fillbuf()) {
-            return 0;
+        // PT table lookup with tree traversal
+        let j = this.pt_table[this.bitbuf >>> (BITBUFSIZ - 8)];
+        if (j >= H_NP) {
+            let mask = 1 << (BITBUFSIZ - 1 - 8);
+            do {
+                if (this.bitbuf & mask) j = this.right[j];
+                else                    j = this.left[j];
+                mask >>>= 1;
+            } while (j >= H_NP);
         }
-        
-        const j = this.pt_table[this.bitbuf >>> (BITBUFSIZ - 16)] || 0;
-        
-        const bitLen = this.pt_len[j] || 0;
-        if (bitLen > 0) {
-            this.getbits(bitLen);
+        this.fillbuf(this.pt_len[j]);
+        if (j !== 0) {
+            j = (1 << (j - 1)) + this.getbits(j - 1);
         }
-        
-        if (j <= 1) {
-            return j;
-        }
-        
-        const extraBits = j - 1;
-        if (extraBits > 0 && extraBits <= 16) {
-            const result = ((1 << extraBits) + this.getbits(extraBits)) & 0xFFFF;
-            return result;
-        }
-        
         return j;
     }
 
     /**
-     * Read multiple bytes into buffer (unified with ub())
+     * Port of decode() from decode.c:16-50
+     * Adapted: uses internal dtext[] as sliding window since
+     * tad.js passes small buffers (not DICSIZ-sized)
      */
-    decode(length, buffer) {
-        for (let i = 0; i < length; i++) {
-            this.pos++;
-            
-            // Check if we have data in buffer
-            if (this.wpos != this.rpos) {
-                buffer[i] = this.buffer[this.rpos];
-                this.rpos = (this.rpos + 1) & 0x1fff;
-                continue;
-            }
-            
-            // Get character/code from Huffman table
+    decode(count, buffer) {
+        let outPos = 0;
+
+        // Complete pending match copy from previous call (static j)
+        while (this.decode_j > 0) {
+            this.dtext[this.r] = this.dtext[this.decode_i];
+            this.decode_i = (this.decode_i + 1) & (DICSIZ - 1);
+            buffer[outPos] = this.dtext[this.r];
+            this.r = (this.r + 1) & (DICSIZ - 1);
+            this.decode_j--;
+            if (++outPos === count) return count;
+        }
+
+        for (;;) {
             const c = this.decode_c();
-            
-            if (c === false) {
-                return i; // EOF - return actual bytes read
-            }
-            
             if (c <= UCHAR_MAX) {
-                // Literal character
-                this.buffer[this.wpos] = c;
-                this.rpos = this.wpos = (this.wpos + 1) & 0x1fff;
-                buffer[i] = c;
+                this.dtext[this.r] = c;
+                buffer[outPos] = c;
+                this.r = (this.r + 1) & (DICSIZ - 1);
+                if (++outPos === count) return count;
             } else {
-                // LZ77 match: length and distance
-                const decode_j = c - (UCHAR_MAX + 1 - THRESHOLD);
-                
-                // Copy matched data to buffer
-                let decode_i = (this.wpos + 0x2000 - this.decode_p() - 1) & 0x1fff;
-                for (let j = 0; j < decode_j; j++) {
-                    this.buffer[this.wpos] = this.buffer[decode_i];
-                    this.wpos = (this.wpos + 1) & 0x1fff;
-                    decode_i = (decode_i + 1) & 0x1fff;
+                this.decode_j = c - (UCHAR_MAX + 1 - THRESHOLD);
+                this.decode_i = (this.r - this.decode_p() - 1) & (DICSIZ - 1);
+                while (this.decode_j > 0) {
+                    this.dtext[this.r] = this.dtext[this.decode_i];
+                    this.decode_i = (this.decode_i + 1) & (DICSIZ - 1);
+                    buffer[outPos] = this.dtext[this.r];
+                    this.r = (this.r + 1) & (DICSIZ - 1);
+                    this.decode_j--;
+                    if (++outPos === count) return count;
                 }
-                
-                // Return first byte of the match
-                buffer[i] = this.buffer[this.rpos];
-                this.rpos = (this.rpos + 1) & 0x1fff;
             }
         }
-        return length;
     }
 }
 
@@ -411,7 +364,7 @@ class LH5Decoder {
 // Export classes and constants to global scope for browser compatibility
 if (typeof window !== 'undefined') {
     window.LH5Decoder = LH5Decoder;
-    
+
     // Export constants for use in tad.js
     window.DICBIT = DICBIT;
     window.DICSIZ = DICSIZ;

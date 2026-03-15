@@ -48,21 +48,14 @@ class FileImportApp extends window.PluginBase {
      * MessageBusハンドラを設定
      */
     setupMessageBusHandlers() {
+        // 共通ハンドラを登録
+        this.setupCommonMessageBusHandlers();
+
         // 初期化メッセージ
         this.messageBus.on('init', (data) => {
             logger.info('[FileImport] init受信', data);
             // 共通初期化処理（windowId設定、スクロール状態送信）
             this.onInit(data);
-        });
-
-        // メニュー定義要求（空のメニューを返す）
-        this.messageBus.on('get-menu-definition', (data) => {
-            logger.info('[FileImport] get-menu-definition受信', data);
-            // ファイル取込プラグインは右クリックメニューを使用しないため、空の配列を返す
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: []
-            });
         });
 
         // ファイル取り込み完了メッセージ
@@ -77,6 +70,20 @@ class FileImportApp extends window.PluginBase {
                 alert('ファイル取り込みに失敗しました: ' + (data.error || '不明なエラー'));
             }
         });
+    }
+
+    /**
+     * メニュー定義（空）
+     */
+    getMenuDefinition() {
+        return [];
+    }
+
+    /**
+     * メニューアクション（なし）
+     */
+    executeMenuAction(action) {
+        // ファイル取込プラグインはメニューアクションなし
     }
 
     /**

@@ -530,7 +530,7 @@ class TrashRealObjectsApp extends window.PluginBase {
                                 errorCount++;
                             }
                             resolve();
-                        });
+                        }, LONG_OPERATION_TIMEOUT_MS);
                     });
                 }
 

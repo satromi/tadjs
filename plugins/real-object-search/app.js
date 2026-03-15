@@ -50,26 +50,15 @@ class RealObjectSearchApp extends window.PluginBase {
      * MessageBusのハンドラを登録
      */
     setupMessageBusHandlers() {
+        // 共通ハンドラを登録
+        this.setupCommonMessageBusHandlers();
+
         // 初期化メッセージ
         this.messageBus.on('init', async (data) => {
             logger.info('[RealObjectSearch] init受信:', data);
 
             // 共通初期化処理（windowId設定、スクロール状態送信）
             this.onInit(data);
-        });
-
-        // メニューアクション
-        this.messageBus.on('menu-action', (data) => {
-            this.handleMenuAction(data.action);
-        });
-
-        // メニュー定義要求
-        this.messageBus.on('get-menu-definition', (data) => {
-            const menuDefinition = this.getMenuDefinition();
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: menuDefinition
-            });
         });
 
         // 検索結果レスポンス
@@ -87,26 +76,10 @@ class RealObjectSearchApp extends window.PluginBase {
      * タブ切り替えを設定
      */
     setupTabs() {
-        const tabs = document.querySelectorAll('.tab');
-        const panels = document.querySelectorAll('.tab-panel');
-
-        tabs.forEach(tab => {
-            tab.addEventListener('click', () => {
-                const targetTab = tab.dataset.tab;
+        this.initTabSwitcher({
+            onTabChange: (targetTab) => {
                 this.currentTab = targetTab;
-
-                // アクティブタブの切り替え
-                tabs.forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-
-                // パネルの切り替え
-                panels.forEach(panel => {
-                    panel.classList.remove('active');
-                    if (panel.id === targetTab + '-panel') {
-                        panel.classList.add('active');
-                    }
-                });
-            });
+            }
         });
     }
 
@@ -631,7 +604,7 @@ class RealObjectSearchApp extends window.PluginBase {
     /**
      * メニューアクション処理
      */
-    handleMenuAction(action) {
+    executeMenuAction(action) {
         switch (action) {
             case 'toggle-fullscreen':
                 this.toggleFullscreen();

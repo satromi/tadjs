@@ -300,6 +300,56 @@ body {
     text-align: right;
 }
 
+/* MCP設定 */
+.mcp-description {
+    flex-direction: column;
+    align-items: flex-start;
+    margin-left: 88px;
+    gap: 4px;
+}
+
+.mcp-description p {
+    margin: 0;
+    color: #404040;
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+.mcp-usage {
+    margin-top: 4px;
+}
+
+.mcp-usage code {
+    background: #c0c0c0;
+    border: 1px inset #a0a0a0;
+    padding: 1px 4px;
+    font-family: 'MS Gothic', monospace;
+    font-size: 11px;
+}
+
+.mcp-controls {
+    margin-top: 4px;
+}
+
+.mcp-controls .config-button {
+    min-width: 48px;
+}
+
+.mcp-status {
+    font-size: 11px;
+    margin-left: 8px;
+    color: #808080;
+}
+
+.mcp-status.running {
+    color: #008000;
+    font-weight: bold;
+}
+
+.mcp-status.stopped {
+    color: #808080;
+}
+
 /* スクロールバーラッパーとコンテンツの背景色 */
 .plugin-scrollbar-wrapper {
     background: #dedede;

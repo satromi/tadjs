@@ -45,9 +45,10 @@ class TADjsViewPlugin extends window.PluginBase {
             return;
         }
 
-        // 初期サイズを設定
-        this.canvas.width = 1200;
-        this.canvas.height = 1000;
+        // 初期サイズを設定（コンテナ幅に追従）
+        const container = this.canvas.parentElement;
+        this.canvas.width = container.clientWidth || 1200;
+        this.canvas.height = container.clientHeight || 1000;
 
         // MessageBusのハンドラを登録
         if (this.messageBus) {
@@ -93,7 +94,7 @@ class TADjsViewPlugin extends window.PluginBase {
             // realIdを保存（拡張子を除去）
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;
-                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '').replace(/\.(bpk|BPK)$/, '') : null;
+                this.realId = rawId ? this.extractRealId(rawId).replace(/\.(bpk|BPK)$/, '') : null;
                 logger.debug('[TADjsView] [MessageBus] realId設定:', this.realId);
 
                 // createTADWindowと同様にoriginalLinkIdを保存
@@ -146,6 +147,7 @@ class TADjsViewPlugin extends window.PluginBase {
      */
     getMenuDefinition() {
         return [
+            { text: '再表示', action: 'redraw' },
             {
                 text: '表示',
                 submenu: [
@@ -162,6 +164,9 @@ class TADjsViewPlugin extends window.PluginBase {
      */
     executeMenuAction(action) {
         switch (action) {
+            case 'redraw':
+                this.redrawCurrentData();
+                break;
             case 'toggle-fullscreen':
                 this.toggleFullscreen();
                 break;
@@ -194,6 +199,39 @@ class TADjsViewPlugin extends window.PluginBase {
         });
     }
 
+    /**
+     * 現在のTADデータを再描画する
+     */
+    redrawCurrentData() {
+        if (!this.canvas || !this.fileData) return;
+        const fileName = this.fileData?.fileName || this.fileData?.file?.name;
+        const rawData = this.fileData?.rawData;
+        if (fileName && rawData) {
+            const uint8Array = rawData instanceof Uint8Array ? rawData : new Uint8Array(rawData);
+            this.renderTAD(fileName, uint8Array);
+        }
+    }
+
+    /**
+     * ウィンドウリサイズ完了時のフック（PluginBaseから呼ばれる）
+     * Canvas幅を更新してTADデータを再描画する
+     */
+    onWindowResizedEnd(data) {
+        if (!this.canvas || !this.fileData) return;
+        // iframeのレイアウト更新を待ってから再描画
+        setTimeout(() => this.redrawCurrentData(), UI_UPDATE_DELAY_MS);
+    }
+
+    /**
+     * 全画面表示切替完了時のフック（PluginBaseから呼ばれる）
+     * Canvas幅を更新してTADデータを再描画する
+     */
+    onWindowMaximizeToggled(data) {
+        if (!this.canvas || !this.fileData) return;
+        // CSSトランジション（0.2s）完了を待ってから再描画
+        setTimeout(() => this.redrawCurrentData(), SCROLL_UPDATE_DELAY_MS);
+    }
+
     // setupWindowActivation() は PluginBase 共通メソッドを使用
 
     /**
@@ -212,9 +250,21 @@ class TADjsViewPlugin extends window.PluginBase {
                 delete this.canvas.tadRecordDataArray;
             }
 
+            // iframeのビューポート幅を取得してCanvas幅を動的に設定
+            // document.documentElement.clientWidthが最も信頼性が高い（CSS影響を受けない）
+            // 高さは前回のコンテンツ高さを使用（初回は十分な値を確保）
+            const container = this.canvas.parentElement;
+            const canvasWidth = document.documentElement.clientWidth || container.clientWidth || 1200;
+            const canvasHeight = this._lastContentHeight || Math.max(container.clientHeight || 1000, 5000);
+
+            // TADファイル描画バッファシステムをリセット（前回のファイルデータをクリア）
+            if (typeof window.resetTadFileSystem === 'function') {
+                window.resetTadFileSystem();
+            }
+
             // TAD.jsの初期化
             if (typeof window.canvasInit === 'function') {
-                window.canvasInit(this.canvasId);
+                window.canvasInit(this.canvasId, canvasWidth, canvasHeight);
             }
 
             if (typeof window.initTAD === 'function') {
@@ -223,13 +273,10 @@ class TADjsViewPlugin extends window.PluginBase {
 
             // TAD描画処理
             if (typeof window.tadRawArray === 'function') {
-                // canvasInit を先に実行してwindow.canvasを設定
-                if (typeof window.canvasInit === 'function') {
-                    window.canvasInit(this.canvasId);
-                    logger.debug('[TADjsView] canvasInit called with:', this.canvasId);
-                    logger.debug('[TADjsView] window.canvas:', window.canvas);
-                    logger.debug('[TADjsView] window.canvas.id:', window.canvas ? window.canvas.id : 'undefined');
-                }
+                // canvasInitは上で実行済み（window.canvasは設定済み）
+                logger.debug('[TADjsView] canvasInit called with:', this.canvasId);
+                logger.debug('[TADjsView] window.canvas:', window.canvas);
+                logger.debug('[TADjsView] window.canvas.id:', window.canvas ? window.canvas.id : 'undefined');
 
                 // tad.jsが使用するwindow.canvasからもvirtualObjectLinksをクリア
                 logger.debug('[TADjsView] DEBUG: Before clearing - window.canvas.virtualObjectLinks:', window.canvas ? window.canvas.virtualObjectLinks : 'window.canvas is null');
@@ -268,6 +315,11 @@ class TADjsViewPlugin extends window.PluginBase {
                     this.onRenderingComplete(tadData);
                 };
                 logger.debug('[TADjsView] Callback set, window[' + callbackName + '] =', typeof window[callbackName]);
+
+                // tadjs-viewではCanvas幅で折り返すようオーバーライドを設定
+                if (typeof window.setDrawTextOverrideWidth === 'function') {
+                    window.setDrawTextOverrideWidth(canvasWidth);
+                }
 
                 // TAD描画を実行（引数は1つだけ）
                 logger.debug('[TADjsView] DEBUG: Calling window.tadRawArray()...');
@@ -343,6 +395,20 @@ class TADjsViewPlugin extends window.PluginBase {
 
         // Note: setupVirtualObjectEventsは、renderTAD()のsetTimeoutで呼ばれるため、ここでは呼ばない
         // （二重呼び出しを避けるため）
+
+        // コンテンツ高さに基づくCanvas高さ調整
+        if (data.textHeight !== undefined) {
+            const contentHeight = Math.ceil(data.textHeight) + 50;
+            const container = this.canvas.parentElement;
+            const minHeight = container.clientHeight || 1000;
+            this._lastContentHeight = Math.max(contentHeight, minHeight);
+
+            if (contentHeight > this.canvas.height) {
+                // コンテンツがCanvasを超える場合: 正しい高さで再描画
+                this.redrawCurrentData();
+                return;
+            }
+        }
 
         // レンダリング完了後にスクロール状態を通知（スクロールバーのサイズ更新のため）
         this.notifyScrollChange();

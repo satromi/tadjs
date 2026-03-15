@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>屑実身操作</title>
+    <link rel="stylesheet" href="../common/btron-theme.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body tabindex="0">
@@ -23,8 +24,9 @@
     </script>
     <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
     <script type="module">
-        import { DEFAULT_VOBJ_HEIGHT } from '../../js/util.js';
+        import { DEFAULT_VOBJ_HEIGHT, LONG_OPERATION_TIMEOUT_MS } from '../../js/util.js';
         window.DEFAULT_VOBJ_HEIGHT = DEFAULT_VOBJ_HEIGHT;
+        window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
     </script>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">

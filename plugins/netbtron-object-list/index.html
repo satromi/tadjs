@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NET仮身一覧</title>
     <link rel="stylesheet" href="../../tadjs-desktop.css">
+    <link rel="stylesheet" href="../common/btron-theme.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body tabindex="0">
@@ -137,6 +138,7 @@
         import {
             convertPtToPx, rgbToHex, hexToRgb, invertColor,
             DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, ERROR_CHECK_TIMEOUT_MS,
+            CONTEXT_MENU_FLAG_CLEAR_MS, SCROLL_UPDATE_DELAY_MS,
             VOBJ_BORDER_WIDTH, DEFAULT_FONT_SIZE, DEFAULT_VOBJ_HEIGHT,
             DEFAULT_FRCOL, DEFAULT_CHCOL, DEFAULT_TBCOL, DEFAULT_BGCOL,
             VOBJ_SELECTION_COLOR, LIST_SELECTED_BG_COLOR, PREVIEW_BORDER_COLOR,
@@ -161,6 +163,8 @@
         window.LIST_SELECTED_BG_COLOR = LIST_SELECTED_BG_COLOR;
         window.PREVIEW_BORDER_COLOR = PREVIEW_BORDER_COLOR;
         window.MAX_CHILD_UPLOAD_OBJECTS = MAX_CHILD_UPLOAD_OBJECTS;
+        window.CONTEXT_MENU_FLAG_CLEAR_MS = CONTEXT_MENU_FLAG_CLEAR_MS;
+        window.SCROLL_UPDATE_DELAY_MS = SCROLL_UPDATE_DELAY_MS;
     </script>
     <!-- パフォーマンス最適化ユーティリティ -->
     <script type="module">

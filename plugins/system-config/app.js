@@ -40,6 +40,9 @@ class SystemConfigApp extends window.PluginBase {
         // バージョンリスト読み込み
         this.loadVersionList();
 
+        // MCP設定読み込み
+        this.loadMcpConfig();
+
         // ボタンイベント
         this.setupButtons();
 
@@ -57,6 +60,9 @@ class SystemConfigApp extends window.PluginBase {
     }
 
     setupMessageBusHandlers() {
+        // 共通ハンドラを登録
+        this.setupCommonMessageBusHandlers();
+
         // init メッセージ
         this.messageBus.on('init', (data) => {
             // 共通初期化処理（windowId設定、スクロール状態送信）
@@ -65,53 +71,77 @@ class SystemConfigApp extends window.PluginBase {
             // fileIdを保存（拡張子を除去）
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;
-                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                this.realId = rawId ? this.extractRealId(rawId) : null;
                 logger.info('[SystemConfig] fileId設定:', this.realId, '(元:', rawId, ')');
             }
-        });
-
-        // get-menu-definition メッセージ
-        this.messageBus.on('get-menu-definition', async (data) => {
-            // 編集メニューを返す
-            const menuDefinition = [
-                {
-                    text: '編集',
-                    submenu: [
-                        { text: '取消', action: 'undo' },
-                        { text: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
-                        { text: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
-                        { text: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
-                        { text: 'クリップボードから移動', action: 'redo', shortcut: 'Ctrl+Z' }
-                    ]
-                }
-            ];
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: menuDefinition
-            });
-        });
-
-        // menu-action メッセージ
-        this.messageBus.on('menu-action', (data) => {
-            this.handleMenuAction(data.action);
-        });
-
-        // window-moved メッセージ
-        this.messageBus.on('window-moved', (data) => {
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
         });
 
         // plugin-list-response メッセージ
         this.messageBus.on('plugin-list-response', (data) => {
             this.renderVersionList(data.plugins);
         });
+
+        // mcp-config-response メッセージ
+        this.messageBus.on('mcp-config-response', (data) => {
+            const checkbox = document.getElementById('enable-mcp-server');
+            if (checkbox && data.config) {
+                checkbox.checked = !!data.config.enabled;
+                this.updateMcpButtonsEnabled(checkbox.checked);
+            }
+        });
+
+        // mcp-config-saved メッセージ
+        this.messageBus.on('mcp-config-saved', (data) => {
+            if (data.success) {
+                logger.info('[SystemConfig] MCP設定を保存しました');
+            } else {
+                logger.error('[SystemConfig] MCP設定保存エラー:', data.error);
+            }
+        });
+
+        // mcp-server-started メッセージ
+        this.messageBus.on('mcp-server-started', (data) => {
+            if (data.success) {
+                this.updateMcpStatus(true);
+                logger.info(`[SystemConfig] MCPサーバ起動 PID=${data.pid} exe=${data.exePath}`);
+                if (data.args) logger.info(`[SystemConfig] 起動引数: ${JSON.stringify(data.args)}`);
+            } else {
+                logger.error('[SystemConfig] MCPサーバ起動エラー:', data.error);
+            }
+        });
+
+        // mcp-server-stopped メッセージ
+        this.messageBus.on('mcp-server-stopped', (data) => {
+            if (data.success) {
+                this.updateMcpStatus(false);
+                logger.info('[SystemConfig] MCPサーバを停止しました');
+            } else {
+                logger.error('[SystemConfig] MCPサーバ停止エラー:', data.error);
+            }
+        });
+
+        // mcp-server-status-response メッセージ
+        this.messageBus.on('mcp-server-status-response', (data) => {
+            this.updateMcpStatus(data.running);
+        });
     }
 
-    async handleMenuAction(action) {
+    getMenuDefinition() {
+        return [
+            {
+                text: '編集',
+                submenu: [
+                    { text: '取消', action: 'undo' },
+                    { text: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
+                    { text: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
+                    { text: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
+                    { text: 'クリップボードから移動', action: 'redo', shortcut: 'Ctrl+Z' }
+                ]
+            }
+        ];
+    }
+
+    async executeMenuAction(action) {
         const activeElement = document.activeElement;
         const isInputField = activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA');
 
@@ -191,47 +221,13 @@ class SystemConfigApp extends window.PluginBase {
     // setupContextMenu() と setupWindowActivation() は PluginBase 共通メソッドを使用
 
     setupTabs() {
-        const tabs = document.querySelectorAll('.tab');
-        const panels = document.querySelectorAll('.tab-panel');
-
-        tabs.forEach(tab => {
-            tab.addEventListener('click', () => {
-                const targetTab = tab.dataset.tab;
-
-                // アクティブタブの切り替え
-                tabs.forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-
-                // パネルの切り替え
-                panels.forEach(panel => {
-                    panel.classList.remove('active');
-                    if (panel.id === targetTab + '-panel') {
-                        panel.classList.add('active');
-                    }
-                });
-            });
-        });
-
-        // 画面タブのサブタブイベント設定
-        const subTabs = document.querySelectorAll('.sub-tab');
-        const subPanels = document.querySelectorAll('.sub-tab-panel');
-
-        subTabs.forEach(subTab => {
-            subTab.addEventListener('click', () => {
-                const targetSubTab = subTab.dataset.subtab;
-
-                // アクティブサブタブの切り替え
-                subTabs.forEach(st => st.classList.remove('active'));
-                subTab.classList.add('active');
-
-                // サブパネルの切り替え
-                subPanels.forEach(panel => {
-                    panel.classList.remove('active');
-                    if (panel.id === targetSubTab + '-panel') {
-                        panel.classList.add('active');
-                    }
-                });
-            });
+        // メインタブ
+        this.initTabSwitcher();
+        // 画面タブのサブタブ
+        this.initTabSwitcher({
+            tabSelector: '.sub-tab',
+            panelSelector: '.sub-tab-panel',
+            dataAttribute: 'subtab'
         });
     }
 
@@ -330,25 +326,14 @@ class SystemConfigApp extends window.PluginBase {
     }
 
     async deleteBackground(id) {
-        const result = await new Promise((resolve) => {
-            this.messageBus.sendWithCallback('show-message-dialog', {
-                message: 'この背景画像を削除しますか？',
-                buttons: [
-                    { label: '取り消し', value: 'cancel' },
-                    { label: '削　除', value: 'delete' }
-                ],
-                defaultButton: 0
-            }, (response) => {
-                // Dialog result is wrapped in response.result
-                const dialogResult = response.result || response;
-                if (dialogResult.error) {
-                    logger.warn('[SystemConfig] ダイアログエラー:', dialogResult.error);
-                    resolve('cancel');
-                    return;
-                }
-                resolve(dialogResult);
-            }, 30000);
-        });
+        const result = await this.showMessageDialog(
+            'この背景画像を削除しますか？',
+            [
+                { label: '取り消し', value: 'cancel' },
+                { label: '削　除', value: 'delete' }
+            ],
+            0
+        );
 
         if (result !== 'delete') {
             return;
@@ -392,6 +377,89 @@ class SystemConfigApp extends window.PluginBase {
         this.selectBackground(currentBg);
     }
 
+    loadMcpConfig() {
+        // メインプロセスからMCP設定を取得
+        this.messageBus.send('get-mcp-config', {});
+        // MCPサーバの稼働状態を取得
+        this.messageBus.send('get-mcp-server-status', {});
+        // 起動・停止ボタンのイベント設定
+        this.setupMcpButtons();
+    }
+
+    setupMcpButtons() {
+        const startButton = document.getElementById('mcp-start-button');
+        const stopButton = document.getElementById('mcp-stop-button');
+        const checkbox = document.getElementById('enable-mcp-server');
+
+        if (startButton) {
+            startButton.addEventListener('click', () => {
+                this.messageBus.send('start-mcp-server', {});
+            });
+        }
+        if (stopButton) {
+            stopButton.addEventListener('click', () => {
+                this.messageBus.send('stop-mcp-server', {});
+            });
+        }
+
+        // チェックボックスの変更でボタンの有効/無効を切り替え
+        if (checkbox) {
+            checkbox.addEventListener('change', () => {
+                this.updateMcpButtonsEnabled(checkbox.checked);
+            });
+        }
+
+        // 初期状態: チェックボックスがOFFならボタンを無効化
+        this.updateMcpButtonsEnabled(checkbox ? checkbox.checked : false);
+    }
+
+    updateMcpButtonsEnabled(enabled) {
+        const startButton = document.getElementById('mcp-start-button');
+        const stopButton = document.getElementById('mcp-stop-button');
+        const statusEl = document.getElementById('mcp-status');
+
+        if (!enabled) {
+            // 無効時: 両ボタンを無効化
+            if (startButton) startButton.disabled = true;
+            if (stopButton) stopButton.disabled = true;
+            if (statusEl) {
+                statusEl.textContent = '無効';
+                statusEl.className = 'mcp-status stopped';
+            }
+        } else {
+            // 有効時: 現在の稼働状態に基づいてボタンを制御
+            this.messageBus.send('get-mcp-server-status', {});
+        }
+    }
+
+    updateMcpStatus(running) {
+        const statusEl = document.getElementById('mcp-status');
+        const startButton = document.getElementById('mcp-start-button');
+        const stopButton = document.getElementById('mcp-stop-button');
+        const checkbox = document.getElementById('enable-mcp-server');
+
+        // チェックボックスがOFFなら常に無効表示
+        if (checkbox && !checkbox.checked) {
+            if (statusEl) {
+                statusEl.textContent = '無効';
+                statusEl.className = 'mcp-status stopped';
+            }
+            if (startButton) startButton.disabled = true;
+            if (stopButton) stopButton.disabled = true;
+            return;
+        }
+
+        if (statusEl) {
+            statusEl.textContent = running ? '起動中' : '停止中';
+            statusEl.className = 'mcp-status ' + (running ? 'running' : 'stopped');
+        }
+        if (startButton) {
+            startButton.disabled = running;
+        }
+        if (stopButton) {
+            stopButton.disabled = !running;
+        }
+    }
 
     setupButtons() {
         const applyButton = document.getElementById('apply-button');
@@ -417,9 +485,17 @@ class SystemConfigApp extends window.PluginBase {
                     backgroundId: this.selectedBackground
                 });
             }
-
-            logger.info('[SystemConfig] 設定を適用しました');
         }
+
+        // MCP設定を保存
+        const mcpCheckbox = document.getElementById('enable-mcp-server');
+        if (mcpCheckbox && this.messageBus) {
+            this.messageBus.send('set-mcp-config', {
+                config: { enabled: mcpCheckbox.checked }
+            });
+        }
+
+        logger.info('[SystemConfig] 設定を適用しました');
 
         // ウィンドウを閉じる
         this.close();

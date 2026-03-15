@@ -9,6 +9,29 @@ import { MENU_FETCH_TIMEOUT_MS, CONTEXT_MENU_FLAG_CLEAR_MS } from './util.js';
 
 const logger = getLogger('ContextMenuManager');
 
+/** 表示モード定数 */
+const DISPLAY_MODE = {
+    MANUSCRIPT: '0',  // 原稿モード
+    DETAIL: '2',      // 詳細モード
+    FAIR_COPY: '3'    // 清書モード
+};
+
+/** コンテキストメニューアクション定数 */
+const MENU_ACTION = {
+    OPEN: 'open',
+    OPEN_VOBJ: 'open-vobj',
+    VOBJ_PROPERTIES: 'vobj-properties',
+    PROPERTIES: 'properties',
+    CLOSE: 'close',
+    MINIMIZE: 'minimize',
+    TOGGLE_PAPER_MODE: 'toggle-paper-mode',
+    SET_DISPLAY_MODE: 'set-display-mode',
+    TOGGLE_WRAP: 'toggle-wrap-at-window-width',
+    LAUNCH_ACCESSORY: 'launch-accessory',
+    WINDOW_PROPERTIES: 'window-properties',
+    PLUGIN_ACTION: 'plugin-action'
+};
+
 export class ContextMenuManager {
     /**
      * @param {Object} options - 初期化オプション
@@ -99,6 +122,46 @@ export class ContextMenuManager {
                 logger.warn('[ContextMenuManager] target frameElementが見つかりません');
                 return;
             }
+
+            // カスタムメニュー項目が指定されている場合（子パネルウインドウ等）
+            if (data.menuItems && Array.isArray(data.menuItems)) {
+                const windowElement = target.closest('.window');
+                const windowId = windowElement ? windowElement.id : null;
+                const items = [];
+
+                // 共通項目（閉じる）
+                if (windowId) {
+                    items.push(...this.generateCommonWindowMenuItems(windowId));
+                    items.push({ separator: true });
+                }
+
+                // カスタムメニュー項目を「編集」サブメニューとして追加
+                const submenuItems = [];
+                data.menuItems.forEach(item => {
+                    if (item.separator) {
+                        submenuItems.push({ separator: true });
+                    } else {
+                        submenuItems.push({
+                            text: item.text,
+                            action: `child-panel-${item.action}`,
+                            data: { windowId }
+                        });
+                    }
+                });
+                if (submenuItems.length > 0) {
+                    items.push({
+                        text: '編集',
+                        submenu: submenuItems
+                    });
+                }
+
+                // 「小物」タイプのプラグインをサブメニューとして追加
+                this._appendAccessorySubmenu(items);
+
+                this.createContextMenu(items, data.x, data.y);
+                return;
+            }
+
             this.showContextMenu(data.x, data.y, target);
         });
 
@@ -149,7 +212,7 @@ export class ContextMenuManager {
             if (windowInfo && windowInfo.canvasId) {
                 const canvasId = windowInfo.canvasId;
                 const paperModeEnabled = windowElement.dataset.paperMode === 'true';
-                const displayMode = windowElement.dataset.displayMode || '3';
+                const displayMode = windowElement.dataset.displayMode || DISPLAY_MODE.FAIR_COPY;
                 const wrapAtWindowWidth = windowElement.dataset.wrapAtWindowWidth !== 'false';
 
                 // 共通メニュー項目を追加
@@ -158,19 +221,20 @@ export class ContextMenuManager {
 
                 // TADウィンドウ固有のメニュー
                 items.push(
-                    { text: displayMode === '0' ? '✓ 1: 原稿モード' : '1: 原稿モード', action: 'set-display-mode', data: { windowId, canvasId, mode: '0' } },
-                    { text: displayMode === '2' ? '✓ 2: 詳細モード' : '2: 詳細モード', action: 'set-display-mode', data: { windowId, canvasId, mode: '2' } },
-                    { text: displayMode === '3' ? '✓ 3: 清書モード' : '3: 清書モード', action: 'set-display-mode', data: { windowId, canvasId, mode: '3' } },
-                    { text: wrapAtWindowWidth ? '✓ ウインドウ幅で折り返し' : 'ウインドウ幅で折り返し', action: 'toggle-wrap-at-window-width', data: { windowId, canvasId } },
+                    { text: displayMode === DISPLAY_MODE.MANUSCRIPT ? '✓ 1: 原稿モード' : '1: 原稿モード', action: MENU_ACTION.SET_DISPLAY_MODE, data: { windowId, canvasId, mode: DISPLAY_MODE.MANUSCRIPT } },
+                    { text: displayMode === DISPLAY_MODE.DETAIL ? '✓ 2: 詳細モード' : '2: 詳細モード', action: MENU_ACTION.SET_DISPLAY_MODE, data: { windowId, canvasId, mode: DISPLAY_MODE.DETAIL } },
+                    { text: displayMode === DISPLAY_MODE.FAIR_COPY ? '✓ 3: 清書モード' : '3: 清書モード', action: MENU_ACTION.SET_DISPLAY_MODE, data: { windowId, canvasId, mode: DISPLAY_MODE.FAIR_COPY } },
+                    { text: wrapAtWindowWidth ? '✓ ウインドウ幅で折り返し' : 'ウインドウ幅で折り返し', action: MENU_ACTION.TOGGLE_WRAP, data: { windowId, canvasId } },
                     { separator: true },
-                    { text: paperModeEnabled ? '✓ 用紙モード' : '用紙モード', action: 'toggle-paper-mode', data: { windowId, canvasId } },
+                    { text: paperModeEnabled ? '✓ 用紙モード' : '用紙モード', action: MENU_ACTION.TOGGLE_PAPER_MODE, data: { windowId, canvasId } },
                     { separator: true },
-                    { text: 'プロパティ', action: 'window-properties' }
+                    { text: 'プロパティ', action: MENU_ACTION.WINDOW_PROPERTIES }
                 );
             } else {
-                // プラグインウィンドウまたはiframeウィンドウかどうかを確認
+                // プラグインウィンドウ、iframeウィンドウ、または子パネルウィンドウかどうかを確認
                 const iframe = windowElement.querySelector('iframe[data-plugin-id]') ||
-                               windowElement.querySelector('iframe[data-iframe-src]');
+                               windowElement.querySelector('iframe[data-iframe-src]') ||
+                               windowElement.querySelector('iframe');
                 if (iframe && iframe.contentWindow) {
                     // 共通メニュー項目を追加
                     items.push(...this.generateCommonWindowMenuItems(windowId));
@@ -188,22 +252,7 @@ export class ContextMenuManager {
                     }
 
                     // 「小物」タイプのプラグインをサブメニューとして追加
-                    if (window.pluginManager) {
-                        const accessoryPlugins = window.pluginManager.getAccessoryPlugins();
-                        if (accessoryPlugins.length > 0) {
-                            const accessorySubmenu = accessoryPlugins.map(plugin => ({
-                                text: plugin.name,
-                                action: 'launch-accessory',
-                                data: { pluginId: plugin.id }
-                            }));
-
-                            items.push({ separator: true });
-                            items.push({
-                                text: '小物',
-                                submenu: accessorySubmenu
-                            });
-                        }
-                    }
+                    this._appendAccessorySubmenu(items);
                 } else {
                     // 通常ウィンドウのメニュー（初期ウィンドウなど）
                     // 選択中のファイルがあるかチェック
@@ -211,29 +260,12 @@ export class ContextMenuManager {
                     const fileName = selectedFileIcon ? selectedFileIcon.dataset.fileName : null;
 
                     items.push(
-                        { text: '閉じる', action: 'close', shortcut: 'Ctrl+E' },
-                        { text: '最小化', action: 'minimize' }
+                        { text: '閉じる', action: MENU_ACTION.CLOSE, shortcut: 'Ctrl+E' },
+                        { text: '最小化', action: MENU_ACTION.MINIMIZE }
                     );
 
                     // 「小物」タイプのプラグインをサブメニューとして追加
-                    if (window.pluginManager) {
-                        const accessoryPlugins = window.pluginManager.getAccessoryPlugins();
-                        if (accessoryPlugins.length > 0) {
-                            const accessorySubmenu = accessoryPlugins.map(plugin => ({
-                                text: plugin.name,
-                                action: 'launch-accessory',
-                                data: { pluginId: plugin.id }
-                            }));
-
-                            items.push(
-                                { separator: true },
-                                {
-                                    text: '小物',
-                                    submenu: accessorySubmenu
-                                }
-                            );
-                        }
-                    }
+                    this._appendAccessorySubmenu(items);
 
                     // ファイルが選択されている場合、「実行」メニューを追加
                     if (window.pluginManager && fileName) {
@@ -241,7 +273,7 @@ export class ContextMenuManager {
                         if (pluginMenus.length > 0) {
                             const executeSubmenu = pluginMenus.map(menu => ({
                                 text: menu.label,
-                                action: 'plugin-action',
+                                action: MENU_ACTION.PLUGIN_ACTION,
                                 data: { pluginId: menu.pluginId, fileName: fileName }
                             }));
 
@@ -259,26 +291,7 @@ export class ContextMenuManager {
         } else {
             // デスクトップのメニュー
             // 「小物」タイプのプラグインをサブメニューとして追加
-            if (window.pluginManager) {
-                const accessoryPlugins = window.pluginManager.getAccessoryPlugins();
-                logger.debug('[ContextMenuManager] 小物プラグイン取得:', accessoryPlugins.length, '個');
-                if (accessoryPlugins.length > 0) {
-                    const accessorySubmenu = accessoryPlugins.map(plugin => ({
-                        text: plugin.name,
-                        action: 'launch-accessory',
-                        data: { pluginId: plugin.id }
-                    }));
-
-                    items.push({
-                        text: '小物',
-                        submenu: accessorySubmenu
-                    });
-                } else {
-                    logger.warn('[ContextMenuManager] 小物プラグインが見つかりません');
-                }
-            } else {
-                logger.warn('[ContextMenuManager] プラグインマネージャーが見つかりません');
-            }
+            this._appendAccessorySubmenu(items, { addSeparator: false });
         }
 
         return items;
@@ -291,7 +304,7 @@ export class ContextMenuManager {
      */
     generateCommonWindowMenuItems(windowId) {
         return [
-            { text: '閉じる', action: 'close', shortcut: 'Ctrl+E', data: { windowId } }
+            { text: '閉じる', action: MENU_ACTION.CLOSE, shortcut: 'Ctrl+E', data: { windowId } }
         ];
     }
 
@@ -468,7 +481,7 @@ export class ContextMenuManager {
         const fileObjects = this.getFileObjects();
 
         switch (action) {
-            case 'open':
+            case MENU_ACTION.OPEN:
                 if (selectedIcon) {
                     const filename = selectedIcon.dataset.filename;
                     // ファイルオブジェクトを再取得（保存されている場合）
@@ -480,26 +493,26 @@ export class ContextMenuManager {
                 }
                 break;
 
-            case 'open-vobj':
+            case MENU_ACTION.OPEN_VOBJ:
                 if (data) {
                     this.openVirtualObject(data);
                 }
                 break;
 
-            case 'vobj-properties':
+            case MENU_ACTION.VOBJ_PROPERTIES:
                 if (data) {
                     this.showVirtualObjectProperties(data);
                 }
                 break;
 
-            case 'properties':
+            case MENU_ACTION.PROPERTIES:
                 if (selectedIcon) {
                     const filename = selectedIcon.dataset.filename;
                     this.showFileProperties(filename);
                 }
                 break;
 
-            case 'close':
+            case MENU_ACTION.CLOSE:
                 if (data && data.windowId) {
                     this.closeWindow(data.windowId);
                 } else {
@@ -510,7 +523,7 @@ export class ContextMenuManager {
                 }
                 break;
 
-            case 'minimize':
+            case MENU_ACTION.MINIMIZE:
                 if (data && data.windowId) {
                     // 将来的に実装
                     this.setStatusMessage('最小化機能は未実装です');
@@ -519,38 +532,38 @@ export class ContextMenuManager {
                 }
                 break;
 
-            case 'toggle-paper-mode':
+            case MENU_ACTION.TOGGLE_PAPER_MODE:
                 if (data && data.windowId && data.canvasId) {
                     this.togglePaperMode(data.windowId, data.canvasId);
                 }
                 break;
 
-            case 'set-display-mode':
+            case MENU_ACTION.SET_DISPLAY_MODE:
                 if (data && data.windowId && data.canvasId && data.mode) {
                     this.setDisplayMode(data.windowId, data.canvasId, data.mode);
                 }
                 break;
 
-            case 'toggle-wrap-at-window-width':
+            case MENU_ACTION.TOGGLE_WRAP:
                 if (data && data.windowId && data.canvasId) {
                     this.toggleWrapAtWindowWidth(data.windowId, data.canvasId);
                 }
                 break;
 
-            case 'launch-accessory':
+            case MENU_ACTION.LAUNCH_ACCESSORY:
                 if (data && data.pluginId && window.pluginManager) {
                     window.pluginManager.launchPlugin(data.pluginId);
                 }
                 break;
 
-            case 'window-properties':
+            case MENU_ACTION.WINDOW_PROPERTIES:
                 const activeWindow = this.getActiveWindow();
                 if (activeWindow) {
                     this.showWindowProperties(activeWindow);
                 }
                 break;
 
-            case 'plugin-action':
+            case MENU_ACTION.PLUGIN_ACTION:
                 if (data && data.pluginId && data.fileName) {
                     this.launchPluginForFile(data.pluginId, data.fileName);
                 }
@@ -558,7 +571,9 @@ export class ContextMenuManager {
 
             // プラグインアクション（基本文章編集）
             default:
-                if (action && action.startsWith('plugin-')) {
+                if (action && action.startsWith('child-panel-')) {
+                    this.handleChildPanelAction(action, data);
+                } else if (action && action.startsWith('plugin-')) {
                     this.handlePluginAction(action, data);
                 }
                 break;
@@ -576,7 +591,8 @@ export class ContextMenuManager {
         const windowElement = document.getElementById(data.windowId);
         if (!windowElement) return;
 
-        const iframe = windowElement.querySelector('iframe[data-plugin-id]');
+        const iframe = windowElement.querySelector('iframe[data-plugin-id]') ||
+                       windowElement.querySelector('iframe');
         if (!iframe || !iframe.contentWindow) return;
 
         // アクション名から "plugin-" プレフィックスを除去
@@ -588,6 +604,23 @@ export class ContextMenuManager {
         });
 
         logger.debug('[ContextMenuManager] プラグインアクション送信:', pluginAction);
+    }
+
+    /**
+     * 子パネルウインドウのアクションを処理
+     * @param {string} action - 実行するアクション名（child-panel-プレフィックス付き）
+     * @param {Object} data - アクションに渡すデータ
+     */
+    handleChildPanelAction(action, data) {
+        if (!data || !data.windowId) return;
+
+        // アクション名から "child-panel-" プレフィックスを除去
+        const panelAction = action.replace('child-panel-', '');
+
+        // 子パネルウインドウにメッセージを送信
+        this.parentMessageBus.sendToWindow(data.windowId, 'menu-action', {
+            action: panelAction
+        });
     }
 
     /**
@@ -657,5 +690,31 @@ export class ContextMenuManager {
 
             return parsed;
         });
+    }
+
+    /**
+     * アクセサリプラグインのサブメニュー項目を生成してitemsに追加
+     * @param {Array} items - メニュー項目配列
+     * @param {Object} [options] - オプション
+     * @param {boolean} [options.addSeparator=true] - セパレータを追加するか
+     * @private
+     */
+    _appendAccessorySubmenu(items, options = {}) {
+        const { addSeparator = true } = options;
+        if (!window.pluginManager) return;
+
+        const accessoryPlugins = window.pluginManager.getAccessoryPlugins();
+        if (accessoryPlugins.length === 0) return;
+
+        const accessorySubmenu = accessoryPlugins.map(plugin => ({
+            text: plugin.name,
+            action: MENU_ACTION.LAUNCH_ACCESSORY,
+            data: { pluginId: plugin.id }
+        }));
+
+        if (addSeparator) {
+            items.push({ separator: true });
+        }
+        items.push({ text: '小物', submenu: accessorySubmenu });
     }
 }

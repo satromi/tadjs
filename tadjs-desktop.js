@@ -1443,6 +1443,43 @@ class TADjsDesktop {
                     }
                 }
             }
+        } else if (e.data && e.data.fromPatternEditor) {
+            // パターン編集パネルからのメッセージ処理
+            // 親エディタウィンドウに中継
+
+            // 方法1: メッセージに含まれるparentWindowIdで直接ルーティング
+            let forwarded = false;
+            if (e.data.parentWindowId) {
+                const parentWindow = document.getElementById(e.data.parentWindowId);
+                if (parentWindow) {
+                    const parentIframe = parentWindow.querySelector('iframe');
+                    if (parentIframe && parentIframe.contentWindow) {
+                        parentIframe.contentWindow.postMessage(e.data, '*');
+                        forwarded = true;
+                    }
+                }
+            }
+
+            // 方法2: フォールバック - e.sourceからchildPanelRelationsで親を特定
+            if (!forwarded && e.source && e.source.frameElement) {
+                const patternEditorIframe = e.source.frameElement;
+                const patternEditorWindow = patternEditorIframe.closest('.window');
+
+                if (patternEditorWindow && this.childPanelRelations) {
+                    const windowId = patternEditorWindow.id;
+                    const relation = this.childPanelRelations[windowId];
+
+                    if (relation && relation.parentWindowId) {
+                        const parentWindow = document.getElementById(relation.parentWindowId);
+                        if (parentWindow) {
+                            const parentIframe = parentWindow.querySelector('iframe');
+                            if (parentIframe && parentIframe.contentWindow) {
+                                parentIframe.contentWindow.postMessage(e.data, '*');
+                            }
+                        }
+                    }
+                }
+            }
         } else if (e.data && e.data.type && this.messageHandlers && this.messageHandlers[e.data.type]) {
             // 汎用メッセージハンドラー（フォールバック）
             const handlerDef = this.messageHandlers[e.data.type];
@@ -3966,25 +4003,56 @@ ${url}
                 // トランジションを復元（次回の操作用）
                 windowElement.style.transition = originalTransition;
             }
+
+            // プレゼンテーションモード時はウィンドウを100%に設定
+            // Electronフルスクリーンでビューポートサイズが変わっても自動追従する
+            windowElement.style.width = '100%';
+            windowElement.style.height = '100%';
+            windowElement.style.left = '0';
+            windowElement.style.top = '0';
         }
 
         // Electronフルスクリーン
-        if (options.electronFullscreen !== false) {
-            if (window.electronAPI && window.electronAPI.enterFullscreen) {
-                window.electronAPI.enterFullscreen();
-            }
-        }
-
-        logger.info('[TADjs] プレゼンテーションモード開始:', windowId);
-
-        // 完了メッセージを送信（即座に）
-        // アニメーションを無効化しているため、requestAnimationFrameで次フレーム待機のみ
-        requestAnimationFrame(() => {
+        const sendCompletion = () => {
             this.parentMessageBus.sendToWindow(windowId, 'enter-presentation-mode-complete', {
                 windowId: windowId,
                 messageId: data.messageId  // 呼び出し元で照合用
             });
-        });
+        };
+
+        if (options.electronFullscreen !== false && window.electronAPI && window.electronAPI.enterFullscreen) {
+            window.electronAPI.enterFullscreen();
+
+            // フルスクリーン遷移完了をresizeイベントで検知してから完了メッセージを送信
+            // ※resizeイベントはビューポートサイズが変わった時に発火する
+            let resizeHandled = false;
+            const resizeHandler = () => {
+                if (resizeHandled) return;
+                resizeHandled = true;
+                window.removeEventListener('resize', resizeHandler);
+                // レイアウト確定を待ってから完了メッセージを送信
+                requestAnimationFrame(() => {
+                    sendCompletion();
+                });
+            };
+            window.addEventListener('resize', resizeHandler);
+
+            // フォールバック: 既にフルスクリーンの場合はresizeが発火しない
+            setTimeout(() => {
+                if (!resizeHandled) {
+                    resizeHandled = true;
+                    window.removeEventListener('resize', resizeHandler);
+                    sendCompletion();
+                }
+            }, 1000);
+        } else {
+            // Electronフルスクリーンなしの場合は即座に送信
+            requestAnimationFrame(() => {
+                sendCompletion();
+            });
+        }
+
+        logger.info('[TADjs] プレゼンテーションモード開始:', windowId);
     }
 
     /**
@@ -4500,7 +4568,7 @@ ${url}
                     realId: fullRealId,  // _0.xtad付きのフルID
                     fileName: fileName,
                     fileData: file,
-                    rawData: Array.from(uint8Array),
+                    rawData: uint8Array,
                     name: virtualObj.link_name || fileName,  // 実身名
                     displayName: virtualObj.link_name || fileName,
                     isBPK: true  // BPKファイルであることを示すフラグ
@@ -4559,7 +4627,7 @@ ${url}
                     fileId: fullRealId,  // 互換性のため
                     fileName: bpkFileName,
                     fileData: file,
-                    rawData: Array.from(uint8Array),
+                    rawData: uint8Array,
                     name: virtualObj.link_name || bpkFileName,  // 実身名
                     displayName: virtualObj.link_name || bpkFileName,
                     isBPK: true  // BPKファイルであることを示すフラグ
@@ -4676,7 +4744,7 @@ ${url}
                 realId: fullRealId,          // _0.xtad付きのフルID
                 fileName: xtadFileName,       // XTADファイル名
                 fileData: xtadFile,          // XTADファイルオブジェクト
-                rawData: Array.from(uint8Array), // XTADのバイトデータ
+                rawData: uint8Array, // XTADのバイトデータ
                 xmlData: xmlData,            // XML文字列
                 realObject: jsonData,        // 実身管理用セグメント（JSON）
                 windowConfig: jsonData.window || null, // ウィンドウ設定
@@ -4989,7 +5057,7 @@ ${url}
             const pluginData = {
                 fileName: fileName,
                 fileData: fileData,
-                rawData: Array.from(uint8Array),
+                rawData: uint8Array,
                 xmlData: xmlData
             };
 
@@ -5379,9 +5447,9 @@ ${url}
      * @param {Array|Uint8Array} imageDataArray 画像データ
      * @returns {boolean} 成功/失敗
      */
-    saveImageFile(fileName, imageDataArray) {
+    async saveImageFile(fileName, imageDataArray) {
         if (this.realObjectSystem) {
-            return this.realObjectSystem.saveImageFile(fileName, imageDataArray);
+            return await this.realObjectSystem.saveImageFile(fileName, imageDataArray);
         }
         logger.warn('[TADjs] RealObjectSystemが利用できません');
         return false;
@@ -5393,9 +5461,9 @@ ${url}
      * @param {string} messageId メッセージID
      * @param {Window} source レスポンス送信先
      */
-    loadImageFile(fileName, messageId, source) {
+    async loadImageFile(fileName, messageId, source) {
         if (this.realObjectSystem) {
-            this.realObjectSystem.loadImageFile(fileName, messageId, source);
+            await this.realObjectSystem.loadImageFile(fileName, messageId, source);
         } else {
             logger.warn('[TADjs] RealObjectSystemが利用できません');
             source.postMessage({
@@ -6689,7 +6757,7 @@ ${url}
                 imageData = bytes;
             }
 
-            success = this.saveImageFile(data.fileName, imageData);
+            success = await this.saveImageFile(data.fileName, imageData);
         } catch (error) {
             logger.error('[TADjs] 画像ファイル保存エラー:', error);
         }
@@ -6712,7 +6780,7 @@ ${url}
      */
     async handleListImageFiles(data, event) {
         // listMediaFilesを使用して全メディアファイルを取得（音声/動画も含む）
-        const mediaFiles = this.realObjectSystem.listMediaFiles(data.realId, data.recordNo);
+        const mediaFiles = await this.realObjectSystem.listMediaFiles(data.realId, data.recordNo);
 
         // 後方互換性のため、imageNoプロパティも追加
         const files = mediaFiles.map(f => ({
@@ -6751,7 +6819,7 @@ ${url}
                 bytes[i] = binaryString.charCodeAt(i);
             }
 
-            success = this.saveImageFile(data.fileName, bytes);
+            success = await this.saveImageFile(data.fileName, bytes);
         } catch (error) {
             logger.error('[TADjs] 表計算用画像ファイル保存エラー:', error);
         }
@@ -6992,7 +7060,7 @@ ${url}
 
             try {
                 // 次のリソース番号を取得（全メディアファイル対象）
-                const existingFiles = this.realObjectSystem.listMediaFiles(baseId, 0);
+                const existingFiles = await this.realObjectSystem.listMediaFiles(baseId, 0);
                 let nextNo = 0;
                 if (existingFiles && existingFiles.length > 0) {
                     const maxNo = Math.max(...existingFiles.map(f => f.resourceNo || 0));
@@ -8028,7 +8096,7 @@ ${url}
      */
     async handleLoadImageFile(data, event) {
         logger.info('[TADjs] 画像ファイル読み込み要求:', data.fileName);
-        this.loadImageFile(data.fileName, data.messageId, event.source);
+        await this.loadImageFile(data.fileName, data.messageId, event.source);
     }
 
     /**
@@ -10182,7 +10250,26 @@ ${url}
 
         try {
             // メタデータを読み込んでdeletableをチェック
-            const { metadata } = await this.realObjectSystem.loadRealObject(realId);
+            let loadResult;
+            try {
+                loadResult = await this.realObjectSystem.loadRealObject(realId);
+            } catch (loadError) {
+                // 既に削除済み（ファイルが存在しない）の場合はsuccessを返す
+                if (loadError.message && loadError.message.includes('実身が見つかりません')) {
+                    logger.info('[TADjs] 実身は既に削除済み:', realId);
+                    if (e.source) {
+                        e.source.postMessage({
+                            type: 'delete-real-object-response',
+                            messageId: messageId,
+                            success: true,
+                            realId: realId
+                        }, '*');
+                    }
+                    return;
+                }
+                throw loadError;
+            }
+            const { metadata } = loadResult;
             if (metadata.deletable === false) {
                 // 削除不可の場合はエラーレスポンスを返す
                 if (e.source) {

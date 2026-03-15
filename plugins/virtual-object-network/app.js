@@ -399,27 +399,6 @@ class VirtualObjectNetworkApp extends window.PluginBase {
     }
 
     /**
-     * link_idから実身IDを抽出
-     */
-    extractRealId(linkId) {
-        if (!linkId) return null;
-
-        // パターン: realId_recordNo.xtad
-        const match = linkId.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_\d+\.xtad$/i);
-        if (match) {
-            return match[1];
-        }
-
-        // パターン: realId のみ（UUIDのみ）
-        const uuidMatch = linkId.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
-        if (uuidMatch) {
-            return uuidMatch[1];
-        }
-
-        return null;
-    }
-
-    /**
      * レイアウトを計算（階層的配置）
      */
     calculateLayout() {

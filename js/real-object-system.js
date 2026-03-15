@@ -91,14 +91,22 @@ export class RealObjectSystem {
         logger.debug(`basePath: ${basePath}`);
         logger.debug(`jsonPath: ${jsonPath}`);
 
-        if (!this.fs.existsSync(jsonPath)) {
+        try {
+            await this.fs.promises.access(jsonPath);
+        } catch {
             throw new Error(`実身が見つかりません: ${realId}`);
         }
 
-        const jsonContent = this.fs.readFileSync(jsonPath, 'utf-8');
+        const jsonContent = await this.fs.promises.readFile(jsonPath, 'utf-8');
         logger.debug(`JSON内容: ${jsonContent.substring(0, 200)}`);
 
-        const metadata = JSON.parse(jsonContent);
+        let metadata;
+        try {
+            metadata = JSON.parse(jsonContent);
+        } catch (parseError) {
+            logger.error(`メタデータJSONのパースに失敗: ${realId}`, parseError);
+            throw new Error(`メタデータJSONが破損しています: ${realId}`);
+        }
         logger.debug(`パース後のmetadata:`, JSON.stringify(metadata, null, 2).substring(0, 300));
         metadata.realId = realId;
 
@@ -109,9 +117,10 @@ export class RealObjectSystem {
             const MAX_RECORDS = 1000;
             while (count < MAX_RECORDS) {
                 const xtadPath = this.path.join(basePath, `${realId}_${count}.xtad`);
-                if (this.fs.existsSync(xtadPath)) {
+                try {
+                    await this.fs.promises.access(xtadPath);
                     count++;
-                } else {
+                } catch {
                     break;
                 }
             }
@@ -121,29 +130,35 @@ export class RealObjectSystem {
 
         logger.debug(`メタデータ読み込み: name=${metadata.name}, recordCount=${metadata.recordCount}`);
 
-        // レコード読み込み
+        // レコード読み込み（並列I/Oで高速化）
         const records = [];
+        const readPromises = [];
         for (let recordNo = 0; recordNo < metadata.recordCount; recordNo++) {
             const xtadPath = this.path.join(basePath, `${realId}_${recordNo}.xtad`);
-
-            if (this.fs.existsSync(xtadPath)) {
-                // UTF-8文字列として読み込み
-                const xtad = this.fs.readFileSync(xtadPath, 'utf-8');
-
-                // バイナリとしても読み込み（プラグインがrawDataを必要とする場合）
-                const rawBuffer = this.fs.readFileSync(xtadPath);
-                const rawData = Array.from(rawBuffer);
-
-                records.push({
-                    xtad: xtad,           // UTF-8文字列
-                    rawData: rawData,     // バイト配列
-                    images: []
-                });
-                logger.debug(`レコード読み込み: ${realId}_${recordNo}.xtad (${xtad.length}文字, ${rawData.length}バイト)`);
-            } else {
-                logger.warn(`レコードファイルが見つかりません: ${xtadPath}`);
-            }
+            readPromises.push(
+                this.fs.promises.readFile(xtadPath, 'utf-8')
+                    .then(xtad => {
+                        return this.fs.promises.readFile(xtadPath).then(rawBuffer => ({
+                            recordNo,
+                            xtad,
+                            rawData: Array.from(rawBuffer),
+                            images: []
+                        }));
+                    })
+                    .catch(() => {
+                        logger.warn(`レコードファイルが見つかりません: ${xtadPath}`);
+                        return null;
+                    })
+            );
         }
+        const results = await Promise.all(readPromises);
+        // recordNo順にソートして格納
+        results.filter(r => r !== null)
+               .sort((a, b) => a.recordNo - b.recordNo)
+               .forEach(r => {
+                   records.push({ xtad: r.xtad, rawData: r.rawData, images: r.images });
+                   logger.debug(`レコード読み込み: ${realId}_${r.recordNo}.xtad (${r.xtad.length}文字, ${r.rawData.length}バイト)`);
+               });
 
         logger.debug(`実身読み込み完了: ${realId} (${records.length}レコード)`);
         return { metadata, records };
@@ -169,17 +184,21 @@ export class RealObjectSystem {
         metadata.realId = realId;
         metadata.recordCount = realObject.records.length;
 
-        this.fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
+        await this.fs.promises.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
         logger.debug(`メタデータ保存: ${jsonPath}`);
 
-        // レコード保存
+        // レコード保存（並列I/O）
+        const writePromises = [];
         realObject.records.forEach((record, index) => {
             if (record.xtad) {
                 const xtadPath = this.path.join(basePath, `${realId}_${index}.xtad`);
-                this.fs.writeFileSync(xtadPath, record.xtad, 'utf-8');
-                logger.debug(`レコード保存: ${xtadPath}`);
+                writePromises.push(
+                    this.fs.promises.writeFile(xtadPath, record.xtad, 'utf-8')
+                        .then(() => logger.debug(`レコード保存: ${xtadPath}`))
+                );
             }
         });
+        await Promise.all(writePromises);
 
         logger.debug(`実身保存完了: ${realId}`);
     }
@@ -240,7 +259,7 @@ export class RealObjectSystem {
         await this.saveRealObject(newRealId, newRealObject);
 
         // デフォルトアイコンを生成
-        this.generateDefaultIcon(newRealId);
+        await this.generateDefaultIcon(newRealId);
 
         logger.debug(`実身新規作成完了: ${newRealId}`);
         return newRealId;
@@ -352,6 +371,12 @@ export class RealObjectSystem {
         const sourceIcoPath = this.path.join(basePath, `${sourceRealId}.ico`);
         const newIcoPath = this.path.join(basePath, `${newRealId}.ico`);
 
+        let sourceIcoExists = false;
+        try {
+            await this.fs.promises.access(sourceIcoPath);
+            sourceIcoExists = true;
+        } catch { /* not found */ }
+
         logger.debug(`icoファイルコピー試行:`, {
             isRootCall: isRootCall,
             sourceRealId: sourceRealId,
@@ -359,15 +384,13 @@ export class RealObjectSystem {
             basePath: basePath,
             sourceIcoPath: sourceIcoPath,
             newIcoPath: newIcoPath,
-            sourceExists: this.fs.existsSync(sourceIcoPath)
+            sourceExists: sourceIcoExists
         });
 
-        if (this.fs.existsSync(sourceIcoPath)) {
+        if (sourceIcoExists) {
             try {
-                this.fs.copyFileSync(sourceIcoPath, newIcoPath);
-                const copySuccess = this.fs.existsSync(newIcoPath);
+                await this.fs.promises.copyFile(sourceIcoPath, newIcoPath);
                 logger.debug(`icoファイルコピー成功: ${sourceRealId}.ico -> ${newRealId}.ico`, {
-                    copySuccess: copySuccess,
                     newIcoPath: newIcoPath
                 });
             } catch (error) {
@@ -381,8 +404,9 @@ export class RealObjectSystem {
         // 基本図形編集プラグインで使用されるピクセルマップ画像
         // ファイル名パターン: realId_0_0.png, realId_0_1.png など
         try {
-            const files = this.fs.readdirSync(basePath);
+            const files = await this.fs.promises.readdir(basePath);
             const pngPattern = new RegExp(`^${sourceRealId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}_\\d+_\\d+\\.png$`);
+            const pngCopyPromises = [];
 
             for (const file of files) {
                 if (pngPattern.test(file)) {
@@ -390,14 +414,14 @@ export class RealObjectSystem {
                     const newPngFile = file.replace(sourceRealId, newRealId);
                     const newPngPath = this.path.join(basePath, newPngFile);
 
-                    try {
-                        this.fs.copyFileSync(sourcePngPath, newPngPath);
-                        logger.debug(`PNGファイルコピー成功: ${file} -> ${newPngFile}`);
-                    } catch (error) {
-                        logger.error(`PNGファイルのコピーに失敗: ${file}`, error);
-                    }
+                    pngCopyPromises.push(
+                        this.fs.promises.copyFile(sourcePngPath, newPngPath)
+                            .then(() => logger.debug(`PNGファイルコピー成功: ${file} -> ${newPngFile}`))
+                            .catch(error => logger.error(`PNGファイルのコピーに失敗: ${file}`, error))
+                    );
                 }
             }
+            await Promise.all(pngCopyPromises);
         } catch (error) {
             logger.debug(`PNGファイルの検索中にエラー:`, error);
         }
@@ -406,8 +430,9 @@ export class RealObjectSystem {
         // かな入力練習プラグインなどで使用される追加レコード情報
         // ファイル名パターン: realId_1_0.json, realId_2_1.json など
         try {
-            const files = this.fs.readdirSync(basePath);
+            const files = await this.fs.promises.readdir(basePath);
             const jsonPattern = new RegExp(`^${sourceRealId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}_\\d+_\\d+\\.json$`);
+            const jsonCopyPromises = [];
 
             for (const file of files) {
                 if (jsonPattern.test(file)) {
@@ -415,14 +440,14 @@ export class RealObjectSystem {
                     const newJsonFile = file.replace(sourceRealId, newRealId);
                     const newJsonPath = this.path.join(basePath, newJsonFile);
 
-                    try {
-                        this.fs.copyFileSync(sourceJsonPath, newJsonPath);
-                        logger.debug(`追加レコードJSONコピー成功: ${file} -> ${newJsonFile}`);
-                    } catch (error) {
-                        logger.error(`追加レコードJSONのコピーに失敗: ${file}`, error);
-                    }
+                    jsonCopyPromises.push(
+                        this.fs.promises.copyFile(sourceJsonPath, newJsonPath)
+                            .then(() => logger.debug(`追加レコードJSONコピー成功: ${file} -> ${newJsonFile}`))
+                            .catch(error => logger.error(`追加レコードJSONのコピーに失敗: ${file}`, error))
+                    );
                 }
             }
+            await Promise.all(jsonCopyPromises);
         } catch (error) {
             logger.debug(`追加レコードJSONの検索中にエラー:`, error);
         }
@@ -482,21 +507,25 @@ export class RealObjectSystem {
         const sourceIcoPath = this.path.join(basePath, `${sourceRealId}.ico`);
         const newIcoPath = this.path.join(basePath, `${newRealId}.ico`);
 
+        let sourceIcoExists = false;
+        try {
+            await this.fs.promises.access(sourceIcoPath);
+            sourceIcoExists = true;
+        } catch { /* not found */ }
+
         logger.debug(`非再帰的コピー: icoファイルコピー試行:`, {
             sourceRealId: sourceRealId,
             newRealId: newRealId,
             basePath: basePath,
             sourceIcoPath: sourceIcoPath,
             newIcoPath: newIcoPath,
-            sourceExists: this.fs.existsSync(sourceIcoPath)
+            sourceExists: sourceIcoExists
         });
 
-        if (this.fs.existsSync(sourceIcoPath)) {
+        if (sourceIcoExists) {
             try {
-                this.fs.copyFileSync(sourceIcoPath, newIcoPath);
-                const copySuccess = this.fs.existsSync(newIcoPath);
+                await this.fs.promises.copyFile(sourceIcoPath, newIcoPath);
                 logger.debug(`非再帰的コピー: icoファイルコピー成功: ${sourceRealId}.ico -> ${newRealId}.ico`, {
-                    copySuccess: copySuccess,
                     newIcoPath: newIcoPath
                 });
             } catch (error) {
@@ -525,19 +554,28 @@ export class RealObjectSystem {
 
         // メタデータ読み込み
         const jsonPath = this.path.join(basePath, `${realId}.json`);
-        if (!this.fs.existsSync(jsonPath)) {
+        try {
+            await this.fs.promises.access(jsonPath);
+        } catch {
             logger.warn(`メタデータが見つかりません: ${realId}`);
             return;
         }
 
-        const metadata = JSON.parse(this.fs.readFileSync(jsonPath, 'utf-8'));
+        const jsonContent = await this.fs.promises.readFile(jsonPath, 'utf-8');
+        let metadata;
+        try {
+            metadata = JSON.parse(jsonContent);
+        } catch (parseError) {
+            logger.error(`メタデータJSONのパースに失敗: ${realId}`, parseError);
+            throw new Error(`メタデータJSONが破損しています: ${realId}`);
+        }
 
         // refCountを-1（0未満にはしない）
         const currentRefCount = metadata.refCount || 0;
         metadata.refCount = Math.max(0, currentRefCount - 1);
 
         // メタデータを保存
-        this.fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
+        await this.fs.promises.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
         logger.debug(`参照カウント更新: ${realId} ${currentRefCount} -> ${metadata.refCount}`);
     }
 
@@ -556,9 +594,11 @@ export class RealObjectSystem {
 
         // メタデータ削除
         const jsonPath = this.path.join(basePath, `${realId}.json`);
-        if (this.fs.existsSync(jsonPath)) {
-            this.fs.unlinkSync(jsonPath);
+        try {
+            await this.fs.promises.unlink(jsonPath);
             logger.debug(`メタデータ削除: ${jsonPath}`);
+        } catch (e) {
+            if (e.code !== 'ENOENT') throw e;
         }
 
         // レコード削除（すべてのレコードファイルを探して削除）
@@ -566,31 +606,34 @@ export class RealObjectSystem {
         const MAX_RECORDS = 1000;
         while (recordNo < MAX_RECORDS) {
             const xtadPath = this.path.join(basePath, `${realId}_${recordNo}.xtad`);
-            if (this.fs.existsSync(xtadPath)) {
-                this.fs.unlinkSync(xtadPath);
+            try {
+                await this.fs.promises.unlink(xtadPath);
                 logger.debug(`レコード削除: ${xtadPath}`);
                 recordNo++;
-            } else {
-                break;
+            } catch (e) {
+                if (e.code === 'ENOENT') break;
+                throw e;
             }
         }
 
         // アイコンファイル削除
         const icoPath = this.path.join(basePath, `${realId}.ico`);
-        if (this.fs.existsSync(icoPath)) {
-            this.fs.unlinkSync(icoPath);
+        try {
+            await this.fs.promises.unlink(icoPath);
             logger.debug(`アイコン削除: ${icoPath}`);
+        } catch (e) {
+            if (e.code !== 'ENOENT') throw e;
         }
 
         // 関連リソースファイル削除（realId_*.*やrealId.* パターン）
         // 画像(png,jpg,gif)、動画(mp4,webm)、音声(mp3,wav)、インポートファイル等
         try {
-            const files = this.fs.readdirSync(basePath);
+            const files = await this.fs.promises.readdir(basePath);
             const escapedId = realId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
             // {realId}_数字_数字.拡張子 または {realId}.拡張子 にマッチ（.json/.xtad/.icoは除外）
             const resourcePattern = new RegExp(`^${escapedId}([_.])`);
             const excludeExts = ['.json', '.xtad', '.ico'];
-            let resourceDeleteCount = 0;
+            const deletePromises = [];
 
             for (const file of files) {
                 if (resourcePattern.test(file)) {
@@ -599,17 +642,16 @@ export class RealObjectSystem {
                         continue;
                     }
                     const filePath = this.path.join(basePath, file);
-                    try {
-                        this.fs.unlinkSync(filePath);
-                        logger.debug(`リソースファイル削除: ${filePath}`);
-                        resourceDeleteCount++;
-                    } catch (error) {
-                        logger.error(`リソースファイル削除失敗: ${file}`, error);
-                    }
+                    deletePromises.push(
+                        this.fs.promises.unlink(filePath)
+                            .then(() => logger.debug(`リソースファイル削除: ${filePath}`))
+                            .catch(error => logger.error(`リソースファイル削除失敗: ${file}`, error))
+                    );
                 }
             }
-            if (resourceDeleteCount > 0) {
-                logger.debug(`リソースファイル ${resourceDeleteCount} 個を削除`);
+            await Promise.all(deletePromises);
+            if (deletePromises.length > 0) {
+                logger.debug(`リソースファイル ${deletePromises.length} 個を削除`);
             }
         } catch (error) {
             logger.debug(`リソースファイルの検索中にエラー:`, error);
@@ -632,15 +674,24 @@ export class RealObjectSystem {
         const basePath = this._basePath;
 
         const jsonPath = this.path.join(basePath, `${realId}.json`);
-        if (!this.fs.existsSync(jsonPath)) {
+        try {
+            await this.fs.promises.access(jsonPath);
+        } catch {
             logger.warn(`メタデータが見つかりません: ${realId}`);
             return;
         }
 
-        const metadata = JSON.parse(this.fs.readFileSync(jsonPath, 'utf-8'));
+        const jsonContent = await this.fs.promises.readFile(jsonPath, 'utf-8');
+        let metadata;
+        try {
+            metadata = JSON.parse(jsonContent);
+        } catch (parseError) {
+            logger.error(`メタデータJSONのパースに失敗: ${realId}`, parseError);
+            throw new Error(`メタデータJSONが破損しています: ${realId}`);
+        }
         metadata.refCount = refCount;
 
-        this.fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
+        await this.fs.promises.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
         logger.debug(`参照カウント更新: ${realId} -> ${refCount}`);
     }
 
@@ -656,11 +707,20 @@ export class RealObjectSystem {
         const basePath = this._basePath;
         const jsonPath = this.path.join(basePath, `${realId}.json`);
 
-        if (!this.fs.existsSync(jsonPath)) {
+        try {
+            await this.fs.promises.access(jsonPath);
+        } catch {
             throw new Error(`メタデータが見つかりません: ${realId}`);
         }
 
-        const metadata = JSON.parse(this.fs.readFileSync(jsonPath, 'utf-8'));
+        const jsonContent = await this.fs.promises.readFile(jsonPath, 'utf-8');
+        let metadata;
+        try {
+            metadata = JSON.parse(jsonContent);
+        } catch (parseError) {
+            logger.error(`メタデータJSONのパースに失敗: ${realId}`, parseError);
+            throw new Error(`メタデータJSONが破損しています: ${realId}`);
+        }
         const currentRefCount = metadata.refCount || 0;
         const newRefCount = currentRefCount + 1;
 
@@ -687,24 +747,32 @@ export class RealObjectSystem {
 
         const basePath = this._basePath;
 
-        const files = this.fs.readdirSync(basePath);
+        const files = await this.fs.promises.readdir(basePath);
         const jsonFiles = files.filter(f => f.endsWith('.json'));
 
-        const metadataList = [];
-        for (const jsonFile of jsonFiles) {
+        // 並列読み込み
+        const readPromises = jsonFiles.map(async (jsonFile) => {
             try {
                 const jsonPath = this.path.join(basePath, jsonFile);
-                const metadata = JSON.parse(this.fs.readFileSync(jsonPath, 'utf-8'));
+                const content = await this.fs.promises.readFile(jsonPath, 'utf-8');
+                const metadata = JSON.parse(content);
                 metadata.realId = jsonFile.replace('.json', '');
-
-                // 実身のメタデータであることを確認（name フィールドが存在する）
-                if (metadata.name !== undefined) {
-                    metadataList.push(metadata);
-                } else {
-                    logger.debug(`実身ではないJSONファイルをスキップ: ${jsonFile}`);
-                }
+                return metadata;
             } catch (error) {
                 logger.warn(`メタデータ読み込みエラー: ${jsonFile}`, error);
+                return null;
+            }
+        });
+        const results = await Promise.all(readPromises);
+
+        const metadataList = [];
+        for (const metadata of results) {
+            if (metadata === null) continue;
+            // 実身のメタデータであることを確認（name フィールドが存在する）
+            if (metadata.name !== undefined) {
+                metadataList.push(metadata);
+            } else {
+                logger.debug(`実身ではないJSONファイルをスキップ: ${metadata.realId}`);
             }
         }
 
@@ -735,11 +803,11 @@ export class RealObjectSystem {
      * @param {Set<string>} excludeRealIds 検索対象から除外する実身ID（削除処理中のもの）
      * @returns {boolean} 参照がある場合true
      */
-    hasReferencesInAllXtadFiles(targetRealId, excludeRealIds = new Set()) {
+    async hasReferencesInAllXtadFiles(targetRealId, excludeRealIds = new Set()) {
         const basePath = this._basePath;
 
         // データフォルダ内の全XTADファイルを取得
-        const files = this.fs.readdirSync(basePath);
+        const files = await this.fs.promises.readdir(basePath);
         const xtadFiles = files.filter(f => f.endsWith('.xtad'));
 
         for (const xtadFile of xtadFiles) {
@@ -751,7 +819,7 @@ export class RealObjectSystem {
 
             try {
                 const xtadPath = this.path.join(basePath, xtadFile);
-                const xtadContent = this.fs.readFileSync(xtadPath, 'utf-8');
+                const xtadContent = await this.fs.promises.readFile(xtadPath, 'utf-8');
 
                 // XTADから仮身（<link>タグ）を検索
                 const linkRegex = /<link[^>]*\sid="([^"]+)"[^>]*>/g;
@@ -799,12 +867,14 @@ export class RealObjectSystem {
         let recordNo = 0;
         while (true) {
             const xtadPath = this.path.join(basePath, `${realId}_${recordNo}.xtad`);
-            if (!this.fs.existsSync(xtadPath)) {
+            try {
+                await this.fs.promises.access(xtadPath);
+            } catch {
                 break;
             }
 
             try {
-                const xtadContent = this.fs.readFileSync(xtadPath, 'utf-8');
+                const xtadContent = await this.fs.promises.readFile(xtadPath, 'utf-8');
 
                 // XTADから仮身（<link>タグ）を抽出
                 const linkRegex = /<link[^>]*\sid="([^"]+)"[^>]*>/g;
@@ -827,15 +897,18 @@ export class RealObjectSystem {
         for (const refRealId of referencedRealIds) {
             try {
                 const jsonPath = this.path.join(basePath, `${refRealId}.json`);
-                if (!this.fs.existsSync(jsonPath)) {
+                try {
+                    await this.fs.promises.access(jsonPath);
+                } catch {
                     continue;
                 }
 
-                const metadata = JSON.parse(this.fs.readFileSync(jsonPath, 'utf-8'));
+                const jsonContent = await this.fs.promises.readFile(jsonPath, 'utf-8');
+                const metadata = JSON.parse(jsonContent);
                 const currentRefCount = metadata.refCount || 0;
                 const newRefCount = Math.max(0, currentRefCount - 1);
                 metadata.refCount = newRefCount;
-                this.fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
+                await this.fs.promises.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
 
                 logger.debug(`参照カウント更新: ${refRealId} ${currentRefCount} -> ${newRefCount}`);
 
@@ -843,12 +916,12 @@ export class RealObjectSystem {
                 if (newRefCount === 0) {
                     // safetyCheck有効時のみ全XTADファイルを検索して参照がないか確認
                     if (safetyCheck) {
-                        const hasReferences = this.hasReferencesInAllXtadFiles(refRealId, processedIds);
+                        const hasReferences = await this.hasReferencesInAllXtadFiles(refRealId, processedIds);
                         if (hasReferences) {
                             logger.warn(`参照カウント0だが他の仮身から参照あり（削除スキップ）: ${refRealId}`);
                             // refCountを1に修正（整合性回復）
                             metadata.refCount = 1;
-                            this.fs.writeFileSync(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
+                            await this.fs.promises.writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf-8');
                             logger.debug(`参照カウント修正: ${refRealId} 0 -> 1`);
                             continue;  // 次の参照先へ
                         }
@@ -1324,7 +1397,7 @@ export class RealObjectSystem {
      * @param {string} realId 実身ID
      * @returns {boolean} 成功/失敗
      */
-    generateDefaultIcon(realId) {
+    async generateDefaultIcon(realId) {
         if (!this.isElectronEnv) {
             logger.warn('デフォルトアイコン生成: Electron環境が必要です');
             return false;
@@ -1337,7 +1410,7 @@ export class RealObjectSystem {
             // 16x16 32bit ICOファイル（文書アイコン風）
             const icoData = this._createMinimalIcon();
 
-            this.fs.writeFileSync(icoPath, Buffer.from(icoData));
+            await this.fs.promises.writeFile(icoPath, Buffer.from(icoData));
             logger.debug(`デフォルトアイコン生成: ${icoPath}`);
             return true;
         } catch (error) {
@@ -1432,7 +1505,7 @@ export class RealObjectSystem {
      * @param {string} templateIcoName 原紙アイコンファイル名
      * @returns {boolean} 成功/失敗
      */
-    copyTemplateIcon(realId, pluginId, templateIcoName) {
+    async copyTemplateIcon(realId, pluginId, templateIcoName) {
         if (!this.isElectronEnv) {
             logger.warn('原紙アイコンコピー: Electron環境が必要です');
             return false;
@@ -1458,13 +1531,15 @@ export class RealObjectSystem {
             const destIcoPath = this.path.join(basePath, `${realId}.ico`);
 
             // ソースファイルが存在するか確認
-            if (!this.fs.existsSync(sourceIcoPath)) {
+            try {
+                await this.fs.promises.access(sourceIcoPath);
+            } catch {
                 logger.warn(`原紙アイコンが見つかりません: ${sourceIcoPath}`);
                 return false;
             }
 
             // コピー実行
-            this.fs.copyFileSync(sourceIcoPath, destIcoPath);
+            await this.fs.promises.copyFile(sourceIcoPath, destIcoPath);
             logger.debug(`原紙アイコンコピー: ${sourceIcoPath} -> ${destIcoPath}`);
             return true;
         } catch (error) {
@@ -1480,7 +1555,7 @@ export class RealObjectSystem {
      * @returns {boolean} 成功/失敗
      *
      */
-    saveImageFile(fileName, imageDataArray) {
+    async saveImageFile(fileName, imageDataArray) {
         if (!this.isElectronEnv) {
             logger.error('画像ファイル保存エラー: Electron環境が必要です');
             return false;
@@ -1493,7 +1568,7 @@ export class RealObjectSystem {
 
             // Uint8Arrayに変換して保存
             const buffer = Buffer.from(imageDataArray);
-            this.fs.writeFileSync(filePath, buffer);
+            await this.fs.promises.writeFile(filePath, buffer);
 
             logger.debug('画像ファイル保存成功:', filePath);
             return true;
@@ -1509,7 +1584,7 @@ export class RealObjectSystem {
      * @param {number} recordNo - レコード番号
      * @returns {Array<{fileName: string, imageNo: number}>} ファイル一覧
      */
-    listImageFiles(realId, recordNo) {
+    async listImageFiles(realId, recordNo) {
         if (!this.isElectronEnv) {
             logger.error('画像ファイル一覧取得エラー: Electron環境が必要です');
             return [];
@@ -1517,7 +1592,7 @@ export class RealObjectSystem {
 
         try {
             const basePath = this.getDataBasePath();
-            const files = this.fs.readdirSync(basePath);
+            const files = await this.fs.promises.readdir(basePath);
 
             // パターン: realId_recordNo_imageNo.png
             const escapedRealId = realId.replace(/[-]/g, '\\-');
@@ -1547,7 +1622,7 @@ export class RealObjectSystem {
      * @param {number} recordNo - レコード番号
      * @returns {Array<{fileName: string, resourceNo: number, ext: string}>} ファイル一覧
      */
-    listMediaFiles(realId, recordNo) {
+    async listMediaFiles(realId, recordNo) {
         if (!this.isElectronEnv) {
             logger.error('メディアファイル一覧取得エラー: Electron環境が必要です');
             return [];
@@ -1555,7 +1630,7 @@ export class RealObjectSystem {
 
         try {
             const basePath = this.getDataBasePath();
-            const files = this.fs.readdirSync(basePath);
+            const files = await this.fs.promises.readdir(basePath);
 
             // パターン: realId_recordNo_resourceNo.拡張子（任意）
             const escapedRealId = realId.replace(/[-]/g, '\\-');
@@ -1586,7 +1661,7 @@ export class RealObjectSystem {
      * @param {string} messageId メッセージID
      * @param {Window} source レスポンス送信先
      */
-    loadImageFile(fileName, messageId, source) {
+    async loadImageFile(fileName, messageId, source) {
         if (!this.isElectronEnv) {
             source.postMessage({
                 type: 'load-image-response',
@@ -1605,7 +1680,9 @@ export class RealObjectSystem {
             logger.debug('画像ファイル読み込み:', filePath);
 
             // ファイルが存在するかチェック
-            if (!this.fs.existsSync(filePath)) {
+            try {
+                await this.fs.promises.access(filePath);
+            } catch {
                 logger.error('画像ファイルが見つかりません:', filePath);
                 source.postMessage({
                     type: 'load-image-response',
@@ -1617,7 +1694,7 @@ export class RealObjectSystem {
             }
 
             // ファイルを読み込み
-            const buffer = this.fs.readFileSync(filePath);
+            const buffer = await this.fs.promises.readFile(filePath);
             const imageData = Array.from(buffer);
 
             // MIMEタイプを推測

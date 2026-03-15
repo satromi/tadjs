@@ -33,7 +33,12 @@
     "transparent": false,
     "backgroundColor": "#ffffff"
   },
-  "cloudConfig": null,
+  "cloudConfig": {
+    "supabaseUrl": "",
+    "anonKey": "",
+    "tenantId": null,
+    "cloudRealObjectId": null
+  },
   "applist": {
     "netbtron-object-list": {
       "name": "NET仮身一覧",

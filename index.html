@@ -39,7 +39,44 @@
             
             let currentTabIndex = 0;
             let tabCount = 0;
-            
+
+            // Canvas表示サイズを動的に取得（canvas-area内に収まるサイズ）
+            function getCanvasDisplaySize() {
+                const canvasArea = document.getElementById('canvas-area');
+                if (canvasArea) {
+                    // canvas-areaのpadding分を除いた内部幅
+                    const style = getComputedStyle(canvasArea);
+                    const paddingLeft = parseFloat(style.paddingLeft) || 0;
+                    const paddingRight = parseFloat(style.paddingRight) || 0;
+                    const width = canvasArea.clientWidth - paddingLeft - paddingRight;
+                    return {
+                        width: Math.max(width, 400),
+                        height: 1000
+                    };
+                }
+                return { width: 1200, height: 1000 };
+            }
+
+            // 既存タブを全てクリアしてリセット
+            function resetAllTabs() {
+                const tabButtons = document.getElementById('tab-buttons');
+                if (tabButtons) tabButtons.innerHTML = '';
+                const canvasArea = document.getElementById('canvas-area');
+                if (canvasArea) {
+                    // canvas-container要素だけを削除（他の要素は残す）
+                    const containers = canvasArea.querySelectorAll('.canvas-container');
+                    containers.forEach(c => c.remove());
+                }
+                tabCount = 0;
+                currentTabIndex = 0;
+                scrollX = 0;
+                scrollY = 0;
+                virtualW = 1200;
+                virtualH = 1000;
+                showHScrollBar = false;
+                showVScrollBar = false;
+            }
+
             function createNewTab(tabIndex) {
                 // Check if tab already exists
                 const existingButton = document.querySelector(`button[onclick*="switchTab(${tabIndex})"]`);
@@ -71,9 +108,10 @@
                 canvasWrapper.className = 'canvas-wrapper';
                 canvasWrapper.id = `canvas-wrapper-${tabIndex}`;
                 
-                // Create canvas - using fixed values since canvasW/H may not be available yet
-                const canvasWidth = 1200;
-                const canvasHeight = 1000;
+                // Create canvas - 表示領域に合わせたサイズ
+                const displaySize = getCanvasDisplaySize();
+                const canvasWidth = displaySize.width;
+                const canvasHeight = displaySize.height;
                 const canvas = document.createElement('canvas');
                 canvas.id = `canvas-${tabIndex}`;
                 canvas.width = canvasWidth;
@@ -94,6 +132,9 @@
                 const hHandle = document.createElement('div');
                 hHandle.className = 'scrollbar-handle';
                 hHandle.id = `hhandle-${tabIndex}`;
+                const hIndicator = document.createElement('div');
+                hIndicator.className = 'scrollbar-indicator';
+                hHandle.appendChild(hIndicator);
                 hScrollbar.appendChild(hHandle);
                 
                 // Create vertical scrollbar
@@ -106,6 +147,9 @@
                 const vHandle = document.createElement('div');
                 vHandle.className = 'scrollbar-handle';
                 vHandle.id = `vhandle-${tabIndex}`;
+                const vIndicator = document.createElement('div');
+                vIndicator.className = 'scrollbar-indicator';
+                vHandle.appendChild(vIndicator);
                 vScrollbar.appendChild(vHandle);
                 
                 // Create corner element
@@ -168,8 +212,12 @@
                 if (newCanvas && typeof window !== 'undefined') {
                     window.canvas = newCanvas;
                     window.ctx = newCanvas.getContext('2d');
+                    // canvasW/canvasHを切り替え先タブのcanvasサイズに同期（クリアなし）
+                    if (typeof window.setCanvasSize === 'function') {
+                        setCanvasSize(newCanvas.width, newCanvas.height);
+                    }
                 }
-                
+
                 // Restore new tab's scroll state
                 if (typeof getTabScrollState === 'function') {
                     const state = getTabScrollState(tabIndex);
@@ -179,21 +227,21 @@
                     virtualH = state.virtualH;
                     showHScrollBar = state.showHScrollBar;
                     showVScrollBar = state.showVScrollBar;
-                    
-                    
-                    // Force recalculation of scrollbar state for the new tab
+
+                    // 新しいcanvasサイズでスクロールバー状態を再計算（forceUpdate=trueでDOM確実反映）
                     if (typeof updateScrollBars === 'function') {
-                        updateScrollBars();
+                        updateScrollBars(tabIndex, true);
                     }
-                    
-                    // Update scrollbar visibility for new tab
-                    updateScrollBarVisibility();
+
+                    // 描画バッファから表示用canvasに再描画（スクロール位置を反映）
+                    redrawCanvas();
                 } else {
                     // tad.js functions not available yet, set default values
                     scrollX = 0;
                     scrollY = 0;
-                    virtualW = 1200;
-                    virtualH = 1000;
+                    const defSize = getCanvasDisplaySize();
+                    virtualW = defSize.width;
+                    virtualH = defSize.height;
                     showHScrollBar = false;
                     showVScrollBar = false;
                 }
@@ -310,6 +358,15 @@
                 
                 // Check overflow on window resize
                 window.addEventListener('resize', checkTabOverflow);
+
+                // ウィンドウリサイズ時にCanvasサイズを更新して再描画
+                let resizeTimer = null;
+                window.addEventListener('resize', () => {
+                    if (resizeTimer) clearTimeout(resizeTimer);
+                    resizeTimer = setTimeout(() => {
+                        resizeAllCanvases();
+                    }, 200);
+                });
                 
                 // Initial check
                 setTimeout(checkTabOverflow, 100);
@@ -333,24 +390,27 @@
                 document.addEventListener('mouseup', handleScrollBarMouseUp);
             }
             
-            function updateScrollBarVisibility() {
-                // Get current tab state
+            function updateScrollBarVisibility(targetTabIndex) {
+                // 引数があればそのタブ、なければ現在のタブ
+                const tabIdx = (targetTabIndex !== undefined) ? targetTabIndex : currentTabIndex;
+
+                // Get target tab state
                 let state;
                 if (typeof getTabScrollState === 'function') {
-                    state = getTabScrollState(currentTabIndex);
+                    state = getTabScrollState(tabIdx);
                 } else {
-                    state = { 
+                    state = {
                         showHScrollBar: showHScrollBar,
                         showVScrollBar: showVScrollBar,
-                        virtualW: virtualW, 
+                        virtualW: virtualW,
                         virtualH: virtualH
                     };
                 }
-                
-                
-                const hScrollbar = document.getElementById(`hscrollbar-${currentTabIndex}`);
-                const vScrollbar = document.getElementById(`vscrollbar-${currentTabIndex}`);
-                const corner = document.getElementById(`corner-${currentTabIndex}`);
+
+
+                const hScrollbar = document.getElementById(`hscrollbar-${tabIdx}`);
+                const vScrollbar = document.getElementById(`vscrollbar-${tabIdx}`);
+                const corner = document.getElementById(`corner-${tabIdx}`);
                 
                 
                 if (hScrollbar) {
@@ -378,8 +438,9 @@
             }
             
             function updateScrollBarHandles() {
-                const canvasWidth = 1200;
-                const canvasHeight = 1000;
+                const displaySize = getCanvasDisplaySize();
+                const canvasWidth = displaySize.width;
+                const canvasHeight = displaySize.height;
                 
                 // Get current tab state
                 let state;
@@ -459,8 +520,9 @@
                 
                 
                 const scrollSpeed = 30;
-                const canvasWidth = 1200;
-                const canvasHeight = 1000;
+                const displaySize = getCanvasDisplaySize();
+                const canvasWidth = displaySize.width;
+                const canvasHeight = displaySize.height;
                 const maxScrollX = Math.max(0, state.virtualW - canvasWidth);
                 const maxScrollY = Math.max(0, state.virtualH - canvasHeight);
                 
@@ -514,8 +576,9 @@
             
             function handleScrollBarMouseDown(event) {
                 const target = event.target;
-                const canvasWidth = 1200;
-                const canvasHeight = 1000;
+                const displaySize = getCanvasDisplaySize();
+                const canvasWidth = displaySize.width;
+                const canvasHeight = displaySize.height;
                 
                 // Check if click is on horizontal scroll bar
                 const hScrollbar = document.getElementById(`hscrollbar-${currentTabIndex}`);
@@ -637,7 +700,7 @@
                 if (dragStartX !== 0) {
                     const hScrollbar = document.getElementById(`hscrollbar-${currentTabIndex}`);
                     if (hScrollbar) {
-                        const canvasWidth = 1200;
+                        const canvasWidth = getCanvasDisplaySize().width;
                         const rect = hScrollbar.getBoundingClientRect();
                         const x = event.clientX - rect.left;
                         const deltaX = x - dragStartX;
@@ -654,7 +717,7 @@
                 if (dragStartY !== 0) {
                     const vScrollbar = document.getElementById(`vscrollbar-${currentTabIndex}`);
                     if (vScrollbar) {
-                        const canvasHeight = 1000;
+                        const canvasHeight = getCanvasDisplaySize().height;
                         const rect = vScrollbar.getBoundingClientRect();
                         const y = event.clientY - rect.top;
                         const deltaY = y - dragStartY;
@@ -691,12 +754,12 @@
             function redrawCanvas() {
                 const canvas = document.getElementById(`canvas-${currentTabIndex}`);
                 if (!canvas) return;
-                
-                
+
+
                 // 新設計：描画バッファ領域から表示用canvasに描画
                 if (typeof renderFromTadFileDrawBuffer === 'function') {
-                    const state = typeof getTabScrollState === 'function' ? 
-                                  getTabScrollState(currentTabIndex) : 
+                    const state = typeof getTabScrollState === 'function' ?
+                                  getTabScrollState(currentTabIndex) :
                                   { scrollX: scrollX, scrollY: scrollY };
                     renderFromTadFileDrawBuffer(currentTabIndex, currentTabIndex, state.scrollX, state.scrollY);
                     //console.debug(`Tab switch: rendered from TAD file draw buffer: file ${currentTabIndex} -> tab ${currentTabIndex}`);
@@ -704,12 +767,58 @@
                     // フォールバック：従来の再描画処理
                     redrawCurrentTAD();
                 }
-                
+
                 // Update scroll bar visibility and handles
                 updateScrollBarVisibility();
-                
+
                 // Ensure scrollbar handles are updated
                 updateScrollBarHandles();
+            }
+
+            // ウィンドウリサイズ時に全Canvasのサイズを更新して現在タブを再描画
+            function resizeAllCanvases() {
+                const displaySize = getCanvasDisplaySize();
+                const newWidth = displaySize.width;
+                const newHeight = displaySize.height;
+
+                // 全タブのcanvasサイズを更新
+                for (let i = 0; i < tabCount; i++) {
+                    const canvas = document.getElementById(`canvas-${i}`);
+                    if (canvas) {
+                        canvas.width = newWidth;
+                        canvas.height = newHeight;
+                    }
+                    // スクロールバーのサイズも更新
+                    const hScrollbar = document.getElementById(`hscrollbar-${i}`);
+                    if (hScrollbar) hScrollbar.style.width = newWidth + 'px';
+                    const vScrollbar = document.getElementById(`vscrollbar-${i}`);
+                    if (vScrollbar) vScrollbar.style.height = newHeight + 'px';
+                }
+
+                // setDrawTextOverrideWidthでテキスト折り返し幅を更新
+                if (typeof window.setDrawTextOverrideWidth === 'function') {
+                    window.setDrawTextOverrideWidth(newWidth);
+                }
+
+                // tad.jsのcanvasW/canvasHを新サイズに同期（クリアなし）
+                if (typeof window.setCanvasSize === 'function') {
+                    setCanvasSize(newWidth, newHeight);
+                }
+
+                // スクロールバー状態を新しいcanvasサイズで再計算（forceUpdate=trueでDOM確実反映）
+                if (typeof window.updateScrollBars === 'function') {
+                    for (let i = 0; i < tabCount; i++) {
+                        updateScrollBars(i, true);
+                    }
+                }
+
+                // 現在タブを再描画（描画バッファからの再描画ではなくTADデータから再レンダリング）
+                if (typeof window.reRenderAllTabs === 'function') {
+                    window.reRenderAllTabs(newWidth, newHeight);
+                } else {
+                    // フォールバック: 描画バッファからの再描画
+                    redrawCanvas();
+                }
             }
     </script>
     <style>
@@ -1005,86 +1114,95 @@
             position: relative;
             display: inline-block;
         }
-        
+
         .canvas-wrapper {
             position: relative;
-            display: inline-block;
+            display: block;
         }
-        
+
         canvas {
             background: white;
-            border-radius: 8px;
             box-shadow: 0 2px 20px rgba(0, 0, 0, 0.1);
             cursor: crosshair;
             position: relative;
         }
-        
+
         canvas:hover {
             cursor: pointer;
         }
-        
-        /* Modern Scrollbars */
+
+        /* BTRON標準スクロールバー（オーバーレイ方式） */
         .scrollbar-h {
-            position: relative;
-            margin-top: 4px;
-            height: 12px;
-            background: rgba(0, 0, 0, 0.05);
-            border-radius: 6px;
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 16px;
+            background: #e0e0e0;
             cursor: pointer;
             display: none;
-            transition: all 0.3s ease;
+            z-index: 100;
         }
-        
-        .scrollbar-h:hover {
-            background: rgba(0, 0, 0, 0.1);
-        }
-        
+
         .scrollbar-v {
             position: absolute;
             top: 0;
-            right: -16px;
-            width: 12px;
-            background: rgba(0, 0, 0, 0.05);
-            border-radius: 6px;
+            right: 0;
+            width: 16px;
+            background: #e0e0e0;
             cursor: pointer;
             display: none;
-            transition: all 0.3s ease;
+            z-index: 100;
         }
-        
-        .scrollbar-v:hover {
-            background: rgba(0, 0, 0, 0.1);
-        }
-        
+
         .scrollbar-handle {
-            background: rgba(0, 160, 233, 0.5);
+            background: #c0c0c0;
+            border: 1px outset #808080;
             position: absolute;
-            border-radius: 6px;
-            transition: background 0.3s ease;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
-        
+
         .scrollbar-handle:hover {
-            background: rgba(0, 160, 233, 0.8);
+            background: #a0a0a0;
         }
-        
+
         .scrollbar-h .scrollbar-handle {
-            height: 10px;
-            top: 1px;
+            height: 12px;
+            top: 2px;
         }
-        
+
         .scrollbar-v .scrollbar-handle {
-            width: 10px;
-            left: 1px;
+            width: 12px;
+            left: 2px;
         }
-        
+
+        /* 黄色のインジケーター */
+        .scrollbar-indicator {
+            background: #ffff00;
+            pointer-events: none;
+        }
+
+        .scrollbar-h .scrollbar-indicator {
+            width: 2px;
+            height: 14px;
+        }
+
+        .scrollbar-v .scrollbar-indicator {
+            width: 14px;
+            height: 2px;
+        }
+
         .scrollbar-corner {
             position: absolute;
-            bottom: -16px;
-            right: -16px;
-            width: 12px;
-            height: 12px;
-            background: rgba(0, 0, 0, 0.05);
-            border-radius: 0 0 8px 0;
+            bottom: 0;
+            right: 0;
+            width: 16px;
+            height: 16px;
+            background: #c0c0c0;
             display: none;
+            z-index: 101;
         }
         
         /* Debug Section */

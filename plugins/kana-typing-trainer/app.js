@@ -8,6 +8,8 @@
  *   {realId}_2_N.json     - かな入力配列（N=0,1,2,...）
  *   {realId}_3_N.json     - キーコード変換マップ（N=0,1,2,...）
  */
+const logger = window.getLogger('KanaTypingTrainer');
+
 class KanaTypingTrainer extends PluginBase {
     constructor() {
         super('KanaTypingTrainer');
@@ -75,7 +77,7 @@ class KanaTypingTrainer extends PluginBase {
                 return JSON.parse(text);
             }
         } catch (e) {
-            // ignore
+            logger.debug('[KanaTypingTrainer] パースエラー:', e.message);
         }
         return null;
     }
@@ -150,6 +152,7 @@ class KanaTypingTrainer extends PluginBase {
             this._loadQuestion(0);
             this._updateStatusMessage('Enterキーで練習開始');
         } catch (e) {
+            logger.debug('[KanaTypingTrainer] データ読み込みエラー:', e.message);
             this._updateStatusMessage('データの読み込みに失敗しました');
         }
     }
@@ -625,6 +628,7 @@ class KanaTypingTrainer extends PluginBase {
                 this._updateStatusMessage('不明なJSONファイル形式です');
             }
         } catch (e) {
+            logger.debug('[KanaTypingTrainer] JSON読み込みエラー:', e.message);
             this._updateStatusMessage('JSONファイルの読み込みに失敗しました');
         }
     }

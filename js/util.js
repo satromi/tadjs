@@ -295,6 +295,32 @@ export const PREVIEW_BORDER_COLOR = '#0078d4';
 export const MAX_CHILD_UPLOAD_OBJECTS = 10000;
 
 // ========================================
+// TADデフォルトマスク定義（ID 0-13）
+// ========================================
+
+/**
+ * TAD仕様のデフォルトマスク定義（ID 0-13、4×4ビットマップ）
+ * 16bitワード値配列で格納。MSBが左端ピクセル、1=描画、0=非描画
+ * パターン定義セグメントのmask[]フィールドで参照される
+ */
+export const DEFAULT_MASK_DEFINITIONS = [
+    { id: 0,  width: 4, height: 4, wordValues: [0x0000, 0x0000, 0x0000, 0x0000] }, // 未定義（透明）
+    { id: 1,  width: 4, height: 4, wordValues: [0x0000, 0x0000, 0x0000, 0x0000] }, // 0%
+    { id: 2,  width: 4, height: 4, wordValues: [0x8000, 0x0000, 0x2000, 0x0000] }, // 12.5%
+    { id: 3,  width: 4, height: 4, wordValues: [0xa000, 0x0000, 0xa000, 0x0000] }, // 25%
+    { id: 4,  width: 4, height: 4, wordValues: [0xa000, 0x5000, 0xa000, 0x5000] }, // 50%
+    { id: 5,  width: 4, height: 4, wordValues: [0xa000, 0xf000, 0xa000, 0xf000] }, // 75%
+    { id: 6,  width: 4, height: 4, wordValues: [0xb000, 0xf000, 0xe000, 0xf000] }, // 87.5%
+    { id: 7,  width: 4, height: 4, wordValues: [0xf000, 0xf000, 0xf000, 0xf000] }, // 100%
+    { id: 8,  width: 4, height: 4, wordValues: [0x4000, 0x4000, 0x4000, 0x4000] }, // 縦線
+    { id: 9,  width: 4, height: 4, wordValues: [0x0000, 0xf000, 0x0000, 0x0000] }, // 横線
+    { id: 10, width: 4, height: 4, wordValues: [0x1000, 0x2000, 0x4000, 0x8000] }, // 右上がり斜線 /
+    { id: 11, width: 4, height: 4, wordValues: [0x8000, 0x4000, 0x2000, 0x1000] }, // 左下がり斜線 \
+    { id: 12, width: 4, height: 4, wordValues: [0x4000, 0xf000, 0x4000, 0x4000] }, // 縦横クロスハッチ
+    { id: 13, width: 4, height: 4, wordValues: [0x9000, 0x6000, 0x6000, 0x9000] }, // 斜線クロスハッチ
+];
+
+// ========================================
 // ユーティリティ関数
 // ========================================
 

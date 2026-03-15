@@ -73,7 +73,7 @@ class BaseFileManager extends window.PluginBase {
             if (data.fileData) {
                 this.fileData = data.fileData;
                 let rawId = data.fileData.realId || data.fileData.fileId;
-                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                this.realId = rawId ? this.extractRealId(rawId) : null;
             }
 
             // 背景色を適用してファイルを読み込む
@@ -661,98 +661,35 @@ class BaseFileManager extends window.PluginBase {
     /**
      * 背景色を適用
      */
-    applyBackgroundColor() {
-        if (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor) {
-            // DOM要素が生成されるまで待機
-            setTimeout(() => {
-                const container = document.querySelector('.manager-container');
-                const list = document.querySelector('.base-file-list');
-                const bgColor = this.fileData.windowConfig.backgroundColor;
-
-                if (container) {
-                    container.style.background = bgColor;
-                }
-                if (list) {
-                    list.style.background = bgColor;
-                } else {
-                    logger.warn('[BaseFileManager] .base-file-list 要素が見つかりません');
-                }
-            }, 100);
-        }
-    }
-
     /**
-     * 背景色変更ダイアログを表示
+     * 背景色をUIに適用する（PluginBaseオーバーライド）
+     * @param {string} [color] - 背景色。省略時はfileData.windowConfig.backgroundColorを使用
      */
-    async changeBgColor() {
-        // 現在の背景色を取得
-        const currentBgColor = (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor)
-            ? this.fileData.windowConfig.backgroundColor
-            : DEFAULT_BGCOL;
+    applyBackgroundColor(color) {
+        const bgColor = color || (this.fileData && this.fileData.windowConfig && this.fileData.windowConfig.backgroundColor);
+        if (!bgColor) return;
 
-        // ダイアログのHTML要素を作成
-        const dialogHtml = `
-            <div style="margin-bottom: 10px;">ウインドウ背景色を選択してください。</div>
-            <div style="margin-bottom: 10px;">
-                <label style="display: block; margin-bottom: 5px;">#FFFFFF形式で入力：</label>
-                <input type="text" id="bgColorInput" placeholder="#FFFFFF" value="${currentBgColor}"
-                       style="width: 100%; padding: 5px; box-sizing: border-box;">
-            </div>
-        `;
+        super.applyBackgroundColor(bgColor);
 
-        const result = await this.showCustomDialog({
-            dialogHtml: dialogHtml,
-            buttons: [
-                { label: '取消', value: 'cancel' },
-                { label: '設定', value: 'ok' }
-            ],
-            defaultButton: 1,
-            inputs: {
-                text: 'bgColorInput'
+        // DOM要素が生成されるまで待機（初期化時対応）
+        const applyToElements = () => {
+            const container = document.querySelector('.manager-container');
+            const list = document.querySelector('.base-file-list');
+            if (container) {
+                container.style.background = bgColor;
             }
-        });
-
-        if (result && result.button === 'ok') {
-            const inputColor = result.input;
-
-            // 入力された色を検証
-            if (/^#[0-9A-Fa-f]{6}$/.test(inputColor)) {
-                const newBgColor = inputColor;
-
-                // コンテナと一覧の背景色を変更
-                const container = document.querySelector('.manager-container');
-                const list = document.querySelector('.base-file-list');
-                if (container) {
-                    container.style.background = newBgColor;
-                }
-                if (list) {
-                    list.style.background = newBgColor;
-                } else {
-                    logger.error('[BaseFileManager] .base-file-listが見つかりません');
-                }
-
-                // 実身管理用セグメントのbackgroundColorを更新
-                if (this.realId) {
-                    this.messageBus.send('update-background-color', {
-                        fileId: this.realId,
-                        backgroundColor: newBgColor
-                    });
-                }
-
-                // this.fileDataを更新（再表示時に正しい色を適用するため）
-                if (!this.fileData) {
-                    this.fileData = {};
-                }
-                if (!this.fileData.windowConfig) {
-                    this.fileData.windowConfig = {};
-                }
-                this.fileData.windowConfig.backgroundColor = newBgColor;
+            if (list) {
+                list.style.background = bgColor;
             } else {
-                logger.warn('[BaseFileManager] 無効な色形式:', inputColor);
+                logger.warn('[BaseFileManager] .base-file-list 要素が見つかりません');
             }
-        }
+        };
 
-        return result;
+        if (document.querySelector('.manager-container')) {
+            applyToElements();
+        } else {
+            setTimeout(applyToElements, UI_UPDATE_DELAY_MS);
+        }
     }
 
     /**

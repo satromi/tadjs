@@ -614,6 +614,7 @@ export class ScrollbarManager {
         let startPos = 0;
         let startScroll = 0;
         let scrollElement = null; // スクロール要素をキャッシュ
+        let pluginResizeObserver = null; // ResizeObserverをキャッシュ（cleanup用）
 
         // スクロール要素を取得する関数
         const getScrollElement = () => {
@@ -759,12 +760,16 @@ export class ScrollbarManager {
 
                 // リサイズ監視（プラグインコンテンツサイズ変更時に更新）
                 try {
-                    const resizeObserver = new ResizeObserver(() => {
+                    // 既存のResizeObserverがあればdisconnect
+                    if (pluginResizeObserver) {
+                        pluginResizeObserver.disconnect();
+                    }
+                    pluginResizeObserver = new ResizeObserver(() => {
                         setTimeout(() => {
                             this.forceUpdateScrollbarForPlugin(iframe, content, scrollbar, direction);
                         }, window.QUICK_UI_UPDATE_DELAY_MS || 50);
                     });
-                    resizeObserver.observe(pluginContent);
+                    pluginResizeObserver.observe(pluginContent);
                 } catch (resizeError) {
                     // ResizeObserver非対応環境では無視
                 }

@@ -8,6 +8,9 @@
  * @version 1.0.0
  */
 
+import { getLogger } from './logger.js';
+const logger = getLogger('RealtimeMedia');
+
 // ============================================================
 // RealtimeTadParser - 実時間制御xmlTADパーサー
 // ============================================================
@@ -423,7 +426,7 @@ export class TimelineEngine {
             if (media) {
                 switch (action) {
                     case 'play':
-                        media.play().catch(e => { if (e.name !== 'AbortError') console.warn('[RealtimeMedia] play失敗:', e.name); });
+                        media.play().catch(e => { if (e.name !== 'AbortError') logger.warn('[RealtimeMedia] play失敗:', e.name); });
                         break;
                     case 'pause':
                         media.pause();
@@ -497,7 +500,7 @@ export class TimelineEngine {
         if (this.plugin && this.plugin.mediaManager) {
             const media = this.plugin.mediaManager.getMediaById(event.mediaId);
             if (media) {
-                media.play().catch(e => { if (e.name !== 'AbortError') console.warn('[RealtimeMedia] play失敗:', e.name); });
+                media.play().catch(e => { if (e.name !== 'AbortError') logger.warn('[RealtimeMedia] play失敗:', e.name); });
             }
         }
     }
@@ -770,7 +773,7 @@ export class SlideMediaManager {
                 }
             }
         } catch (error) {
-            // エラー時はフォールバック
+            logger.debug('[RealtimeMedia] getImageFilePath呼び出しエラー、フォールバックを使用:', error.message);
         }
 
         // フォールバック

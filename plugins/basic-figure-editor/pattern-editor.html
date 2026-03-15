@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>パターン編集</title>
+    <link rel="stylesheet" href="../../tadjs-desktop.css">
+    <link rel="stylesheet" href="pattern-editor.css">
+</head>
+<body>
+    <div class="pattern-editor-window">
+        <div class="pattern-editor-content">
+            <!-- 左側: 編集グリッド -->
+            <div class="edit-area">
+                <div class="edit-grid-container">
+                    <canvas class="edit-grid-canvas" id="editCanvas" width="192" height="192"></canvas>
+                </div>
+            </div>
+
+            <!-- 右側: プレビュー + パレット + ツール -->
+            <div class="preview-area">
+                <div class="preview-label">原寸:</div>
+                <div class="preview-container">
+                    <canvas class="preview-canvas" id="previewCanvas" width="32" height="32"></canvas>
+                </div>
+
+                <!-- 選択色 -->
+                <div class="selected-color-display">
+                    <span>選択色:</span>
+                    <div id="colorPalette"></div>
+                </div>
+
+                <!-- ツール -->
+                <div class="tool-section">
+                    <div class="tool-section-label">ツール:</div>
+                    <div class="tool-row">
+                        <button class="editor-tool-btn active" data-tool="pencil" title="鉛筆">✎</button>
+                        <button class="editor-tool-btn" data-tool="rect" title="長方形塗り">□</button>
+                        <button class="editor-tool-btn" data-tool="eyedropper" id="eyedropperBtn" title="スポイト（グリッドの色を取得）">💧</button>
+                        <button class="editor-tool-btn" data-tool="fill" title="展開">⊞</button>
+                    </div>
+                    <div class="tool-section-label">移動:</div>
+                    <div class="tool-row">
+                        <button class="editor-tool-btn" data-action="move-left" title="左">←</button>
+                        <button class="editor-tool-btn" data-action="move-up" title="上">↑</button>
+                        <button class="editor-tool-btn" data-action="move-down" title="下">↓</button>
+                        <button class="editor-tool-btn" data-action="move-right" title="右">→</button>
+                    </div>
+                    <div class="tool-section-label">変形:</div>
+                    <div class="tool-row">
+                        <button class="editor-tool-btn" data-action="rotate-cw" title="回転CW">↻</button>
+                        <button class="editor-tool-btn" data-action="rotate-ccw" title="回転CCW">↺</button>
+                        <button class="editor-tool-btn" data-action="flip-h" title="左右反転">↔</button>
+                        <button class="editor-tool-btn" data-action="flip-v" title="上下反転">↕</button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- 操作ボタン（全幅） -->
+        <div class="action-row">
+            <button class="action-btn" id="loadBtn">読込</button>
+            <button class="action-btn" id="replaceBtn">入替</button>
+            <button class="action-btn" id="undoBtn">復旧</button>
+        </div>
+    </div>
+    <script type="module">
+        import { DEFAULT_PATTERNS, createPatternCanvas, createFillPattern, createPatternPreviewCanvas } from '../../js/pattern-utils.js';
+        window.DEFAULT_PATTERNS = DEFAULT_PATTERNS;
+        window.createPatternCanvas = createPatternCanvas;
+        window.createFillPattern = createFillPattern;
+        window.createPatternPreviewCanvas = createPatternPreviewCanvas;
+    </script>
+    <script type="module" src="pattern-editor.js"></script>
+</body>
+</html>

@@ -71,6 +71,9 @@ class UserConfigApp extends window.PluginBase {
     }
 
     setupMessageBusHandlers() {
+        // 共通ハンドラを登録
+        this.setupCommonMessageBusHandlers();
+
         // init メッセージ
         this.messageBus.on('init', (data) => {
             // 共通初期化処理（windowId設定、スクロール状態送信）
@@ -79,48 +82,28 @@ class UserConfigApp extends window.PluginBase {
             // fileIdを保存（拡張子を除去）
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;
-                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/, '') : null;
+                this.realId = rawId ? this.extractRealId(rawId) : null;
                 logger.info('[UserConfig] fileId設定:', this.realId, '(元:', rawId, ')');
             }
         });
-
-        // get-menu-definition メッセージ
-        this.messageBus.on('get-menu-definition', async (data) => {
-            // 編集メニューを返す
-            const menuDefinition = [
-                {
-                    text: '編集',
-                    submenu: [
-                        { text: '取消', action: 'undo' },
-                        { text: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
-                        { text: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
-                        { text: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
-                        { text: 'クリップボードから移動', action: 'redo', shortcut: 'Ctrl+Z' }
-                    ]
-                }
-            ];
-            this.messageBus.send('menu-definition-response', {
-                messageId: data.messageId,
-                menuDefinition: menuDefinition
-            });
-        });
-
-        // menu-action メッセージ
-        this.messageBus.on('menu-action', (data) => {
-            this.handleMenuAction(data.action);
-        });
-
-        // window-moved メッセージ
-        this.messageBus.on('window-moved', (data) => {
-            this.updateWindowConfig({
-                pos: data.pos,
-                width: data.width,
-                height: data.height
-            });
-        });
     }
 
-    async handleMenuAction(action) {
+    getMenuDefinition() {
+        return [
+            {
+                text: '編集',
+                submenu: [
+                    { text: '取消', action: 'undo' },
+                    { text: 'クリップボードへコピー', action: 'copy', shortcut: 'Ctrl+C' },
+                    { text: 'クリップボードからコピー', action: 'paste', shortcut: 'Ctrl+V' },
+                    { text: 'クリップボードへ移動', action: 'cut', shortcut: 'Ctrl+X' },
+                    { text: 'クリップボードから移動', action: 'redo', shortcut: 'Ctrl+Z' }
+                ]
+            }
+        ];
+    }
+
+    async executeMenuAction(action) {
         const activeElement = document.activeElement;
         const isInputField = activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA');
 
@@ -200,26 +183,7 @@ class UserConfigApp extends window.PluginBase {
     // setupContextMenu() と setupWindowActivation() は PluginBase 共通メソッドを使用
 
     setupTabs() {
-        const tabs = document.querySelectorAll('.tab');
-        const panels = document.querySelectorAll('.tab-panel');
-
-        tabs.forEach(tab => {
-            tab.addEventListener('click', () => {
-                const targetTab = tab.dataset.tab;
-
-                // アクティブタブの切り替え
-                tabs.forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-
-                // パネルの切り替え
-                panels.forEach(panel => {
-                    panel.classList.remove('active');
-                    if (panel.id === targetTab + '-panel') {
-                        panel.classList.add('active');
-                    }
-                });
-            });
-        });
+        this.initTabSwitcher();
     }
 
     setupButtons() {

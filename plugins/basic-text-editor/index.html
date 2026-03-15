@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>基本文章編集</title>
+    <link rel="stylesheet" href="../common/btron-theme.css">
     <link rel="stylesheet" href="style.css?v=20251006215303">
 </head>
 <body tabindex="0">
@@ -105,6 +106,15 @@
     <script type="module">
         import { roundFontSize } from '../../js/tad-units.js';
         window.roundFontSize = roundFontSize;
+    </script>
+    <!-- Mixinモジュールをグローバル変数として読み込み -->
+    <script type="module">
+        import { TextTadParserMixin } from './text-tad-parser.js';
+        import { TextXmlSerializerMixin } from './text-xml-serializer.js';
+        import { TextVirtualObjectMixin } from './text-virtual-object.js';
+        window.TextTadParserMixin = TextTadParserMixin;
+        window.TextXmlSerializerMixin = TextXmlSerializerMixin;
+        window.TextVirtualObjectMixin = TextVirtualObjectMixin;
     </script>
     <script type="module" src="editor.js?v=202511130203"></script>
 </body>

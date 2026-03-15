@@ -1,0 +1,34 @@
+/**
+ * plugins/common/btron-theme.css
+ * BTRON共通テーマ定義 - CSS カスタムプロパティ
+ * 全プラグインで共有される色定義・基本スタイル
+ */
+
+:root {
+    /* === BTRON カラーパレット === */
+    --btron-bg-standard: #dedede;       /* 標準背景（ダイアログ、タブパネル） */
+    --btron-bg-tab-header: #e0e0e0;     /* タブヘッダー、ダイアログボタン領域 */
+    --btron-bg-inactive: #c0c0c0;       /* 非アクティブタブ、ボタン背景 */
+    --btron-border: #808080;            /* ボーダー（区切り線） */
+    --btron-bg-content: #ffffff;        /* コンテンツ領域（テキスト入力、リスト） */
+    --btron-bg-legacy: #f0f0f0;         /* 旧スタイル互換用 */
+
+    /* === テキスト色 === */
+    --btron-text-primary: #000000;      /* 主テキスト */
+    --btron-text-secondary: #333333;    /* 副テキスト */
+    --btron-text-disabled: #888888;     /* 無効テキスト */
+
+    /* === 選択・ハイライト色 === */
+    --btron-bg-selected: #0078d7;       /* 選択背景 */
+    --btron-text-selected: #ffffff;     /* 選択テキスト */
+    --btron-bg-hover: #e8e8e8;          /* ホバー背景 */
+
+    /* === ボーダー === */
+    --btron-border-light: #a0a0a0;      /* 薄いボーダー */
+    --btron-border-dark: #606060;       /* 濃いボーダー */
+
+    /* === フォント === */
+    --btron-font-family: 'MS Gothic', 'ＭＳ ゴシック', monospace;
+    --btron-font-size: 12px;
+    --btron-font-size-small: 11px;
+}

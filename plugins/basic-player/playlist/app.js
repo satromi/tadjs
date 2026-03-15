@@ -31,7 +31,7 @@ class PlaylistViewerApp {
                     this.messageBus.start();
                     resolve();
                 } else {
-                    setTimeout(check, 50);
+                    setTimeout(check, RETRY_DELAY_MS);
                 }
             };
             check();

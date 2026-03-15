@@ -35,6 +35,9 @@ class UrlLinkExec extends window.PluginBase {
      * 親ウィンドウからのメッセージを受信して処理
      */
     setupMessageBusHandlers() {
+        // 共通ハンドラを登録
+        this.setupCommonMessageBusHandlers();
+
         // 初期化メッセージ
         this.messageBus.on('init', async (data) => {
             logger.info('[UrlLinkExec] init受信', data);

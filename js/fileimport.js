@@ -1,4 +1,6 @@
-const logger = window.getLogger('FileImportManager');
+import { getLogger } from './logger.js';
+
+const logger = getLogger('FileImportManager');
 
 /**
  * ファイルインポート管理クラス

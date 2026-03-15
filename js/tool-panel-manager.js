@@ -316,6 +316,33 @@ export class ToolPanelManager {
                 return;
             }
 
+            if (e.target.classList.contains('fill-pattern-cell')) {
+                e.preventDefault();
+                const patternId = parseInt(e.target.dataset.patternId);
+
+                // すべてのパターンセルの選択スタイルをリセット
+                popup.querySelectorAll('.fill-pattern-cell').forEach(cell => {
+                    cell.style.outline = '';
+                    cell.style.outlineOffset = '';
+                });
+
+                // クリックされたセルを選択状態にする
+                e.target.style.outline = '2px solid #0078d7';
+                e.target.style.outlineOffset = '-1px';
+
+                this.sendToToolPanelSource(source, 'popup-fill-pattern-change', {
+                    patternId: patternId
+                });
+                return;
+            }
+
+            if (e.target.id === 'patternEditBtn') {
+                e.preventDefault();
+                this.sendToToolPanelSource(source, 'open-pattern-editor-request', {});
+                this.hideToolPanelPopup();
+                return;
+            }
+
             if (e.target.classList.contains('grid-interval-btn')) {
                 e.preventDefault();
                 const interval = parseInt(e.target.dataset.interval);

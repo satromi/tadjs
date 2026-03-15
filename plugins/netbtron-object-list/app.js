@@ -126,7 +126,7 @@ class BackgroundUploadManager {
                     const jsonText = await jsonFile.text();
                     localMetadata = JSON.parse(jsonText);
                 }
-            } catch (e) { return; }
+            } catch (e) { logger.debug('[NetBtronViewer] ローカルメタデータ読み込みエラー:', e.message); return; }
 
             if (!localMetadata) return;
 
@@ -178,7 +178,7 @@ class BackgroundUploadManager {
                     const icoBuffer = await icoFile.arrayBuffer();
                     files.ico = Array.from(new Uint8Array(icoBuffer));
                 }
-            } catch (e) { /* 非致命的 */ }
+            } catch (e) { logger.debug('[NetBtronViewer] 非致命的エラー:', e.message); }
 
             if (realObject.images && Array.isArray(realObject.images)) {
                 for (const img of realObject.images) {
@@ -213,7 +213,7 @@ class BackgroundUploadManager {
             }
             // 失敗・競合はcompletedに入れない → フォアグラウンド保存時に再試行
         } catch (e) {
-            // バックグラウンドエラーはサイレントに無視
+            logger.debug('[NetBtronViewer] バックグラウンドエラー:', e.message);
         }
     }
 }
@@ -399,7 +399,7 @@ class NetBtronViewer extends window.PluginBase {
                 document.getElementById('login-email').value = config.email || '';
             }
         } catch (e) {
-            // 復元失敗は無視
+            logger.debug('[NetBtronViewer] 復元失敗:', e.message);
         }
     }
 
@@ -407,7 +407,7 @@ class NetBtronViewer extends window.PluginBase {
         try {
             localStorage.setItem('net-btron-config', JSON.stringify({ url, anonKey, email }));
         } catch (e) {
-            // 保存失敗は無視
+            logger.debug('[NetBtronViewer] 設定保存失敗:', e.message);
         }
     }
 
@@ -422,7 +422,7 @@ class NetBtronViewer extends window.PluginBase {
                 return JSON.parse(saved);
             }
         } catch (e) {
-            // 復元失敗
+            logger.debug('[NetBtronViewer] 復元失敗:', e.message);
         }
         return null;
     }
@@ -449,6 +449,7 @@ class NetBtronViewer extends window.PluginBase {
                 (data) => data.messageId === messageId
             );
         } catch (e) {
+            logger.debug('[NetBtronViewer] 実身読み込みエラー:', e.message);
             return;
         }
         if (!loadResult || !loadResult.realObject) return;
@@ -456,7 +457,11 @@ class NetBtronViewer extends window.PluginBase {
         const realObject = loadResult.realObject;
 
         if (tenantId) {
+            // 現在のURL/Keyをlocalstorageから取得してcloudConfigに含める
+            const currentConfig = this.loadSavedConfigData();
             realObject.metadata.cloudConfig = {
+                supabaseUrl: (currentConfig && currentConfig.url) || '',
+                anonKey: (currentConfig && currentConfig.anonKey) || '',
                 tenantId: tenantId,
                 cloudRealObjectId: cloudRealObjectId || null
             };
@@ -477,7 +482,7 @@ class NetBtronViewer extends window.PluginBase {
                 (data) => data.messageId === saveMessageId
             );
         } catch (e) {
-            // 保存失敗は無視（localStorageにフォールバック）
+            logger.debug('[NetBtronViewer] 保存失敗（localStorageにフォールバック）:', e.message);
         }
 
         this.cloudConfig = realObject.metadata.cloudConfig || null;
@@ -504,6 +509,16 @@ class NetBtronViewer extends window.PluginBase {
             }
             if (this.cloudConfig.cloudRealObjectId) {
                 this.cloudRealObjectId = this.cloudConfig.cloudRealObjectId;
+            }
+            // cloudConfigにURL/Keyがあればフォーム自動補完+localStorage同期
+            if (this.cloudConfig.supabaseUrl && this.cloudConfig.anonKey) {
+                const saved = this.loadSavedConfigData();
+                if (!saved || !saved.url || !saved.anonKey) {
+                    // localStorageが空ならcloudConfigから復元
+                    this.saveConfig(this.cloudConfig.supabaseUrl, this.cloudConfig.anonKey, (saved && saved.email) || '');
+                }
+                document.getElementById('supabase-url').value = this.cloudConfig.supabaseUrl;
+                document.getElementById('supabase-key').value = this.cloudConfig.anonKey;
             }
         }
 
@@ -582,7 +597,7 @@ class NetBtronViewer extends window.PluginBase {
                 JSON.stringify(info)
             );
         } catch (e) {
-            // 保存失敗は無視
+            logger.debug('[NetBtronViewer] 閲覧情報保存失敗:', e.message);
         }
     }
 
@@ -597,6 +612,7 @@ class NetBtronViewer extends window.PluginBase {
             const saved = localStorage.getItem(key);
             return saved ? JSON.parse(saved) : null;
         } catch (e) {
+            logger.debug('[NetBtronViewer] 閲覧情報読み込みエラー:', e.message);
             return null;
         }
     }
@@ -642,7 +658,7 @@ class NetBtronViewer extends window.PluginBase {
                 }
             }
         } catch (e) {
-            // メタデータ取得失敗 → テナント一覧へフォールバック
+            logger.debug('[NetBtronViewer] メタデータ取得失敗（テナント一覧へフォールバック）:', e.message);
         }
 
         // キャッシュが古い or 取得失敗 → テナント一覧表示
@@ -687,6 +703,7 @@ class NetBtronViewer extends window.PluginBase {
             }
             return { supabaseUrl: parsed.origin, tenantName: null };
         } catch (e) {
+            logger.debug('[NetBtronViewer] URL解析エラー:', e.message);
             return { supabaseUrl: inputUrl, tenantName: null };
         }
     }
@@ -781,7 +798,7 @@ class NetBtronViewer extends window.PluginBase {
                     const config = JSON.parse(savedConfig);
                     this.saveConfig(config.url || '', config.anonKey || '', email);
                 } catch (e) {
-                    // 無視
+                    logger.debug('[NetBtronViewer] ログイン時設定保存エラー:', e.message);
                 }
             }
             // 明示的なログイン操作 → 常に管理モード（テナント一覧）を表示
@@ -806,7 +823,7 @@ class NetBtronViewer extends window.PluginBase {
                     const config = JSON.parse(savedConfig);
                     this.saveConfig(config.url || '', config.anonKey || '', result.user.email);
                 } catch (e) {
-                    // 無視
+                    logger.debug('[NetBtronViewer] Google認証時設定保存エラー:', e.message);
                 }
             }
             await this.showMainPanel();
@@ -841,7 +858,7 @@ class NetBtronViewer extends window.PluginBase {
                 }
                 keysToRemove.forEach(key => localStorage.removeItem(key));
             } catch (e) {
-                // localStorageアクセスエラーは無視
+                logger.debug('[NetBtronViewer] localStorageアクセスエラー:', e.message);
             }
             document.getElementById('tenant-select').disabled = false;
             this.resetAnonymousUI();
@@ -954,9 +971,17 @@ class NetBtronViewer extends window.PluginBase {
         this.showPanel('main');
         document.getElementById('user-info').textContent = this.currentUser ? this.currentUser.email : '匿名参照モード';
 
-        // システムロール取得
-        if (this.currentUser) {
-            const profileResult = await window.cloudAPI.getMyProfile();
+        this.setStatus('テナント一覧を取得中...');
+
+        // getMyProfile と getTenants を並列実行（互いに独立したAPI呼び出し）
+        logger.info('showMainPanel: API並列取得開始');
+        const [profileResult, result] = await Promise.all([
+            this.currentUser ? window.cloudAPI.getMyProfile() : Promise.resolve(null),
+            window.cloudAPI.getTenants()
+        ]);
+
+        // システムロール取得結果を処理
+        if (this.currentUser && profileResult) {
             logger.info('showMainPanel: getMyProfile結果:', JSON.stringify({ success: profileResult.success, systemRole: profileResult.profile ? profileResult.profile.system_role : null, error: profileResult.error }));
             if (profileResult.success && profileResult.profile) {
                 this.systemRole = profileResult.profile.system_role || 'user';
@@ -967,10 +992,7 @@ class NetBtronViewer extends window.PluginBase {
         logger.info('showMainPanel: systemRole:', this.systemRole);
         this.updateSystemRoleUI();
 
-        this.setStatus('テナント一覧を取得中...');
-
-        logger.info('showMainPanel: テナント一覧取得開始');
-        const result = await window.cloudAPI.getTenants();
+        // テナント一覧取得結果を処理
         logger.info('showMainPanel: getTenants結果:', JSON.stringify({ success: result.success, count: result.tenants ? result.tenants.length : 0, error: result.error }));
         if (result.success) {
             this.tenants = result.tenants || [];
@@ -1289,7 +1311,7 @@ class NetBtronViewer extends window.PluginBase {
                 files.ico = Array.from(new Uint8Array(icoBuffer));
             }
         } catch (e) {
-            // アイコン読み込み失敗は無視（必須ではない）
+            logger.debug('[NetBtronViewer] アイコン読み込み失敗:', e.message);
         }
 
         if (!files.xtad) return false;
@@ -2477,7 +2499,7 @@ class NetBtronViewer extends window.PluginBase {
                     const config = JSON.parse(savedConfig);
                     this.saveConfig(config.url || '', config.anonKey || '', oauthResult.user.email);
                 } catch (e) {
-                    // 無視
+                    logger.debug('[NetBtronViewer] OAuth設定保存エラー:', e.message);
                 }
             }
             this.setStatus('登録完了！テナントに参加しました');
@@ -2562,7 +2584,7 @@ class NetBtronViewer extends window.PluginBase {
                     const config = JSON.parse(savedConfig);
                     this.saveConfig(config.url || '', config.anonKey || '', email);
                 } catch (e) {
-                    // 無視
+                    logger.debug('[NetBtronViewer] 招待登録時設定保存エラー:', e.message);
                 }
             }
             this.setStatus('登録完了！テナントに参加しました');
@@ -2661,11 +2683,7 @@ class NetBtronViewer extends window.PluginBase {
         this.setStatus('');
     }
 
-    escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
+    // escapeHtml(text) は PluginBase に移動済み
 
     // =========================================================
     // MessageBusハンドラ
@@ -2685,7 +2703,7 @@ class NetBtronViewer extends window.PluginBase {
 
             const realIdValue = this.fileData ? (this.fileData.realId || this.fileData.fileId) : null;
             if (realIdValue) {
-                this.realId = realIdValue.replace(/_\d+\.xtad$/i, '');
+                this.realId = this.extractRealId(realIdValue);
             } else {
                 this.realId = null;
             }
@@ -3087,7 +3105,7 @@ class NetBtronViewer extends window.PluginBase {
                             return;
                         }
                     } catch (fetchError) {
-                        // 次のURLを試行
+                        logger.debug('[NetBtronViewer] 次のURLを試行:', fetchError.message);
                     }
                 }
 
@@ -3118,13 +3136,14 @@ class NetBtronViewer extends window.PluginBase {
                             return;
                         }
                     } catch (cloudError) {
-                        // クラウドフォールバック失敗
+                        logger.debug('[NetBtronViewer] クラウドフォールバック失敗:', cloudError.message);
                     }
                 }
 
                 virtualObj.applist = {};
             }
         } catch (error) {
+            logger.debug('[NetBtronViewer] applist取得エラー:', error.message);
             virtualObj.applist = {};
         }
     }
@@ -3456,7 +3475,7 @@ class NetBtronViewer extends window.PluginBase {
             e.preventDefault();
             if (this.virtualObjectDragState.isDragging) return;
             this.justOpenedContextMenu = true;
-            setTimeout(() => { this.justOpenedContextMenu = false; }, 100);
+            setTimeout(() => { this.justOpenedContextMenu = false; }, CONTEXT_MENU_FLAG_CLEAR_MS);
             this.showContextMenuAtEvent(e);
         });
 
@@ -4529,7 +4548,7 @@ class NetBtronViewer extends window.PluginBase {
                     }
                 }
             } catch (e) {
-                // 先行取得失敗は致命的でない: BFSループ内でフォールバック
+                logger.debug('[NetBtronViewer] 先行取得失敗（BFSループ内でフォールバック）:', e.message);
             }
         }
 
@@ -4594,7 +4613,7 @@ class NetBtronViewer extends window.PluginBase {
                                 this.cloudChildrenData.set(dbRow.id, dbRow);
                             }
                         }
-                    } catch (e) { /* 安全側: 新規として扱われる */ }
+                    } catch (e) { logger.debug('[NetBtronViewer] 安全側（新規として扱われる）:', e.message); }
                 }
             }
         }
@@ -4627,7 +4646,7 @@ class NetBtronViewer extends window.PluginBase {
                         xtadString = await xtadFile.text();
                         nestedLinks = this.extractLinkIdsFromXtad(xtadString);
                     }
-                } catch (e) { /* 非致命的 */ }
+                } catch (e) { logger.debug('[NetBtronViewer] 非致命的エラー:', e.message); }
                 return { status: 'skipped', xtadString, nestedLinks };
             }
 
@@ -4639,7 +4658,7 @@ class NetBtronViewer extends window.PluginBase {
                     const jsonText = await jsonFile.text();
                     localMetadata = JSON.parse(jsonText);
                 }
-            } catch (e) { /* ファイルが見つからない */ }
+            } catch (e) { logger.debug('[NetBtronViewer] ファイルが見つからない:', e.message); }
 
             if (!localMetadata) {
                 if (!(this.cloudChildrenData && this.cloudChildrenData.has(realId))) {
@@ -4698,7 +4717,7 @@ class NetBtronViewer extends window.PluginBase {
                         const icoBuffer = await icoFile.arrayBuffer();
                         files.ico = Array.from(new Uint8Array(icoBuffer));
                     }
-                } catch (e) { /* アイコン読み込み失敗は致命的でない */ }
+                } catch (e) { logger.debug('[NetBtronViewer] アイコン読み込み失敗:', e.message); }
 
                 // 画像ファイルを収集
                 if (realObject.images && Array.isArray(realObject.images)) {
@@ -4743,7 +4762,7 @@ class NetBtronViewer extends window.PluginBase {
                     if (xtadFile) {
                         xtadString = await xtadFile.text();
                     }
-                } catch (e) { /* XTAD読み込み失敗は致命的でない */ }
+                } catch (e) { logger.debug('[NetBtronViewer] XTAD読み込み失敗:', e.message); }
 
                 if (xtadString) nestedLinks = this.extractLinkIdsFromXtad(xtadString);
                 return { status: 'skipped', xtadString, nestedLinks };
@@ -4784,7 +4803,7 @@ class NetBtronViewer extends window.PluginBase {
                         scanQueue.push(childXtad);
                     }
                 } catch (e) {
-                    // 読み込み失敗は無視（該当子実身の孫は走査されないのみ）
+                    logger.debug('[NetBtronViewer] 読み込み失敗（該当子実身の孫は走査されないのみ）:', e.message);
                 }
             }
         }
@@ -4815,7 +4834,7 @@ class NetBtronViewer extends window.PluginBase {
                 }
             }
         } catch (e) {
-            // XMLパースエラーは無視（該当XTADにlinkがなかったものとして扱う）
+            logger.debug('[NetBtronViewer] XMLパースエラー（linkなしとして扱う）:', e.message);
         }
         return links;
     }
@@ -4871,7 +4890,7 @@ class NetBtronViewer extends window.PluginBase {
                 (data) => data.messageId === messageId
             );
         } catch (e) {
-            // タイムアウトしてもアイコンなしで表示を続行
+            logger.debug('[NetBtronViewer] タイムアウト（アイコンなしで表示を続行）:', e.message);
         }
     }
 
@@ -4919,7 +4938,7 @@ class NetBtronViewer extends window.PluginBase {
                 }
             }
         } catch (quotaError) {
-            // 容量チェック失敗は保存を妨げない
+            logger.debug('[NetBtronViewer] 容量チェック失敗（保存を妨げない）:', quotaError.message);
         }
 
         this.setStatus('クラウドに保存中...');
@@ -5249,7 +5268,7 @@ class NetBtronViewer extends window.PluginBase {
         this.renderVirtualObjects();
 
         this.justClosedContextMenu = true;
-        setTimeout(() => { this.justClosedContextMenu = false; }, 300);
+        setTimeout(() => { this.justClosedContextMenu = false; }, SCROLL_UPDATE_DELAY_MS);
     }
 
     removeProtection(protectionType) {
@@ -5268,7 +5287,7 @@ class NetBtronViewer extends window.PluginBase {
         this.renderVirtualObjects();
 
         this.justClosedContextMenu = true;
-        setTimeout(() => { this.justClosedContextMenu = false; }, 300);
+        setTimeout(() => { this.justClosedContextMenu = false; }, SCROLL_UPDATE_DELAY_MS);
     }
 
     moveSelectedVirtualObjectsToBackground() {
@@ -5363,7 +5382,7 @@ class NetBtronViewer extends window.PluginBase {
                     this.cloudFiles.json = Array.from(new TextEncoder().encode(JSON.stringify(jsonObj, null, 2)));
                 }
             } catch (e) {
-                // JSON解析エラーは無視（次回クラウド保存時に古い色のまま）
+                logger.debug('[NetBtronViewer] JSON解析エラー（次回クラウド保存時に古い色のまま）:', e.message);
             }
         }
     }
@@ -7261,7 +7280,7 @@ class NetBtronViewer extends window.PluginBase {
         try {
             localStorage.setItem('net-btron-last-tenant', tenantId);
         } catch (e) {
-            // localStorageが使えない場合は無視
+            logger.debug('[NetBtronViewer] localStorage保存エラー:', e.message);
         }
     }
 
@@ -7273,6 +7292,7 @@ class NetBtronViewer extends window.PluginBase {
         try {
             return localStorage.getItem('net-btron-last-tenant');
         } catch (e) {
+            logger.debug('[NetBtronViewer] localStorage読み込みエラー:', e.message);
             return null;
         }
     }

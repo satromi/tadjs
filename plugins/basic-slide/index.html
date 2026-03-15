@@ -6,6 +6,7 @@
     <title>スライド</title>
     <!-- 基本文章編集のスタイルを継承 -->
     <link rel="stylesheet" href="../basic-text-editor/style.css">
+    <link rel="stylesheet" href="../common/btron-theme.css">
     <!-- スライド固有スタイル -->
     <link rel="stylesheet" href="style.css">
 </head>
@@ -50,7 +51,11 @@
     <script type="module">
         import {
             convertPtToPx, rgbToHex, hexToRgb, invertColor,
-            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, UI_UPDATE_DELAY_MS
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, UI_UPDATE_DELAY_MS,
+            RETRY_DELAY_MS,
+            VOBJ_BORDER_WIDTH, DEFAULT_FONT_SIZE, DEFAULT_VOBJ_HEIGHT,
+            DEFAULT_FRCOL, DEFAULT_CHCOL, DEFAULT_TBCOL, DEFAULT_BGCOL,
+            LIST_SELECTED_BG_COLOR, PREVIEW_BORDER_COLOR
         } from '../../js/util.js';
         window.convertPtToPx = convertPtToPx;
         window.rgbToHex = rgbToHex;
@@ -60,6 +65,16 @@
         window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
         window.ICON_LOAD_TIMEOUT_MS = ICON_LOAD_TIMEOUT_MS;
         window.UI_UPDATE_DELAY_MS = UI_UPDATE_DELAY_MS;
+        window.RETRY_DELAY_MS = RETRY_DELAY_MS;
+        window.VOBJ_BORDER_WIDTH = VOBJ_BORDER_WIDTH;
+        window.DEFAULT_FONT_SIZE = DEFAULT_FONT_SIZE;
+        window.DEFAULT_VOBJ_HEIGHT = DEFAULT_VOBJ_HEIGHT;
+        window.DEFAULT_FRCOL = DEFAULT_FRCOL;
+        window.DEFAULT_CHCOL = DEFAULT_CHCOL;
+        window.DEFAULT_TBCOL = DEFAULT_TBCOL;
+        window.DEFAULT_BGCOL = DEFAULT_BGCOL;
+        window.LIST_SELECTED_BG_COLOR = LIST_SELECTED_BG_COLOR;
+        window.PREVIEW_BORDER_COLOR = PREVIEW_BORDER_COLOR;
     </script>
     <!-- パフォーマンス最適化ユーティリティをグローバル変数として読み込み -->
     <script type="module">
@@ -101,6 +116,15 @@
         window.RealtimeTadParser = RealtimeTadParser;
         window.SlideMediaManager = SlideMediaManager;
         window.TimelineEngine = TimelineEngine;
+    </script>
+    <!-- 基本文章編集のMixinモジュールをグローバル変数として読み込み -->
+    <script type="module">
+        import { TextTadParserMixin } from '../basic-text-editor/text-tad-parser.js';
+        import { TextXmlSerializerMixin } from '../basic-text-editor/text-xml-serializer.js';
+        import { TextVirtualObjectMixin } from '../basic-text-editor/text-virtual-object.js';
+        window.TextTadParserMixin = TextTadParserMixin;
+        window.TextXmlSerializerMixin = TextXmlSerializerMixin;
+        window.TextVirtualObjectMixin = TextVirtualObjectMixin;
     </script>
     <!-- 基本文章編集のeditor.jsを読み込み（グローバルにBasicTextEditorを定義） -->
     <script type="module" src="../basic-text-editor/editor.js"></script>

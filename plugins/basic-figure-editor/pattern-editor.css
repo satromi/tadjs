@@ -1,0 +1,184 @@
+/* パターン編集パネル */
+.pattern-editor-window {
+    font-family: sans-serif;
+    font-size: 13px;
+    background: #dedede;
+    padding: 6px;
+    user-select: none;
+}
+
+.pattern-editor-content {
+    display: flex;
+    gap: 10px;
+}
+
+.edit-area {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* 16×16 編集グリッド（拡大表示） */
+.edit-grid-container {
+    border: 1px solid #808080;
+    cursor: crosshair;
+}
+
+.edit-grid-canvas {
+    display: block;
+}
+
+/* 原寸プレビュー（32×32タイリング） */
+.preview-area {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.preview-label {
+    font-size: 12px;
+    color: #333;
+}
+
+.preview-container {
+    border: 1px solid #808080;
+    background: #ffffff;
+    width: 32px;
+    height: 32px;
+}
+
+.preview-canvas {
+    display: block;
+}
+
+/* 色パレット */
+.color-palette {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin-top: 6px;
+}
+
+.color-cell-wrapper {
+    position: relative;
+    width: 24px;
+    height: 24px;
+}
+
+.color-cell {
+    width: 24px;
+    height: 24px;
+    border: 1px solid #999;
+    cursor: pointer;
+    box-sizing: border-box;
+}
+
+.color-cell.selected {
+    outline: 2px solid #0078d7;
+    outline-offset: -1px;
+}
+
+.color-cell.transparent-cell {
+    background: linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%),
+                linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+}
+
+.selected-color-display {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 12px;
+}
+
+.selected-color-swatch {
+    width: 20px;
+    height: 14px;
+    border: 1px solid #808080;
+}
+
+/* ツールバー */
+.tool-section {
+    margin-top: 6px;
+}
+
+.tool-section-label {
+    font-size: 12px;
+    color: #333;
+    margin-bottom: 3px;
+}
+
+.tool-row {
+    display: flex;
+    gap: 3px;
+    margin-bottom: 3px;
+}
+
+.editor-tool-btn {
+    width: 28px;
+    height: 26px;
+    border: 1px outset #c0c0c0;
+    background: #dedede;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.editor-tool-btn:hover {
+    background: #e8e8e8;
+}
+
+.editor-tool-btn.active {
+    border: 1px inset #808080;
+    background: #c0c0c0;
+}
+
+/* 操作ボタン */
+.action-row {
+    display: flex;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.action-btn {
+    flex: 1;
+    padding: 3px 4px;
+    border: 1px outset #c0c0c0;
+    background: #dedede;
+    cursor: pointer;
+    font-size: 13px;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.action-btn:hover {
+    background: #e8e8e8;
+}
+
+/* パターン読込ダイアログ */
+.pattern-load-grid {
+    display: grid;
+    grid-template-columns: repeat(16, 16px);
+    gap: 1px;
+    margin-top: 4px;
+    border: 1px solid #808080;
+    padding: 2px;
+    background: #ffffff;
+}
+
+.pattern-load-cell {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #ccc;
+    cursor: pointer;
+}
+
+.pattern-load-cell:hover {
+    outline: 2px solid #0078d7;
+    outline-offset: -1px;
+}

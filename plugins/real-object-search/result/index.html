@@ -27,10 +27,11 @@
     <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
     <script type="module">
         import {
-            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS
+            DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, RETRY_DELAY_MS
         } from '../../../js/util.js';
         window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
         window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
+        window.RETRY_DELAY_MS = RETRY_DELAY_MS;
     </script>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">

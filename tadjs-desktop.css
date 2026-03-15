@@ -1912,3 +1912,25 @@ input[type="text"], input[type="password"], textarea, .config-input {
     height: 2px;
     background: #ffff00;
 }
+
+/* プラグイン共通: コンテンツ領域 */
+.plugin-content {
+    overflow: auto;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* カスタムスクロールバーを使用するためブラウザ標準のスクロールバーを非表示 */
+.plugin-content::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.plugin-content {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE, Edge */
+}

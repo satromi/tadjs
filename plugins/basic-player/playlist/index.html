@@ -18,12 +18,17 @@
         </div>
     </div>
 
+    <!-- 共通ユーティリティ定数をグローバル変数として読み込み -->
+    <script type="module">
+        import { RETRY_DELAY_MS } from '../../../js/util.js';
+        window.RETRY_DELAY_MS = RETRY_DELAY_MS;
+    </script>
     <!-- MessageBusをグローバル変数として読み込み -->
     <script type="module">
         import { MessageBus } from '../../../js/message-bus.js';
         window.MessageBus = MessageBus;
     </script>
     <!-- メインアプリケーション -->
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>

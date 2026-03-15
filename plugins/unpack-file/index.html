@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>書庫解凍</title>
+    <link rel="stylesheet" href="../common/btron-theme.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -27,7 +28,17 @@
     <!-- TAD解析ライブラリ -->
     <script src="unpack.js?v=20251109"></script>
     <!-- LHZ解凍ライブラリ -->
-    <script src="lh5.js?v=20251109"></script>
+    <script src="../../lh5.js"></script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
+    </script>
+    <!-- 共通ユーティリティ定数をグローバル変数として読み込み -->
+    <script type="module">
+        import { UI_UPDATE_DELAY_MS } from '../../js/util.js';
+        window.UI_UPDATE_DELAY_MS = UI_UPDATE_DELAY_MS;
+    </script>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">
         import { MessageBus } from '../../js/message-bus.js';

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>原紙管理</title>
+    <link rel="stylesheet" href="../common/btron-theme.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -34,15 +35,21 @@
     <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
     <script type="module">
         import {
-            convertPtToPx, DEFAULT_TIMEOUT_MS,
+            convertPtToPx, DEFAULT_TIMEOUT_MS, UI_UPDATE_DELAY_MS,
             DEFAULT_FRCOL, DEFAULT_CHCOL, DEFAULT_TBCOL, DEFAULT_BGCOL
         } from '../../js/util.js';
         window.convertPtToPx = convertPtToPx;
         window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+        window.UI_UPDATE_DELAY_MS = UI_UPDATE_DELAY_MS;
         window.DEFAULT_FRCOL = DEFAULT_FRCOL;
         window.DEFAULT_CHCOL = DEFAULT_CHCOL;
         window.DEFAULT_TBCOL = DEFAULT_TBCOL;
         window.DEFAULT_BGCOL = DEFAULT_BGCOL;
+    </script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
     </script>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">

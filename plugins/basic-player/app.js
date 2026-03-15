@@ -11,6 +11,8 @@
 
 import { RealtimeTadParser } from '../../js/realtime-media.js';
 
+const logger = window.getLogger('PlayerApp');
+
 // ============================================================
 // MediaElementManager - HTMLメディア要素管理
 // ============================================================
@@ -145,7 +147,7 @@ class MediaElementManager {
                 return filePath;
             }
         } catch (error) {
-            console.warn('[PlayerApp] パス解決エラー:', href, error);
+            logger.warn('[PlayerApp] パス解決エラー:', href, error);
         }
 
         // フォールバック: 相対パス（正しいデータフォルダを指す）
@@ -236,7 +238,7 @@ class PlaybackController {
         const paused = this.getCurrentMedia();
         if (paused && paused.paused && paused.currentTime > 0) {
             paused.play().catch(e => {
-                console.warn('[PlayerApp] 再生再開エラー:', e.message);
+                logger.warn('[PlayerApp] 再生再開エラー:', e.message);
             });
             return;
         }
@@ -246,7 +248,7 @@ class PlaybackController {
         if (firstMedia && firstMedia.paused) {
             firstMedia.currentTime = 0;
             firstMedia.play().catch(e => {
-                console.warn('[PlayerApp] 再生開始エラー:', e.message);
+                logger.warn('[PlayerApp] 再生開始エラー:', e.message);
             });
         }
     }
@@ -332,7 +334,7 @@ class PlaybackController {
         const media = this.mediaManager.getMediaById(id);
         if (media && media.paused) {
             media.play().catch(e => {
-                console.warn('[PlayerApp] メディア再生エラー:', id, e.message);
+                logger.warn('[PlayerApp] メディア再生エラー:', id, e.message);
             });
         }
     }
@@ -388,13 +390,13 @@ class PlaybackController {
             const prevMedia = allMedia[currentIndex - 1];
             prevMedia.currentTime = 0;
             this.isPlaying = true;
-            prevMedia.play().catch(e => console.warn('[PlayerApp] 再生エラー:', e.message));
+            prevMedia.play().catch(e => logger.warn('[PlayerApp] 再生エラー:', e.message));
         } else {
             // 1曲目なら先頭に戻る
             if (current) {
                 current.currentTime = 0;
                 this.isPlaying = true;
-                current.play().catch(e => console.warn('[PlayerApp] 再生エラー:', e.message));
+                current.play().catch(e => logger.warn('[PlayerApp] 再生エラー:', e.message));
             }
         }
     }
@@ -488,7 +490,7 @@ class PlaybackController {
         targetMedia.currentTime = 0;
         this.isPlaying = true;
         this.lastPlayedIndex = index;
-        targetMedia.play().catch(e => console.warn('[PlayerApp] 再生エラー:', e.message));
+        targetMedia.play().catch(e => logger.warn('[PlayerApp] 再生エラー:', e.message));
     }
 
     /**
@@ -502,7 +504,7 @@ class PlaybackController {
             if (current) {
                 current.currentTime = 0;
                 this.isPlaying = true;
-                current.play().catch(e => console.warn('[PlayerApp] 再生エラー:', e.message));
+                current.play().catch(e => logger.warn('[PlayerApp] 再生エラー:', e.message));
             }
             return true;
         }
@@ -568,7 +570,7 @@ class PlayerApp extends PluginBase {
             this.messageBus.send('show-media-drop-overlay', {
                 windowId: this.windowId
             });
-            console.log('[PlayerApp] dragenter - 親にオーバーレイ表示を要求');
+            logger.debug('[PlayerApp] dragenter - 親にオーバーレイ表示を要求');
         };
 
         this._dragOverHandler = (e) => {
@@ -582,13 +584,13 @@ class PlayerApp extends PluginBase {
             this.messageBus.send('hide-media-drop-overlay', {
                 windowId: this.windowId
             });
-            console.log('[PlayerApp] dragleave - 親にオーバーレイ非表示を要求');
+            logger.debug('[PlayerApp] dragleave - 親にオーバーレイ非表示を要求');
         };
 
         this._dropHandler = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            console.log('[PlayerApp] drop event - 親ウィンドウが処理します');
+            logger.debug('[PlayerApp] drop event - 親ウィンドウが処理します');
         };
 
         this.playerContainer.addEventListener('dragenter', this._dragEnterHandler);
@@ -636,7 +638,7 @@ class PlayerApp extends PluginBase {
             if (!realtimeEl) {
                 const tadEl = doc.querySelector('tad');
                 if (!tadEl) {
-                    console.error('[PlayerApp] tad要素が見つかりません');
+                    logger.error('[PlayerApp] tad要素が見つかりません');
                     return;
                 }
                 realtimeEl = doc.createElement('realtime');
@@ -743,9 +745,9 @@ class PlayerApp extends PluginBase {
                 }
             }
 
-            console.log('[PlayerApp] xmlTAD更新完了（メディア追加）');
+            logger.debug('[PlayerApp] xmlTAD更新完了（メディア追加）');
         } catch (error) {
-            console.error('[PlayerApp] xmlTAD更新エラー:', error);
+            logger.error('[PlayerApp] xmlTAD更新エラー:', error);
         }
     }
 
@@ -764,7 +766,7 @@ class PlayerApp extends PluginBase {
             // realIdを取得（fileDataから、_数字.xtadを除去）
             if (data.fileData) {
                 let rawId = data.fileData.realId || data.fileData.fileId;
-                this.realId = rawId ? rawId.replace(/_\d+\.xtad$/i, '') : null;
+                this.realId = rawId ? this.extractRealId(rawId) : null;
             }
 
             // 実身IDからベースパスを設定
@@ -843,7 +845,7 @@ class PlayerApp extends PluginBase {
                 this.showNoMedia();
             }
         } catch (error) {
-            console.error('[PlayerApp] xtad読み込みエラー:', error);
+            logger.error('[PlayerApp] xtad読み込みエラー:', error);
             this.showNoMedia();
         }
     }
@@ -939,7 +941,7 @@ class PlayerApp extends PluginBase {
         });
 
         mediaEl.addEventListener('error', (e) => {
-            console.error('[PlayerApp] メディアエラー:', mediaEl.src, e);
+            logger.error('[PlayerApp] メディアエラー:', mediaEl.src, e);
         });
 
         mediaEl.addEventListener('loadedmetadata', () => {
@@ -1570,7 +1572,7 @@ class PlayerApp extends PluginBase {
             newXtadContent = this._formatXmlOutput(newXtadContent);
 
             // xml-data-changedで保存
-            console.log('[PlayerApp] xmlTAD更新:', this.controller.shuffleMode ? 'シャッフル' : this.controller.repeatMode);
+            logger.debug('[PlayerApp] xmlTAD更新:', this.controller.shuffleMode ? 'シャッフル' : this.controller.repeatMode);
             this.messageBus.send('xml-data-changed', {
                 windowId: this.windowId,
                 fileId: this.realId,
@@ -1586,7 +1588,7 @@ class PlayerApp extends PluginBase {
                 }
             }
         } catch (error) {
-            console.error('[PlayerApp] xmlTAD更新エラー:', error);
+            logger.error('[PlayerApp] xmlTAD更新エラー:', error);
         }
     }
 

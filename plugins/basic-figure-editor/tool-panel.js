@@ -15,6 +15,7 @@ class ToolPanel {
         // 現在の設定値
         this.fillColor = DEFAULT_BGCOL;
         this.fillEnabled = true;
+        this.fillPatternId = 0; // 0=ソリッド, 2-127=パターンID
         this.strokeColor = DEFAULT_FRCOL;
         this.lineWidth = 2;
         this.lineType = 0; // 0:実線, 1:破線, 2:点線, 3:一点鎖線, 4:二点鎖線, 5:長破線
@@ -35,6 +36,9 @@ class ToolPanel {
         this.pixelmapTool = 'pencil';
         this.pixelmapBrushSize = 1;
 
+        // カスタムパターン（editor.jsのcustomPatternsのローカルコピー）
+        this.localCustomPatterns = {};
+
         this.init();
     }
 
@@ -48,6 +52,7 @@ class ToolPanel {
                 if (event.data.settings) {
                     this.fillColor = event.data.settings.fillColor || DEFAULT_BGCOL;
                     this.fillEnabled = event.data.settings.fillEnabled !== false;
+                    this.fillPatternId = event.data.settings.fillPatternId || 0;
                     this.strokeColor = event.data.settings.strokeColor || DEFAULT_FRCOL;
                     this.lineWidth = event.data.settings.lineWidth || 2;
                     // lineType対応（後方互換: linePatternがあればlineTypeに変換）
@@ -61,6 +66,10 @@ class ToolPanel {
                     }
                     this.lineConnectionType = event.data.settings.lineConnectionType || 'straight';
                     this.cornerRadius = event.data.settings.cornerRadius || 0;
+                    // カスタムパターンを受信
+                    if (event.data.settings.customPatterns) {
+                        this.localCustomPatterns = event.data.settings.customPatterns;
+                    }
                 }
                 if (event.data.settings.zoomLevel !== undefined) {
                     this.zoomLevel = event.data.settings.zoomLevel;
@@ -134,6 +143,20 @@ class ToolPanel {
                     type: 'update-fill-enabled',
                     fillEnabled: this.fillEnabled
                 });
+            } else if (event.data && event.data.type === 'popup-fill-pattern-change') {
+                // パターン選択
+                this.fillPatternId = event.data.patternId;
+                this.updatePaletteIcons();
+                this.sendToEditor({
+                    type: 'update-fill-pattern',
+                    patternId: this.fillPatternId
+                });
+            } else if (event.data && event.data.type === 'open-pattern-editor-request') {
+                // パターン編集パネルを開く要求
+                this.sendToEditor({
+                    type: 'open-pattern-editor',
+                    currentPatternId: this.fillPatternId
+                });
             } else if (event.data && event.data.type === 'popup-stroke-color-change') {
                 // 線色変更
                 logger.debug('[TOOL PANEL] 線色変更:', event.data.strokeColor);
@@ -200,12 +223,28 @@ class ToolPanel {
                     type: 'update-pixelmap-brush-size',
                     pixelmapBrushSize: this.pixelmapBrushSize
                 });
+            } else if (event.data && event.data.type === 'patterns-updated') {
+                // カスタムパターンの更新通知（pixelColors含む）
+                if (event.data.patternId !== undefined && event.data.patternData) {
+                    this.localCustomPatterns[event.data.patternId] = {
+                        id: event.data.patternId,
+                        type: 'pattern',
+                        data: event.data.patternData,
+                        pixelColors: event.data.pixelColors || null
+                    };
+                }
+                // fillPatternIdが含まれていれば更新（入替時に塗りパターンを切り替え）
+                if (event.data.fillPatternId !== undefined) {
+                    this.fillPatternId = event.data.fillPatternId;
+                }
+                this.updatePaletteIcons();
             } else if (event.data && event.data.type === 'sync-shape-attributes') {
                 // 選択図形の属性を同期
                 const attrs = event.data.attributes;
                 if (attrs) {
                     this.fillColor = attrs.fillColor || DEFAULT_BGCOL;
                     this.fillEnabled = attrs.fillEnabled !== false;
+                    this.fillPatternId = attrs.fillPatternId || 0;
                     this.strokeColor = attrs.strokeColor || DEFAULT_FRCOL;
                     this.lineWidth = attrs.lineWidth || 2;
                     this.lineType = attrs.lineType !== undefined ? attrs.lineType : 0;
@@ -336,58 +375,58 @@ class ToolPanel {
         });
     }
 
+    /**
+     * ボタン要素からポップアップ表示位置を計算（iframe→親ウィンドウ座標変換）
+     */
+    getPopupPosition(buttonElement) {
+        const rect = buttonElement.getBoundingClientRect();
+        const iframeRect = window.frameElement.getBoundingClientRect();
+        return {
+            x: iframeRect.left + rect.left,
+            y: iframeRect.top + rect.bottom + 5
+        };
+    }
+
     showPalettePopup(paletteType, buttonElement) {
-        // すべてのポップアップを親ウィンドウに表示
-        if (paletteType === 'grid') {
-            this.showGridPopupInParent(buttonElement);
-            return;
+        const dispatch = {
+            grid:      'showGridPopupInParent',
+            font:      'showFontPopupInParent',
+            fill:      'showFillPopupInParent',
+            stroke:    'showStrokePopupInParent',
+            lineStyle: 'showLineStylePopupInParent',
+            corner:    'showCornerPopupInParent',
+            material:  'showMaterialPopupInParent',
+            zoom:      'showZoomPopupInParent',
+        };
+        const handler = dispatch[paletteType];
+        if (handler) {
+            this[handler](buttonElement);
+        } else {
+            logger.warn('[TOOL PANEL] 未知のポップアップタイプ:', paletteType);
         }
-
-        if (paletteType === 'font') {
-            this.showFontPopupInParent(buttonElement);
-            return;
-        }
-
-        if (paletteType === 'fill') {
-            this.showFillPopupInParent(buttonElement);
-            return;
-        }
-
-        if (paletteType === 'stroke') {
-            this.showStrokePopupInParent(buttonElement);
-            return;
-        }
-
-        if (paletteType === 'lineStyle') {
-            this.showLineStylePopupInParent(buttonElement);
-            return;
-        }
-
-        if (paletteType === 'corner') {
-            this.showCornerPopupInParent(buttonElement);
-            return;
-        }
-
-        if (paletteType === 'material') {
-            this.showMaterialPopupInParent(buttonElement);
-            return;
-        }
-
-        if (paletteType === 'zoom') {
-            this.showZoomPopupInParent(buttonElement);
-            return;
-        }
-
-        // すべてのポップアップタイプが親ウィンドウ表示に対応済み
-        logger.warn('[TOOL PANEL] 未知のポップアップタイプ:', paletteType);
     }
 
     updatePaletteIcons() {
         // 塗りつぶし色アイコンを更新
         const fillIcon = document.querySelector('.fill-icon');
         if (fillIcon) {
-            fillIcon.style.background = this.fillColor;
-            fillIcon.style.border = '1px solid #000';
+            if (this.fillPatternId >= 2 && typeof DEFAULT_PATTERNS !== 'undefined') {
+                // パターンプレビュー表示（カスタムパターン優先）
+                const customPat = this.localCustomPatterns && this.localCustomPatterns[this.fillPatternId];
+                const patDef = customPat || DEFAULT_PATTERNS[this.fillPatternId];
+                if (patDef) {
+                    const previewCanvas = createPatternPreviewCanvas(patDef, 16, this.fillColor);
+                    fillIcon.style.background = `url(${previewCanvas.toDataURL()})`;
+                    fillIcon.style.backgroundSize = '16px 16px';
+                    fillIcon.style.border = '1px solid #000';
+                } else {
+                    fillIcon.style.background = this.fillColor;
+                    fillIcon.style.border = '1px solid #000';
+                }
+            } else {
+                fillIcon.style.background = this.fillColor;
+                fillIcon.style.border = '1px solid #000';
+            }
         }
 
         // 線色アイコンを更新
@@ -399,12 +438,7 @@ class ToolPanel {
     }
 
     showGridPopupInParent(buttonElement) {
-        const rect = buttonElement.getBoundingClientRect();
-        const iframeRect = window.frameElement.getBoundingClientRect();
-
-        // iframe内の座標を親ウィンドウの座標に変換
-        const x = iframeRect.left + rect.left;
-        const y = iframeRect.top + rect.bottom + 5;
+        const { x, y } = this.getPopupPosition(buttonElement);
 
         const htmlContent = `
             <div style="font-weight: bold; margin-bottom: 8px;">格子点設定</div>
@@ -449,12 +483,7 @@ class ToolPanel {
     }
 
     showFontPopupInParent(buttonElement, settings = {}) {
-        const rect = buttonElement.getBoundingClientRect();
-        const iframeRect = window.frameElement.getBoundingClientRect();
-
-        // iframe内の座標を親ウィンドウの座標に変換
-        const x = iframeRect.left + rect.left;
-        const y = iframeRect.top + rect.bottom + 5;
+        const { x, y } = this.getPopupPosition(buttonElement);
 
         // デフォルト値を設定
         const fontSize = settings.fontSize || 16;
@@ -502,20 +531,24 @@ class ToolPanel {
 
             <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #999;">
                 <div style="font-weight: bold; margin-bottom: 6px;">文字修飾</div>
-                <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                <label class="checkbox-label" style="margin-bottom: 4px;">
                     <input type="checkbox" id="boldCheck" ${decorations.bold ? 'checked' : ''}>
+                    <span class="checkbox-indicator"></span>
                     <span>太字</span>
                 </label>
-                <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                <label class="checkbox-label" style="margin-bottom: 4px;">
                     <input type="checkbox" id="italicCheck" ${decorations.italic ? 'checked' : ''}>
+                    <span class="checkbox-indicator"></span>
                     <span>斜体</span>
                 </label>
-                <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                <label class="checkbox-label" style="margin-bottom: 4px;">
                     <input type="checkbox" id="underlineCheck" ${decorations.underline ? 'checked' : ''}>
+                    <span class="checkbox-indicator"></span>
                     <span>下線</span>
                 </label>
-                <label style="display: flex; align-items: center; gap: 8px;">
+                <label class="checkbox-label">
                     <input type="checkbox" id="strikethroughCheck" ${decorations.strikethrough ? 'checked' : ''}>
+                    <span class="checkbox-indicator"></span>
                     <span>打ち消し線</span>
                 </label>
             </div>
@@ -533,22 +566,48 @@ class ToolPanel {
     }
 
     showFillPopupInParent(buttonElement) {
-        const rect = buttonElement.getBoundingClientRect();
-        const iframeRect = window.frameElement.getBoundingClientRect();
+        const { x, y } = this.getPopupPosition(buttonElement);
 
-        // iframe内の座標を親ウィンドウの座標に変換
-        const x = iframeRect.left + rect.left;
-        const y = iframeRect.top + rect.bottom + 5;
+        // パターン選択グリッドHTML生成（16列×8行 = 128パターン）
+        let patternGridHtml = '';
+        if (typeof DEFAULT_PATTERNS !== 'undefined') {
+            patternGridHtml = '<div style="font-size: 11px; margin-bottom: 4px; color: #333;">パターン:</div>';
+            patternGridHtml += '<div style="display: grid; grid-template-columns: repeat(16, 16px); gap: 1px; margin-bottom: 8px;">';
+            for (let i = 0; i < DEFAULT_PATTERNS.length; i++) {
+                // カスタムパターンがあれば上書き
+                const customPat = this.localCustomPatterns && this.localCustomPatterns[i];
+                const pat = customPat || DEFAULT_PATTERNS[i];
+                const isSelected = (this.fillPatternId === i && i >= 2) || (this.fillPatternId === 0 && i === 0);
+                const selectedStyle = isSelected ? 'outline: 2px solid #0078d7; outline-offset: -1px;' : '';
+                let bgStyle = '';
+                if (pat.type === 'solid') {
+                    bgStyle = `background: ${pat.color};`;
+                } else if (pat.type === 'pattern') {
+                    const previewCanvas = createPatternPreviewCanvas(pat, 16, '#000000');
+                    bgStyle = `background: url(${previewCanvas.toDataURL()}); background-size: 16px 16px;`;
+                }
+                patternGridHtml += `<div class="fill-pattern-cell" data-pattern-id="${i}" ` +
+                    `style="width: 16px; height: 16px; border: 1px solid #999; cursor: pointer; ${bgStyle} ${selectedStyle}" ` +
+                    `title="パターン ${i}"></div>`;
+            }
+            patternGridHtml += '</div>';
+        }
 
         const htmlContent = `
             <label style="display: flex; align-items: center; gap: 8px;">
                 <span>塗りつぶし色:</span>
                 <input type="color" id="fillColorPicker" value="${this.fillColor}" style="width: 60px; height: 30px;">
             </label>
-            <label style="display: flex; align-items: center; gap: 8px;">
+            <label class="checkbox-label" style="margin-top: 4px;">
                 <input type="checkbox" id="fillEnabledCheck" ${this.fillEnabled ? 'checked' : ''}>
+                <span class="checkbox-indicator"></span>
                 <span>塗りつぶし有効</span>
             </label>
+            <div style="border-top: 1px solid #999; margin: 8px 0;"></div>
+            ${patternGridHtml}
+            <div style="display: flex; gap: 8px;">
+                <button id="patternEditBtn" style="padding: 4px 12px; border: 1px outset #c0c0c0; background: #dedede; cursor: pointer; font-size: 11px;">パターン編集...</button>
+            </div>
         `;
 
         if (window.parent && window.parent !== window) {
@@ -563,12 +622,7 @@ class ToolPanel {
     }
 
     showStrokePopupInParent(buttonElement) {
-        const rect = buttonElement.getBoundingClientRect();
-        const iframeRect = window.frameElement.getBoundingClientRect();
-
-        // iframe内の座標を親ウィンドウの座標に変換
-        const x = iframeRect.left + rect.left;
-        const y = iframeRect.top + rect.bottom + 5;
+        const { x, y } = this.getPopupPosition(buttonElement);
 
         const htmlContent = `
             <label style="display: flex; align-items: center; gap: 8px;">
@@ -589,12 +643,7 @@ class ToolPanel {
     }
 
     showLineStylePopupInParent(buttonElement) {
-        const rect = buttonElement.getBoundingClientRect();
-        const iframeRect = window.frameElement.getBoundingClientRect();
-
-        // iframe内の座標を親ウィンドウの座標に変換
-        const x = iframeRect.left + rect.left;
-        const y = iframeRect.top + rect.bottom + 5;
+        const { x, y } = this.getPopupPosition(buttonElement);
 
         const htmlContent = `
             <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
@@ -658,12 +707,7 @@ class ToolPanel {
     }
 
     showCornerPopupInParent(buttonElement) {
-        const rect = buttonElement.getBoundingClientRect();
-        const iframeRect = window.frameElement.getBoundingClientRect();
-
-        // iframe内の座標を親ウィンドウの座標に変換
-        const x = iframeRect.left + rect.left;
-        const y = iframeRect.top + rect.bottom + 5;
+        const { x, y } = this.getPopupPosition(buttonElement);
 
         const htmlContent = `
             <label style="display: flex; align-items: center; gap: 8px;">
@@ -684,12 +728,7 @@ class ToolPanel {
     }
 
     showMaterialPopupInParent(buttonElement) {
-        const rect = buttonElement.getBoundingClientRect();
-        const iframeRect = window.frameElement.getBoundingClientRect();
-
-        // iframe内の座標を親ウィンドウの座標に変換
-        const x = iframeRect.left + rect.left;
-        const y = iframeRect.top + rect.bottom + 5;
+        const { x, y } = this.getPopupPosition(buttonElement);
 
         // 画材パネルウィンドウを開くようエディタに要求
         this.sendToEditor({
@@ -710,12 +749,7 @@ class ToolPanel {
     }
 
     showZoomPopupInParent(buttonElement) {
-        const rect = buttonElement.getBoundingClientRect();
-        const iframeRect = window.frameElement.getBoundingClientRect();
-
-        // iframe内の座標を親ウィンドウの座標に変換
-        const x = iframeRect.left + rect.left;
-        const y = iframeRect.top + rect.bottom + 5;
+        const { x, y } = this.getPopupPosition(buttonElement);
 
         const zoomOptions = [
             { value: '0.125', label: 'x1/8' },

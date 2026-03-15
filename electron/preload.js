@@ -25,6 +25,16 @@ window.electronAPI = {
     clipboardReadText: () => ipcRenderer.invoke('clipboard-read-text'),
     clipboardWriteText: (text) => ipcRenderer.invoke('clipboard-write-text', text),
 
+    // MCP設定・制御
+    getMcpConfig: () => ipcRenderer.invoke('get-mcp-config'),
+    setMcpConfig: (config) => ipcRenderer.invoke('set-mcp-config', config),
+    startMcpServer: () => ipcRenderer.invoke('start-mcp-server'),
+    stopMcpServer: () => ipcRenderer.invoke('stop-mcp-server'),
+    getMcpServerStatus: () => ipcRenderer.invoke('get-mcp-server-status'),
+    onMcpServerStatus: (callback) => ipcRenderer.on('mcp-server-status', (event, data) => callback(data)),
+    onMcpServerLog: (callback) => ipcRenderer.on('mcp-server-log', (event, message) => callback(message)),
+    sendMcpRequest: (jsonRpcRequest) => ipcRenderer.invoke('send-mcp-request', jsonRpcRequest),
+
     // PTY（疑似端末）操作
     ptySpawn: (options) => ipcRenderer.invoke('pty-spawn', options),
     ptyWrite: (windowId, data) => ipcRenderer.invoke('pty-write', { windowId, data }),

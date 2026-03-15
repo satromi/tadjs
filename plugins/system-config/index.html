@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>システム環境設定</title>
     <link rel="stylesheet" href="../../tadjs-desktop.css">
+    <link rel="stylesheet" href="../common/btron-theme.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -19,7 +20,27 @@
             <div class="tab-content">
                 <div class="tab-panel active" id="device-panel">
                     <div class="config-section">
-                        <p>機器設定の項目は未実装です。</p>
+                        <h4>MCPサーバ</h4>
+                        <div class="config-item">
+                            <label>MCPサーバ：</label>
+                            <div class="checkbox-group-inline">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="enable-mcp-server">
+                                    <span class="checkbox-indicator"></span>
+                                    <span>有効</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="config-item mcp-description">
+                            <p>MCPサーバを有効にすると、Claude Desktop等のAIアシスタントから<br>実身/仮身データベースにアクセスできるようになります。</p>
+                            <p class="mcp-usage">使用方法：<code>tadjs_desktop.exe --mcp</code> で起動</p>
+                        </div>
+                        <div class="config-item mcp-controls">
+                            <label>サーバ制御：</label>
+                            <button class="config-button" id="mcp-start-button">起　動</button>
+                            <button class="config-button" id="mcp-stop-button">停　止</button>
+                            <span class="mcp-status" id="mcp-status">停止中</span>
+                        </div>
                     </div>
                 </div>
                 <div class="tab-panel" id="display-panel">
@@ -96,6 +117,11 @@
         window.getLogger = getLogger;
         window.LogLevel = LogLevel;
         window.logManager = logManager;
+    </script>
+    <!-- 実身仮身システムをグローバル変数として読み込み -->
+    <script type="module">
+        import { RealObjectSystem } from '../../js/real-object-system.js';
+        window.RealObjectSystem = RealObjectSystem;
     </script>
     <!-- メッセージバスをグローバル変数として読み込み -->
     <script type="module">

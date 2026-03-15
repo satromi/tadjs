@@ -1,7 +1,7 @@
 /**
  * electron/main.js
  * TADjs Desktop アプリケーションのメインプロセス
- * 
+ *
  */
 
 const electron = require('electron');
@@ -19,27 +19,12 @@ if (typeof electron === 'string') {
 const { app, BrowserWindow, ipcMain, Menu, dialog, shell } = electron;
 const path = require('path');
 const fs = require('fs');
-const http = require('http');
-const { execSync } = require('child_process');
-const fontList = require('font-list');
-const fontkit = require('fontkit');
+const { registerFontIpcHandlers, getFontAllNames, getFontDirectories, findFontFile, getSystemFontsViaDirectWrite } = require('./ipc-font');
+const { registerCloudIpcHandlers } = require('./ipc-cloud');
+const { PtyManager } = require('./pty-manager');
 
-// node-pty（PTY - 疑似端末）の読み込み
-// node-ptyが利用できない場合はchild_processにフォールバック
-let pty = null;
-let usePtyFallback = false;
-try {
-    pty = require('node-pty');
-    logger.info('node-pty loaded successfully');
-} catch (e) {
-    logger.warn('node-pty module not available, using child_process fallback:', e.message);
-    usePtyFallback = true;
-}
-
-const { spawn } = require('child_process');
-
-// PTYプロセス管理（windowId => ptyProcess or childProcess）
-const ptyProcesses = new Map();
+// PTYマネージャー
+const ptyManager = new PtyManager();
 
 // winreg は Windows 専用なので条件付きで読み込み
 let winreg = null;
@@ -47,7 +32,7 @@ if (process.platform === 'win32') {
     try {
         winreg = require('winreg');
     } catch (e) {
-        console.warn('winreg module not available');
+        logger.warn('[Main] winreg module not available');
     }
 }
 
@@ -220,7 +205,6 @@ function createWindow() {
             nodeIntegration: true,
             nodeIntegrationInSubFrames: true,
             contextIsolation: false,
-            enableRemoteModule: true,
             preload: path.join(__dirname, 'preload.js')
         },
         icon: fs.existsSync(iconPath) ? iconPath : undefined,
@@ -295,6 +279,81 @@ function createWindow() {
 // カラープロファイル設定（色が紫っぽくなる問題の対策）
 app.commandLine.appendSwitch('force-color-profile', 'srgb');
 
+// MCPサーバモード判定
+// --mcp フラグ（Electron内部spawn用）または TADJS_MCP_MODE 環境変数（外部プロセス用）
+// 外部プロセスからの起動時はElectron/Chromiumが --mcp を不正な引数として拒否するため、
+// 環境変数で代替する
+const isMcpMode = process.argv.includes('--mcp') || process.env.TADJS_MCP_MODE === '1';
+
+if (isMcpMode) {
+    // MCPモード: stdioサーバとして起動（GUIなし）
+    // console.logがstdoutに出力されるとMCPプロトコルが壊れるためstderrにリダイレクト
+    const originalConsoleLog = console.log;
+    console.log = (...args) => console.error('[MCP]', ...args);
+
+    console.error('[MCP] MCPモード開始 process.argv:', JSON.stringify(process.argv));
+    console.error('[MCP] PID:', process.pid);
+
+    // プロセス終了時のログ
+    process.on('exit', (code) => {
+        console.error(`[MCP] プロセス終了 code=${code}`);
+    });
+    process.on('beforeExit', (code) => {
+        console.error(`[MCP] beforeExit code=${code}`);
+    });
+    process.on('uncaughtException', (err) => {
+        console.error('[MCP] uncaughtException:', err.stack || err);
+    });
+    process.on('unhandledRejection', (reason) => {
+        console.error('[MCP] unhandledRejection:', reason);
+    });
+
+    console.error('[MCP] app.whenReady() 待機中...');
+    app.whenReady().then(async () => {
+        console.error('[MCP] app.whenReady() 完了');
+        try {
+            // MCP有効設定を確認（--forceオプションまたはTADJS_MCP_FORCE環境変数で設定を無視可能）
+            const forceMode = process.argv.includes('--force') || process.env.TADJS_MCP_FORCE === '1';
+            console.error(`[MCP] forceMode=${forceMode}`);
+            if (!forceMode) {
+                const mcpConfigPath = path.join(getAppRootDir(), 'mcp-config.json');
+                console.error(`[MCP] 設定ファイル確認: ${mcpConfigPath}`);
+                try {
+                    const configData = fs.readFileSync(mcpConfigPath, 'utf-8');
+                    const config = JSON.parse(configData);
+                    if (!config.enabled) {
+                        console.error('[MCP] MCPサーバは無効に設定されています。システム環境設定で有効にしてください。');
+                        process.exit(0);
+                    }
+                    console.error('[MCP] 設定ファイル: enabled=true');
+                } catch (readErr) {
+                    // 設定ファイルが存在しない場合はデフォルトで無効
+                    console.error('[MCP] MCP設定ファイルが見つかりません。システム環境設定でMCPサーバを有効にしてください。');
+                    process.exit(0);
+                }
+            }
+
+            console.error('[MCP] mcp-server.js を require 中...');
+            const { startMcpServer } = require('./mcp/mcp-server');
+            console.error('[MCP] mcp-server.js require 完了');
+            const dataFolderIdx = process.argv.indexOf('--data-folder');
+            const dataFolder = dataFolderIdx >= 0
+                ? process.argv[dataFolderIdx + 1]
+                : (process.env.TADJS_MCP_DATA_FOLDER || path.join(getAppRootDir(), 'data'));
+            console.error(`[MCP] dataFolder=${dataFolder}`);
+            console.error('[MCP] startMcpServer() 呼び出し中...');
+            await startMcpServer(dataFolder);
+            console.error('[MCP] startMcpServer() 完了 - サーバ稼働中');
+        } catch (err) {
+            console.error('[MCP] サーバ起動エラー:', err.stack || err);
+            process.exit(1);
+        }
+    }).catch(err => {
+        console.error('[MCP] app.whenReady() エラー:', err.stack || err);
+        process.exit(1);
+    });
+} else {
+
 // 二重起動防止
 const gotTheLock = app.requestSingleInstanceLock();
 
@@ -327,8 +386,11 @@ if (!gotTheLock) {
     });
 }
 
+} // isMcpMode else ブロック終了
+
 app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
+    // MCPモードではGUIなしで動作するため、app.quit()を呼ばない
+    if (!isMcpMode && process.platform !== 'darwin') {
         app.quit();
     }
 });
@@ -397,9 +459,27 @@ ipcMain.handle('save-file-dialog', async (event, defaultName) => {
     return result.canceled ? null : result.filePath;
 });
 
+// パストラバーサル対策: ファイルパスがアプリケーションの許可ディレクトリ内かを検証
+function isPathAllowed(filePath) {
+    const resolved = path.resolve(filePath);
+    const appDir = getAppRootDir();
+    const userDataDir = app.getPath('userData');
+    const tempDir = app.getPath('temp');
+    // アプリケーションディレクトリ、ユーザーデータ、テンポラリのいずれかの配下であること
+    return resolved.startsWith(appDir + path.sep) ||
+           resolved.startsWith(userDataDir + path.sep) ||
+           resolved.startsWith(tempDir + path.sep) ||
+           resolved === appDir ||
+           resolved === userDataDir;
+}
+
 // IPC通信: ファイル保存
 ipcMain.handle('save-file', async (event, filePath, data) => {
     try {
+        if (!isPathAllowed(filePath)) {
+            logger.warn('[Main] ファイル保存: 許可されていないパス:', filePath);
+            return { success: false, error: '許可されていないパスです' };
+        }
         const buffer = Buffer.from(data);
         await fs.promises.writeFile(filePath, buffer);
         return { success: true };
@@ -411,6 +491,10 @@ ipcMain.handle('save-file', async (event, filePath, data) => {
 // IPC通信: ファイル読み込み
 ipcMain.handle('read-file', async (event, filePath) => {
     try {
+        if (!isPathAllowed(filePath)) {
+            logger.warn('[Main] ファイル読み込み: 許可されていないパス:', filePath);
+            return { success: false, error: '許可されていないパスです' };
+        }
         const fileData = await fs.promises.readFile(filePath);
         return {
             success: true,
@@ -424,6 +508,10 @@ ipcMain.handle('read-file', async (event, filePath) => {
 // IPC通信: ファイル削除
 ipcMain.handle('delete-file', async (event, filePath) => {
     try {
+        if (!isPathAllowed(filePath)) {
+            logger.warn('[Main] ファイル削除: 許可されていないパス:', filePath);
+            return { success: false, error: '許可されていないパスです' };
+        }
         await fs.promises.unlink(filePath);
         return { success: true };
     } catch (error) {
@@ -460,6 +548,136 @@ ipcMain.handle('clipboard-write-text', async (event, text) => {
     return { success: true };
 });
 
+// MCPサーバ子プロセス管理
+let mcpChildProcess = null;
+
+// レンダラーにMCPログを転送するヘルパー
+function sendMcpLog(message) {
+    logger.info(message);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('mcp-server-log', message);
+    }
+}
+
+// IPC通信: MCPサーバ起動
+ipcMain.handle('start-mcp-server', async () => {
+    if (mcpChildProcess) {
+        return { success: false, error: 'MCPサーバは既に起動しています' };
+    }
+    try {
+        const { spawn } = require('child_process');
+        const exePath = app.getPath('exe');
+        const dataFolder = path.join(getAppRootDir(), 'data');
+        // Electronの二重起動競合を避けるため、別のユーザーデータディレクトリを使用
+        const mcpUserDataDir = path.join(app.getPath('userData'), 'mcp-server');
+        const spawnArgs = [
+            '--mcp', '--force',
+            '--data-folder', dataFolder,
+            '--user-data-dir=' + mcpUserDataDir
+        ];
+        sendMcpLog(`[MCP] 起動コマンド: ${exePath}`);
+        sendMcpLog(`[MCP] 起動引数: ${JSON.stringify(spawnArgs)}`);
+        mcpChildProcess = spawn(exePath, spawnArgs, {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            detached: false
+        });
+        sendMcpLog(`[MCP] 子プロセス PID: ${mcpChildProcess.pid}`);
+        // stderrを監視（MCPモードの全ログはstderrに出力される）→レンダラーに転送
+        mcpChildProcess.stderr.on('data', (data) => {
+            sendMcpLog(`[MCP-stderr] ${data.toString().trim()}`);
+        });
+        mcpChildProcess.stdout.on('data', (data) => {
+            sendMcpLog(`[MCP-stdout] ${data.toString().substring(0, 500)}`);
+        });
+        mcpChildProcess.on('exit', (code, signal) => {
+            sendMcpLog(`[MCP] 子プロセス終了 code=${code} signal=${signal}`);
+            mcpChildProcess = null;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('mcp-server-status', { running: false, exitCode: code, signal });
+            }
+        });
+        mcpChildProcess.on('error', (err) => {
+            sendMcpLog(`[MCP] spawnエラー: ${err.message}`);
+            mcpChildProcess = null;
+        });
+        sendMcpLog('[MCP] spawn完了、子プロセス起動待ち...');
+        return { success: true, pid: mcpChildProcess.pid, exePath, args: spawnArgs };
+    } catch (err) {
+        sendMcpLog(`[MCP] 起動例外: ${err.message}`);
+        mcpChildProcess = null;
+        return { success: false, error: err.message };
+    }
+});
+
+// IPC通信: MCPサーバ停止
+ipcMain.handle('stop-mcp-server', async () => {
+    if (!mcpChildProcess) {
+        return { success: false, error: 'MCPサーバは起動していません' };
+    }
+    try {
+        const proc = mcpChildProcess;
+        mcpChildProcess = null;
+        if (!proc.killed) {
+            proc.kill('SIGTERM');
+            // Windowsではkillが効かない場合があるためタイムアウト後にSIGKILL
+            setTimeout(() => {
+                try { if (!proc.killed) proc.kill('SIGKILL'); } catch (_) {}
+            }, 3000);
+        }
+        logger.info('[Main] MCPサーバ子プロセスを停止しました');
+        return { success: true };
+    } catch (err) {
+        logger.error('[Main] MCPサーバ停止エラー:', err);
+        return { success: false, error: err.message };
+    }
+});
+
+// IPC通信: MCPサーバ状態取得
+ipcMain.handle('get-mcp-server-status', async () => {
+    return { running: mcpChildProcess !== null };
+});
+
+// IPC通信: MCPサーバにJSON-RPCリクエスト送信（テスト用）
+ipcMain.handle('send-mcp-request', async (event, jsonRpcRequest) => {
+    if (!mcpChildProcess) {
+        return { success: false, error: 'MCPサーバは起動していません' };
+    }
+    try {
+        const requestStr = typeof jsonRpcRequest === 'string'
+            ? jsonRpcRequest
+            : JSON.stringify(jsonRpcRequest);
+        sendMcpLog(`[MCP-stdin] ${requestStr.substring(0, 300)}`);
+        mcpChildProcess.stdin.write(requestStr + '\n');
+        return { success: true };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+// IPC通信: MCP設定の読み込み
+ipcMain.handle('get-mcp-config', async () => {
+    try {
+        const mcpConfigPath = path.join(getAppRootDir(), 'mcp-config.json');
+        const configData = await fs.promises.readFile(mcpConfigPath, 'utf-8');
+        return { success: true, config: JSON.parse(configData) };
+    } catch (err) {
+        // ファイルが存在しない場合はデフォルト値を返す
+        return { success: true, config: { enabled: false } };
+    }
+});
+
+// IPC通信: MCP設定の保存
+ipcMain.handle('set-mcp-config', async (event, config) => {
+    try {
+        const mcpConfigPath = path.join(getAppRootDir(), 'mcp-config.json');
+        await fs.promises.writeFile(mcpConfigPath, JSON.stringify(config, null, 2), 'utf-8');
+        return { success: true };
+    } catch (err) {
+        logger.error('[Main] MCP設定保存エラー:', err);
+        return { success: false, error: err.message };
+    }
+});
+
 // IPC通信: メニューバーの表示/非表示
 ipcMain.on('set-menu-bar-visibility', (event, visible) => {
     if (mainWindow) {
@@ -467,1018 +685,16 @@ ipcMain.on('set-menu-bar-visibility', (event, visible) => {
     }
 });
 
-// フォントファイルから複数の名前（日本語名、英語名など）を取得
-function getFontAllNames(fontPath, debugFontName = null) {
-    try {
-        const font = fontkit.openSync(fontPath);
-        const nameTable = font['name'];
+// フォントIPCハンドラを分離モジュールから登録
+registerFontIpcHandlers();
 
-        if (!nameTable || !Array.isArray(nameTable.records)) {
-            return null;
-        }
+// PTY IPCハンドラを分離モジュールから登録
+ptyManager.registerHandlers(isPathAllowed);
 
-        const names = {
-            japanese: null,      // 日本語のフルネーム
-            english: null,       // 英語のフルネーム
-            japaneseFamily: null, // 日本語のファミリー名
-            englishFamily: null   // 英語のファミリー名
-        };
-
-        // 日本語フルネーム (Windows platform, Japanese, Full Name)
-        const jaFullName = nameTable.records.find(r =>
-            r.platformID === 3 && r.languageID === 1041 && r.nameID === 4
-        );
-        if (jaFullName) {
-            names.japanese = jaFullName.value;
-        }
-
-        // 日本語ファミリー名
-        const jaFamily = nameTable.records.find(r =>
-            r.platformID === 3 && r.languageID === 1041 && r.nameID === 1
-        );
-        if (jaFamily) {
-            names.japaneseFamily = jaFamily.value;
-        }
-
-        // 英語フルネーム (Windows platform, English US, Full Name)
-        const enFullName = nameTable.records.find(r =>
-            r.platformID === 3 && r.languageID === 0x0409 && r.nameID === 4
-        );
-        if (enFullName) {
-            names.english = enFullName.value;
-        }
-
-        // 英語ファミリー名
-        const enFamily = nameTable.records.find(r =>
-            r.platformID === 3 && r.languageID === 0x0409 && r.nameID === 1
-        );
-        if (enFamily) {
-            names.englishFamily = enFamily.value;
-        }
-
-        return names;
-    } catch (error) {
-        logger.error('フォント名取得エラー:', fontPath, error.message);
-        return null;
-    }
-}
-
-
-// プラットフォーム別のフォントディレクトリを取得
-function getFontDirectories() {
-    if (process.platform === 'win32') {
-        return [
-            'C:\\Windows\\Fonts',
-            path.join(process.env.LOCALAPPDATA || '', 'Microsoft\\Windows\\Fonts')
-        ];
-    } else if (process.platform === 'darwin') {
-        return [
-            '/Library/Fonts',
-            '/System/Library/Fonts',
-            '/System/Library/Fonts/Supplemental',
-            path.join(process.env.HOME || '', 'Library/Fonts')
-        ];
-    } else {
-        // Linux
-        return [
-            '/usr/share/fonts',
-            '/usr/local/share/fonts',
-            path.join(process.env.HOME || '', '.fonts'),
-            path.join(process.env.HOME || '', '.local/share/fonts')
-        ];
-    }
-}
-
-// フォント名に対応するファイルパスを検索
-function findFontFile(fontName) {
-    const fontDirs = getFontDirectories();
-
-    // フォント名から推測される可能性のあるファイル名
-    const possibleNames = [
-        `${fontName}.ttf`,
-        `${fontName}.ttc`,
-        `${fontName}.otf`,
-        `${fontName.replace(/\s+/g, '')}.ttf`,
-        `${fontName.replace(/\s+/g, '')}.ttc`,
-        `${fontName.replace(/\s+/g, '')}.otf`,
-        `${fontName.replace(/\s+/g, '').toLowerCase()}.ttf`,
-        `${fontName.replace(/\s+/g, '').toLowerCase()}.ttc`,
-        `${fontName.replace(/\s+/g, '').toLowerCase()}.otf`
-    ];
-
-    for (const dir of fontDirs) {
-        if (!fs.existsSync(dir)) continue;
-
-        for (const fileName of possibleNames) {
-            const fullPath = path.join(dir, fileName);
-            if (fs.existsSync(fullPath)) {
-                return fullPath;
-            }
-        }
-
-        // ディレクトリ内を検索してフォント名にマッチするファイルを探す
-        try {
-            const files = fs.readdirSync(dir);
-            // フォント名の最初の単語を取得（より柔軟なマッチングのため）
-            const firstWord = fontName.split(/\s+/)[0].toLowerCase();
-
-            for (const file of files) {
-                const ext = path.extname(file).toLowerCase();
-                if (['.ttf', '.ttc', '.otf'].includes(ext)) {
-                    const fileNameLower = file.toLowerCase();
-                    const searchName = fontName.toLowerCase().replace(/\s+/g, '');
-                    const fileNameNoExt = file.replace(/\.(ttf|ttc|otf)$/i, '').toLowerCase().replace(/[_\-\s]/g, '');
-
-                    // 複数の条件でマッチング
-                    if (fileNameLower.includes(searchName) ||
-                        searchName.includes(fileNameNoExt) ||
-                        fileNameLower.includes(firstWord)) {
-                        return path.join(dir, file);
-                    }
-                }
-            }
-        } catch (error) {
-            // ディレクトリ読み取りエラーは無視
-        }
-    }
-
-    return null;
-}
-
-// PowerShellでDirectWrite APIを使ってフォント情報を取得（Windows専用）
-async function getSystemFontsViaDirectWrite() {
-    // Windows以外では空配列を返す
-    if (process.platform !== 'win32') {
-        logger.debug('getSystemFontsViaDirectWrite: Windows以外のプラットフォームではスキップ');
-        return [];
-    }
-
-    const psScript = `
-        Add-Type -AssemblyName PresentationCore
-
-        $fonts = [System.Windows.Media.Fonts]::SystemFontFamilies
-        $result = @()
-
-        foreach ($font in $fonts) {
-            # 日本語名と英語名を取得
-            $japaneseName = $null
-            $englishName = $null
-
-            # 日本語名を取得（ja-jp）
-            if ($font.FamilyNames.ContainsKey([System.Globalization.CultureInfo]::GetCultureInfo('ja-JP'))) {
-                $japaneseName = $font.FamilyNames[[System.Globalization.CultureInfo]::GetCultureInfo('ja-JP')]
-            }
-
-            # 英語名を取得（en-us）
-            if ($font.FamilyNames.ContainsKey([System.Globalization.CultureInfo]::GetCultureInfo('en-US'))) {
-                $englishName = $font.FamilyNames[[System.Globalization.CultureInfo]::GetCultureInfo('en-US')]
-            }
-
-            # 不変の名前（システム名）
-            $systemName = $font.Source
-
-            # すべての利用可能な名前を取得
-            $allNames = @()
-            foreach ($key in $font.FamilyNames.Keys) {
-                $name = $font.FamilyNames[$key]
-                if ($name -and $allNames -notcontains $name) {
-                    $allNames += $name
-                }
-            }
-
-            $result += @{
-                systemName = $systemName
-                japanese = $japaneseName
-                english = $englishName
-                allNames = $allNames
-            }
-        }
-
-        $result | ConvertTo-Json -Compress
-    `;
-
-    try {
-        logger.debug('PowerShell DirectWrite APIでフォント取得開始');
-
-        const output = execSync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`, {
-            encoding: 'utf8',
-            maxBuffer: 20 * 1024 * 1024
-        });
-
-        if (!output || output.trim().length === 0) {
-            logger.error('PowerShell出力が空です');
-            return [];
-        }
-
-        const items = JSON.parse(output);
-        const itemsArray = Array.isArray(items) ? items : [items];
-
-        logger.debug('DirectWriteから取得:', itemsArray.length, 'フォント');
-
-        return itemsArray;
-    } catch (error) {
-        logger.error('DirectWriteフォント取得エラー:', error.message);
-        return [];
-    }
-}
-
-// IPC通信: システムフォント一覧取得（日本語名付き）
-ipcMain.handle('get-system-fonts', async () => {
-    try {
-        logger.info('システムフォント一覧を取得中...');
-
-        // font-list ライブラリで取得（日本語名対応済み）
-        const fontNames = await fontList.getFonts({ disableQuoting: true });
-        logger.debug('font-listから取得:', fontNames.length, 'フォント');
-
-        // フォント情報を整形
-        const fonts = fontNames.map(name => ({
-            systemName: name,
-            displayName: name,
-            allNames: [name]
-        }));
-
-        logger.info('フォント情報取得完了:', fonts.length);
-        return { success: true, fonts: fonts };
-    } catch (error) {
-        logger.error('システムフォント取得エラー:', error);
-        return { success: false, fonts: [], error: error.message };
-    }
-});
-
-// ========================================
-// PTY（疑似端末）関連 IPC通信
-// ========================================
-
-// IPC通信: PTYプロセス生成
-ipcMain.handle('pty-spawn', async (event, options) => {
-    const { windowId, cwd, cols, rows } = options;
-
-    try {
-        // 既存のPTYプロセスがあれば終了
-        if (ptyProcesses.has(windowId)) {
-            const oldProcess = ptyProcesses.get(windowId);
-            if (oldProcess.kill) oldProcess.kill();
-            ptyProcesses.delete(windowId);
-        }
-
-        const shell = process.platform === 'win32' ? 'powershell.exe' : (process.env.SHELL || 'bash');
-        const workingDir = cwd || process.env.HOME || process.env.USERPROFILE;
-
-        // node-ptyが利用可能な場合はそちらを使用
-        if (pty && !usePtyFallback) {
-            const ptyProcess = pty.spawn(shell, [], {
-                name: 'xterm-256color',
-                cols: cols || 80,
-                rows: rows || 24,
-                cwd: workingDir,
-                env: process.env
-            });
-
-            // onData/onExitのdisposableを保存してkill時にdispose可能にする
-            const disposables = [];
-
-            // データ受信時にレンダラーへ転送
-            disposables.push(ptyProcess.onData((data) => {
-                if (!event.sender.isDestroyed()) {
-                    event.sender.send('pty-data', { windowId, data });
-                }
-            }));
-
-            // プロセス終了時
-            disposables.push(ptyProcess.onExit(({ exitCode }) => {
-                if (!event.sender.isDestroyed()) {
-                    event.sender.send('pty-exit', { windowId, exitCode });
-                }
-                ptyProcesses.delete(windowId);
-            }));
-
-            ptyProcesses.set(windowId, { type: 'pty', process: ptyProcess, disposables });
-
-            logger.info(`PTY spawned (node-pty): windowId=${windowId}, pid=${ptyProcess.pid}`);
-            return { success: true, pid: ptyProcess.pid };
-        }
-
-        // フォールバック: child_processを使用
-        // PowerShellはパイプI/Oで正しく動作しないため、cmd.exeを使用
-        const fallbackShell = process.platform === 'win32' ? 'cmd.exe' : shell;
-        const fallbackArgs = process.platform === 'win32' ? ['/Q'] : [];  // /Q: エコーオフ
-
-        logger.info(`PTY spawned (fallback): windowId=${windowId}, shell=${fallbackShell}`);
-
-        const childProcess = spawn(fallbackShell, fallbackArgs, {
-            cwd: workingDir,
-            env: { ...process.env, TERM: 'xterm-256color' },
-            shell: false,
-            stdio: ['pipe', 'pipe', 'pipe']
-        });
-
-        ptyProcesses.set(windowId, { type: 'child', process: childProcess });
-
-        // フォールバックモードの開始メッセージを送信
-        if (!event.sender.isDestroyed()) {
-            event.sender.send('pty-data', {
-                windowId,
-                data: '[Terminal fallback mode - cmd.exe]\r\n'
-            });
-        }
-
-        // 標準出力をレンダラーへ転送
-        childProcess.stdout.on('data', (data) => {
-            if (!event.sender.isDestroyed()) {
-                event.sender.send('pty-data', { windowId, data: data.toString() });
-            }
-        });
-
-        // 標準エラー出力をレンダラーへ転送
-        childProcess.stderr.on('data', (data) => {
-            if (!event.sender.isDestroyed()) {
-                event.sender.send('pty-data', { windowId, data: data.toString() });
-            }
-        });
-
-        // プロセス終了時
-        childProcess.on('close', (exitCode) => {
-            if (!event.sender.isDestroyed()) {
-                event.sender.send('pty-exit', { windowId, exitCode: exitCode || 0 });
-            }
-            ptyProcesses.delete(windowId);
-        });
-
-        childProcess.on('error', (error) => {
-            logger.error(`Child process error: ${error.message}`);
-            if (!event.sender.isDestroyed()) {
-                event.sender.send('pty-data', { windowId, data: `\r\n[Error: ${error.message}]\r\n` });
-            }
-        });
-
-        return { success: true, pid: childProcess.pid };
-    } catch (error) {
-        logger.error('PTY spawn error:', error);
-        return { success: false, error: error.message };
-    }
-});
-
-// IPC通信: PTYへの入力送信
-ipcMain.handle('pty-write', async (event, { windowId, data }) => {
-    const entry = ptyProcesses.get(windowId);
-    if (entry) {
-        if (entry.type === 'pty') {
-            entry.process.write(data);
-        } else {
-            // child_processの場合はstdinに書き込み
-            entry.process.stdin.write(data);
-        }
-        return { success: true };
-    }
-    return { success: false, error: 'PTY not found' };
-});
-
-// IPC通信: PTYリサイズ
-ipcMain.handle('pty-resize', async (event, { windowId, cols, rows }) => {
-    const entry = ptyProcesses.get(windowId);
-    if (entry) {
-        if (entry.type === 'pty' && entry.process.resize) {
-            entry.process.resize(cols, rows);
-        }
-        // child_processの場合はリサイズ不可（無視）
-        return { success: true };
-    }
-    return { success: false, error: 'PTY not found' };
-});
-
-// IPC通信: PTYプロセス終了
-ipcMain.handle('pty-kill', async (event, { windowId }) => {
-    const entry = ptyProcesses.get(windowId);
-    if (entry) {
-        // disposableをdisposeしてイベントリスナーを解放
-        if (entry.disposables) {
-            entry.disposables.forEach(d => d.dispose());
-        }
-        if (entry.type === 'pty') {
-            entry.process.kill();
-        } else {
-            entry.process.kill('SIGTERM');
-        }
-        ptyProcesses.delete(windowId);
-        logger.info(`PTY killed: windowId=${windowId}`);
-        return { success: true };
-    }
-    return { success: false, error: 'PTY not found' };
-});
-
-// =============================================================
-// IPC通信: Net-BTRON クラウド実身共有
-// =============================================================
-
-// IPC入力バリデーション関数 (H-5)
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function isValidUUID(value) {
-    return typeof value === 'string' && UUID_REGEX.test(value);
-}
-function validateUUID(value, label) {
-    if (!isValidUUID(value)) {
-        return { success: false, error: `無効な${label}形式です` };
-    }
-    return null;
-}
-function validateString(value, label, maxLength = 255) {
-    if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) {
-        return { success: false, error: `無効な${label}です（空または長すぎます）` };
-    }
-    return null;
-}
-function validateEnum(value, label, allowedValues) {
-    if (!allowedValues.includes(value)) {
-        return { success: false, error: `無効な${label}です` };
-    }
-    return null;
-}
-
-// クラウド初期化
-ipcMain.handle('cloud-initialize', async (event, config) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    // CR-1: Supabase URL検証（悪意あるURLによる認証情報窃取を防止）
-    if (!config || !config.url) {
-        return { success: false, error: '接続設定が不足しています' };
-    }
-    try {
-        const parsedUrl = new URL(config.url);
-        if (parsedUrl.protocol !== 'https:' && parsedUrl.hostname !== 'localhost') {
-            return { success: false, error: '接続先URLはHTTPSである必要があります' };
-        }
-        if (!parsedUrl.hostname.endsWith('.supabase.co') && !parsedUrl.hostname.endsWith('.supabase.in') && parsedUrl.hostname !== 'localhost') {
-            return { success: false, error: '許可されていない接続先です。Supabase URLを指定してください' };
-        }
-    } catch (e) {
-        return { success: false, error: '無効なURLです' };
-    }
-    return await cloudAccessManager.initialize(config);
-});
-
-// クラウド認証: ログイン
-ipcMain.handle('cloud-sign-in', async (event, { email, password }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    // ME-2: 入力バリデーション追加（cloud-sign-upと同等）
-    let err;
-    if ((err = validateString(email, 'メールアドレス', 255))) return err;
-    if ((err = validateString(password, 'パスワード', 255))) return err;
-    return await cloudAccessManager.signIn(email, password);
-});
-
-// クラウド認証: OAuthログイン（システムブラウザ + ローカルHTTPサーバーでコールバック受信）
-ipcMain.handle('cloud-sign-in-oauth', async (event, { provider }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    // LO-2: プロバイダをホワイトリスト検証
-    if ((err = validateEnum(provider, 'OAuthプロバイダ', ['google', 'github', 'azure', 'gitlab']))) return err;
-
-    return new Promise((resolve) => {
-        let resolved = false;
-        let server = null;
-        let timeoutId = null;
-
-        const cleanup = () => {
-            if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; }
-            if (server) { try { server.close(); } catch (e) {} server = null; }
-        };
-
-        // ローカルHTTPサーバーを起動してOAuthコールバックを受信
-        server = http.createServer(async (req, res) => {
-            const reqUrl = new URL(req.url, 'http://127.0.0.1');
-
-            if (reqUrl.pathname === '/auth/callback') {
-                // ハッシュフラグメント（#access_token=...）はサーバーに届かないため、
-                // HTMLページでJavaScriptを使い、クエリパラメータに変換してリダイレクトする
-                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end('<!DOCTYPE html><html><head><title>認証処理中</title></head><body>' +
-                    '<p>認証処理中...</p>' +
-                    '<script>' +
-                    'var h=window.location.hash.substring(1);' +
-                    'if(h){window.location.href="/auth/complete?"+h;}' +
-                    'else{document.body.innerHTML="<h3>認証に失敗しました</h3><p>このタブを閉じてやり直してください。</p>";}' +
-                    '</script></body></html>');
-            } else if (reqUrl.pathname === '/auth/complete') {
-                const accessToken = reqUrl.searchParams.get('access_token');
-                const refreshToken = reqUrl.searchParams.get('refresh_token');
-
-                if (accessToken && refreshToken && !resolved) {
-                    resolved = true;
-                    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                    res.end('<!DOCTYPE html><html><head><title>認証完了</title></head><body>' +
-                        '<h3>認証が完了しました</h3>' +
-                        '<p>このタブを閉じてアプリに戻ってください。</p></body></html>');
-                    const sessionResult = await cloudAccessManager.setSessionFromTokens(accessToken, refreshToken);
-                    cleanup();
-                    resolve(sessionResult);
-                } else {
-                    res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-                    res.end('<!DOCTYPE html><html><body><h3>認証に失敗しました</h3></body></html>');
-                    if (!resolved) {
-                        resolved = true;
-                        cleanup();
-                        resolve({ success: false, error: 'トークンの取得に失敗しました' });
-                    }
-                }
-            } else {
-                res.writeHead(404);
-                res.end();
-            }
-        });
-
-        server.listen(0, '127.0.0.1', async () => {
-            const port = server.address().port;
-            const redirectUrl = `http://127.0.0.1:${port}/auth/callback`;
-
-            // OAuth URLを取得（ローカルサーバーをリダイレクト先に指定）
-            const urlResult = await cloudAccessManager.signInWithOAuth(provider, redirectUrl);
-            if (!urlResult.success) {
-                cleanup();
-                resolve(urlResult);
-                return;
-            }
-
-            // タイムアウト（5分）
-            timeoutId = setTimeout(() => {
-                if (!resolved) {
-                    resolved = true;
-                    cleanup();
-                    resolve({ success: false, cancelled: true, error: 'ログインがタイムアウトしました（5分経過）' });
-                }
-            }, 5 * 60 * 1000);
-
-            // システムブラウザでOAuth認証画面を開く
-            shell.openExternal(urlResult.url);
-        });
-
-        server.on('error', (serverErr) => {
-            if (!resolved) {
-                resolved = true;
-                cleanup();
-                resolve({ success: false, error: 'ローカルサーバー起動失敗: ' + serverErr.message });
-            }
-        });
-    });
-});
-
-// クラウド認証: 新規ユーザー登録
-ipcMain.handle('cloud-sign-up', async (event, { email, password }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateString(email, 'メールアドレス', 255))) return err;
-    if ((err = validateString(password, 'パスワード', 255))) return err;
-    return await cloudAccessManager.signUp(email, password);
-});
-
-// クラウド認証: ログアウト
-ipcMain.handle('cloud-sign-out', async () => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    return await cloudAccessManager.signOut();
-});
-
-// クラウド認証: セッション取得
-ipcMain.handle('cloud-get-session', async () => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    return await cloudAccessManager.getSession();
-});
-
-// クラウド招待: 招待作成
-ipcMain.handle('cloud-create-invite', async (event, { tenantId, email, role }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateEnum(role, 'ロール', ['admin', 'member', 'readonly']))) return err;
-    return await cloudAccessManager.createInvite(tenantId, email || '', role);
-});
-
-// クラウド招待: トークンで招待情報取得
-ipcMain.handle('cloud-get-invite-by-token', async (event, { token }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateString(token, '招待トークン', 200))) return err;
-    return await cloudAccessManager.getInviteByToken(token);
-});
-
-// クラウド招待: 招待消費（テナント参加）
-ipcMain.handle('cloud-consume-invite', async (event, { token }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateString(token, '招待トークン', 200))) return err;
-    return await cloudAccessManager.consumeInvite(token);
-});
-
-// クラウド招待: 招待一覧
-ipcMain.handle('cloud-list-invites', async (event, { tenantId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    return await cloudAccessManager.listInvites(tenantId);
-});
-
-// クラウド招待: 招待取消
-ipcMain.handle('cloud-revoke-invite', async (event, { inviteId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(inviteId, 'inviteId'))) return err;
-    return await cloudAccessManager.revokeInvite(inviteId);
-});
-
-// クラウド: 自分のプロフィール取得（system_role含む）
-ipcMain.handle('cloud-get-my-profile', async () => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    return await cloudAccessManager.getMyProfile();
-});
-
-// クラウド: ユーザーのシステムロール変更（system_adminのみ）
-ipcMain.handle('cloud-update-user-system-role', async (event, { userId, role }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(userId, 'userId'))) return err;
-    if ((err = validateEnum(role, 'システムロール', ['system_admin', 'tenant_creator', 'user']))) return err;
-    return await cloudAccessManager.updateUserSystemRole(userId, role);
-});
-
-// クラウド: 全ユーザー一覧取得（system_admin用）
-ipcMain.handle('cloud-list-users', async () => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    return await cloudAccessManager.listUsers();
-});
-
-// クラウド: テナント一覧取得
-ipcMain.handle('cloud-get-tenants', async () => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    return await cloudAccessManager.getTenants();
-});
-
-// クラウド: テナント作成
-ipcMain.handle('cloud-create-tenant', async (event, { name, visibility }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateString(name, 'テナント名', 100))) return err;
-    if ((err = validateEnum(visibility, '公開範囲', ['private', 'internal']))) return err;
-    return await cloudAccessManager.createTenant(name, visibility);
-});
-
-// クラウド: テナント公開範囲変更
-ipcMain.handle('cloud-update-tenant-visibility', async (event, { tenantId, visibility }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateEnum(visibility, '公開範囲', ['private', 'internal']))) return err;
-    return await cloudAccessManager.updateTenantVisibility(tenantId, visibility);
-});
-
-// クラウド: テナント名でテナント情報取得
-ipcMain.handle('cloud-get-tenant-by-name', async (event, { name }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    // LO-6: 入力バリデーション追加
-    let err;
-    if ((err = validateString(name, 'テナント名', 255))) return err;
-    return await cloudAccessManager.getTenantByName(name);
-});
-
-// クラウド: テナント削除
-ipcMain.handle('cloud-delete-tenant', async (event, { tenantId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    return await cloudAccessManager.deleteTenant(tenantId);
-});
-
-// クラウド: 実身一覧取得
-ipcMain.handle('cloud-list-real-objects', async (event, { tenantId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    return await cloudAccessManager.listRealObjects(tenantId);
-});
-
-// クラウド: テナントメンバー一覧
-ipcMain.handle('cloud-list-tenant-members', async (event, { tenantId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    return await cloudAccessManager.listTenantMembers(tenantId);
-});
-
-// クラウド: テナントメンバー追加
-ipcMain.handle('cloud-add-tenant-member', async (event, { tenantId, email, role }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateString(email, 'メールアドレス', 254))) return err;
-    if ((err = validateEnum(role, 'ロール', ['admin', 'member', 'readonly']))) return err;
-    return await cloudAccessManager.addTenantMember(tenantId, email, role);
-});
-
-// クラウド: テナントメンバー削除
-ipcMain.handle('cloud-remove-tenant-member', async (event, { tenantId, userId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateUUID(userId, 'userId'))) return err;
-    return await cloudAccessManager.removeTenantMember(tenantId, userId);
-});
-
-// クラウド: 実身アップロード
-ipcMain.handle('cloud-upload-real-object', async (event, { tenantId, realObject, files }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    const _metadata = realObject.metadata || realObject;
-    const _realId = _metadata.realId || _metadata.id;
-    if ((err = validateUUID(_realId, 'realId'))) return err;
-    // ファイルデータをBufferに変換
-    const bufferFiles = {};
-    if (files.json) bufferFiles.json = Buffer.from(files.json);
-    if (files.xtad) bufferFiles.xtad = Buffer.from(files.xtad);
-    if (files.ico) bufferFiles.ico = Buffer.from(files.ico);
-    if (files.images && Array.isArray(files.images)) {
-        bufferFiles.images = files.images.map(img => ({
-            name: img.name,
-            data: Buffer.from(img.data)
-        }));
-    }
-    return await cloudAccessManager.uploadRealObject(tenantId, realObject, bufferFiles);
-});
-
-// クラウド: 楽観的排他制御付き実身アップロード
-ipcMain.handle('cloud-upload-real-object-versioned', async (event, { tenantId, realObject, files, expectedVersion }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    const _metadata = realObject.metadata || realObject;
-    const _realId = _metadata.realId || _metadata.id;
-    if ((err = validateUUID(_realId, 'realId'))) return err;
-    if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
-        return { success: false, error: 'expectedVersionは非負整数である必要があります' };
-    }
-    const bufferFiles = {};
-    if (files.json) bufferFiles.json = Buffer.from(files.json);
-    if (files.xtad) bufferFiles.xtad = Buffer.from(files.xtad);
-    if (files.ico) bufferFiles.ico = Buffer.from(files.ico);
-    if (files.images && Array.isArray(files.images)) {
-        bufferFiles.images = files.images.map(img => ({
-            name: img.name,
-            data: Buffer.from(img.data)
-        }));
-    }
-    return await cloudAccessManager.uploadRealObjectVersioned(tenantId, realObject, bufferFiles, expectedVersion);
-});
-
-// クラウド: 実身ダウンロード
-ipcMain.handle('cloud-download-real-object', async (event, { tenantId, realId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateUUID(realId, 'realId'))) return err;
-    return await cloudAccessManager.downloadRealObject(tenantId, realId);
-});
-
-// クラウド: 個別ファイルダウンロード
-ipcMain.handle('cloud-download-file', async (event, { tenantId, realId, fileName }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateUUID(realId, 'realId'))) return err;
-    if ((err = validateString(fileName, 'ファイル名'))) return err;
-    return await cloudAccessManager.downloadFile(tenantId, realId, fileName);
-});
-
-// クラウド: 実身削除
-ipcMain.handle('cloud-delete-real-object', async (event, { tenantId, realId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateUUID(realId, 'realId'))) return err;
-    return await cloudAccessManager.deleteRealObject(tenantId, realId);
-});
-
-// クラウド: 複数実身メタデータ一括取得
-ipcMain.handle('cloud-get-real-objects-metadata', async (event, { tenantId, realIds }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if (!Array.isArray(realIds) || !realIds.every(isValidUUID)) {
-        return { success: false, error: '無効なrealIds形式です' };
-    }
-    return await cloudAccessManager.getRealObjectsMetadata(tenantId, realIds);
-});
-
-// クラウド: 実身とその子孫を再帰的に削除
-ipcMain.handle('cloud-delete-real-object-with-children', async (event, { tenantId, realId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateUUID(realId, 'realId'))) return err;
-    return await cloudAccessManager.deleteRealObjectWithChildren(tenantId, realId);
-});
-
-// クラウド: 共有一覧取得
-ipcMain.handle('cloud-list-shares', async (event, { objectId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(objectId, 'objectId'))) return err;
-    return await cloudAccessManager.listShares(objectId);
-});
-
-// クラウド: 共有作成
-ipcMain.handle('cloud-create-share', async (event, { objectId, email, permission }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(objectId, 'objectId'))) return err;
-    if ((err = validateString(email, 'メールアドレス', 254))) return err;
-    if ((err = validateEnum(permission, '権限', ['read', 'write', 'admin']))) return err;
-    return await cloudAccessManager.createShare(objectId, email, permission);
-});
-
-// クラウド: 共有削除
-ipcMain.handle('cloud-delete-share', async (event, { shareId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(shareId, 'shareId'))) return err;
-    return await cloudAccessManager.deleteShare(shareId);
-});
-
-// クラウド: バージョン管理付き実身保存
-ipcMain.handle('cloud-save-real-object-with-version', async (event, { tenantId, realObject, files, expectedVersion }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    const _metadata = realObject.metadata || realObject;
-    const _realId = _metadata.realId || _metadata.id;
-    if ((err = validateUUID(_realId, 'realId'))) return err;
-    if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
-        return { success: false, error: 'expectedVersionは非負整数である必要があります' };
-    }
-    return await cloudAccessManager.saveRealObjectWithVersion(tenantId, realObject, files, expectedVersion);
-});
-
-// クラウド: バージョン履歴取得
-ipcMain.handle('cloud-get-version-history', async (event, { tenantId, realId, limit }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateUUID(realId, 'realId'))) return err;
-    return await cloudAccessManager.getVersionHistory(tenantId, realId, limit);
-});
-
-// クラウド: バージョンファイルダウンロード（復元用）
-ipcMain.handle('cloud-download-version-files', async (event, { tenantId, realId, version }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateUUID(realId, 'realId'))) return err;
-    // ME-3: versionパラメータの型チェック
-    if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
-        return { success: false, error: 'バージョン番号が不正です' };
-    }
-    return await cloudAccessManager.downloadVersionFiles(tenantId, realId, version);
-});
-
-// クラウド: バージョン差分取得
-ipcMain.handle('cloud-get-version-diff', async (event, { tenantId, realId, version }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    if ((err = validateUUID(realId, 'realId'))) return err;
-    // ME-3: versionパラメータの型チェック
-    if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
-        return { success: false, error: 'バージョン番号が不正です' };
-    }
-    return await cloudAccessManager.getVersionDiff(tenantId, realId, version);
-});
-
-// クラウド: テナント容量情報取得
-ipcMain.handle('cloud-get-tenant-quota', async (event, { tenantId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    return await cloudAccessManager.getTenantQuota(tenantId);
-});
-
-// クラウド: 自分に共有された実身一覧
-ipcMain.handle('cloud-list-shared-with-me', async () => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    return await cloudAccessManager.listSharedWithMe();
-});
-
-// クラウド: リアルタイム購読
-ipcMain.handle('cloud-subscribe-tenant', async (event, { tenantId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    return cloudAccessManager.subscribeToTenant(tenantId, (payload) => {
-        // メインプロセスからレンダラーにイベントを転送
-        const win = BrowserWindow.fromWebContents(event.sender);
-        if (win && !win.isDestroyed()) {
-            win.webContents.send('cloud-realtime-event', payload);
-        }
-    });
-});
-
-// クラウド: リアルタイム購読解除
-ipcMain.handle('cloud-unsubscribe-tenant', async (event, { tenantId }) => {
-    if (!cloudAccessManager) {
-        return { success: false, error: 'CloudAccessManager が利用できません' };
-    }
-    let err;
-    if ((err = validateUUID(tenantId, 'tenantId'))) return err;
-    return cloudAccessManager.unsubscribeFromTenant(tenantId);
-});
+// クラウドIPCハンドラを分離モジュールから登録
+registerCloudIpcHandlers(cloudAccessManager);
 
 // アプリ終了時に全PTYプロセスを終了
 app.on('before-quit', () => {
-    for (const [windowId, entry] of ptyProcesses) {
-        logger.info(`Killing PTY on quit: windowId=${windowId}`);
-        if (entry.disposables) {
-            entry.disposables.forEach(d => d.dispose());
-        }
-        if (entry.type === 'pty') {
-            entry.process.kill();
-        } else {
-            entry.process.kill('SIGTERM');
-        }
-    }
-    ptyProcesses.clear();
+    ptyManager.killAll();
 });

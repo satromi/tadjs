@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>基本表計算</title>
+    <link rel="stylesheet" href="../common/btron-theme.css">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -104,6 +105,18 @@
     <script type="module">
         import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
         window.VirtualObjectRenderer = VirtualObjectRenderer;
+    </script>
+    <!-- パターンユーティリティをグローバル変数として読み込み -->
+    <script type="module">
+        import { DEFAULT_PATTERNS, findSolidColorPatternId, resolvePatternColor } from '../../js/pattern-utils.js';
+        window.DEFAULT_PATTERNS = DEFAULT_PATTERNS;
+        window.findSolidColorPatternId = findSolidColorPatternId;
+        window.resolvePatternColor = resolvePatternColor;
+    </script>
+    <!-- グラフMixinをグローバル変数として読み込み -->
+    <script type="module">
+        import { CalcChartMixin } from './calc-chart-mixin.js';
+        window.CalcChartMixin = CalcChartMixin;
     </script>
     <script type="module" src="editor.js"></script>
 </body>

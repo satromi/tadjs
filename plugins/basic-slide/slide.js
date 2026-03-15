@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.BasicTextEditor) {
             initSlidePlugin();
         } else {
-            setTimeout(waitForBasicTextEditor, 50);
+            setTimeout(waitForBasicTextEditor, RETRY_DELAY_MS);
         }
     };
     waitForBasicTextEditor();
@@ -886,42 +886,12 @@ function initSlidePlugin() {
             return linkId.split('#')[0];
         }
 
-        /**
-         * applistデータを取得
-         */
-        async getAppListData(realId) {
-            return new Promise((resolve) => {
-                const messageId = this.generateMessageId('get-applist');
-
-                const handler = (data) => {
-                    if (data.messageId === messageId) {
-                        this.messageBus.off('applist-data', handler);
-                        resolve(data.applist || {});
-                    }
-                };
-
-                this.messageBus.on('applist-data', handler);
-                this.messageBus.send('get-applist', {
-                    realId: realId,
-                    messageId: messageId
-                });
-
-                // タイムアウト
-                setTimeout(() => {
-                    this.messageBus.off('applist-data', handler);
-                    resolve({});
-                }, 3000);
-            });
-        }
+        // getAppListData() はPluginBase版を使用（RealObjectSystem経由）
 
         /**
-         * HTMLエスケープ
+         * HTMLエスケープ（PluginBase共通メソッドを使用）
          */
-        escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
+        // escapeHtml(text) は PluginBase に移動済み
 
         /**
          * クローズ要求処理（オーバーライド）
@@ -964,7 +934,7 @@ function initSlidePlugin() {
                 options: {
                     hideScrollbar: true,
                     hideFrame: true,
-                    electronFullscreen: false  // ユーザーがF11で操作
+                    electronFullscreen: true
                 }
             });
         }
@@ -1001,7 +971,7 @@ function initSlidePlugin() {
                     options: {
                         hideScrollbar: true,
                         hideFrame: true,
-                        electronFullscreen: false
+                        electronFullscreen: true
                     }
                 });
 
@@ -1012,7 +982,7 @@ function initSlidePlugin() {
                         this.messageBus.off('enter-presentation-mode-complete');
                     }
                     resolve();
-                }, 500);  // 500msでタイムアウト
+                }, 3000);  // 3秒でタイムアウト（Electronフルスクリーン遷移完了待ち）
             });
         }
 
@@ -1034,6 +1004,7 @@ function initSlidePlugin() {
             const wrapper = document.getElementById('slide-wrapper');
             if (wrapper) {
                 wrapper.classList.add('ready');
+                wrapper.classList.add('fullscreen');
             }
         }
 
