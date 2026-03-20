@@ -156,6 +156,40 @@ export const DEFAULT_LINE_HEIGHT = 1.2;
 export const VOBJ_BORDER_WIDTH = 2;
 
 /**
+ * 閉じた仮身の左右パディング合計（ピクセル）
+ * 左:8px + 右:8px = 16px
+ */
+export const VOBJ_PADDING_HORIZONTAL = 16;
+
+/**
+ * 閉じた仮身の上下パディング合計（ピクセル）
+ * 上:4px + 下:4px = 8px
+ */
+export const VOBJ_PADDING_VERTICAL = 8;
+
+/**
+ * 開いた仮身のタイトルバー上下パディング合計（ピクセル）
+ * 上:8px + 下:8px = 16px
+ */
+export const VOBJ_TITLEBAR_PADDING_VERTICAL = 16;
+
+/**
+ * 仮身複製時のドロップ水平オフセット（ピクセル）
+ */
+export const VOBJ_DROP_OFFSET_X = 20;
+
+/**
+ * 仮身複製時のドロップ垂直オフセット（ピクセル）
+ */
+export const VOBJ_DROP_OFFSET_Y = 30;
+
+/**
+ * 開いた仮身の最小高さオフセット（ピクセル）
+ * タイトルバー(+8) + 区切り線(+2) + コンテンツ最小(+20) = 30
+ */
+export const VOBJ_MIN_OPEN_HEIGHT_OFFSET = 30;
+
+/**
  * 閉じた仮身のデフォルト高さ（ピクセル）
  * chsz=14pt時のgetMinClosedHeight()計算結果: contentHeight(23) + padding(8) = 31
  */
@@ -353,6 +387,16 @@ export function convertPtToPx(pt) {
     // 96 DPI での標準変換: 1pt = 1.333px
     // JIS Z 8401準拠の最近接偶数への丸めで整数値に変換
     return jisRound(pt * 1.333);
+}
+
+/**
+ * ピクセル（px）をポイント（pt）に変換
+ * @param {number} px - ピクセル値
+ * @returns {number} ポイント値（小数点以下あり）
+ */
+export function convertPxToPt(px) {
+    // 96 DPI での標準変換: 1px = 0.75pt (= 3/4)
+    return px * 3 / 4;
 }
 
 /**

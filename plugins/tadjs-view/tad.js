@@ -8129,7 +8129,7 @@ function tsVirtualObjSegment(segLen, tadSeg) {
     // XMLのリンク情報を保存（自己閉じタグ形式）
     // link_nameはJSONから取得する方式に統一
     if(isXmlDumpEnabled) {
-        xmlBuffer.push(`<link id="${newLink.link_id}" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}"/>\r\n`);
+        xmlBuffer.push(`<link id="${newLink.link_id}" vobjid="${(typeof UuidV7Generator !== 'undefined' ? UuidV7Generator.generate() : crypto.randomUUID())}" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}" scrollx="0" scrolly="0" zoomratio="1"/>\r\n`);
     }
     
     //logger.debug('Link data to save:', newLink);

@@ -115,14 +115,14 @@ Claudeの応答結果を `*_0.xtad` にxmlTAD形式で記載する。
 ```xml
 <rect id="rect1" left="0" top="0" right="100" bottom="100"
       lineType="1" lineWidth="3" lineColor="#000000"
-      f_pat="1" fillColor="#FFFFFF" zIndex="10"/>
+      f_pat="1"zIndex="10"/>
 ```
 
 ### 円
 ```xml
 <circle id="circle1" left="0" top="0" right="100" bottom="100"
         lineType="1" lineWidth="3" lineColor="#000000"
-        f_pat="1" fillColor="#FFFFFF" zIndex="10"/>
+        f_pat="1"zIndex="10"/>
 ```
 
 ### 多角形
@@ -130,7 +130,7 @@ Claudeの応答結果を `*_0.xtad` にxmlTAD形式で記載する。
 <polygon id="poly1" left="0" top="0" right="100" bottom="100"
          points="50,0 0,100 100,100"
          lineType="1" lineWidth="3" lineColor="#000000"
-         f_pat="1" fillColor="#FFFFFF" zIndex="10"/>
+         f_pat="1"zIndex="10"/>
 ```
 
 ---

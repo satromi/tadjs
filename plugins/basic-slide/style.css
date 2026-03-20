@@ -43,7 +43,7 @@ body {
 /* エディタコンテナ（拡大縮小の対象） */
 #slide-wrapper .editor-container {
     position: relative;  /* メディアコンテナのabsolute配置の基準 */
-    background: #fff;
+    background: var(--btron-bg-content);
     overflow: hidden;
     margin: 0;
     padding: 0;
@@ -59,7 +59,7 @@ body {
 
 /* エディタ本体 */
 #slide-wrapper #editor {
-    background: #fff;
+    background: var(--btron-bg-content);
     cursor: default;
     user-select: none;
     /* 基本文章編集のmin-height: 100%を無効化 */
@@ -79,7 +79,7 @@ body {
 
 /* 終了画面メッセージ */
 .end-screen-message {
-    color: #fff;
+    color: var(--btron-bg-content);
     font-size: 32px;
     text-align: center;
     font-family: "MS UI Gothic", sans-serif;
@@ -92,12 +92,12 @@ body {
 
 /* 背景色選択ダイアログ */
 .color-list {
-    background: #fff;
-    border: 1px solid #808080;
+    background: var(--btron-bg-content);
+    border: 1px solid var(--btron-border);
 }
 
 .color-item:hover {
-    background: #e0e0e0;
+    background: var(--btron-bg-tab-header);
 }
 
 /* ============================================================

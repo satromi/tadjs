@@ -136,10 +136,10 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
             // デフォルト値を計算
             const chsz = virtualObject.chsz || DEFAULT_FONT_SIZE;
             const chszPx = window.convertPtToPx(chsz);
-            const lineHeight = 1.2;
+            const lineHeight = DEFAULT_LINE_HEIGHT;
             const textHeight = Math.ceil(chszPx * lineHeight);
             width = 100;
-            height = textHeight + 8; // 閉じた仮身の高さ
+            height = textHeight + VOBJ_PADDING_VERTICAL; // 閉じた仮身の高さ
         }
 
         // 仮身を図形として追加
@@ -186,6 +186,7 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
 
         // デフォルト値で仮身オブジェクトを作成
         const virtualObj = {
+            vobjid: UuidV7Generator.generate(),
             link_id: realId,
             link_name: name,
             width: 150,
@@ -196,6 +197,9 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
             tbcol: DEFAULT_TBCOL,
             bgcol: DEFAULT_BGCOL,
             dlen: 0,
+            scrollx: 0,
+            scrolly: 0,
+            zoomratio: 1.0,
             pictdisp: 'true',  // ピクトグラムを表示
             namedisp: 'true',  // 名称を表示
             applist: applist || {}
@@ -581,7 +585,9 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
                     realObject: realObjectData,
                     bgcol: bgcol,
                     readonly: options.readonly !== false,
-                    noScrollbar: options.noScrollbar !== false
+                    noScrollbar: options.noScrollbar !== false,
+                    scrollPos: { x: virtualObject.scrollx || 0, y: virtualObject.scrolly || 0 },
+                    zoomratio: virtualObject.zoomratio || 1.0
                 }, '*');
                 logger.debug('[FIGURE EDITOR] 開いた仮身表示にデータを送信:', { virtualObject, realObjectData, bgcol, readonly: options.readonly !== false, noScrollbar: options.noScrollbar !== false });
             });

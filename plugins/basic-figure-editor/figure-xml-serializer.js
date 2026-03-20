@@ -117,10 +117,10 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
                 };
 
                 // 元の仮身の下に配置（10px下）
-                const chszPx = (newVirtualObject.chsz || DEFAULT_FONT_SIZE) * (96 / 72);
-                const lineHeight = 1.2;
+                const chszPx = window.convertPtToPx(newVirtualObject.chsz || DEFAULT_FONT_SIZE);
+                const lineHeight = DEFAULT_LINE_HEIGHT;
                 const textHeight = Math.ceil(chszPx * lineHeight);
-                const newHeight = textHeight + 8;
+                const newHeight = textHeight + VOBJ_PADDING_VERTICAL;
 
                 const newVobjShape = {
                     type: 'vobj',
@@ -276,10 +276,10 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
                 if (shape.linePatternId >= 128) usedCustomPatternIds.add(shape.linePatternId);
                 // fillColor → fillPatternId の事前解決
                 const fillEnabled = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
-                if (!(shape.fillPatternId >= 1) && fillEnabled) {
+                if (fillEnabled && !(shape.fillPatternId >= 1)) {
                     shape.fillPatternId = this.getOrCreateSolidColorPattern(shape.fillColor || DEFAULT_BGCOL);
                 }
-                if (shape.fillPatternId >= 128) usedCustomPatternIds.add(shape.fillPatternId);
+                if (fillEnabled && shape.fillPatternId >= 128) usedCustomPatternIds.add(shape.fillPatternId);
             }
 
             // 未使用カスタムパターンを除去し、IDを128から詰め直す
@@ -416,15 +416,16 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
             }
         }
         // 塗りパターン: 0=透明, 1+=パターンID
+        // fillEnabledチェックを最優先（fillPatternIdが残っていてもfillEnabled=falseなら透明）
         const fillEnabled = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
         let f_pat;
-        if (shape.fillPatternId >= 1) {
+        if (!fillEnabled) {
+            f_pat = 0; // 透明（塗りつぶし無効）
+        } else if (shape.fillPatternId >= 1) {
             f_pat = shape.fillPatternId;
-        } else if (fillEnabled) {
+        } else {
             // ソリッド塗り → 対応するパターンIDを取得/生成
             f_pat = this.getOrCreateSolidColorPattern(shape.fillColor || DEFAULT_BGCOL);
-        } else {
-            f_pat = 0; // 透明
         }
         // 角度
         const angle = shape.angle || 0;
@@ -614,8 +615,14 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
                     const relationshipAttr = vo.linkRelationship && vo.linkRelationship.length > 0
                         ? ` relationship="${vo.linkRelationship.join(' ')}"`
                         : '';
+                    // vobjid属性（必須）
+                    const vobjidAttr = ` vobjid="${vo.vobjid}"`;
+                    // scrollx/scrolly/zoomratio属性（常に出力）
+                    const scrollxAttr = ` scrollx="${vo.scrollx || 0}"`;
+                    const scrollyAttr = ` scrolly="${vo.scrolly || 0}"`;
+                    const zoomratioAttr = ` zoomratio="${vo.zoomratio || 1.0}"`;
                     // 自己閉じタグ形式（link_nameはJSONから取得する方式に統一）、dlen=0
-                    xmlParts.push(`<link id="${vo.link_id}" vobjleft="${shape.startX}" vobjtop="${shape.startY}" vobjright="${shape.endX}" vobjbottom="${shape.endY}" height="${height}" chsz="${vo.chsz || DEFAULT_FONT_SIZE}" frcol="${vo.frcol || DEFAULT_FRCOL}" chcol="${vo.chcol || DEFAULT_FRCOL}" tbcol="${vo.tbcol || DEFAULT_BGCOL}" bgcol="${vo.bgcol || DEFAULT_BGCOL}" dlen="0" pictdisp="${vo.pictdisp || 'true'}" namedisp="${vo.namedisp || 'true'}" roledisp="${vo.roledisp || 'false'}" typedisp="${vo.typedisp || 'false'}" updatedisp="${vo.updatedisp || 'false'}" framedisp="${vo.framedisp || 'true'}" autoopen="${vo.autoopen || 'false'}"${relationshipAttr}${fixedAttr}${backgroundAttr}${zIndexAttr}/>\r\n`);
+                    xmlParts.push(`<link id="${vo.link_id}"${vobjidAttr} vobjleft="${shape.startX}" vobjtop="${shape.startY}" vobjright="${shape.endX}" vobjbottom="${shape.endY}" height="${height}" chsz="${vo.chsz || DEFAULT_FONT_SIZE}" frcol="${vo.frcol || DEFAULT_FRCOL}" chcol="${vo.chcol || DEFAULT_FRCOL}" tbcol="${vo.tbcol || DEFAULT_BGCOL}" bgcol="${vo.bgcol || DEFAULT_BGCOL}" dlen="0" pictdisp="${vo.pictdisp || 'true'}" namedisp="${vo.namedisp || 'true'}" roledisp="${vo.roledisp || 'false'}" typedisp="${vo.typedisp || 'false'}" updatedisp="${vo.updatedisp || 'false'}" framedisp="${vo.framedisp || 'true'}" autoopen="${vo.autoopen || 'false'}"${relationshipAttr}${fixedAttr}${backgroundAttr}${zIndexAttr}${scrollxAttr}${scrollyAttr}${zoomratioAttr}/>\r\n`);
                 }
                 break;
 

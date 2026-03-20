@@ -437,8 +437,8 @@ class BaseFileManager extends window.PluginBase {
         const menuFontSize = localStorage.getItem('menu-font-size') || '14';
         const chsz = parseFloat(menuFontSize);
 
-        // ピクセル値に変換（フォールバック用）
-        const chszPx = window.convertPtToPx ? window.convertPtToPx(chsz) : Math.round(chsz * 1.333);
+        // ピクセル値に変換
+        const chszPx = window.convertPtToPx(chsz);
 
         // VirtualObjectRendererを使用する場合
         if (this.virtualObjectRenderer && baseFile.realId) {

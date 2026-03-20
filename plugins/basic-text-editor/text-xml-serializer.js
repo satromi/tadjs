@@ -167,8 +167,11 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
                     }
 
                     // 継承フォントサイズがある場合、ペアタグで囲む
+                    // ただし、段落内の全コンテンツが既にfontタグで包まれている場合は二重ラップを防止
                     if (inheritedFontSizeForPairTag) {
-                        finalContent = `<font size="${inheritedFontSizeForPairTag}">${finalContent}</font>`;
+                        if (!this.isContentFullyWrappedByFontSize(finalContent)) {
+                            finalContent = `<font size="${inheritedFontSizeForPairTag}">${finalContent}</font>`;
+                        }
                     }
 
                     xmlParts.push(finalContent);
@@ -436,6 +439,10 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
                         let attrs = '';
                         let innerContent = '';
                         let applistAttr = '';
+                        let vobjidAttr = '';
+                        let scrollxAttr = '';
+                        let scrollyAttr = '';
+                        let zoomratioAttr = '';
 
                         for (const key in node.dataset) {
                             if (key.startsWith('link')) {
@@ -451,6 +458,20 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
                                     // 座標属性はスキップ
                                     continue;
                                 }
+                                // vobjid属性はid属性の直後に出力するため別途保持
+                                else if (attrName === 'vobjid') {
+                                    vobjidAttr = ` vobjid="${this.escapeXml(attrValue)}"`;
+                                }
+                                // scrollx/scrolly/zoomratioは末尾に出力するため別途保持
+                                else if (attrName === 'scrollx') {
+                                    scrollxAttr = ` scrollx="${this.escapeXml(attrValue)}"`;
+                                }
+                                else if (attrName === 'scrolly') {
+                                    scrollyAttr = ` scrolly="${this.escapeXml(attrValue)}"`;
+                                }
+                                else if (attrName === 'zoomratio') {
+                                    zoomratioAttr = ` zoomratio="${this.escapeXml(attrValue)}"`;
+                                }
                                 else {
                                     attrs += ` ${attrName}="${this.escapeXml(attrValue)}"`;
                                 }
@@ -459,8 +480,15 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
                                 applistAttr = ` applist="${this.escapeXml(node.dataset[key])}"`;
                             }
                         }
+
+                        // id属性の直後にvobjidを挿入
+                        // attrs内の id="..." の直後に vobjid を挿入
+                        if (vobjidAttr) {
+                            attrs = attrs.replace(/( id="[^"]*")/, `$1${vobjidAttr}`);
+                        }
+
                         // 自己閉じタグ形式（link_nameはJSONから取得する方式に統一）
-                        xml += `<link${attrs}${applistAttr}/>`;
+                        xml += `<link${attrs}${applistAttr}${scrollxAttr}${scrollyAttr}${zoomratioAttr}/>`;
                     } else if (!node._tabProcessed) {
                         // 処理済みのタブspanはスキップ
 
@@ -529,7 +557,7 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
                                     endNode.nextSibling.nodeType === Node.ELEMENT_NODE &&
                                     endNode.nextSibling.nodeName === 'SPAN' &&
                                     endNode.nextSibling.style.fontSize) {
-                                    const size = window.roundFontSize(endNode.nextSibling.style.fontSize.replace('pt', '').replace('px', ''));
+                                    const size = this.normalizeFontSizeToPt(endNode.nextSibling.style.fontSize);
                                     if (size) nextFontSize = size;
                                 }
 
@@ -559,10 +587,10 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
                                     node.nextSibling.nodeType === Node.ELEMENT_NODE &&
                                     node.nextSibling.nodeName === 'SPAN' &&
                                     node.nextSibling.style.fontSize) {
-                                    tabFollowSize = window.roundFontSize(node.nextSibling.style.fontSize.replace('pt', '').replace('px', ''));
+                                    tabFollowSize = this.normalizeFontSizeToPt(node.nextSibling.style.fontSize);
                                 } else if (style.fontSize) {
                                     // span自身のフォントサイズ
-                                    tabFollowSize = window.roundFontSize(style.fontSize.replace('pt', '').replace('px', ''));
+                                    tabFollowSize = this.normalizeFontSizeToPt(style.fontSize);
                                 }
 
                                 parts.forEach((part, index) => {
@@ -594,7 +622,7 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
                                 const newState = { ...fontState };
 
                                 if (style.fontSize) {
-                                    const size = window.roundFontSize(style.fontSize.replace('pt', '').replace('px', ''));
+                                    const size = this.normalizeFontSizeToPt(style.fontSize);
                                     newState.size = size;
                                 }
                                 if (style.color) {
@@ -641,7 +669,7 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
                                     newState.color = hexColor;
                                 }
                                 if (style.fontSize) {
-                                    const size = window.roundFontSize(style.fontSize.replace('pt', '').replace('px', ''));
+                                    const size = this.normalizeFontSizeToPt(style.fontSize);
                                     // ペアタグ方式：親と異なるサイズの場合のみ出力（重複防止）
                                     if (size !== fontState.size) {
                                         xml += `<font size="${size}">`;
@@ -724,15 +752,76 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
     }
 
     /**
+     * style.fontSizeの値からpt単位の丸めた文字列を取得
+     * px単位の場合はpt単位に変換してからroundFontSizeを適用
+     * @param {string} fontSizeStr - style.fontSizeの値（例: "14pt", "18.67px"）
+     * @returns {string|null} pt単位の丸めた文字列（例: "14"）、またはnull
+     */
+    normalizeFontSizeToPt(fontSizeStr) {
+        if (!fontSizeStr) return null;
+        let size = parseFloat(fontSizeStr);
+        if (isNaN(size)) return null;
+        // px単位の場合はpt単位に変換（1pt = 4/3px → 1px = 3/4pt）
+        if (fontSizeStr.includes('px')) {
+            size = window.convertPxToPt(size);
+        }
+        return window.roundFontSize(String(size));
+    }
+
+    /**
      * 段落からフォントサイズを抽出
      */
     extractFontSize(element) {
         const style = element.style.fontSize;
         if (style) {
-            const size = style.replace('pt', '').replace('px', '');
-            return window.roundFontSize(size);
+            return this.normalizeFontSizeToPt(style);
         }
         return null;
+    }
+
+    /**
+     * 段落内のコンテンツが既にfont sizeタグで完全にラップされているかチェック
+     * updateParagraphLineHeight()が段落のstyle.fontSizeをmaxFontSizeに設定するため、
+     * 段落内の子要素が既に個別のfont sizeタグを持っている場合に段落レベルでの
+     * 二重ラップを防止するために使用する
+     * @param {string} content - XML文字列
+     * @returns {boolean} 全コンテンツがfont sizeタグで包まれている場合true
+     */
+    isContentFullyWrappedByFontSize(content) {
+        // brタグや空白・改行を除去して実質的なコンテンツを取得
+        const stripped = content.replace(/<br\s*\/?>/g, '').replace(/\r?\n/g, '').trim();
+        if (!stripped) return false;
+
+        // font sizeタグの外にテキストやlinkがあるかチェック
+        // アプローチ: fontタグの外にあるテキストノードを探す
+        let depth = 0;
+        let hasContentOutsideFont = false;
+        let i = 0;
+        while (i < stripped.length) {
+            if (stripped[i] === '<') {
+                const tagEnd = stripped.indexOf('>', i);
+                if (tagEnd === -1) break;
+                const tag = stripped.substring(i, tagEnd + 1);
+
+                if (tag.match(/^<font\s+(size|color|face)="/)) {
+                    depth++;
+                } else if (tag === '</font>') {
+                    depth--;
+                }
+                // 自己閉じタグ（link, brなど）はfontタグの外にあってもコンテンツとは見なさない
+                i = tagEnd + 1;
+            } else {
+                // テキストノード
+                if (depth === 0) {
+                    // fontタグの外にテキストがある
+                    hasContentOutsideFont = true;
+                    break;
+                }
+                i++;
+            }
+        }
+
+        return !hasContentOutsideFont;
     }
 
     /**

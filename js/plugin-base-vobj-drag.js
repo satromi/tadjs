@@ -7,6 +7,9 @@
 import { getLogger } from './logger.js';
 import { DEFAULT_TIMEOUT_MS } from './util.js';
 
+// UuidV7Generatorはグローバルスコープから取得（uuid-v7.jsがHTMLで先に読み込まれる前提）
+const UuidV7Generator = globalThis.UuidV7Generator;
+
 const logger = getLogger('PluginBase');
 
 /**
@@ -245,7 +248,8 @@ export function applyVobjDragMethods(PluginBaseClass) {
         return {
             ...virtualObject,
             link_id: result.newRealId,
-            link_name: result.newName
+            link_name: result.newName,
+            vobjid: UuidV7Generator.generate()
         };
     };
 
@@ -457,6 +461,14 @@ export function applyVobjDragMethods(PluginBaseClass) {
         } else {
             virtualObj.linkRelationship = [];
         }
+
+        // vobjid（仮身固有ID）
+        if (virtualObj.link_vobjid) virtualObj.vobjid = virtualObj.link_vobjid;
+
+        // scrollx/scrolly/zoomratio（仮身ごとのスクロール位置・ズーム率）
+        if (virtualObj.link_scrollx !== undefined) virtualObj.scrollx = parseFloat(virtualObj.link_scrollx);
+        if (virtualObj.link_scrolly !== undefined) virtualObj.scrolly = parseFloat(virtualObj.link_scrolly);
+        if (virtualObj.link_zoomratio !== undefined) virtualObj.zoomratio = parseFloat(virtualObj.link_zoomratio);
 
         return virtualObj;
     };

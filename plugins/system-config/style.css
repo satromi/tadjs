@@ -3,14 +3,14 @@ body {
     padding: 0;
     font-family: 'Noto Sans JP', sans-serif;
     font-size: 11px;
-    background: #dedede;
+    background: var(--btron-bg-standard);
 }
 
 .system-config-dialog {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    background: #dedede;
+    background: var(--btron-bg-standard);
 }
 
 .tab-container {
@@ -18,19 +18,19 @@ body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background: #dedede;
+    background: var(--btron-bg-standard);
 }
 
 .tab-header {
     display: flex;
-    border-bottom: 1px solid #808080;
-    background: #e0e0e0;
+    border-bottom: 1px solid var(--btron-border);
+    background: var(--btron-bg-tab-header);
 }
 
 .tab {
     padding: 6px 12px;
-    border: 1px outset #c0c0c0;
-    background: #c0c0c0;
+    border: 1px outset var(--btron-bg-inactive);
+    background: var(--btron-bg-inactive);
     cursor: pointer;
     font-size: 11px;
     user-select: none;
@@ -38,14 +38,14 @@ body {
 }
 
 .tab.active {
-    background: #dedede;
+    background: var(--btron-bg-standard);
     border-style: inset;
 }
 
 .tab-content {
     flex: 1;
     overflow-y: auto;
-    background: #dedede;
+    background: var(--btron-bg-standard);
     padding: 0;
 }
 
@@ -53,20 +53,20 @@ body {
     display: none;
     padding: 12px;
     padding-right: 0;  /* スクロールバー用に右側パディングを削除 */
-    background: #dedede;
+    background: var(--btron-bg-standard);
     min-height: 100%;  /* スクロール領域全体をカバー */
     box-sizing: border-box;  /* padding込みで100% */
 }
 
 /* tadjs-desktop.css の .system-config-dialog 固有スタイルを上書き（詳細度 0,2,0） */
 .system-config-dialog .tab-content {
-    background: #dedede;
+    background: var(--btron-bg-standard);
 }
 
 .system-config-dialog .tab-panel {
     padding: 12px;
     padding-right: 0;
-    background: #dedede;
+    background: var(--btron-bg-standard);
     min-height: 100%;
     box-sizing: border-box;
 }
@@ -78,16 +78,16 @@ body {
 /* サブタブ（画面タブ内） */
 .display-sub-tabs {
     display: flex;
-    border-bottom: 1px solid #808080;
-    background: #e0e0e0;
+    border-bottom: 1px solid var(--btron-border);
+    background: var(--btron-bg-tab-header);
     margin: -12px -12px 12px -12px;
     padding: 0;
 }
 
 .sub-tab {
     padding: 4px 10px;
-    border: 1px outset #c0c0c0;
-    background: #c0c0c0;
+    border: 1px outset var(--btron-bg-inactive);
+    background: var(--btron-bg-inactive);
     cursor: pointer;
     font-size: 11px;
     user-select: none;
@@ -95,18 +95,18 @@ body {
 }
 
 .sub-tab.active {
-    background: #dedede;
+    background: var(--btron-bg-standard);
     border-style: inset;
 }
 
 .sub-tab-content {
     position: relative;
-    background: #dedede;
+    background: var(--btron-bg-standard);
 }
 
 .sub-tab-panel {
     display: none;
-    background: #dedede;
+    background: var(--btron-bg-standard);
 }
 
 .sub-tab-panel.active {
@@ -138,11 +138,11 @@ body {
 }
 
 .config-button {
-    border: 1px outset #c0c0c0;
+    border: 1px outset var(--btron-bg-inactive);
     padding: 3px 8px;
     font-size: 11px;
     font-family: 'Noto Sans JP', sans-serif;
-    background: #c0c0c0;
+    background: var(--btron-bg-inactive);
     cursor: pointer;
 }
 
@@ -151,9 +151,9 @@ body {
 }
 
 .background-list {
-    border: 1px inset #c0c0c0;
+    border: 1px inset var(--btron-bg-inactive);
     padding: 4px;
-    background: white;
+    background: var(--btron-bg-content);
     margin-top: 8px;
 }
 
@@ -172,22 +172,22 @@ body {
 
 .background-option.selected {
     background: #0060ff;
-    color: white;
+    color: var(--btron-bg-content);
     border-color: #004080;
 }
 
 .bg-preview {
     width: 32px;
     height: 24px;
-    border: 1px inset #c0c0c0;
+    border: 1px inset var(--btron-bg-inactive);
     background-size: cover;
     background-position: center;
     flex-shrink: 0;
 }
 
 .bg-none {
-    background: linear-gradient(45deg, #dedede 25%, transparent 25%, transparent 75%, #dedede 75%),
-                linear-gradient(45deg, #dedede 25%, transparent 25%, transparent 75%, #dedede 75%);
+    background: linear-gradient(45deg, var(--btron-bg-standard) 25%, transparent 25%, transparent 75%, var(--btron-bg-standard) 75%),
+                linear-gradient(45deg, var(--btron-bg-standard) 25%, transparent 25%, transparent 75%, var(--btron-bg-standard) 75%);
     background-size: 8px 8px;
     background-position: 0 0, 4px 4px;
 }
@@ -202,16 +202,16 @@ body {
     justify-content: flex-end;
     gap: 8px;
     padding: 8px;
-    border-top: 1px solid #808080;
-    background: #e0e0e0;
+    border-top: 1px solid var(--btron-border);
+    background: var(--btron-bg-tab-header);
 }
 
 .dialog-button {
-    border: 1px outset #c0c0c0;
+    border: 1px outset var(--btron-bg-inactive);
     padding: 4px 12px;
     font-size: 11px;
     font-family: 'MS Sans Serif', sans-serif;
-    background: #c0c0c0;
+    background: var(--btron-bg-inactive);
     cursor: pointer;
     min-width: 60px;
 }
@@ -225,9 +225,9 @@ body {
     margin-left: auto;
     width: 16px;
     height: 16px;
-    background: #ff4040;
-    color: white;
-    border: 1px outset #ff6060;
+    background: var(--btron-accent-red);
+    color: var(--btron-bg-content);
+    border: 1px outset var(--btron-accent-red-light);
     font-size: 10px;
     cursor: pointer;
     display: flex;
@@ -237,7 +237,7 @@ body {
 }
 
 .bg-delete:hover {
-    background: #ff6060;
+    background: var(--btron-accent-red-light);
 }
 
 .bg-delete:active {
@@ -250,8 +250,8 @@ body {
 }
 
 .version-section {
-    background: white;
-    border: 2px inset #808080;
+    background: var(--btron-bg-content);
+    border: 2px inset var(--btron-border);
     padding: 0;
     /* margin-right は #version-panel の padding-right に移動 */
 }
@@ -260,8 +260,8 @@ body {
     display: flex;
     align-items: center;
     padding: 8px;
-    border-bottom: 2px solid #000000;
-    background: white;
+    border-bottom: 2px solid var(--btron-text-primary);
+    background: var(--btron-bg-content);
 }
 
 .version-label {
@@ -275,7 +275,7 @@ body {
 }
 
 .version-list {
-    background: white;
+    background: var(--btron-bg-content);
     padding: 0;
 }
 
@@ -283,7 +283,7 @@ body {
     display: flex;
     justify-content: space-between;
     padding: 4px 8px;
-    border-bottom: 1px solid #c0c0c0;
+    border-bottom: 1px solid var(--btron-bg-inactive);
     font-size: 12px;
 }
 
@@ -320,8 +320,8 @@ body {
 }
 
 .mcp-usage code {
-    background: #c0c0c0;
-    border: 1px inset #a0a0a0;
+    background: var(--btron-bg-inactive);
+    border: 1px inset var(--btron-gray-medium);
     padding: 1px 4px;
     font-family: 'MS Gothic', monospace;
     font-size: 11px;
@@ -338,7 +338,7 @@ body {
 .mcp-status {
     font-size: 11px;
     margin-left: 8px;
-    color: #808080;
+    color: var(--btron-border);
 }
 
 .mcp-status.running {
@@ -347,23 +347,23 @@ body {
 }
 
 .mcp-status.stopped {
-    color: #808080;
+    color: var(--btron-border);
 }
 
 /* スクロールバーラッパーとコンテンツの背景色 */
 .plugin-scrollbar-wrapper {
-    background: #dedede;
+    background: var(--btron-bg-standard);
 }
 
 .plugin-scrollbar-content {
-    background: #dedede;
+    background: var(--btron-bg-standard);
 }
 
 /* カスタムスクロールバー本体とトラックの背景色（tadjs-desktop.cssより高い詳細度が必要） */
 .plugin-scrollbar-wrapper > .custom-scrollbar.vertical {
-    background: #dedede;
+    background: var(--btron-bg-standard);
 }
 
 .plugin-scrollbar-wrapper .scroll-track {
-    background: #dedede;
+    background: var(--btron-bg-standard);
 }

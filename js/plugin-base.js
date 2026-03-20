@@ -13,6 +13,8 @@ import {
     DEFAULT_TBCOL,
     DEFAULT_BGCOL,
     DEFAULT_VOBJ_HEIGHT,
+    VOBJ_BORDER_WIDTH,
+    VOBJ_PADDING_HORIZONTAL,
     escapeXml as escapeXmlUtil,
     unescapeXml as unescapeXmlUtil,
     rgbToHex as rgbToHexUtil
@@ -21,6 +23,8 @@ import { getLogger } from './logger.js';
 import { throttle } from './performance-utils.js';
 import { DEFAULT_PATTERNS, resolvePatternColor } from './pattern-utils.js';
 import { PaperSize, PaperMargin, PAPER_SIZES, getPaperSizeOptions, pointsToMm, mmToPoints } from './paper-size.js';
+// UuidV7Generatorはグローバルスコープから取得（uuid-v7.jsがHTMLで先に読み込まれる前提）
+const UuidV7Generator = globalThis.UuidV7Generator;
 import { applyScrollbarMethods } from './plugin-base-scrollbar.js';
 import { applyVobjDragMethods } from './plugin-base-vobj-drag.js';
 import { TextStyleStateManager } from './text-style-manager.js';
@@ -1688,10 +1692,15 @@ export class PluginBase {
      */
     updateWindowConfig(windowConfig) {
         if (this.messageBus && this.realId) {
-            this.messageBus.send('update-window-config', {
+            const message = {
                 fileId: this.realId,
                 windowConfig: windowConfig
-            });
+            };
+            // vobjidがある場合は含める（仮身ごとのスクロール位置保存用）
+            if (this.vobjid) {
+                message.vobjid = this.vobjid;
+            }
+            this.messageBus.send('update-window-config', message);
         }
     }
 
@@ -1975,6 +1984,11 @@ export class PluginBase {
 
         if (data.fileData) {
             this.realId = this.extractRealId(data.fileData.realId || data.fileData.fileId);
+
+            // 仮身固有ID（vobjid）を保存（スクロール位置保存用）
+            if (data.fileData.vobjid) {
+                this.vobjid = data.fileData.vobjid;
+            }
 
             // 背景色の復元
             if (data.fileData.bgcol) {
@@ -3735,10 +3749,8 @@ export class PluginBase {
         const iconWidth = showPict ? chszPx : 0;
         const gap = showPict ? 4 : 0;  // アイコンとテキスト間のgap
 
-        // padding: 4px 8px → 左右で16px
-        // border: 1px solid → 左右で2px
-        const padding = 16;
-        const border = 2;
+        const padding = VOBJ_PADDING_HORIZONTAL;  // padding: 4px 8px → 左右で16px
+        const border = VOBJ_BORDER_WIDTH;         // border: 1px solid → 左右で2px
 
         return iconWidth + gap + textWidth + padding + border;
     }
@@ -4660,6 +4672,8 @@ export class PluginBase {
             const vobjbottom = parseInt(linkElement.getAttribute('vobjbottom')) || 0;
 
             return {
+                // 仮身固有ID（なければ自動生成）
+                vobjid: linkElement.getAttribute('vobjid') || UuidV7Generator.generate(),
                 // 識別属性
                 link_id: linkElement.getAttribute('id') || '',
                 link_name: linkElement.textContent?.trim() || '',
@@ -4686,6 +4700,17 @@ export class PluginBase {
                 updatedisp: linkElement.getAttribute('updatedisp') || PluginBase.VOBJ_DEFAULT_ATTRS.updatedisp,
                 framedisp: linkElement.getAttribute('framedisp') || PluginBase.VOBJ_DEFAULT_ATTRS.framedisp,
                 autoopen: linkElement.getAttribute('autoopen') || PluginBase.VOBJ_DEFAULT_ATTRS.autoopen,
+                // applist属性（起動可能アプリリスト）
+                applist: linkElement.getAttribute('applist') ? (() => {
+                    try { return JSON.parse(linkElement.getAttribute('applist')); }
+                    catch (e) { return {}; }
+                })() : {},
+                // zIndex属性（レイヤー順序）
+                zIndex: linkElement.getAttribute('zIndex') !== null ? parseInt(linkElement.getAttribute('zIndex')) : null,
+                // スクロール位置・表示倍率（仮身毎に管理、BTRON仕様準拠）
+                scrollx: parseFloat(linkElement.getAttribute('scrollx')) || 0,
+                scrolly: parseFloat(linkElement.getAttribute('scrolly')) || 0,
+                zoomratio: parseFloat(linkElement.getAttribute('zoomratio')) || 1.0,
                 // 仮身固有の続柄（link要素のrelationship属性）
                 linkRelationship: this.parseLinkRelationship(linkElement)
             };
@@ -4722,6 +4747,8 @@ export class PluginBase {
      */
     createVirtualObjectData(baseData) {
         return {
+            // 仮身固有ID（新規作成時は自動生成）
+            vobjid: baseData.vobjid || UuidV7Generator.generate(),
             // 必須属性
             link_id: baseData.link_id,
             link_name: baseData.link_name || '',
@@ -4746,6 +4773,10 @@ export class PluginBase {
             updatedisp: baseData.updatedisp !== undefined ? baseData.updatedisp : PluginBase.VOBJ_DEFAULT_ATTRS.updatedisp,
             framedisp: baseData.framedisp !== undefined ? baseData.framedisp : PluginBase.VOBJ_DEFAULT_ATTRS.framedisp,
             autoopen: baseData.autoopen !== undefined ? baseData.autoopen : PluginBase.VOBJ_DEFAULT_ATTRS.autoopen,
+            // スクロール位置・表示倍率（仮身毎に管理、BTRON仕様準拠）
+            scrollx: baseData.scrollx !== undefined ? baseData.scrollx : 0,
+            scrolly: baseData.scrolly !== undefined ? baseData.scrolly : 0,
+            zoomratio: baseData.zoomratio !== undefined ? baseData.zoomratio : 1.0,
             // 仮身固有の続柄（link要素のrelationship属性）
             linkRelationship: baseData.linkRelationship || []
         };
@@ -4758,8 +4789,11 @@ export class PluginBase {
      * @param {Object} virtualObj - 仮身オブジェクト
      */
     buildLinkElementAttributes(linkElement, virtualObj) {
-        // 必須属性
+        // 識別属性（id, vobjidは先頭に配置）
         linkElement.setAttribute('id', virtualObj.link_id);
+        linkElement.setAttribute('vobjid', virtualObj.vobjid || UuidV7Generator.generate());
+
+        // 座標属性
         linkElement.setAttribute('vobjleft', (virtualObj.vobjleft || 10).toString());
         linkElement.setAttribute('vobjtop', (virtualObj.vobjtop || 10).toString());
         linkElement.setAttribute('vobjright', (virtualObj.vobjright || 160).toString());
@@ -4782,6 +4816,26 @@ export class PluginBase {
         linkElement.setAttribute('framedisp', virtualObj.framedisp !== undefined ? virtualObj.framedisp.toString() : da.framedisp);
         linkElement.setAttribute('autoopen', virtualObj.autoopen !== undefined ? virtualObj.autoopen.toString() : da.autoopen);
 
+        // applist属性（起動可能アプリリスト）
+        if (virtualObj.applist) {
+            const applistStr = typeof virtualObj.applist === 'string'
+                ? virtualObj.applist
+                : JSON.stringify(virtualObj.applist);
+            if (applistStr && applistStr !== '{}') {
+                linkElement.setAttribute('applist', applistStr);
+            }
+        }
+
+        // スクロール位置・表示倍率（仮身毎に管理、BTRON仕様準拠）
+        linkElement.setAttribute('scrollx', (virtualObj.scrollx || 0).toString());
+        linkElement.setAttribute('scrolly', (virtualObj.scrolly || 0).toString());
+        linkElement.setAttribute('zoomratio', (virtualObj.zoomratio || 1.0).toString());
+
+        // zIndex属性（レイヤー順序、図形TAD用）
+        if (virtualObj.zIndex !== undefined && virtualObj.zIndex !== null) {
+            linkElement.setAttribute('zIndex', virtualObj.zIndex.toString());
+        }
+
         // 仮身固有の続柄（link要素のrelationship属性）
         if (virtualObj.linkRelationship && virtualObj.linkRelationship.length > 0) {
             linkElement.setAttribute('relationship', virtualObj.linkRelationship.join(' '));
@@ -4792,6 +4846,60 @@ export class PluginBase {
 
         // テキスト内容は書き込まない（自己閉じタグ形式）
         // link_nameはJSONから取得する方式に統一
+    }
+
+    /**
+     * xmlData内の全link要素を正規化（vobjid/applist/scrollx/scrolly/zoomratio等を付与）
+     * 初回ロード完了後に呼び出し、メモリ上のvirtualObjectsとxmlDataの整合性を確保する。
+     * isModifiedは変更しない（正規化のみなので保存確認ダイアログは出さない）。
+     * サブクラスでオーバーライドして、プラグイン固有属性（fixed, background等）を追加可能。
+     */
+    normalizeXmlLinkElements() {
+        if (!this.xmlData || !this.virtualObjects || this.virtualObjects.length === 0) return;
+
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(this.xmlData, 'text/xml');
+            const linkElements = xmlDoc.getElementsByTagName('link');
+
+            // 既存要素のリストを先に収集（getElementsByTagNameはライブコレクションなので）
+            const elementsToReplace = [];
+            for (let i = 0; i < linkElements.length; i++) {
+                const virtualObj = this.virtualObjects.find(vo => vo._xmlIndex === i);
+                if (virtualObj) {
+                    elementsToReplace.push({ oldElement: linkElements[i], virtualObj });
+                }
+            }
+
+            // 新しいlink要素に置換（属性順序を保証するため）
+            for (const { oldElement, virtualObj } of elementsToReplace) {
+                const newElement = xmlDoc.createElement('link');
+
+                // 共通属性を正しい順序で設定（id → vobjid → 座標 → ...）
+                this.buildLinkElementAttributes(newElement, virtualObj);
+
+                // プラグイン固有属性を設定（サブクラスでオーバーライド）
+                this.buildPluginSpecificLinkAttributes(newElement, virtualObj);
+
+                // 旧要素を新要素で置換
+                oldElement.parentNode.replaceChild(newElement, oldElement);
+            }
+
+            this.xmlData = this.serializeXmlDocument(xmlDoc);
+            console.log('[PluginBase] 全link要素を正規化完了, count:', this.virtualObjects.length);
+        } catch (error) {
+            console.error('[PluginBase] normalizeXmlLinkElements エラー:', error);
+        }
+    }
+
+    /**
+     * プラグイン固有のlink要素属性を設定するフックメソッド
+     * normalizeXmlLinkElements()から呼ばれる。サブクラスでオーバーライドして使用。
+     * @param {Element} linkElement - XML link要素
+     * @param {Object} virtualObj - 仮身オブジェクト
+     */
+    buildPluginSpecificLinkAttributes(linkElement, virtualObj) {
+        // デフォルトは何もしない。サブクラスでオーバーライド。
     }
 
     /**

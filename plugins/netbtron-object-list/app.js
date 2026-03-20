@@ -2994,9 +2994,28 @@ class NetBtronViewer extends window.PluginBase {
                 this.virtualObjects.push(obj);
             });
 
+            // 全link要素を正規化（vobjid/applist/scrollx/scrolly/zoomratio等を一括付与）
+            this.normalizeXmlLinkElements();
+
             await this.autoOpenVirtualObjects();
         } catch (error) {
             logger.error('[NetBtronViewer] XML解析エラー:', error);
+        }
+    }
+
+    /**
+     * プラグイン固有のlink要素属性を設定（normalizeXmlLinkElementsから呼ばれる）
+     */
+    buildPluginSpecificLinkAttributes(linkElement, virtualObj) {
+        if (virtualObj.isFixed) {
+            linkElement.setAttribute('fixed', 'true');
+        } else {
+            linkElement.removeAttribute('fixed');
+        }
+        if (virtualObj.isBackground) {
+            linkElement.setAttribute('background', 'true');
+        } else {
+            linkElement.removeAttribute('background');
         }
     }
 
@@ -3214,9 +3233,9 @@ class NetBtronViewer extends window.PluginBase {
             const chsz = parseFloat(obj.chsz) || DEFAULT_FONT_SIZE;
             const chszPx = window.convertPtToPx(chsz);
             const iconSize = window.convertPtToPx(chsz);
-            const textHeight = Math.ceil(chszPx * 1.2);
+            const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
             const contentHeight = Math.max(iconSize, textHeight);
-            const titleHeight = contentHeight + 8;
+            const titleHeight = contentHeight + VOBJ_PADDING_VERTICAL;
 
             const isOpenVirtualObj = this.isOpenVirtualObject(obj);
 
@@ -3316,8 +3335,8 @@ class NetBtronViewer extends window.PluginBase {
 
     _getMinClosedHeightFallback(chsz) {
         const chszPx = window.convertPtToPx(parseFloat(chsz) || DEFAULT_FONT_SIZE);
-        const textHeight = Math.ceil(chszPx * 1.2);
-        return textHeight + 8;
+        const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
+        return textHeight + VOBJ_PADDING_VERTICAL;
     }
 
     // =========================================================
@@ -4242,6 +4261,31 @@ class NetBtronViewer extends window.PluginBase {
                     linkElement.removeAttribute('relationship');
                 }
 
+                // applist属性（起動可能アプリリスト）
+                if (virtualObj.applist) {
+                    const applistStr = typeof virtualObj.applist === 'string'
+                        ? virtualObj.applist
+                        : JSON.stringify(virtualObj.applist);
+                    if (applistStr && applistStr !== '{}') {
+                        linkElement.setAttribute('applist', applistStr);
+                    }
+                }
+
+                // vobjid属性（必須）
+                if (virtualObj.vobjid !== undefined) {
+                    linkElement.setAttribute('vobjid', virtualObj.vobjid);
+                }
+                // scrollx/scrolly/zoomratio属性（常に出力）
+                if (virtualObj.scrollx !== undefined) {
+                    linkElement.setAttribute('scrollx', virtualObj.scrollx.toString());
+                }
+                if (virtualObj.scrolly !== undefined) {
+                    linkElement.setAttribute('scrolly', virtualObj.scrolly.toString());
+                }
+                if (virtualObj.zoomratio !== undefined) {
+                    linkElement.setAttribute('zoomratio', virtualObj.zoomratio.toString());
+                }
+
                 virtualObj.originalLeft = virtualObj.vobjleft;
                 virtualObj.originalTop = virtualObj.vobjtop;
                 virtualObj.originalRight = virtualObj.vobjright;
@@ -4262,27 +4306,10 @@ class NetBtronViewer extends window.PluginBase {
             const parser = new DOMParser();
             const xmlDoc = parser.parseFromString(this.xmlData, 'text/xml');
 
+            // 新しい<link>要素を作成（共通メソッドを使用）
             const linkElement = xmlDoc.createElement('link');
-            linkElement.setAttribute('id', virtualObj.link_id);
-            linkElement.setAttribute('vobjleft', virtualObj.vobjleft.toString());
-            linkElement.setAttribute('vobjtop', virtualObj.vobjtop.toString());
-            linkElement.setAttribute('vobjright', virtualObj.vobjright.toString());
-            linkElement.setAttribute('vobjbottom', virtualObj.vobjbottom.toString());
-            linkElement.setAttribute('height', (virtualObj.heightPx || DEFAULT_VOBJ_HEIGHT).toString());
-            linkElement.setAttribute('chsz', (virtualObj.chsz || DEFAULT_FONT_SIZE).toString());
-            linkElement.setAttribute('frcol', virtualObj.frcol || DEFAULT_FRCOL);
-            linkElement.setAttribute('chcol', virtualObj.chcol || DEFAULT_CHCOL);
-            linkElement.setAttribute('tbcol', virtualObj.tbcol || DEFAULT_TBCOL);
-            linkElement.setAttribute('bgcol', virtualObj.bgcol || DEFAULT_BGCOL);
-            linkElement.setAttribute('dlen', (virtualObj.dlen || 0).toString());
-
-            if (virtualObj.pictdisp !== undefined) linkElement.setAttribute('pictdisp', virtualObj.pictdisp.toString());
-            if (virtualObj.namedisp !== undefined) linkElement.setAttribute('namedisp', virtualObj.namedisp.toString());
-            if (virtualObj.roledisp !== undefined) linkElement.setAttribute('roledisp', virtualObj.roledisp.toString());
-            if (virtualObj.typedisp !== undefined) linkElement.setAttribute('typedisp', virtualObj.typedisp.toString());
-            if (virtualObj.updatedisp !== undefined) linkElement.setAttribute('updatedisp', virtualObj.updatedisp.toString());
-            if (virtualObj.framedisp !== undefined) linkElement.setAttribute('framedisp', virtualObj.framedisp.toString());
-            if (virtualObj.autoopen !== undefined) linkElement.setAttribute('autoopen', virtualObj.autoopen.toString());
+            this.buildLinkElementAttributes(linkElement, virtualObj);
+            // プラグイン固有属性：保護状態
             if (virtualObj.isFixed) linkElement.setAttribute('fixed', 'true');
             if (virtualObj.isBackground) linkElement.setAttribute('background', 'true');
 
@@ -5488,14 +5515,14 @@ class NetBtronViewer extends window.PluginBase {
                     const newVirtualObj = {
                         link_id: result.newRealId,
                         link_name: result.newName,
-                        vobjleft: selectedVirtualObject.vobjleft + 20,
-                        vobjtop: selectedVirtualObject.vobjtop + 30,
-                        vobjright: selectedVirtualObject.vobjright + 20,
-                        vobjbottom: selectedVirtualObject.vobjbottom + 30,
-                        originalLeft: selectedVirtualObject.vobjleft + 20,
-                        originalTop: selectedVirtualObject.vobjtop + 30,
-                        originalRight: selectedVirtualObject.vobjright + 20,
-                        originalBottom: selectedVirtualObject.vobjbottom + 30,
+                        vobjleft: selectedVirtualObject.vobjleft + VOBJ_DROP_OFFSET_X,
+                        vobjtop: selectedVirtualObject.vobjtop + VOBJ_DROP_OFFSET_Y,
+                        vobjright: selectedVirtualObject.vobjright + VOBJ_DROP_OFFSET_X,
+                        vobjbottom: selectedVirtualObject.vobjbottom + VOBJ_DROP_OFFSET_Y,
+                        originalLeft: selectedVirtualObject.vobjleft + VOBJ_DROP_OFFSET_X,
+                        originalTop: selectedVirtualObject.vobjtop + VOBJ_DROP_OFFSET_Y,
+                        originalRight: selectedVirtualObject.vobjright + VOBJ_DROP_OFFSET_X,
+                        originalBottom: selectedVirtualObject.vobjbottom + VOBJ_DROP_OFFSET_Y,
                         width: selectedVirtualObject.width,
                         heightPx: selectedVirtualObject.heightPx,
                         chsz: selectedVirtualObject.chsz,
@@ -5641,7 +5668,7 @@ class NetBtronViewer extends window.PluginBase {
 
         if (this.openedRealObjects) {
             for (const [realId, wId] of this.openedRealObjects.entries()) {
-                if (wId === windowId) {
+                if (wId === windowId || (wId && wId.windowId === windowId)) {
                     this.openedRealObjects.delete(realId);
                     break;
                 }
@@ -5938,7 +5965,7 @@ class NetBtronViewer extends window.PluginBase {
     }
 
     calculateRequiredWidth(obj, lengthType, ctx) {
-        const chszPx = (obj.chsz || DEFAULT_FONT_SIZE) * 96 / 72;
+        const chszPx = window.convertPtToPx(obj.chsz || DEFAULT_FONT_SIZE);
         ctx.font = `${chszPx}px sans-serif`;
 
         const paddingLeft = 10;
@@ -7144,17 +7171,17 @@ class NetBtronViewer extends window.PluginBase {
             });
 
             if (!hasContentArea) {
-                const lineHeight = 1.2;
+                const lineHeight = DEFAULT_LINE_HEIGHT;
                 const newChszPx = window.convertPtToPx(newChsz);
                 const textHeight = Math.ceil(newChszPx * lineHeight);
-                const newHeight = textHeight + 8;
+                const newHeight = textHeight + VOBJ_PADDING_VERTICAL;
                 vobj.vobjbottom = vobj.vobjtop + newHeight;
                 logger.debug('[NetBtronViewer] 閉じた仮身の高さを調整:', vobjHeight, '->', newHeight, `(${newChsz}pt = ${newChszPx}px)`);
             } else {
-                const lineHeight = 1.2;
+                const lineHeight = DEFAULT_LINE_HEIGHT;
                 const newChszPx = window.convertPtToPx(newChsz);
                 const textHeight = Math.ceil(newChszPx * lineHeight);
-                const newMinOpenHeight = textHeight + 30;
+                const newMinOpenHeight = textHeight + VOBJ_MIN_OPEN_HEIGHT_OFFSET;
                 const heightRatio = newChsz / oldChsz;
                 const adjustedHeight = Math.max(newMinOpenHeight, Math.round(vobjHeight * heightRatio));
                 vobj.vobjbottom = vobj.vobjtop + adjustedHeight;
@@ -7178,10 +7205,10 @@ class NetBtronViewer extends window.PluginBase {
             if (!hasContentArea) {
                 const currentHeight = vobj.vobjbottom - vobj.vobjtop;
                 const chsz = parseInt(vobj.chsz) || DEFAULT_FONT_SIZE;
-                const lineHeight = 1.2;
+                const lineHeight = DEFAULT_LINE_HEIGHT;
                 const chszPx = window.convertPtToPx(chsz);
                 const textHeight = Math.ceil(chszPx * lineHeight);
-                const newHeight = textHeight + 8;
+                const newHeight = textHeight + VOBJ_PADDING_VERTICAL;
 
                 if (currentHeight !== newHeight) {
                     vobj.vobjbottom = vobj.vobjtop + newHeight;

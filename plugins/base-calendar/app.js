@@ -3355,6 +3355,21 @@ ${dayText}
                 linkElement.removeAttribute('relationship');
             }
 
+            // vobjid属性（必須）
+            if (vobj.vobjid !== undefined) {
+                linkElement.setAttribute('vobjid', vobj.vobjid);
+            }
+            // scrollx/scrolly/zoomratio属性
+            if (vobj.scrollx !== undefined) {
+                linkElement.setAttribute('scrollx', vobj.scrollx.toString());
+            }
+            if (vobj.scrolly !== undefined) {
+                linkElement.setAttribute('scrolly', vobj.scrolly.toString());
+            }
+            if (vobj.zoomratio !== undefined) {
+                linkElement.setAttribute('zoomratio', vobj.zoomratio.toString());
+            }
+
             // XMLを更新
             const serializer = new XMLSerializer();
             let xmlString = serializer.serializeToString(xmlDoc);
@@ -3432,10 +3447,10 @@ ${dayText}
         const newVirtualObj = {
             link_id: result.newRealId,
             link_name: result.newName,
-            vobjleft: (originalVirtualObj.vobjleft || 100) + 20,
-            vobjtop: (originalVirtualObj.vobjtop || 100) + 30,
-            vobjright: (originalVirtualObj.vobjright || 200) + 20,
-            vobjbottom: (originalVirtualObj.vobjbottom || 200) + 30,
+            vobjleft: (originalVirtualObj.vobjleft || 100) + VOBJ_DROP_OFFSET_X,
+            vobjtop: (originalVirtualObj.vobjtop || 100) + VOBJ_DROP_OFFSET_Y,
+            vobjright: (originalVirtualObj.vobjright || 200) + VOBJ_DROP_OFFSET_X,
+            vobjbottom: (originalVirtualObj.vobjbottom || 200) + VOBJ_DROP_OFFSET_Y,
             width: originalVirtualObj.width,
             heightPx: originalVirtualObj.heightPx,
             chsz: originalVirtualObj.chsz,

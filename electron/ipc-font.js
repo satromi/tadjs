@@ -89,6 +89,8 @@ function getFontDirectories() {
         // Linux
         return [
             '/usr/share/fonts',
+            '/usr/share/fonts/truetype',
+            '/usr/share/fonts/opentype',
             '/usr/local/share/fonts',
             path.join(process.env.HOME || '', '.fonts'),
             path.join(process.env.HOME || '', '.local/share/fonts')
@@ -150,6 +152,61 @@ function findFontFile(fontName) {
     }
 
     return null;
+}
+
+// fc-listでフォント情報を取得（Linux専用）
+async function getSystemFontsViaFcList() {
+    if (process.platform !== 'linux') {
+        return [];
+    }
+
+    try {
+        logger.debug('fc-listでフォント取得開始');
+        // fc-list で日本語名・英語名を含むフォントファミリー一覧を取得
+        // まず日本語フォントを試行し、失敗したら全フォントを取得
+        let output = '';
+        try {
+            output = execSync('fc-list :lang=ja --format="%{family[0]}\\n"', {
+                encoding: 'utf8',
+                maxBuffer: 10 * 1024 * 1024,
+                stdio: ['pipe', 'pipe', 'ignore']
+            });
+        } catch (e1) {
+            try {
+                output = execSync('fc-list --format="%{family[0]}\\n"', {
+                    encoding: 'utf8',
+                    maxBuffer: 10 * 1024 * 1024
+                });
+            } catch (e2) {
+                logger.debug('fc-listコマンドが利用できません');
+                return [];
+            }
+        }
+
+        if (!output || output.trim().length === 0) {
+            logger.debug('fc-list出力が空です');
+            return [];
+        }
+
+        // 重複を除去してフォント情報に整形
+        const fontNames = [...new Set(output.trim().split('\n').filter(n => n.length > 0))];
+        const result = fontNames.map(name => {
+            // fc-listは "日本語名,英語名" 形式で返すことがある
+            const names = name.split(',').map(n => n.trim());
+            return {
+                systemName: names[names.length - 1] || name, // 英語名（最後）
+                japanese: names.length > 1 ? names[0] : null, // 日本語名（最初）
+                english: names[names.length - 1] || name,
+                allNames: names
+            };
+        });
+
+        logger.debug('fc-listから取得:', result.length, 'フォント');
+        return result;
+    } catch (error) {
+        logger.error('fc-listフォント取得エラー:', error.message);
+        return [];
+    }
 }
 
 // PowerShellでDirectWrite APIを使ってフォント情報を取得（Windows専用）
@@ -249,6 +306,29 @@ function registerFontIpcHandlers() {
                 allNames: [name]
             }));
 
+            // Linux: fc-listから追加のフォント情報を取得して統合
+            if (process.platform === 'linux') {
+                try {
+                    const fcFonts = await getSystemFontsViaFcList();
+                    if (fcFonts.length > 0) {
+                        const existingNames = new Set(fonts.map(f => f.systemName));
+                        for (const fcFont of fcFonts) {
+                            if (!existingNames.has(fcFont.systemName)) {
+                                fonts.push({
+                                    systemName: fcFont.systemName,
+                                    displayName: fcFont.japanese || fcFont.systemName,
+                                    allNames: fcFont.allNames
+                                });
+                                existingNames.add(fcFont.systemName);
+                            }
+                        }
+                        logger.debug('fc-listから追加統合:', fcFonts.length, 'フォント');
+                    }
+                } catch (err) {
+                    logger.warn('fc-list統合をスキップ:', err.message);
+                }
+            }
+
             logger.info('フォント情報取得完了:', fonts.length);
             return { success: true, fonts: fonts };
         } catch (error) {
@@ -263,5 +343,6 @@ module.exports = {
     getFontDirectories,
     findFontFile,
     getSystemFontsViaDirectWrite,
+    getSystemFontsViaFcList,
     registerFontIpcHandlers
 };

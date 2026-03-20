@@ -1,6 +1,6 @@
 # TADjs
 
-ダウンロード： [TADjs Desktop Ver0.38](https://github.com/satromi/tadjs/releases/tag/Ver0.38 "TADjs Desktop Ver0.38 Release")
+ダウンロード： [TADjs Desktop Ver0.39](https://github.com/satromi/tadjs/releases/tag/Ver0.39 "TADjs Desktop Ver0.39 Release")
 
 satromi@gmai.com
 
@@ -26,12 +26,87 @@ TADjsはBTRONユーザが継続的に実身/仮身、TADを活用していくた
 
 書庫形式である実身内に仮身セグメントがある場合、仮身をクリックするとリンク先の実身に飛ぶことができます。
 
+## Windows版インストール方法
+
+インストールは、どこかのフォルダにtadjs_desktop.zipを解凍してください。
+起動前に、解凍フォルダ"019ab620-1e6a-7d17-9598-bccfe61293e0_0.xtad”をエディタで開いて、
+data_folder "C:\tadjs-desktop\data"のようにtadjs_desktopを解凍したフォルダ配下にあるdataフォルダを指定してください。
+使うには、解凍したフォルダ直下にあるtadjs_desktop.exeを起動してください。
+
+## Windows版アップデート方法
+
+アップデートされる場合は、\dataフォルダと"019ab620-1e6a-7d17-9598-bccfe61293e0_0.xtad”をどこかに待避して、インストールフォルダに新バージョンを解凍してください。
+その後、インストールフォルダに\dataフォルダと"019ab620-1e6a-7d17-9598-bccfe61293e0_0.xtad”を戻してください。
+
+## Linux版インストール方法
+
+### 前提条件
+
+日本語フォントおよびElectron実行に必要なライブラリを事前にインストールしてください。
+
+#### Ubuntu/Debian系の場合
+
+```bash
+sudo apt install -y fonts-noto-cjk libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libgtk-3-0 libnss3 libxcomposite1 libxdamage1 libxrandr2 libxss1 libxtst6
+```
+
+#### Fedora/RHEL系の場合
+
+```bash
+sudo dnf install -y google-noto-sans-cjk-fonts alsa-lib atk at-spi2-atk cups-libs libdrm mesa-libgbm gtk3 nss libXcomposite libXdamage libXrandr libXScrnSaver libXtst
+```
+
+### インストール手順
+
+1. `tadjs_desktop.tar.gz`を任意のフォルダに解凍してください
+
+```bash
+tar xzf tadjs_desktop.tar.gz
+```
+
+1. 解凍されたフォルダに移動し、実行ファイルに実行権限を付与してください
+
+```bash
+cd "TADjs Desktop-linux-x64"
+chmod +x tadjs_desktop
+```
+
+1. `tadjs_desktop`を起動してください
+
+```bash
+./tadjs_desktop
+```
+
+> **Note:** Linux版はデータフォルダが相対パス（`./data/`）で設定済みのため、Windows版のようなxtadファイルの編集は不要です。
+
+### WSL（Windows Subsystem for Linux）で使用する場合
+
+WSLではGUI表示のためにWSLg（Windows 11標準搭載）が必要です。
+WSL1をお使いの場合はWSL2へのアップグレードが必要です。
+
+## Linux版アップデート方法
+
+アップデートされる場合は、`/data`フォルダをどこかに待避して、インストールフォルダに新バージョンを解凍してください。
+その後、インストールフォルダに`/data`フォルダを戻してください。
+
+> **Note:** Linux版は`019ab620-1e6a-7d17-9598-bccfe61293e0_0.xtad`の待避は不要です（相対パス設定のため）。
+
 ## 更新履歴
+
+### Ver0.39
+
+- Linux向けビルドを追加しました。
+  - Linux向けのビルドを追加
+- 諸々修正
+  - 開いた仮身表示の位置を保存できるように、仮身セグメントにウインドウ位置を保存するように修正
+  - 仮身セグメント自体に仮身セグメントID（実身IDと同様の採番ルール）、スクロール位置、表示倍率を持たせるように修正
+- 基本図形編集プラグインの機能を修正しました。
+  - 塗りつぶし色無効にして保存しても、塗りつぶし有効になる不具合を修正
 
 ### Ver0.38
 
 - 基本文章編集プラグインの機能を追加しました。
-  - <document>要素がない場合でも図形セグメントを表示する機能を追加
+  - `<document>`要素がない場合でも図形セグメントを表示する機能を追加
 - 基本文章編集プラグインの機能を追加しました。
   - タブ書式指定付箋に暫定対応
 - 基本図形編集プラグインの機能を追加しました。

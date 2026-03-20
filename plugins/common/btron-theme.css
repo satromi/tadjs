@@ -2,30 +2,62 @@
  * plugins/common/btron-theme.css
  * BTRON共通テーマ定義 - CSS カスタムプロパティ
  * 全プラグインで共有される色定義・基本スタイル
+ *
+ * 使用方法: 各プラグインのindex.htmlで読み込む
+ *   <link rel="stylesheet" href="../common/btron-theme.css">
+ *
+ * 対応するJS定数: js/util.js
  */
 
 :root {
-    /* === BTRON カラーパレット === */
-    --btron-bg-standard: #dedede;       /* 標準背景（ダイアログ、タブパネル） */
+    /* === BTRON カラーパレット（CLAUDE.md準拠） === */
+    --btron-bg-standard: #dedede;       /* 標準背景（ダイアログ、タブパネル） - 新規実装で推奨 */
     --btron-bg-tab-header: #e0e0e0;     /* タブヘッダー、ダイアログボタン領域 */
     --btron-bg-inactive: #c0c0c0;       /* 非アクティブタブ、ボタン背景 */
     --btron-border: #808080;            /* ボーダー（区切り線） */
     --btron-bg-content: #ffffff;        /* コンテンツ領域（テキスト入力、リスト） */
-    --btron-bg-legacy: #f0f0f0;         /* 旧スタイル互換用 */
+    --btron-bg-legacy: #f0f0f0;         /* 旧スタイル互換用（新規では非推奨） */
+
+    /* === グレースケール中間色 === */
+    --btron-gray-light: #d0d0d0;        /* ボタンホバー、軽いボーダー */
+    --btron-gray-medium: #a0a0a0;       /* 非アクティブボーダー、メニューボーダー */
+    --btron-gray-dark: #606060;         /* ダークボーダー、ホバーボーダー */
+    --btron-gray-darker: #404040;       /* ウィンドウシャドウ */
 
     /* === テキスト色 === */
     --btron-text-primary: #000000;      /* 主テキスト */
     --btron-text-secondary: #333333;    /* 副テキスト */
-    --btron-text-disabled: #888888;     /* 無効テキスト */
+    --btron-text-muted: #666666;        /* 薄いテキスト（ステータスバー、ショートカット等） */
+    --btron-text-disabled: #808080;     /* 無効テキスト */
+    --btron-text-info: #000080;         /* 情報テキスト（濃紺） */
 
     /* === 選択・ハイライト色 === */
-    --btron-bg-selected: #0078d7;       /* 選択背景 */
+    --btron-bg-selected: #0078d4;       /* 選択背景（リスト等） */
     --btron-text-selected: #ffffff;     /* 選択テキスト */
     --btron-bg-hover: #e8e8e8;          /* ホバー背景 */
+    --btron-bg-list-hover: #e3f2fd;     /* リスト/メニューホバー背景（薄い青） */
+    --btron-bg-list-selected: #e8f4f8;  /* リスト選択背景（薄い青緑） */
+
+    /* === アクセントカラー === */
+    --btron-accent-blue: #0066cc;       /* 選択・フォーカス（表計算等） */
+    --btron-accent-orange: #ff8f00;     /* 仮身選択状態 */
+    --btron-accent-red: #ff4040;        /* 削除ボタン、エラー */
+    --btron-accent-red-light: #ff6060;  /* 削除ボタンホバー、エラーボーダー */
+    --btron-accent-green: #48cf5a;      /* チェックボックス/ラジオ選択状態 */
+    --btron-accent-green-border: #3ab34a; /* チェックボックス/ラジオ選択ボーダー */
+
+    /* === 特殊用途色 === */
+    --btron-desktop-bg: #cdeeff;        /* デスクトップ背景（BTRON青） */
+    --btron-close-hover: #ff4444;       /* ウィンドウクローズボタンホバー */
+    --btron-slider-indicator: #ffff00;  /* スライダーインジケーター */
+    --btron-drop-zone-bg: rgba(0, 255, 0, 0.1);    /* ドロップゾーン背景 */
+    --btron-drop-zone-border: #00aa00;  /* ドロップゾーンボーダー */
+    --btron-modal-backdrop: rgba(0, 0, 0, 0.3);     /* モーダル背景 */
 
     /* === ボーダー === */
     --btron-border-light: #a0a0a0;      /* 薄いボーダー */
     --btron-border-dark: #606060;       /* 濃いボーダー */
+    --btron-border-separator: #cccccc;  /* セパレータ */
 
     /* === フォント === */
     --btron-font-family: 'MS Gothic', 'ＭＳ ゴシック', monospace;

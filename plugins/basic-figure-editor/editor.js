@@ -264,6 +264,18 @@ class BasicFigureEditor extends
         // menu-action, get-menu-definition, window-close-request
         this.setupCommonMessageBusHandlers();
 
+        // update-vobj-scroll メッセージ（ウィンドウ閉じた時の仮身スクロール位置更新）
+        this.messageBus.on('update-vobj-scroll', (data) => {
+            if (!data.vobjid || !this.shapes) return;
+            const shape = this.shapes.find(s => s.virtualObject && s.virtualObject.vobjid === data.vobjid);
+            if (shape) {
+                if (data.scrollx !== undefined) shape.virtualObject.scrollx = data.scrollx;
+                if (data.scrolly !== undefined) shape.virtualObject.scrolly = data.scrolly;
+                if (data.zoomratio !== undefined) shape.virtualObject.zoomratio = data.zoomratio;
+                this.saveFile();
+            }
+        });
+
         // scroll メッセージ
         this.messageBus.on('scroll', (data) => {
             logger.debug('[FIGURE EDITOR] [MessageBus] scroll受信:', data);
@@ -472,7 +484,7 @@ class BasicFigureEditor extends
             logger.debug('[FIGURE EDITOR] [MessageBus] window-closed受信, windowId:', data.windowId);
             // openedRealObjectsから削除
             for (const [realId, windowId] of this.openedRealObjects.entries()) {
-                if (windowId === data.windowId) {
+                if (windowId === data.windowId || (windowId && windowId.windowId === data.windowId)) {
                     this.openedRealObjects.delete(realId);
                     logger.debug('[FIGURE EDITOR] [MessageBus] 実身ウィンドウを追跡から削除:', realId);
                     break;
@@ -605,10 +617,12 @@ class BasicFigureEditor extends
                 });
 
                 // スクロール位置を復元（DOM更新完了を待つ）
+                // data.scrollPos（仮身ごとの設定）を優先、フォールバックとしてwindowConfig.scrollPos
                 const windowConfig = realObject.metadata?.window;
-                if (windowConfig && windowConfig.scrollPos) {
+                const scrollPos = data.scrollPos || (windowConfig && windowConfig.scrollPos);
+                if (scrollPos) {
                     setTimeout(() => {
-                        this.setScrollPosition(windowConfig.scrollPos);
+                        this.setScrollPosition(scrollPos);
                     }, 200);
                 }
             }
@@ -2212,12 +2226,12 @@ class BasicFigureEditor extends
                         // 現在の行を描画
                         if (currentLineSegments.length > 0) {
                             drawLine(currentLineSegments, y);
-                            y += style.fontSize * 1.2;
+                            y += style.fontSize * DEFAULT_LINE_HEIGHT;
                             currentLineSegments = [];
                             currentLineWidth = 0;
                         } else {
                             // 空行
-                            y += style.fontSize * 1.2;
+                            y += style.fontSize * DEFAULT_LINE_HEIGHT;
                         }
                     }
 
@@ -2237,7 +2251,7 @@ class BasicFigureEditor extends
 
                             // 行を描画
                             drawLine(currentLineSegments, y);
-                            y += style.fontSize * 1.2;
+                            y += style.fontSize * DEFAULT_LINE_HEIGHT;
 
                             // 次の行を開始
                             currentLineSegments = [];
@@ -3940,8 +3954,9 @@ class BasicFigureEditor extends
             shape.vobjElement.style.top = `${pos.y}px`;
         }
         if (shape.type === 'vobj' && shape.expanded && shape.expandedElement) {
-            const chsz = (shape.virtualObject && shape.virtualObject.chsz) || 16;
-            const titleBarHeight = chsz + 16;
+            const chsz = (shape.virtualObject && shape.virtualObject.chsz) || DEFAULT_FONT_SIZE;
+            const chszPx = window.convertPtToPx(chsz);
+            const titleBarHeight = Math.max(chszPx, Math.ceil(chszPx * DEFAULT_LINE_HEIGHT)) + VOBJ_PADDING_VERTICAL + 1;
             const expPos = this.logicalToPhysical(shape.startX, shape.startY + titleBarHeight);
             shape.expandedElement.style.left = `${expPos.x}px`;
             shape.expandedElement.style.top = `${expPos.y}px`;
@@ -4349,10 +4364,10 @@ class BasicFigureEditor extends
                 };
 
                 // 元の仮身の下に配置（10px下）
-                const chszPx = (newVirtualObject.chsz || DEFAULT_FONT_SIZE) * (96 / 72);
-                const lineHeight = 1.2;
+                const chszPx = window.convertPtToPx(newVirtualObject.chsz || DEFAULT_FONT_SIZE);
+                const lineHeight = DEFAULT_LINE_HEIGHT;
                 const textHeight = Math.ceil(chszPx * lineHeight);
-                const newHeight = textHeight + 8;
+                const newHeight = textHeight + VOBJ_PADDING_VERTICAL;
 
                 const newVobjShape = {
                     type: 'vobj',

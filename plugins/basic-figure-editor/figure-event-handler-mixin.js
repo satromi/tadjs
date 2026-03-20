@@ -1023,7 +1023,8 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
                 // 展開された仮身のiframe位置を更新（論理座標を物理座標に変換）
                 if (shape.type === 'vobj' && shape.expanded && shape.expandedElement) {
                     const chsz = shape.virtualObject.chsz || DEFAULT_FONT_SIZE;
-                    const titleBarHeight = chsz + 16;
+                    const chszPx = window.convertPtToPx(chsz);
+                    const titleBarHeight = Math.max(chszPx, Math.ceil(chszPx * DEFAULT_LINE_HEIGHT)) + VOBJ_PADDING_VERTICAL + 1;
                     const expPos = this.logicalToPhysical(shape.startX, shape.startY + titleBarHeight);
                     shape.expandedElement.style.left = `${expPos.x}px`;
                     shape.expandedElement.style.top = `${expPos.y}px`;

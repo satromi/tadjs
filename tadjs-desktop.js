@@ -50,7 +50,7 @@ class TADjsDesktop {
         this.clipboard = null; // グローバルクリップボード（仮身データ）
         this.closeConfirmCallbacks = {}; // ウィンドウクローズ確認コールバック
         this.closingWindows = new Set(); // 現在クローズ処理中のウィンドウID（重複防止）
-        this.openedRealObjects = new Map(); // 開いている実身ID -> ウィンドウIDのマッピング
+        this.openedRealObjects = new Map(); // 開いている実身ID -> { windowId, vobjid } のマッピング
         this._windowCloudContexts = new Map(); // ウィンドウID -> cloudContext（クラウドコンテキスト伝播用）
         this.currentUser = null; // 現在の使用者名（xtad更新時のmakerフィールドに使用）
 
@@ -313,12 +313,28 @@ class TADjsDesktop {
                             dataFolder = match[1].replace(/\\/g, '/');
                             logger.info('[TADjs] データフォルダを設定ファイルから読み込み:', dataFolder);
 
-                            // データフォルダのアクセス権限を検証
-                            const folderAccessCheck = this.checkFolderAccess(dataFolder);
-                            if (!folderAccessCheck.success) {
-                                logger.error('[TADjs] データフォルダへのアクセスに失敗:', folderAccessCheck.error);
-                                logger.warn('[TADjs] デフォルトフォルダ（プログラム配置場所）にフォールバック');
+                            // クロスプラットフォーム対応: 別プラットフォームのパスを検出してフォールバック
+                            const isWindowsPath = /^[A-Za-z]:\//.test(dataFolder);
+                            const isRunningOnWindows = process.platform === 'win32';
+                            if (isWindowsPath && !isRunningOnWindows) {
+                                logger.warn('[TADjs] Windowsパスが検出されましたがLinux/macOS上で実行中です。デフォルトフォルダにフォールバック');
                                 dataFolder = null; // フォールバック処理へ
+                            }
+
+                            // 相対パスの場合は_systemConfigBasePathを基準に絶対パスへ変換
+                            if (dataFolder && !this.path.isAbsolute(dataFolder)) {
+                                dataFolder = this.path.resolve(this._systemConfigBasePath, dataFolder);
+                                logger.info('[TADjs] 相対パスを絶対パスに変換:', dataFolder);
+                            }
+
+                            // データフォルダのアクセス権限を検証
+                            if (dataFolder) {
+                                const folderAccessCheck = this.checkFolderAccess(dataFolder);
+                                if (!folderAccessCheck.success) {
+                                    logger.error('[TADjs] データフォルダへのアクセスに失敗:', folderAccessCheck.error);
+                                    logger.warn('[TADjs] デフォルトフォルダ（プログラム配置場所）にフォールバック');
+                                    dataFolder = null; // フォールバック処理へ
+                                }
                             }
                         }
                     } catch (error) {
@@ -2966,7 +2982,7 @@ ${url}
      * 仮身（仮想オブジェクト）を開く
      * @param {Object} link - リンク情報オブジェクト
      */
-    async openVirtualObject(linkIdOrObject, linkName = null, cloudContext = null) {
+    async openVirtualObject(linkIdOrObject, linkName = null, cloudContext = null, vobjid = null) {
         // linkIdとlinkNameが個別に渡された場合（仮身一覧から呼ばれた場合）
         if (typeof linkIdOrObject === 'string' && linkName !== null) {
             const linkId = linkIdOrObject;
@@ -3017,7 +3033,8 @@ ${url}
                 // 仮身オブジェクトを構築してopenVirtualObjectRealを呼び出す
                 const virtualObj = {
                     link_id: linkId,
-                    link_name: linkName
+                    link_name: linkName,
+                    vobjid: vobjid || null
                 };
 
                 await this.openVirtualObjectReal(virtualObj, defaultPlugin, null, null, cloudContext);
@@ -3748,8 +3765,8 @@ ${url}
         this.broadcastWindowClosed(windowId, win);
 
         // openedRealObjectsから削除（windowIdから実身IDを逆引き）
-        for (const [realId, openedWindowId] of this.openedRealObjects.entries()) {
-            if (openedWindowId === windowId) {
+        for (const [realId, entry] of this.openedRealObjects.entries()) {
+            if (entry.windowId === windowId) {
                 this.openedRealObjects.delete(realId);
                 logger.info('[TADjs] 閉じたウィンドウを記録から削除:', realId, windowId);
                 break;
@@ -4525,7 +4542,8 @@ ${url}
 
             // 既に開いているウィンドウがあればアクティブにして処理を終了
             if (this.openedRealObjects.has(realId)) {
-                const existingWindowId = this.openedRealObjects.get(realId);
+                const existingEntry = this.openedRealObjects.get(realId);
+                const existingWindowId = existingEntry.windowId;
                 logger.info('[TADjs] 実身は既に開いています:', realId, 'ウィンドウID:', existingWindowId);
                 // ウィンドウをアクティブにする
                 this.setActiveWindow(existingWindowId);
@@ -4571,7 +4589,8 @@ ${url}
                     rawData: uint8Array,
                     name: virtualObj.link_name || fileName,  // 実身名
                     displayName: virtualObj.link_name || fileName,
-                    isBPK: true  // BPKファイルであることを示すフラグ
+                    isBPK: true,  // BPKファイルであることを示すフラグ
+                    vobjid: virtualObj.vobjid || null  // 仮身固有ID（スクロール位置保存用）
                 };
 
                 // プラグインを起動
@@ -4581,7 +4600,7 @@ ${url}
                     logger.info('[TADjs] BPKファイルをプラグインで開きました:', pluginId, 'windowId:', windowId);
                     // 開いたウィンドウを記録
                     if (windowId) {
-                        this.openedRealObjects.set(realId, windowId);
+                        this.openedRealObjects.set(realId, { windowId, vobjid: virtualObj.vobjid || null });
                     }
                 } else {
                     logger.error('[TADjs] プラグインマネージャーが見つかりません');
@@ -4630,7 +4649,8 @@ ${url}
                     rawData: uint8Array,
                     name: virtualObj.link_name || bpkFileName,  // 実身名
                     displayName: virtualObj.link_name || bpkFileName,
-                    isBPK: true  // BPKファイルであることを示すフラグ
+                    isBPK: true,  // BPKファイルであることを示すフラグ
+                    vobjid: virtualObj.vobjid || null  // 仮身固有ID（スクロール位置保存用）
                 };
 
                 const windowId = await window.pluginManager.launchPlugin(pluginId, fileData);
@@ -4638,7 +4658,7 @@ ${url}
 
                 // 開いたウィンドウを記録
                 if (windowId) {
-                    this.openedRealObjects.set(realId, windowId);
+                    this.openedRealObjects.set(realId, { windowId, vobjid: virtualObj.vobjid || null });
 
                     // ウィンドウのアイコンを設定（DOMが準備されるまで少し待つ）
                     const iconPath = `${realId}.ico`;
@@ -4750,7 +4770,8 @@ ${url}
                 windowConfig: jsonData.window || null, // ウィンドウ設定
                 name: jsonData.name || virtualObj.link_name || realId,  // 実身名
                 displayName: jsonData.name || virtualObj.link_name || realId,
-                cloudContext: cloudContext || null  // クラウドコンテキスト（伝播用）
+                cloudContext: cloudContext || null,  // クラウドコンテキスト（伝播用）
+                vobjid: virtualObj.vobjid || null  // 仮身固有ID（スクロール位置保存用）
             };
 
             // プラグインを起動
@@ -4761,7 +4782,7 @@ ${url}
 
                 // 開いたウィンドウを記録
                 if (windowId) {
-                    this.openedRealObjects.set(realId, windowId);
+                    this.openedRealObjects.set(realId, { windowId, vobjid: virtualObj.vobjid || null });
 
                     // クラウドコンテキストを記録（子プラグインへの伝播用）
                     if (cloudContext) {
@@ -7342,9 +7363,9 @@ ${url}
                         const vobj = {
                             link_id: linkId,
                             link_name: linkName,
-                            frcol: link.getAttribute('frcol') || '#000000',
-                            tbcol: link.getAttribute('tbcol') || '#ffffff',
-                            chcol: link.getAttribute('chcol') || '#000000',
+                            frcol: link.getAttribute('frcol') || DEFAULT_FRCOL,
+                            tbcol: link.getAttribute('tbcol') || DEFAULT_TBCOL,
+                            chcol: link.getAttribute('chcol') || DEFAULT_CHCOL,
                             chsz: parseInt(link.getAttribute('chsz')) || DEFAULT_FONT_SIZE
                         };
                         virtualObjects.push(vobj);
@@ -8585,7 +8606,7 @@ ${url}
         if (!cloudContext && data.sourceWindowId) {
             cloudContext = this._windowCloudContexts.get(data.sourceWindowId) || null;
         }
-        this.openVirtualObject(data.linkId, data.linkName, cloudContext);
+        this.openVirtualObject(data.linkId, data.linkName, cloudContext, data.vobjid || null);
     }
 
     /**
@@ -10978,7 +10999,7 @@ ${url}
      * ウィンドウ設定更新ハンドラー
      */
     async handleUpdateWindowConfig(e) {
-        const { fileId, windowConfig } = e.data;
+        const { fileId, windowConfig, vobjid } = e.data;
 
         if (!fileId || !windowConfig) {
             logger.error('[TADjs] ウィンドウ設定更新: fileIdまたはwindowConfigが不足');
@@ -10997,6 +11018,16 @@ ${url}
             if (windowConfig.wordWrap !== undefined) win.wordWrap = windowConfig.wordWrap;
             if (windowConfig.zoomratio !== undefined) win.zoomratio = windowConfig.zoomratio;
         }, 'ウィンドウ設定更新', windowConfig);
+
+        // vobjidがある場合、親プラグインに仮身のスクロール位置更新を通知
+        if (vobjid && windowConfig.scrollPos) {
+            this.parentMessageBus.broadcast('update-vobj-scroll', {
+                vobjid: vobjid,
+                scrollx: windowConfig.scrollPos.x || 0,
+                scrolly: windowConfig.scrollPos.y || 0,
+                zoomratio: windowConfig.zoomratio !== undefined ? windowConfig.zoomratio : undefined
+            });
+        }
     }
 
     /**

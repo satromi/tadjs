@@ -136,6 +136,15 @@ export const TextTadParserMixin = (Base) => class extends Base {
                 attrMap[attrMatch[1]] = attrMatch[2];
             }
 
+            // vobjid属性がない場合は自動生成（BTRON仕様: 仮身の一意識別子）
+            if (!attrMap.vobjid) {
+                attrMap.vobjid = UuidV7Generator.generate();
+            }
+            // scrollx/scrolly/zoomratio属性のデフォルト値（BTRON仕様: 仮身毎のスクロール位置・表示倍率）
+            if (!attrMap.scrollx) attrMap.scrollx = '0';
+            if (!attrMap.scrolly) attrMap.scrolly = '0';
+            if (!attrMap.zoomratio) attrMap.zoomratio = '1';
+
             // data属性として保存（すべての属性を保持）
             let dataAttrs = '';
             for (const [key, value] of Object.entries(attrMap)) {
@@ -959,8 +968,7 @@ export const TextTadParserMixin = (Base) => class extends Base {
                 // heightはギャップ率（例: 0.75）、総合比率は 1 + height（例: 1.75）
                 // maxFontSizeはpt単位のためpx変換（×4/3）が必要
                 const heightValue = parseFloat(tabFormatState.height);
-                const ptToPx = 4 / 3;
-                const lineHeight = (heightValue > 0) ? (1 + heightValue) * maxFontSize * ptToPx : maxFontSize * ptToPx * 1.5;
+                const lineHeight = (heightValue > 0) ? (1 + heightValue) * window.convertPtToPx(maxFontSize) : window.convertPtToPx(maxFontSize) * 1.5;
                 style += `line-height: ${lineHeight}px;`;
 
                 // 空の段落（XMLソースの整形による改行のみの段落）はスキップ
@@ -1135,8 +1143,7 @@ export const TextTadParserMixin = (Base) => class extends Base {
                 // line-heightを最大フォントサイズに基づいて設定
                 // heightはギャップ率（例: 0.75）、総合比率は 1 + height（例: 1.75）
                 const heightValueR = parseFloat(tabFormatState.height);
-                const ptToPxR = 4 / 3;
-                const lineHeight = (heightValueR > 0) ? (1 + heightValueR) * maxFontSize * ptToPxR : maxFontSize * ptToPxR * 1.5;
+                const lineHeight = (heightValueR > 0) ? (1 + heightValueR) * window.convertPtToPx(maxFontSize) : window.convertPtToPx(maxFontSize) * 1.5;
                 style += `line-height: ${lineHeight}px;`;
 
                 // 空の段落（XMLソースの整形による改行のみの段落）はスキップ

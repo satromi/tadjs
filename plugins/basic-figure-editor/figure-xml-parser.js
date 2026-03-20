@@ -1028,9 +1028,9 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         // originalHeightを計算（chszはポイント値なのでピクセルに変換）
         const chszPx = window.convertPtToPx(chsz);
-        const lineHeight = 1.2;
+        const lineHeight = DEFAULT_LINE_HEIGHT;
         const textHeight = Math.ceil(chszPx * lineHeight);
-        const originalHeight = textHeight + 8; // 閉じた仮身の高さ
+        const originalHeight = textHeight + VOBJ_PADDING_VERTICAL; // 閉じた仮身の高さ
 
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
@@ -1042,6 +1042,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             endX: right,
             endY: bottom,
             virtualObject: {
+                vobjid: elem.getAttribute('vobjid') || UuidV7Generator.generate(),
                 link_id: elem.getAttribute('id') || '',
                 link_name: elem.textContent || '仮身',
                 chsz: chsz,
@@ -1056,6 +1057,10 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
                 updatedisp: elem.getAttribute('updatedisp') || 'false',
                 framedisp: elem.getAttribute('framedisp') || 'true',
                 autoopen: elem.getAttribute('autoopen') || 'false',
+                // スクロール位置・表示倍率（仮身毎に管理、BTRON仕様準拠）
+                scrollx: parseFloat(elem.getAttribute('scrollx')) || 0,
+                scrolly: parseFloat(elem.getAttribute('scrolly')) || 0,
+                zoomratio: parseFloat(elem.getAttribute('zoomratio')) || 1.0,
                 // 仮身固有の続柄（link要素のrelationship属性）
                 linkRelationship: elem.getAttribute('relationship') ? elem.getAttribute('relationship').split(/\s+/).filter(t => t) : []
             },

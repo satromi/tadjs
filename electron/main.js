@@ -279,6 +279,11 @@ function createWindow() {
 // カラープロファイル設定（色が紫っぽくなる問題の対策）
 app.commandLine.appendSwitch('force-color-profile', 'srgb');
 
+// Linux向け: 日本語ロケール設定（文字化け対策）
+if (process.platform === 'linux') {
+    app.commandLine.appendSwitch('lang', 'ja-JP');
+}
+
 // MCPサーバモード判定
 // --mcp フラグ（Electron内部spawn用）または TADJS_MCP_MODE 環境変数（外部プロセス用）
 // 外部プロセスからの起動時はElectron/Chromiumが --mcp を不正な引数として拒否するため、

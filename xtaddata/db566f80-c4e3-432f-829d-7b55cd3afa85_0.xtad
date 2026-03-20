@@ -4,9 +4,18 @@
 <figView top="0" left="0" right="1920" bottom="1080"/>
 <figDraw top="0" left="0" right="1920" bottom="1080"/>
 <figScale hunit="-72" vunit="-72"/>
+<patterns>
+<pattern id="128" width="1" height="1" ncol="1" fgcolors="#2a2a4e" bgcolor="#ffffff"/>
+<pattern id="129" width="1" height="1" ncol="1" fgcolors="#2060CC" bgcolor="#ffffff"/>
+<pattern id="130" width="1" height="1" ncol="1" fgcolors="#CC6020" bgcolor="#ffffff"/>
+<pattern id="131" width="1" height="1" ncol="1" fgcolors="#20CC60" bgcolor="#ffffff"/>
+<pattern id="132" width="1" height="1" ncol="1" fgcolors="#4080ff" bgcolor="#ffffff"/>
+<pattern id="133" width="1" height="1" ncol="1" fgcolors="#ff8040" bgcolor="#ffffff"/>
+<pattern id="134" width="1" height="1" ncol="1" fgcolors="#40ff80" bgcolor="#ffffff"/>
+</patterns>
 
 <!-- 背景矩形 -->
-<rect lineType="0" lineWidth="0" f_pat="1" left="0" top="0" right="1920" bottom="1080" fillColor="#2a2a4e" zIndex="0"/>
+<rect lineType="0" lineWidth="0" l_pat="0" f_pat="128" left="0" top="0" right="1920" bottom="1080" zIndex="0"/>
 
 <!-- ページタイトル -->
 <document>
@@ -65,13 +74,13 @@
 </document>
 
 <!-- アニメーション対象の円 -->
-<circle id="animCircle1" left="1100" top="250" right="1300" bottom="450" lineType="1" lineWidth="3" lineColor="#4080FF" f_pat="1" fillColor="#2060CC" zIndex="50"/>
+<circle id="animCircle1" left="1100" top="250" right="1300" bottom="450" lineType="1" lineWidth="3" l_pat="132" f_pat="129" zIndex="50"/>
 
 <!-- アニメーション対象の矩形 -->
-<rect id="animRect1" left="1350" top="350" right="1550" bottom="550" lineType="1" lineWidth="3" lineColor="#FF8040" f_pat="1" fillColor="#CC6020" zIndex="50"/>
+<rect id="animRect1" left="1350" top="350" right="1550" bottom="550" lineType="1" lineWidth="3" l_pat="133" f_pat="130" zIndex="50"/>
 
 <!-- アニメーション対象の三角形 -->
-<polygon id="animTriangle1" left="1600" top="200" right="1800" bottom="500" points="1700,200 1600,500 1800,500" lineType="1" lineWidth="3" lineColor="#40FF80" f_pat="1" fillColor="#20CC60" zIndex="50"/>
+<polygon id="animTriangle1" left="1600" top="200" right="1800" bottom="500" points="1700,200 1600,500 1800,500" lineType="1" lineWidth="3" l_pat="134" f_pat="131" zIndex="50"/>
 </figure>
 
 <realData>

@@ -9,7 +9,11 @@ import {
     DEFAULT_FONT_STYLE,
     DEFAULT_FONT_WEIGHT,
     DEFAULT_LINE_HEIGHT,
-    DEFAULT_VOBJ_HEIGHT
+    DEFAULT_VOBJ_HEIGHT,
+    VOBJ_PADDING_VERTICAL,
+    VOBJ_TITLEBAR_PADDING_VERTICAL,
+    VOBJ_BORDER_WIDTH,
+    VOBJ_MIN_OPEN_HEIGHT_OFFSET
 } from './util.js';
 import { getLogger } from './logger.js';
 
@@ -28,7 +32,7 @@ export class VirtualObjectRenderer {
             frcol: DEFAULT_FRCOL,  // 枠線色
             chcol: DEFAULT_CHCOL,  // 文字色
             bgcol: DEFAULT_BGCOL,  // 背景色
-            chsz: DEFAULT_FONT_SIZE // 文字サイズ(px)
+            chsz: DEFAULT_FONT_SIZE // 文字サイズ(pt)
         };
 
         // オプションでデフォルトスタイルを上書き
@@ -63,13 +67,13 @@ export class VirtualObjectRenderer {
      */
     calculateSize(virtualObject, mode = 'closed') {
         const styles = this.getStyles(virtualObject);
-        const padding = 8;  // 上下左右のパディング
-        const border = 2;   // 枠線の太さ
+        const padding = VOBJ_PADDING_VERTICAL;  // 上下左右のパディング
+        const border = VOBJ_BORDER_WIDTH;   // 枠線の太さ
 
         if (mode === 'closed') {
             // 閉じた仮身のデフォルトサイズ
             const width = virtualObject.width || 100;
-            const height = styles.chsz + padding + border;
+            const height = styles.chszPx + padding + border;
             return { width, height };
         } else if (mode === 'opened') {
             // 開いた仮身のサイズ
@@ -321,8 +325,8 @@ export class VirtualObjectRenderer {
         const textHeight = Math.ceil(styles.chszPx * lineHeight);
         const iconSize = Math.round(styles.chszPx * 1.0);
         const contentHeight = Math.max(iconSize, textHeight);
-        const borderWidth = 2; // 上下の border: 1px + 1px
-        const paddingVertical = 8; // 上下の padding: 4px + 4px
+        const borderWidth = VOBJ_BORDER_WIDTH; // 上下の border: 1px + 1px
+        const paddingVertical = VOBJ_PADDING_VERTICAL; // 上下の padding: 4px + 4px
         // contentHeightを使用してtitleAreaと同じ高さになるようにする
         const minClosedHeight = contentHeight + paddingVertical + borderWidth;
 
@@ -569,14 +573,14 @@ export class VirtualObjectRenderer {
             vobj.style.border = `1px solid ${styles.frcol}`;
         }
 
-        // タイトルバーの高さを計算（閉じた仮身と同じ計算方法）
+        // タイトルバーの高さを計算
         const lineHeight = DEFAULT_LINE_HEIGHT;
         const textHeight = Math.ceil(styles.chszPx * lineHeight);
         const iconSize = Math.round(styles.chszPx * 1.0);
         const contentHeight = Math.max(iconSize, textHeight);
-        const paddingVertical = 8; // 上下の padding: 4px + 4px
-        const borderWidth = 1; // titleBar の borderBottom のみ（vobj の borderTop は別）
-        const titleBarHeight = contentHeight + paddingVertical + borderWidth; // = contentHeight + 9
+        const paddingVertical = VOBJ_PADDING_VERTICAL; // 上下の padding: 4px + 4px
+        const borderWidth = 1; // titleBar の borderBottom のみ
+        const titleBarHeight = contentHeight + paddingVertical + borderWidth;
         let contentTop = 0;
 
         if (showTitleBar) {
@@ -709,19 +713,16 @@ export class VirtualObjectRenderer {
         contentArea.style.position = 'absolute';
 
         // 枠が非表示の場合は余白を大きくして選択しやすくする
-        const margin = showFrame ? 2 : 10;
+        // text-virtual-object.jsと同じ配置（枠表示時はmargin=0でtitleBarの直下にiframe配置）
+        const margin = showFrame ? 0 : 10;
         contentArea.style.top = (contentTop + margin) + 'px';
         contentArea.style.left = margin + 'px';
         contentArea.style.right = margin + 'px';
         contentArea.style.bottom = margin + 'px';
 
         contentArea.style.backgroundColor = styles.bgcol;
-        contentArea.style.overflow = 'auto';
+        contentArea.style.overflow = 'hidden';
         contentArea.style.boxSizing = 'border-box';
-        // 外枠がある場合は二重枠を表示
-        if (showFrame) {
-            contentArea.style.border = `1px solid ${styles.frcol}`;
-        }
 
         vobj.appendChild(contentArea);
 
@@ -790,7 +791,7 @@ export class VirtualObjectRenderer {
         const lineHeight = DEFAULT_LINE_HEIGHT;
         const iconSize = showPict ? Math.round(styles.chszPx * 1.0) : 0;
         const textHeight = Math.ceil(styles.chszPx * lineHeight);  // テキストの実際の高さ
-        const titleHeight = textHeight + 8;  // パディングを含めた高さ
+        const titleHeight = textHeight + VOBJ_PADDING_VERTICAL;  // パディングを含めた高さ
         const paddingX = 4;
 
         // 全ての表示属性がオフかどうかを判定
@@ -1014,7 +1015,7 @@ export class VirtualObjectRenderer {
         const chszPx = convertPtToPx(chsz);
         const lineHeight = DEFAULT_LINE_HEIGHT;
         const textHeight = Math.ceil(chszPx * lineHeight);
-        const minClosedHeight = textHeight + 8;
+        const minClosedHeight = textHeight + VOBJ_PADDING_VERTICAL;
 
         // 閉じた仮身の高さより10px以上大きければ開いた仮身と判定
         // （数ピクセルの誤差で表示が切り替わるのを防ぐ）
@@ -1031,7 +1032,7 @@ export class VirtualObjectRenderer {
         const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
         const iconSize = Math.round(chszPx * 1.0);
         const contentHeight = Math.max(iconSize, textHeight);
-        const paddingVertical = 8; // 上下の padding: 4px + 4px
+        const paddingVertical = VOBJ_PADDING_VERTICAL; // 上下の padding: 4px + 4px
         // 注: TADファイルのheight属性はborderを含まない高さを表す
         // DOM要素はbox-sizing: border-boxでborderを含むが、保存値は含まない
         return contentHeight + paddingVertical;
@@ -1045,7 +1046,7 @@ export class VirtualObjectRenderer {
     getMinOpenHeight(chsz = DEFAULT_FONT_SIZE) {
         const chszPx = convertPtToPx(parseFloat(chsz) || DEFAULT_FONT_SIZE);
         const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
-        return textHeight + 30; // タイトルバー(+8) + 区切り線(+2) + コンテンツ最小(+20)
+        return textHeight + VOBJ_MIN_OPEN_HEIGHT_OFFSET; // タイトルバー(+8) + 区切り線(+2) + コンテンツ最小(+20)
     }
 
     /**
@@ -1147,6 +1148,18 @@ export class VirtualObjectRenderer {
         }
         if (virtualObject.autoopen !== undefined) {
             element.setAttribute('data-autoopen', virtualObject.autoopen);
+        }
+        if (virtualObject.vobjid !== undefined) {
+            element.setAttribute('data-link-vobjid', virtualObject.vobjid);
+        }
+        if (virtualObject.scrollx !== undefined) {
+            element.setAttribute('data-link-scrollx', virtualObject.scrollx);
+        }
+        if (virtualObject.scrolly !== undefined) {
+            element.setAttribute('data-link-scrolly', virtualObject.scrolly);
+        }
+        if (virtualObject.zoomratio !== undefined) {
+            element.setAttribute('data-link-zoomratio', virtualObject.zoomratio);
         }
     }
 }

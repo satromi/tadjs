@@ -93,7 +93,8 @@
         import {
             convertPtToPx, rgbToHex, hexToRgb, invertColor,
             DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, ERROR_CHECK_TIMEOUT_MS,
-            VOBJ_BORDER_WIDTH, DEFAULT_FONT_SIZE, DEFAULT_VOBJ_HEIGHT,
+            VOBJ_BORDER_WIDTH, VOBJ_DROP_OFFSET_X, VOBJ_DROP_OFFSET_Y,
+            DEFAULT_FONT_SIZE, DEFAULT_VOBJ_HEIGHT,
             DIALOG_BG_COLOR, DEFAULT_FRCOL, DEFAULT_CHCOL, DEFAULT_BGCOL,
             GRAY_COLOR, SUNDAY_COLOR, SATURDAY_COLOR,
             HOVER_BG_COLOR, DESKTOP_BG_COLOR, TODAY_CELL_COLOR, SELECTION_COLOR,
@@ -108,6 +109,8 @@
         window.ICON_LOAD_TIMEOUT_MS = ICON_LOAD_TIMEOUT_MS;
         window.ERROR_CHECK_TIMEOUT_MS = ERROR_CHECK_TIMEOUT_MS;
         window.VOBJ_BORDER_WIDTH = VOBJ_BORDER_WIDTH;
+        window.VOBJ_DROP_OFFSET_X = VOBJ_DROP_OFFSET_X;
+        window.VOBJ_DROP_OFFSET_Y = VOBJ_DROP_OFFSET_Y;
         window.DEFAULT_FONT_SIZE = DEFAULT_FONT_SIZE;
         window.DEFAULT_VOBJ_HEIGHT = DEFAULT_VOBJ_HEIGHT;
         window.DIALOG_BG_COLOR = DIALOG_BG_COLOR;
@@ -146,6 +149,7 @@
         import { RealObjectSystem } from '../../js/real-object-system.js';
         window.RealObjectSystem = RealObjectSystem;
     </script>
+    <script src="../../js/uuid-v7.js"></script>
     <!-- プラグイン共通基底クラスをグローバル変数として読み込み -->
     <script type="module">
         import { PluginBase } from '../../js/plugin-base.js';

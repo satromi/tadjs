@@ -13,7 +13,10 @@ export const TextVirtualObjectMixin = (Base) => class extends Base {
             if (iframe) {
                 const titleBar = vo.querySelector('.virtual-object-titlebar');
                 const chsz = parseFloat(vo.dataset.linkChsz) || DEFAULT_FONT_SIZE;
-                const titleBarHeight = titleBar ? (chsz + 16) : 0;  // タイトルバーがある場合のみ高さを計算
+                // VirtualObjectRenderer.createOpenedBlockElement()と同じ計算式
+                const chszPx = window.convertPtToPx(chsz);
+                const contentH = Math.max(chszPx, Math.ceil(chszPx * DEFAULT_LINE_HEIGHT));
+                const titleBarHeight = titleBar ? (contentH + VOBJ_PADDING_VERTICAL + 1) : 0;
                 // vo要素自体のサイズを更新
                 vo.style.width = `${width}px`;
                 vo.style.height = `${height}px`;
@@ -102,8 +105,10 @@ export const TextVirtualObjectMixin = (Base) => class extends Base {
             // 全ての表示属性がオフかどうかを判定
             const showTitleBar = showPict || showName || showRole || showType || showUpdate;
 
-            // タイトルバーの高さ = chsz + 16（上下パディング8pxずつ）
-            const titleBarHeight = chsz + 16;
+            // VirtualObjectRenderer.createOpenedBlockElement()と同じ計算式
+            const chszPx = window.convertPtToPx(chsz);
+            const contentHeight = Math.max(chszPx, Math.ceil(chszPx * DEFAULT_LINE_HEIGHT));
+            const titleBarHeight = contentHeight + VOBJ_PADDING_VERTICAL + 1;  // +1はborderBottom
 
             // 仮身の内容をクリア
             vo.innerHTML = '';
@@ -276,7 +281,9 @@ export const TextVirtualObjectMixin = (Base) => class extends Base {
                     realObject: realObjectData,
                     bgcol: bgcol,          // 背景色を渡す
                     readonly: true,        // 読み取り専用モード（仮身一覧プラグインと同様）
-                    noScrollbar: true      // スクロールバー非表示モード（仮身一覧プラグインと同様）
+                    noScrollbar: true,     // スクロールバー非表示モード（仮身一覧プラグインと同様）
+                    scrollPos: { x: virtualObj.scrollx || 0, y: virtualObj.scrolly || 0 },
+                    zoomratio: virtualObj.zoomratio || 1.0
                 }, '*');
 
                 logger.debug('[EDITOR] 開いた仮身表示にデータを送信:', { virtualObj, realObject: realObjectData, bgcol, readonly: true, noScrollbar: true });
@@ -487,8 +494,8 @@ export const TextVirtualObjectMixin = (Base) => class extends Base {
         vo.style.minWidth = actualWidth + 'px';
 
         // 閉じた時の高さをoriginalHeightとして保存
-        const textHeight = Math.ceil(chszPx * 1.2);  // lineHeight = 1.2
-        const closedHeight = textHeight + 8; // 閉じた仮身の高さ
+        const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
+        const closedHeight = textHeight + VOBJ_PADDING_VERTICAL; // 閉じた仮身の高さ
         vo.dataset.originalHeight = closedHeight.toString();
         logger.debug('[EDITOR] 仮身を閉じた時の originalHeight を更新:', vo.dataset.linkName, closedHeight, '幅:', actualWidth);
     }
@@ -779,9 +786,9 @@ export const TextVirtualObjectMixin = (Base) => class extends Base {
 
                 // chsz変更時は、閉じた仮身の最低縦幅(originalHeight)を再計算
                 if (!element.classList.contains('expanded')) {
-                    const lineHeight = 1.2;
+                    const lineHeight = DEFAULT_LINE_HEIGHT;
                     const textHeight = Math.ceil(chszPx * lineHeight);
-                    const newHeight = textHeight + 8; // 閉じた仮身の高さ
+                    const newHeight = textHeight + VOBJ_PADDING_VERTICAL; // 閉じた仮身の高さ
                     element.dataset.originalHeight = newHeight.toString();
                     logger.debug('[EDITOR] chsz変更により originalHeight を再計算:', element.dataset.linkName, newHeight);
 
@@ -971,6 +978,21 @@ export const TextVirtualObjectMixin = (Base) => class extends Base {
                         linkElement.setAttribute('relationship', virtualObj.linkRelationship.join(' '));
                     } else if (linkElement.hasAttribute('relationship')) {
                         linkElement.removeAttribute('relationship');
+                    }
+
+                    // vobjid属性（必須）
+                    if (virtualObj.vobjid !== undefined) {
+                        linkElement.setAttribute('vobjid', virtualObj.vobjid);
+                    }
+                    // scrollx/scrolly/zoomratio属性（常に出力）
+                    if (virtualObj.scrollx !== undefined) {
+                        linkElement.setAttribute('scrollx', virtualObj.scrollx.toString());
+                    }
+                    if (virtualObj.scrolly !== undefined) {
+                        linkElement.setAttribute('scrolly', virtualObj.scrolly.toString());
+                    }
+                    if (virtualObj.zoomratio !== undefined) {
+                        linkElement.setAttribute('zoomratio', virtualObj.zoomratio.toString());
                     }
 
                     // テキスト内容は書き込まない（自己閉じタグ形式）

@@ -1,6 +1,6 @@
 {
   "name": "tadjs-desktop",
-  "version": "0.38.0",
+  "version": "0.39.0",
   "description": "TADjs Desktop Environment with Plugin System",
   "main": "electron/main.js",
   "scripts": {
@@ -12,6 +12,8 @@
     "build:mac-arm": "electron-builder --mac --arm64",
     "build:mac-universal": "electron-builder --mac --universal",
     "package": "electron-packager . \"TADjs Desktop\" --platform=win32 --arch=x64 --out=dist --overwrite --icon=tadjs.ico --executable-name=tadjs_desktop --ignore=\"^/dist$|^/\\.git$|^/\\.vscode$|^/\\.serena$|^/\\.claude$|^/designlog$|^/xtaddata$|^/scripts$|^/upload$|^/encoding\\.js-|^/ecl_array\\.js-master$|^/CLAUDE\\.md$|^/DEVELOPMENT_NOTES\\.md$|tmpclaude|\\.ps1$\" --prune=true && node scripts/postpackage.js",
+    "package:linux": "electron-packager . \"TADjs Desktop\" --platform=linux --arch=x64 --out=dist --overwrite --executable-name=tadjs_desktop --ignore=\"^/dist$|^/\\.git$|^/\\.vscode$|^/\\.serena$|^/\\.claude$|^/designlog$|^/xtaddata$|^/scripts$|^/upload$|^/encoding\\.js-|^/ecl_array\\.js-master$|^/CLAUDE\\.md$|^/DEVELOPMENT_NOTES\\.md$|tmpclaude|\\.ps1$\" --prune=true && node scripts/postpackage.js --platform=linux",
+    "build:linux": "electron-builder --linux --x64",
     "package:mac": "electron-builder --mac --x64 --dir",
     "package:mac-arm": "electron-builder --mac --arm64 --dir",
     "postinstall": "node scripts/patch-font-list.js",
@@ -32,7 +34,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
-    "electron": "^40.8.0",
+    "electron": "^41.0.3",
     "electron-builder": "^24.9.1",
     "electron-packager": "^17.1.2",
     "jsmediatags": "^3.9.7",
@@ -94,6 +96,24 @@
         "width": 540,
         "height": 380
       }
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Office",
+      "icon": "tadjs.png"
     },
     "forceCodeSigning": false
   },

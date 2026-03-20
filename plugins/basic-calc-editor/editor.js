@@ -408,7 +408,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         this.messageBus.on('window-closed', (data) => {
             // openedRealObjectsから削除
             for (const [realId, windowId] of this.openedRealObjects.entries()) {
-                if (windowId === data.windowId) {
+                if (windowId === data.windowId || (windowId && windowId.windowId === data.windowId)) {
                     this.openedRealObjects.delete(realId);
                     logger.debug('[CalcEditor] 実身ウィンドウを追跡から削除:', realId);
                     break;
@@ -4149,6 +4149,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                     const virtualObject = {
                         link_id: attrMap.id || '',
                         link_name: attrMap.name || this.unescapeXml(innerContent) || '',
+                        vobjid: attrMap.vobjid || UuidV7Generator.generate(),
                         tbcol: attrMap.tbcol,
                         frcol: attrMap.frcol,
                         chcol: attrMap.chcol,
@@ -4164,6 +4165,10 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                         heightPx: attrMap.heightPx ? parseFloat(attrMap.heightPx) : undefined,
                         autoopen: attrMap.autoopen || 'false',
                         applist: applist,
+                        // スクロール位置・表示倍率（仮身毎に管理、BTRON仕様準拠）
+                        scrollx: parseFloat(attrMap.scrollx) || 0,
+                        scrolly: parseFloat(attrMap.scrolly) || 0,
+                        zoomratio: parseFloat(attrMap.zoomratio) || 1.0,
                         // 仮身固有の続柄（link要素のrelationship属性）
                         linkRelationship: attrMap.relationship ? attrMap.relationship.split(/\s+/).filter(t => t) : []
                     };
@@ -4836,6 +4841,11 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         // 必須属性
         let attrs = ` id="${this.escapeXml(virtualObject.link_id)}"`;
 
+        // vobjid属性（仮身の一意識別子）
+        if (virtualObject.vobjid) {
+            attrs += ` vobjid="${this.escapeXml(virtualObject.vobjid)}"`;
+        }
+
         // name属性は出力しない（link_nameはJSONから取得する方式に統一）
 
         // 色属性
@@ -5055,6 +5065,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
             const virtualObject = {
                 link_id: attrMap.id || '',
                 link_name: attrMap.name || this.unescapeXml(innerContent) || '',
+                vobjid: attrMap.vobjid || UuidV7Generator.generate(),
                 tbcol: attrMap.tbcol,
                 frcol: attrMap.frcol,
                 chcol: attrMap.chcol,
@@ -5068,7 +5079,11 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                 updatedisp: attrMap.updatedisp,
                 width: attrMap.width ? parseFloat(attrMap.width) : undefined,
                 heightPx: attrMap.heightPx ? parseFloat(attrMap.heightPx) : undefined,
-                applist: applist
+                applist: applist,
+                // スクロール位置・表示倍率（仮身毎に管理、BTRON仕様準拠）
+                scrollx: parseFloat(attrMap.scrollx) || 0,
+                scrolly: parseFloat(attrMap.scrolly) || 0,
+                zoomratio: parseFloat(attrMap.zoomratio) || 1.0
             };
 
             logger.debug('[CalcEditor] linkタグパース成功:', virtualObject);
@@ -6507,6 +6522,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
 
         // デフォルト値で仮身オブジェクトを作成
         const virtualObj = {
+            vobjid: UuidV7Generator.generate(),
             link_id: realId,
             link_name: name,
             width: 150,
@@ -6517,6 +6533,9 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
             tbcol: DEFAULT_TBCOL,
             bgcol: DEFAULT_BGCOL,
             dlen: 0,
+            scrollx: 0,
+            scrolly: 0,
+            zoomratio: 1.0,
             pictdisp: 'true',  // ピクトグラムを表示
             namedisp: 'true',  // 名称を表示
             applist: applist || {}
@@ -6554,9 +6573,9 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         const chsz = parseFloat(virtualObject.chsz) || DEFAULT_FONT_SIZE;
 
         // 閉じた仮身の最小高さを計算（VirtualObjectRendererと同じ閾値）
-        const chszPx = window.convertPtToPx ? window.convertPtToPx(chsz) : chsz * 1.333;
-        const textHeight = Math.ceil(chszPx * 1.2);
-        const minClosedHeight = textHeight + 8;
+        const chszPx = window.convertPtToPx(chsz);
+        const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
+        const minClosedHeight = textHeight + VOBJ_PADDING_VERTICAL;
 
         // VirtualObjectRendererと同じ閾値を使用: height > minClosedHeight
         return heightPx > minClosedHeight;

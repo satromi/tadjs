@@ -5224,7 +5224,7 @@ function tsVirtualObjSegment(segLen, tadSeg) {
         // XMLのリンク情報を保存（自己閉じタグ形式）
         // link_nameはJSONから取得する方式に統一
         figureZIndexCounter++;
-        xmlBuffer.push(`<link id="${realId}_0.xtad" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}" zIndex="${figureZIndexCounter}"/>\r\n`);
+        xmlBuffer.push(`<link id="${realId}_0.xtad" vobjid="${UuidV7Generator.generate()}" vobjleft="${vobj.left}" vobjtop="${vobj.top}" vobjright="${vobj.right}" vobjbottom="${vobj.bottom}" vobjheight="${vobj.height}" chsz="${vobj.chsz}" frcol="${vobj.frcol.color}" chcol="${vobj.chcol.color}" tbcol="${vobj.tbcol.color}" bgcol="${vobj.bgcol.color}" dlen="${vobj.dlen}" scrollx="0" scrolly="0" zoomratio="1" zIndex="${figureZIndexCounter}"/>\r\n`);
 
         // 文字修飾を再度開く
         for (const deco of activeDecorations) {

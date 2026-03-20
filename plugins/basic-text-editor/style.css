@@ -39,7 +39,7 @@ body {
 .editor-container {
     display: flex;
     flex-direction: column;
-    background: #ffffff;
+    background: var(--btron-bg-content);
     min-height: 100%; /* heightからmin-heightに変更（スクロール時の背景色問題を修正） */
 }
 
@@ -48,8 +48,8 @@ body {
     display: flex;
     align-items: center;
     padding: 8px 12px;
-    background: #ffffff;
-    border-bottom: 1px solid #e0e0e0;
+    background: var(--btron-bg-content);
+    border-bottom: 1px solid var(--btron-bg-tab-header);
     gap: 8px;
     flex-shrink: 0;
 }
@@ -61,8 +61,8 @@ body {
 
 .toolbar-btn {
     padding: 6px 12px;
-    border: 1px solid #d0d0d0;
-    background: #ffffff;
+    border: 1px solid var(--btron-gray-light);
+    background: var(--btron-bg-content);
     cursor: pointer;
     border-radius: 3px;
     font-size: 14px;
@@ -70,20 +70,20 @@ body {
 }
 
 .toolbar-btn:hover {
-    background: #f0f0f0;
+    background: var(--btron-bg-legacy);
     border-color: #b0b0b0;
 }
 
 .toolbar-btn:active,
 .toolbar-btn.active {
-    background: #e0e0e0;
-    border-color: #a0a0a0;
+    background: var(--btron-bg-tab-header);
+    border-color: var(--btron-gray-medium);
 }
 
 .toolbar-select {
     padding: 6px 8px;
-    border: 1px solid #d0d0d0;
-    background: #ffffff;
+    border: 1px solid var(--btron-gray-light);
+    background: var(--btron-bg-content);
     border-radius: 3px;
     font-size: 14px;
     cursor: pointer;
@@ -92,13 +92,13 @@ body {
 .toolbar-separator {
     width: 1px;
     height: 24px;
-    background: #d0d0d0;
+    background: var(--btron-gray-light);
 }
 
 /* エディタ */
 .editor {
     padding: 20px;
-    background: #ffffff;
+    background: var(--btron-bg-content);
     overflow: visible;
     outline: none;
     font-family: 'Noto Sans JP', 'Noto Serif JP', 'Yu Mincho', 'MS Mincho', serif;
@@ -111,7 +111,7 @@ body {
     flex: 1;
     min-height: 100%;
     /* カーソル設定（ブラウザの制限により部分的な対応） */
-    caret-color: #000000;
+    caret-color: var(--btron-text-primary);
     /* タブサイズを4文字分に設定 */
     tab-size: 4;
     -moz-tab-size: 4;
@@ -135,10 +135,10 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 6px 12px;
-    background: #ffffff;
-    border-top: 1px solid #e0e0e0;
+    background: var(--btron-bg-content);
+    border-top: 1px solid var(--btron-bg-tab-header);
     font-size: 12px;
-    color: #666;
+    color: var(--btron-text-muted);
     flex-shrink: 0;
 }
 
@@ -241,8 +241,8 @@ body {
 /* 右クリックメニュー */
 .context-menu {
     position: fixed;
-    background: #ffffff;
-    border: 1px solid #ccc;
+    background: var(--btron-bg-content);
+    border: 1px solid var(--btron-border-separator);
     box-shadow: 2px 2px 8px rgba(0, 0, 0, 0.2);
     z-index: 10000;
     min-width: 200px;
@@ -266,11 +266,11 @@ body {
 }
 
 .context-menu-item:hover {
-    background: #e3f2fd;
+    background: var(--btron-bg-list-hover);
 }
 
 .context-menu-item.disabled {
-    color: #999;
+    color: var(--btron-text-disabled);
     cursor: not-allowed;
 }
 
@@ -280,27 +280,27 @@ body {
 
 .context-menu-separator {
     height: 1px;
-    background: #e0e0e0;
+    background: var(--btron-bg-tab-header);
     margin: 4px 0;
 }
 
 .context-menu-item .shortcut {
     margin-left: 20px;
-    color: #666;
+    color: var(--btron-text-muted);
     font-size: 12px;
 }
 
 .context-menu-item .arrow {
     margin-left: 20px;
-    color: #666;
+    color: var(--btron-text-muted);
 }
 
 .context-submenu {
     position: absolute;
     left: 100%;
     top: -4px;
-    background: #ffffff;
-    border: 1px solid #ccc;
+    background: var(--btron-bg-content);
+    border: 1px solid var(--btron-border-separator);
     box-shadow: 2px 2px 8px rgba(0, 0, 0, 0.2);
     min-width: 150px;
     width: max-content;
@@ -343,7 +343,7 @@ body {
 /* 仮身の選択状態 */
 .virtual-object.selected {
     box-shadow: 0 0 0 2px rgba(255, 143, 0, 0.5);
-    outline: 2px solid #ff8f00;
+    outline: 2px solid var(--btron-accent-orange);
 }
 
 .virtual-object.selected:hover {
@@ -430,7 +430,7 @@ body.readonly-mode .virtual-object.selected:hover {
     margin: 20px 0;
     padding: 10px 0;
     text-align: center;
-    color: #999;
+    color: var(--btron-text-disabled);
     font-size: 12px;
     user-select: none;
     -webkit-user-select: none;
@@ -438,7 +438,7 @@ body.readonly-mode .virtual-object.selected:hover {
 
 /* 用紙枠表示オン時のページ区切り線 */
 .page-break.page-break-visible {
-    border-top: 2px dashed #808080;
+    border-top: 2px dashed var(--btron-border);
     margin: 1em 0;
     padding-top: 1em;
     position: relative;
@@ -450,15 +450,15 @@ body.readonly-mode .virtual-object.selected:hover {
     top: -0.7em;
     left: 50%;
     transform: translateX(-50%);
-    background: #ffffff;
+    background: var(--btron-bg-content);
     padding: 0 0.5em;
     font-size: 11px;
-    color: #808080;
+    color: var(--btron-border);
 }
 
 /* 自動ページ区切り線（用紙枠表示オン時に自動計算で表示） */
 .auto-page-break {
-    border-top: 1px dashed #a0a0a0;
+    border-top: 1px dashed var(--btron-gray-medium);
     margin: 0.5em 0;
     padding-top: 0.5em;
     position: relative;
@@ -471,10 +471,10 @@ body.readonly-mode .virtual-object.selected:hover {
     top: -0.6em;
     left: 50%;
     transform: translateX(-50%);
-    background: #ffffff;
+    background: var(--btron-bg-content);
     padding: 0 0.5em;
     font-size: 10px;
-    color: #a0a0a0;
+    color: var(--btron-gray-medium);
 }
 
 /* 条件付き改ページ（基本スタイル - 条件不成立時は非表示） */
@@ -491,7 +491,7 @@ body.readonly-mode .virtual-object.selected:hover {
     margin: 20px 0;
     padding: 10px 0;
     text-align: center;
-    color: #999;
+    color: var(--btron-text-disabled);
     font-size: 12px;
 }
 
@@ -509,7 +509,7 @@ body.readonly-mode .virtual-object.selected:hover {
     top: -0.7em;
     left: 50%;
     transform: translateX(-50%);
-    background: #ffffff;
+    background: var(--btron-bg-content);
     padding: 0 0.5em;
     font-size: 11px;
     color: #6080a0;
@@ -566,8 +566,8 @@ sub[data-attend-unit="1"][data-attend-target-position="1"] {
     vertical-align: middle;
     margin: 4px;
     cursor: default;
-    border: 1px solid #ccc;
-    background: #ffffff;
+    border: 1px solid var(--btron-border-separator);
+    background: var(--btron-bg-content);
 }
 
 .figure-segment iframe {

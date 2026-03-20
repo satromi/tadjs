@@ -299,27 +299,34 @@ class BasicTextEditor extends
                             p.style.whiteSpace = this.wrapMode ? 'pre-wrap' : 'pre';
                         });
                     }, 100);
+                }
 
-                    // スクロール位置を復元（DOM更新完了を待つ）
-                    // noScrollbar時は直接editorのscrollTopを設定
-                    if (windowConfig.scrollPos) {
-                        // 複数のrequestAnimationFrameで確実にDOMレンダリング完了を待つ
-                        requestAnimationFrame(() => {
-                            requestAnimationFrame(() => {
-                                // editorに直接スクロール位置を設定
-                                this.editor.scrollLeft = windowConfig.scrollPos.x || 0;
-                                this.editor.scrollTop = windowConfig.scrollPos.y || 0;
-                            });
-                        });
-                    }
-
-                    // エディタにフォーカス
+                // スクロール位置を復元（DOM更新完了を待つ）
+                // data.scrollPos（仮身ごとの設定）を優先、フォールバックとしてwindowConfig.scrollPos
+                const scrollPos = data.scrollPos || (windowConfig && windowConfig.scrollPos);
+                if (scrollPos && (scrollPos.x || scrollPos.y)) {
+                    // 複数のrequestAnimationFrameで確実にDOMレンダリング完了を待つ
                     requestAnimationFrame(() => {
                         requestAnimationFrame(() => {
-                            this.editor.focus();
+                            // .plugin-contentにスクロール位置を設定
+                            // （noScrollbar時はeditorにoverflow:hiddenが設定されるが、
+                            //   editorにはmax-heightがないため全高に拡張されscrollTopが効かない。
+                            //   .plugin-contentは固定サイズなのでscrollTopが機能する）
+                            const pluginContent = document.querySelector('.plugin-content');
+                            if (pluginContent) {
+                                pluginContent.scrollLeft = scrollPos.x || 0;
+                                pluginContent.scrollTop = scrollPos.y || 0;
+                            }
                         });
                     });
                 }
+
+                // エディタにフォーカス
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        this.editor.focus();
+                    });
+                });
             }
         });
 
@@ -327,6 +334,36 @@ class BasicTextEditor extends
         // window-moved, window-resized-end, window-maximize-toggled,
         // menu-action, get-menu-definition, window-close-request
         this.setupCommonMessageBusHandlers();
+
+        // update-vobj-scroll メッセージ（ウィンドウ閉じた時の仮身スクロール位置更新）
+        this.messageBus.on('update-vobj-scroll', async (data) => {
+            if (!data.vobjid) return;
+            try {
+                // DOM上の仮身要素からvobjidで検索（this.tadDataは古いxtadでvobjidがない場合があるためDOMを使用）
+                const vobjElements = this.editor.querySelectorAll('.virtual-object');
+                let found = false;
+                for (const vo of vobjElements) {
+                    if (vo.dataset.linkVobjid === data.vobjid) {
+                        // DOM上のdata属性を更新
+                        if (data.scrollx !== undefined) vo.dataset.linkScrollx = data.scrollx.toString();
+                        if (data.scrolly !== undefined) vo.dataset.linkScrolly = data.scrolly.toString();
+                        if (data.zoomratio !== undefined) vo.dataset.linkZoomratio = data.zoomratio.toString();
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) {
+                    // DOMからxtadを再生成して保存
+                    const xmlData = await this.convertEditorToXML();
+                    if (xmlData) {
+                        this.tadData = xmlData;
+                        this.notifyXmlDataChanged();
+                    }
+                }
+            } catch (error) {
+                logger.error('[EDITOR] update-vobj-scroll処理エラー:', error);
+            }
+        });
 
         // ダイアログレスポンスはMessageBusが自動的に処理するため、ハンドラ不要
 
@@ -1189,6 +1226,7 @@ class BasicTextEditor extends
 
         // 仮身オブジェクトを作成（デフォルト値で）
         const virtualObj = {
+            vobjid: UuidV7Generator.generate(),
             link_id: `${realId}_0.xtad`,
             link_name: name,
             width: 150,
@@ -1200,6 +1238,9 @@ class BasicTextEditor extends
             bgcol: DEFAULT_BGCOL,
             dlen: 0,
             applist: applist || {},
+            scrollx: 0,
+            scrolly: 0,
+            zoomratio: 1.0,
             // 表示属性のデフォルト値
             framedisp: 'true',
             namedisp: 'true',
@@ -1634,7 +1675,7 @@ class BasicTextEditor extends
                 const range = selection.getRangeAt(0);
 
                 // カーソル直前の文字サイズを取得
-                let fontSize = '14pt'; // デフォルト
+                let fontSize = `${DEFAULT_FONT_SIZE}pt`; // デフォルト
 
                 // カーソル位置の要素を取得
                 let container = range.startContainer;
@@ -1668,7 +1709,7 @@ class BasicTextEditor extends
                         // pt単位をpx単位に変換してcaretStyleに設定
                         let fontSizePt = parseFloat(container.style.fontSize);
                         if (container.style.fontSize.endsWith('pt')) {
-                            caretStyle.fontSize = (fontSizePt * 1.333) + 'px';
+                            caretStyle.fontSize = window.convertPtToPx(fontSizePt) + 'px';
                         }
                     }
                 }
@@ -1735,10 +1776,10 @@ class BasicTextEditor extends
                                 // 段落にもフォントサイズを設定（extractFontSize対応）
                                 let fontSizePt = parseFloat(caretStyle.fontSize);
                                 if (caretStyle.fontSize && caretStyle.fontSize.endsWith('px')) {
-                                    fontSizePt = fontSizePt / 1.333;  // px → pt 変換
+                                    fontSizePt = window.convertPxToPt(fontSizePt);
                                 }
                                 fontSizePt = Math.round(fontSizePt * 10) / 10;
-                                if (Math.abs(fontSizePt - 14) > 0.5) {
+                                if (Math.abs(fontSizePt - DEFAULT_FONT_SIZE) > 0.5) {
                                     newP.style.fontSize = `${fontSizePt}pt`;
                                 }
                             }
@@ -1755,10 +1796,10 @@ class BasicTextEditor extends
                             if (needsInherit) {
                                 let fontSizePt = parseFloat(caretStyle.fontSize);
                                 if (caretStyle.fontSize && caretStyle.fontSize.endsWith('px')) {
-                                    fontSizePt = fontSizePt / 1.333;
+                                    fontSizePt = window.convertPxToPt(fontSizePt);
                                 }
                                 fontSizePt = Math.round(fontSizePt * 10) / 10;
-                                if (Math.abs(fontSizePt - 14) > 0.5) {
+                                if (Math.abs(fontSizePt - DEFAULT_FONT_SIZE) > 0.5) {
                                     newP.style.fontSize = `${fontSizePt}pt`;
                                 }
                             }
@@ -1775,10 +1816,10 @@ class BasicTextEditor extends
                             // 段落にもフォントサイズを設定（extractFontSize対応）
                             let fontSizePt = parseFloat(caretStyle.fontSize);
                             if (caretStyle.fontSize && caretStyle.fontSize.endsWith('px')) {
-                                fontSizePt = fontSizePt / 1.333;  // px → pt 変換
+                                fontSizePt = window.convertPxToPt(fontSizePt);
                             }
                             fontSizePt = Math.round(fontSizePt * 10) / 10;
-                            if (Math.abs(fontSizePt - 14) > 0.5) {
+                            if (Math.abs(fontSizePt - DEFAULT_FONT_SIZE) > 0.5) {
                                 newP.style.fontSize = `${fontSizePt}pt`;
                             }
                         }
@@ -1794,10 +1835,10 @@ class BasicTextEditor extends
                             // 段落にもフォントサイズを設定（extractFontSize対応）
                             let fontSizePt = parseFloat(caretStyle.fontSize);
                             if (caretStyle.fontSize && caretStyle.fontSize.endsWith('px')) {
-                                fontSizePt = fontSizePt / 1.333;
+                                fontSizePt = window.convertPxToPt(fontSizePt);
                             }
                             fontSizePt = Math.round(fontSizePt * 10) / 10;
-                            if (Math.abs(fontSizePt - 14) > 0.5) {
+                            if (Math.abs(fontSizePt - DEFAULT_FONT_SIZE) > 0.5) {
                                 currentP.style.fontSize = `${fontSizePt}pt`;
                             }
                         } else {
@@ -2603,9 +2644,9 @@ class BasicTextEditor extends
                 if (chsz) {
                     // 閉じた状態の仮身の高さ（chszはポイント値なのでピクセルに変換）
                     const chszPx = window.convertPtToPx(chsz);
-                    const lineHeight = 1.2;
+                    const lineHeight = DEFAULT_LINE_HEIGHT;
                     const textHeight = Math.ceil(chszPx * lineHeight);
-                    height = textHeight + 8; // 閉じた仮身の高さ
+                    height = textHeight + VOBJ_PADDING_VERTICAL; // 閉じた仮身の高さ
                 } else {
                     // chsz がない場合は実際の高さを測定
                     const rect = vo.getBoundingClientRect();
@@ -3094,8 +3135,9 @@ class BasicTextEditor extends
         const width = vobjright - vobjleft;
         const height = vobjbottom - vobjtop;
 
-        // 最小必要高さを計算（chsz + パディング）
-        const minRequiredHeight = chsz + 16; // 上下パディング8pxずつ
+        // 最小必要高さを計算（rendererと同じ計算式）
+        const chszPx = window.convertPtToPx(chsz);
+        const minRequiredHeight = Math.max(chszPx, Math.ceil(chszPx * DEFAULT_LINE_HEIGHT)) + VOBJ_PADDING_VERTICAL + 1;
 
         logger.debug('[EDITOR] 仮身自動展開チェック:', {
             name: vo.dataset.linkName || vo.textContent,
@@ -3903,7 +3945,7 @@ class BasicTextEditor extends
         range.deleteContents();
 
         // タブ文字を14ptのフォントサイズで挿入
-        const baseFontSize = 14 * 1.33; // 14pt = 約18.67px
+        const baseFontSize = window.convertPtToPx(DEFAULT_FONT_SIZE);
 
         if (Math.abs(currentFontSize - baseFontSize) > 0.5) {
             // 現在のフォントサイズが14ptと異なる場合、タブだけ14ptに固定
@@ -3920,7 +3962,7 @@ class BasicTextEditor extends
             if (previousNode &&
                 previousNode.nodeType === Node.ELEMENT_NODE &&
                 previousNode.nodeName === 'SPAN' &&
-                previousNode.style.fontSize === '14pt' &&
+                previousNode.style.fontSize === `${DEFAULT_FONT_SIZE}pt` &&
                 /^[\t]+$/.test(previousNode.textContent)) {
 
                 // 既存のタブspanに追加
@@ -3932,7 +3974,7 @@ class BasicTextEditor extends
             } else {
                 // 新しいタブspanを作成
                 const tabSpan = document.createElement('span');
-                tabSpan.style.fontSize = '14pt';
+                tabSpan.style.fontSize = `${DEFAULT_FONT_SIZE}pt`;
                 tabSpan.textContent = '\t';
 
                 range.insertNode(tabSpan);
@@ -4051,7 +4093,7 @@ class BasicTextEditor extends
     measureTabWidth() {
         const measureElement = document.createElement('span');
         measureElement.style.fontFamily = window.getComputedStyle(this.editor).fontFamily;
-        measureElement.style.fontSize = '14pt';
+        measureElement.style.fontSize = `${DEFAULT_FONT_SIZE}pt`;
         measureElement.style.tabSize = '4';
         measureElement.style.MozTabSize = '4';
         measureElement.style.whiteSpace = 'pre';
@@ -4072,7 +4114,7 @@ class BasicTextEditor extends
     measureTextWidth(text) {
         const measureElement = document.createElement('span');
         measureElement.style.fontFamily = window.getComputedStyle(this.editor).fontFamily;
-        measureElement.style.fontSize = '14pt';
+        measureElement.style.fontSize = `${DEFAULT_FONT_SIZE}pt`;
         measureElement.style.whiteSpace = 'pre';
         measureElement.style.position = 'absolute';
         measureElement.style.visibility = 'hidden';
@@ -5592,7 +5634,7 @@ class BasicTextEditor extends
                     if (part === '\t') {
                         // タブは14ptのspanで囲む
                         const tabSpan = document.createElement('span');
-                        tabSpan.style.fontSize = '14pt';
+                        tabSpan.style.fontSize = `${DEFAULT_FONT_SIZE}pt`;
                         tabSpan.textContent = '\t';
                         newNodes.push(tabSpan);
                     } else if (part.length > 0) {
@@ -5629,7 +5671,7 @@ class BasicTextEditor extends
                 // フォントサイズを14ptと比較（px単位の場合も考慮）
                 let is14pt = false;
                 if (node.style.fontSize) {
-                    if (node.style.fontSize === '14pt') {
+                    if (node.style.fontSize === `${DEFAULT_FONT_SIZE}pt`) {
                         is14pt = true;
                     } else if (node.style.fontSize.endsWith('px')) {
                         const px = parseFloat(node.style.fontSize);
@@ -5642,7 +5684,7 @@ class BasicTextEditor extends
                     return;
                 } else {
                     // 14pt以外のタブspanは14ptに変更
-                    node.style.fontSize = '14pt';
+                    node.style.fontSize = `${DEFAULT_FONT_SIZE}pt`;
                     return;
                 }
             }
@@ -5708,15 +5750,29 @@ class BasicTextEditor extends
             paragraphs.forEach(paragraph => {
                 if (paragraph && paragraph.nodeName === 'P') {
                     // 段落内のすべてのフォントサイズを取得
-                    let maxFontSize = 14; // デフォルト
+                    // line-height計算用（仮身含む全要素）とXML保存用（テキスト要素のみ）を分離
+                    let maxFontSizeForLineHeight = 14; // line-height計算用（仮身含む）
+                    let maxFontSizeForText = 14;       // XML保存用（テキスト要素のみ）
 
-                    // 段落内のすべてのfont要素とspan要素を確認（属性セレクタではなく直接プロパティをチェック）
                     const allElements = paragraph.querySelectorAll('font, span');
                     allElements.forEach(el => {
                         if (el.style.fontSize) {
-                            const size = parseFloat(el.style.fontSize);
-                            if (!isNaN(size) && size > maxFontSize) {
-                                maxFontSize = size;
+                            const rawSize = parseFloat(el.style.fontSize);
+                            if (!isNaN(rawSize)) {
+                                // px単位の場合はpt単位に変換（1pt = 4/3px）
+                                const sizePt = el.style.fontSize.includes('px') ? window.convertPxToPt(rawSize) : rawSize;
+
+                                // line-height計算用は全要素を含む
+                                if (sizePt > maxFontSizeForLineHeight) {
+                                    maxFontSizeForLineHeight = sizePt;
+                                }
+
+                                // XML保存用は仮身要素を除外（chszは仮身表示用であり段落のテキストフォントサイズとは無関係）
+                                const isVirtualObject = (el.classList && el.classList.contains('virtual-object')) ||
+                                                        (el.closest && el.closest('.virtual-object'));
+                                if (!isVirtualObject && sizePt > maxFontSizeForText) {
+                                    maxFontSizeForText = sizePt;
+                                }
                             }
                         }
                     });
@@ -5735,12 +5791,13 @@ class BasicTextEditor extends
                     }
 
                     // line-heightを設定（pt→px変換: ×4/3）
-                    const ptToPx = 4 / 3;
-                    const lineHeight = maxFontSize * ptToPx * lineHeightRatio;
+                    // ※仮身を含む全要素の最大フォントサイズを使用（段落の行高さに仮身サイズが影響するため）
+                    const lineHeight = window.convertPtToPx(maxFontSizeForLineHeight) * lineHeightRatio;
                     paragraph.style.lineHeight = `${lineHeight}px`;
 
                     // 段落レベルのfont-sizeを更新（XML保存時にextractFontSize()が正しい値を返すように）
-                    paragraph.style.fontSize = `${maxFontSize}pt`;
+                    // ※テキスト要素のみの最大フォントサイズを使用（仮身のchszは段落のテキストフォントサイズとは無関係）
+                    paragraph.style.fontSize = `${maxFontSizeForText}pt`;
                 }
             });
         }
@@ -5888,9 +5945,9 @@ class BasicTextEditor extends
         // computedStyleはpx単位で返されるため、pt値に変換して比較
         let fontSizePt = parseFloat(style.fontSize);
         if (style.fontSize && style.fontSize.endsWith('px')) {
-            fontSizePt = fontSizePt / 1.333;  // px → pt 変換
+            fontSizePt = window.convertPxToPt(fontSizePt);
         }
-        if (Math.abs(fontSizePt - 14) > 0.5) return true;
+        if (Math.abs(fontSizePt - DEFAULT_FONT_SIZE) > 0.5) return true;
 
         // 色が黒以外（rgb(0, 0, 0) または rgb(1, 1, 1) はデフォルト扱い）
         if (style.color && style.color !== 'rgb(0, 0, 0)' && style.color !== 'rgb(1, 1, 1)') return true;
@@ -5919,9 +5976,9 @@ class BasicTextEditor extends
         // computedStyleはpx単位で返されるため、pt値に変換して比較・設定
         let fontSizePt = parseFloat(style.fontSize);
         if (style.fontSize && style.fontSize.endsWith('px')) {
-            fontSizePt = fontSizePt / 1.333;  // px → pt 変換
+            fontSizePt = window.convertPxToPt(fontSizePt);
         }
-        if (Math.abs(fontSizePt - 14) > 0.5) {
+        if (Math.abs(fontSizePt - DEFAULT_FONT_SIZE) > 0.5) {
             span.style.fontSize = fontSizePt + 'pt';  // pt単位で設定
         }
 
@@ -7739,7 +7796,7 @@ class BasicTextEditor extends
 
         // windowIdで検索して削除
         for (const [realId, wId] of this.openedRealObjects.entries()) {
-            if (wId === windowId) {
+            if (wId === windowId || (wId && wId.windowId === windowId)) {
                 this.openedRealObjects.delete(realId);
                 logger.debug('[EDITOR] windowIdから実身の追跡を削除:', realId, windowId);
                 break;
