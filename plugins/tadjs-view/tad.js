@@ -281,6 +281,7 @@ class MaskData {
 
 // デフォルトマスク1-13を定義（4x4パターン）
 function initializeDefaultMasks() {
+    maskDefinitions.clear();
     // マスク1: 0000000000000000 (全て描画しない)
     maskDefinitions.set(1, new MaskData(1, 4, 4, [0x00, 0x00, 0x00, 0x00]));    
     // マスク2: 1000000000100000
@@ -5437,7 +5438,7 @@ function getPixelColor(imageSeg, pixelIndex) {
             const byteIdx = Math.floor(pixelIndex / 8);
             if (byteIdx >= imageSeg.bitmap.length) return [0, 0, 0];
             const bit = (imageSeg.bitmap[byteIdx] >> (7 - bitIndex)) & 1;
-            const mono = bit ? 255 : 0;
+            const mono = bit ? 0 : 255;  // BTRON: bit1=前景(黒), bit0=背景(白)
             return [mono, mono, mono];
         }
         
@@ -7633,6 +7634,8 @@ function initTAD(x = 0, y = 0) {
     tabRulerLineMoveFlag = false;
     tabRulerLinePoint = 0;
     colorPattern = [];
+    colorMap = [];
+    imageSegments = [];
 
     // デフォルトマスクを初期化
     initializeDefaultMasks();
@@ -9248,6 +9251,7 @@ function onAddFile(event) {
     currentFileIndex = 0;
     linkRecordList = [];  // Reset linkRecordList as two-dimensional array
     linkRecordList[0] = [];  // Initialize first index for single files
+    tadRecordDataArray = [];  // BPKレコードデータ配列をリセット
 
     // XMLパース関連のリセット
     xml = [];
@@ -9256,12 +9260,21 @@ function onAddFile(event) {
     isInDocSegment = false;
     currentIndentLevel = 0;
 
-    // 新設計：TADファイル描画バッファシステムをリセット
+    // メモリ解放: 描画バッファ・画像セグメントをクリア
     tadFileCanvases = {};
     tadFileContexts = {};
     tadFileDrawBuffers = {};
     tadRawDataArray = {};
-    
+    imageSegments = [];
+
+    // メモリ解放: BPK解凍用データをクリア
+    tadRaw = null;
+    tadRawBuffer = null;
+    tadDataView = null;
+    if (typeof window !== 'undefined') {
+        window.currentRawData = null;
+    }
+
     logger.debug('TAD file drawing system reset');
     
     canvasInit();

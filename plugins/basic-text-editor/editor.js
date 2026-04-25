@@ -837,7 +837,7 @@ class BasicTextEditor extends
         // 右ボタン処理はPluginBaseのsetupVirtualObjectRightButtonHandlers()で処理
 
         // ダブルクリック+ドラッグ用のグローバルmousemoveハンドラー
-        document.addEventListener('mousemove', (e) => {
+        this._dblClickDragMouseMoveHandler = (e) => {
             // ダブルクリック+ドラッグ候補の検出
             // 共通メソッドでドラッグ開始判定
             if (this.shouldStartDblClickDrag(e)) {
@@ -860,7 +860,7 @@ class BasicTextEditor extends
             }
 
             // ドラッグ中のプレビュー位置を更新（requestAnimationFrameで滑らかに）
-            if (this.dblClickDragState.isDblClickDrag && this.dblClickDragState.dragPreview) {
+            if (this.dblClickDragState && this.dblClickDragState.isDblClickDrag && this.dblClickDragState.dragPreview) {
                 // 最新のマウス座標を保存
                 this.dblClickDragState.lastMouseX = e.clientX;
                 this.dblClickDragState.lastMouseY = e.clientY;
@@ -877,10 +877,12 @@ class BasicTextEditor extends
                     });
                 }
             }
-        });
+        };
+        document.addEventListener('mousemove', this._dblClickDragMouseMoveHandler);
 
         // ダブルクリック+ドラッグ用のグローバルmouseupハンドラー
-        document.addEventListener('mouseup', (e) => {
+        this._dblClickDragMouseUpHandler = (e) => {
+            if (!this.dblClickDragState) return;
             // ダブルクリック+ドラッグ確定後のmouseup処理（実身複製）
             if (this.dblClickDragState.isDblClickDrag && e.button === 0) {
                 logger.debug('[EDITOR] ダブルクリック+ドラッグ完了、実身を複製');
@@ -935,6 +937,77 @@ class BasicTextEditor extends
                 // 状態をリセット（共通メソッド使用）
                 this.cleanupDblClickDragState();
             }
+        };
+        document.addEventListener('mouseup', this._dblClickDragMouseUpHandler);
+    }
+
+    /**
+     * 選択範囲のコンテナから、各段落ごとに個別XML生成してTAD XMLを構築
+     * extractTADXMLFromElementは単独では<p>タグを出力しないため、
+     * 呼び出し側で段落ごとに処理して<p>タグ・fontSizeを付与する
+     * @param {HTMLElement} tempDiv - 選択範囲を含むコンテナ
+     * @param {Selection} selection - 現在のSelection（単一段落内選択時のfontSize参照用）
+     * @returns {string} TAD XML（必ず<p>タグで囲まれた形式）
+     */
+    buildCopyXmlFromContainer(tempDiv, selection) {
+        const paragraphs = tempDiv.querySelectorAll('p');
+        if (paragraphs.length > 0) {
+            // <p>タグが1つ以上ある場合: 段落ごとに処理（複数段落対応）
+            const xmlParts = [];
+            for (const p of paragraphs) {
+                const fontSize = this.getParagraphFontSizePt(p);
+                // <p>の中身のみextract（<p>タグは自分でラップする）
+                const innerXml = this.extractTADXMLFromElement(p);
+                xmlParts.push(`<p><font size="${fontSize}"/>${innerXml}</p>`);
+            }
+            return xmlParts.join('');
+        } else {
+            // <p>タグなし（単一段落内の一部選択）
+            const innerXml = this.extractTADXMLFromElement(tempDiv);
+            let fontSize = 14;
+            if (selection && selection.rangeCount > 0) {
+                let startP = selection.getRangeAt(0).startContainer;
+                while (startP && startP.nodeName !== 'P') startP = startP.parentElement;
+                fontSize = this.getParagraphFontSizePt(startP);
+            }
+            return `<p><font size="${fontSize}"/>${innerXml}</p>`;
+        }
+    }
+
+    /**
+     * <p>要素のfontSizeをpt単位で取得（px→pt変換対応）
+     */
+    getParagraphFontSizePt(pElement) {
+        if (pElement && pElement.style && pElement.style.fontSize) {
+            const s = pElement.style.fontSize;
+            if (s.endsWith('pt')) return Math.round(parseFloat(s));
+            if (s.endsWith('px')) return Math.round(parseFloat(s) * 0.75);
+        }
+        return 14;
+    }
+
+    /**
+     * コピー時のXML後処理: 各段落の先頭に<font size="X"/>を明示付与
+     * extractTADXMLFromElementは14ptの段落で<font>を省略するため、
+     * そのままのXMLをペーストすると前段落のフォント状態が継承されてしまう。
+     * 各段落のサイズを明示付与することで、ペースト側で確実に正しいサイズが反映される。
+     * @param {string} xmlContent - コピー対象XML
+     * @param {HTMLElement} sourceContainer - コピー元DOM（<p>のstyle.fontSize参照）
+     * @returns {string} 修正後XML
+     */
+    ensureExplicitFontSizeInParagraphs(xmlContent, sourceContainer) {
+        const paragraphs = sourceContainer.querySelectorAll('p');
+        const fontSizes = Array.from(paragraphs).map(p => this.getParagraphFontSizePt(p));
+
+        let index = 0;
+        return xmlContent.replace(/<p>([\s\S]*?)<\/p>/gi, (match, content) => {
+            const size = fontSizes[index] !== undefined ? fontSizes[index] : 14;
+            index++;
+            // 段落先頭付近に既に<font size>がある場合はスキップ（メタタグの後もチェック）
+            if (/^\s*(?:<(text|tab-format|indent|pagebreak|docoverlay)[^>]*\/>\s*)*<font\s+size="[^"]*"/i.test(content)) {
+                return match;
+            }
+            return `<p><font size="${size}"/>${content}</p>`;
         });
     }
 
@@ -943,6 +1016,7 @@ class BasicTextEditor extends
      */
     handleCopy(e) {
         try {
+            console.log('[EDITOR:DEBUG] handleCopy 呼び出し');
             const selection = window.getSelection();
             if (!selection.rangeCount) {
                 return; // 選択範囲がない場合はデフォルト動作
@@ -954,11 +1028,14 @@ class BasicTextEditor extends
 
             // 選択範囲に仮身が含まれているか確認
             const hasVirtualObject = container.querySelector('.virtual-object') !== null;
+            console.log('[EDITOR:DEBUG] handleCopy hasVirtualObject:', hasVirtualObject);
 
             if (!hasVirtualObject) {
                 // 仮身が含まれていない場合でもグローバルクリップボードを更新
                 // （Ctrl+Cでブラウザのデフォルトコピーと同時に実行される）
                 if (selectedText) {
+                    // selection.toString()は<p>境界で\n\nを返す
+                    // \n\nは改段落、\nは改行として保持する
                     this.setTextClipboard(selectedText);
                     // テキストコピー時はローカルの画像・仮身クリップボードをクリア
                     // （ペースト時にテキストが優先されるようにする）
@@ -975,14 +1052,21 @@ class BasicTextEditor extends
             const tempDiv = document.createElement('div');
             tempDiv.appendChild(container);
 
-            // XMLに変換
-            const xmlContent = this.extractTADXMLFromElement(tempDiv);
+            // 段落ごとに個別処理してXML生成（複数段落対応 + fontSize明示付与）
+            let xmlContent = this.buildCopyXmlFromContainer(tempDiv, selection);
 
             // プレーンテキスト版も作成（仮身は名前のみ）
-            const plainText = tempDiv.textContent;
+            // innerTextを使用: textContentでは<p>や<br>の改行が失われるため
+            // innerTextはレンダリング結果に基づき適切に改行を挿入する
+            // ※innerTextはDOMに接続されていない要素では動作しないため一時的にbodyに追加
+            tempDiv.style.position = 'absolute';
+            tempDiv.style.left = '-9999px';
+            document.body.appendChild(tempDiv);
+            const plainText = tempDiv.innerText;
+            document.body.removeChild(tempDiv);
 
-            logger.debug('[EDITOR] コピー内容（XML）:', xmlContent);
-            logger.debug('[EDITOR] コピー内容（プレーンテキスト）:', plainText);
+            console.log('[EDITOR:DEBUG] handleCopy XML:', xmlContent);
+            console.log('[EDITOR:DEBUG] handleCopy プレーンテキスト:', plainText);
 
             // クリップボードに両方の形式でコピー
             e.clipboardData.setData('text/plain', plainText);
@@ -1000,8 +1084,126 @@ class BasicTextEditor extends
      * ペーストイベントを処理
      * テキストを優先し、画像のみの場合は画像を挿入
      */
+    /**
+     * TAD XMLフラグメント（仮身を含む可能性あり）をカーソル位置に貼り付け
+     * 共通ルート: handlePaste(Ctrl+V)とpasteFromGlobalClipboard(メニュー操作)の両方から呼ばれる
+     * @param {string} tadXml - コピー元から取得したXMLフラグメント（<p>...<link/>...</p>等）
+     * @param {string} plainTextFallback - XML失敗時のフォールバック用プレーンテキスト
+     */
+    async pasteTadXmlFragment(tadXml, plainTextFallback) {
+        console.log('[EDITOR:DEBUG] pasteTadXmlFragment 呼び出し, tadXml:', tadXml);
+
+        // <document>でラップしてパース検証（コピー元XMLが単一rootでないケース対応）
+        const wrappedXml = `<document>${tadXml}</document>`;
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(wrappedXml, 'text/xml');
+        const parseError = xmlDoc.querySelector('parsererror');
+        if (parseError) {
+            logger.error('[EDITOR] ペーストXMLパースエラー:', parseError.textContent);
+            if (plainTextFallback) {
+                this.insertPlainText(plainTextFallback);
+                this.updateParagraphLineHeight(true);
+                this.isModified = true;
+                this.setStatus('プレーンテキストとして貼り付けました（XML解析失敗）');
+                return;
+            }
+            this.setStatus('貼り付けに失敗しました（XML解析エラー）');
+            return;
+        }
+
+        // linkタグのvobjidを新規生成（仮身インスタンスIDの重複回避）
+        // linkId（参照先実身ID）は変更しない
+        const links = xmlDoc.querySelectorAll('link');
+        for (const link of links) {
+            link.setAttribute('vobjid', UuidV7Generator.generate());
+        }
+
+        // renderTADXML を returnHtml:true モードで呼び出し、段落処理・フォントサイズ継承・
+        // line-height計算を含むHTML文字列を取得（editor.innerHTML上書きはスキップ）
+        const serializer = new XMLSerializer();
+        const wrappedXmlWithNewVobjid = serializer.serializeToString(xmlDoc.documentElement);
+        const htmlContent = await this.renderTADXML(wrappedXmlWithNewVobjid, { returnHtml: true });
+
+        if (!htmlContent) {
+            if (plainTextFallback) {
+                this.insertPlainText(plainTextFallback);
+                this.updateParagraphLineHeight(true);
+                this.isModified = true;
+                this.setStatus('プレーンテキストとして貼り付けました');
+                return;
+            }
+            this.setStatus('貼り付けに失敗しました');
+            return;
+        }
+
+        // カーソル位置にHTMLを挿入（既存内容は保持）
+        // ブラウザサニタイズ回避のためRange APIを使うが、<p>タグのネスト正規化で
+        // 改段落が消える問題があるため、カーソル位置の<p>の直後へinsertBeforeで挿入する
+        const selection = window.getSelection();
+        if (selection.rangeCount === 0) {
+            this.editor.insertAdjacentHTML('beforeend', htmlContent);
+        } else {
+            const range = selection.getRangeAt(0);
+            range.deleteContents();
+
+            // カーソル位置の最外<p>要素(editor直下)を取得
+            let currentP = range.startContainer;
+            while (currentP && currentP.nodeName !== 'P' && currentP !== this.editor) {
+                currentP = currentP.parentElement;
+            }
+
+            if (currentP && currentP.nodeName === 'P' && currentP.parentElement === this.editor) {
+                // カーソル位置の<p>の直後にhtmlContentの各<p>を挿入（<p>ネスト回避）
+                const tempContainer = document.createElement('div');
+                tempContainer.innerHTML = htmlContent;
+                const newNodes = Array.from(tempContainer.childNodes);
+                let lastInserted = currentP;
+                for (const node of newNodes) {
+                    lastInserted.parentNode.insertBefore(node, lastInserted.nextSibling);
+                    lastInserted = node;
+                }
+                // カーソルを最後の挿入ノードの後ろに移動
+                if (lastInserted && lastInserted !== currentP) {
+                    const newRange = document.createRange();
+                    newRange.setStartAfter(lastInserted);
+                    newRange.collapse(true);
+                    selection.removeAllRanges();
+                    selection.addRange(newRange);
+                }
+            } else {
+                // <p>の外（エディタ直下テキストなど、通常は発生しない）: 従来のフラグメント挿入
+                const fragment = range.createContextualFragment(htmlContent);
+                const lastNode = fragment.lastChild;
+                range.insertNode(fragment);
+                if (lastNode) {
+                    const newRange = document.createRange();
+                    newRange.setStartAfter(lastNode);
+                    newRange.collapse(true);
+                    selection.removeAllRanges();
+                    selection.addRange(newRange);
+                }
+            }
+        }
+
+        // 挿入した仮身要素に contenteditable="false" を明示的に設定
+        const vobjElements = this.editor.querySelectorAll('.virtual-object:not([contenteditable])');
+        vobjElements.forEach(vo => {
+            vo.setAttribute('contenteditable', 'false');
+        });
+
+        // 後処理: 仮身イベントハンドラ、画像読み込み、図形iframe初期化
+        this.setupVirtualObjectEventHandlers();
+        await this.loadImagesFromParent();
+        this.initFigureSegmentIframes();
+
+        this.updateParagraphLineHeight(true);
+        this.isModified = true;
+        this.setStatus('仮身を含むコンテンツを貼り付けました');
+    }
+
     async handlePaste(e) {
         try {
+            console.log('[EDITOR:DEBUG] handlePaste 呼び出し');
             // 読み取り専用の場合はペーストを無視
             if (this.editor.contentEditable === 'false') {
                 this.setStatus('読み取り専用モードです');
@@ -1029,15 +1231,25 @@ class BasicTextEditor extends
                 return;
             }
 
-            // TAD XMLデータをチェック（仮身を含むコピー）
+            // ★ awaitの前にclipboardDataのデータを同期的に読み取る
+            // （DataTransferオブジェクトはawait後に無効化されるため）
             const tadXml = clipboardData.getData('application/x-tad-xml');
+            const plainText = clipboardData.getData('text/plain');
+            const imageBlobs = [];
+            if (clipboardData.items) {
+                for (let i = 0; i < clipboardData.items.length; i++) {
+                    if (clipboardData.items[i].type.startsWith('image/')) {
+                        const blob = clipboardData.items[i].getAsFile();
+                        if (blob) {
+                            imageBlobs.push(blob);
+                        }
+                    }
+                }
+            }
+
+            // TAD XMLデータをチェック（仮身を含むコピー: Ctrl+Cでhandle Copyが書き込んだXML）
             if (tadXml) {
-                logger.debug('[EDITOR] TAD XMLをペースト:', tadXml);
-                const htmlContent = await this.renderTADXML(tadXml);
-                document.execCommand('insertHTML', false, htmlContent);
-                this.updateParagraphLineHeight(); // 段落のline-heightを更新
-                this.isModified = true;
-                this.setStatus('仮身を含むコンテンツを貼り付けました');
+                await this.pasteTadXmlFragment(tadXml, plainText);
                 return;
             }
 
@@ -1046,10 +1258,15 @@ class BasicTextEditor extends
 
             // グローバルクリップボードの全型をチェック（アプリ内コピーをシステムクリップボードより優先）
             if (globalClipboard) {
+                // tad-xml: 右クリックメニュー「コピー」で仮身含む範囲をコピーした場合
+                if (globalClipboard.type === 'tad-xml' && globalClipboard.xml) {
+                    await this.pasteTadXmlFragment(globalClipboard.xml, globalClipboard.text);
+                    return;
+                }
                 if (globalClipboard.type === 'text' && globalClipboard.text) {
                     // テキスト（メニュー操作等でシステムクリップボード書き込みが失敗した場合に対応）
-                    document.execCommand('insertText', false, globalClipboard.text);
-                    this.updateParagraphLineHeight();
+                    this.insertPlainText(globalClipboard.text);
+                    this.updateParagraphLineHeight(true); // 全段落のline-heightを更新
                     this.isModified = true;
                     this.setStatus('テキストをクリップボードから貼り付けました');
                     return;
@@ -1073,32 +1290,26 @@ class BasicTextEditor extends
             }
 
             // グローバルクリップボードにデータがない場合はシステムクリップボードを使用
-            const text = clipboardData.getData('text/plain');
-            if (text) {
-                document.execCommand('insertText', false, text);
-                this.updateParagraphLineHeight();
+            // clipboardData.getData('text/plain')の結果を優先し、空の場合はElectron IPC経由で取得
+            const systemText = plainText || await this.getSystemClipboardText();
+            if (systemText) {
+                this.insertPlainText(systemText);
+                this.updateParagraphLineHeight(true); // 全段落のline-heightを更新
                 this.isModified = true;
                 this.setStatus('クリップボードから貼り付けました');
                 return;
             }
 
             // 画像ファイルをチェック（テキストがない場合のみ）
-            const items = clipboardData.items;
-            if (items) {
-                for (let i = 0; i < items.length; i++) {
-                    if (items[i].type.startsWith('image/')) {
-                        const blob = items[i].getAsFile();
-                        if (blob) {
-                            const reader = new FileReader();
-                            reader.onload = async (event) => {
-                                await this.insertImageFromDataUrl(event.target.result, 'clipboard_image.png');
-                                this.setStatus('画像をクリップボードから貼り付けました');
-                            };
-                            reader.readAsDataURL(blob);
-                            return;
-                        }
-                    }
-                }
+            if (imageBlobs.length > 0) {
+                const blob = imageBlobs[0];
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                    await this.insertImageFromDataUrl(event.target.result, 'clipboard_image.png');
+                    this.setStatus('画像をクリップボードから貼り付けました');
+                };
+                reader.readAsDataURL(blob);
+                return;
             }
 
             this.setStatus('貼り付け可能なデータがありません');
@@ -2318,8 +2529,21 @@ class BasicTextEditor extends
             if (this.selectedImage || this.selectedVirtualObject) {
                 e.preventDefault();
                 this.executeMenuAction('copy');
+                return;
             }
-            // テキストの場合はブラウザのデフォルト動作を使用
+            // 選択範囲に仮身を含む場合はブラウザのネイティブcopyイベントに任せる
+            // （handleCopyでTAD XML形式でクリップボードにコピーされる）
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0) {
+                const container = selection.getRangeAt(0).cloneContents();
+                if (container.querySelector('.virtual-object')) {
+                    return;
+                }
+            }
+            // 通常テキスト選択時はexecuteMenuActionでシステムクリップボードに確実にコピー
+            // （ElectronメニューにEdit roleがない環境でもCtrl+Cが動作するため）
+            e.preventDefault();
+            this.executeMenuAction('copy');
             return;
         }
 
@@ -2329,17 +2553,33 @@ class BasicTextEditor extends
             if (this.selectedImage || this.selectedVirtualObject) {
                 e.preventDefault();
                 this.executeMenuAction('cut');
+                return;
             }
-            // テキストの場合はブラウザのデフォルト動作を使用
+            // 選択範囲に仮身を含む場合はブラウザのネイティブcutイベントに任せる
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0) {
+                const container = selection.getRangeAt(0).cloneContents();
+                if (container.querySelector('.virtual-object')) {
+                    return;
+                }
+            }
+            // 通常テキスト選択時はexecuteMenuActionでシステムクリップボードに確実に移動
+            e.preventDefault();
+            this.executeMenuAction('cut');
             return;
         }
 
-        // Ctrl+V: ペースト（右クリックメニューと同じ処理フローを使用）
-        // フォーカスがエディタにない場合（仮身/画像選択時等）もペーストできるよう
-        // executeMenuAction経由で処理を共通化
+        // Ctrl+V: ペーストはpasteイベント経由で処理
+        // （keydownでe.preventDefault()するとpasteイベントが発火しなくなるため、
+        //   ここではpreventDefaultせずブラウザのデフォルト動作でpasteイベントを発火させる）
+        // ただし、画像/仮身が選択されている場合はpasteイベントが正しく処理されないため
+        // executeMenuAction経由で処理する
         if (e.ctrlKey && e.key === 'v') {
-            e.preventDefault();
-            this.executeMenuAction('paste');
+            if (this.selectedImage || this.selectedVirtualObject) {
+                e.preventDefault();
+                this.executeMenuAction('paste');
+            }
+            // テキスト編集時はブラウザのデフォルト動作でpasteイベントを発火させる
             return;
         }
 
@@ -5710,13 +5950,19 @@ class BasicTextEditor extends
      * 現在の段落のline-heightと段落レベルのfont-sizeを最大フォントサイズに基づいて更新
      * 複数行にまたがってフォントサイズを変更した場合、段落レベルのfont-sizeも更新する
      */
-    updateParagraphLineHeight() {
-        const selection = window.getSelection();
-        if (selection.rangeCount > 0) {
+    updateParagraphLineHeight(updateAll = false) {
+        let paragraphs;
+
+        if (updateAll) {
+            // 全段落を対象（ペースト後など）
+            paragraphs = Array.from(this.editor.querySelectorAll('p'));
+        } else {
+            // 選択範囲内の段落のみ対象（通常の編集時）
+            const selection = window.getSelection();
+            if (!selection.rangeCount) return;
             const range = selection.getRangeAt(0);
 
-            // 選択範囲内のすべての段落要素を取得
-            const paragraphs = new Set();
+            const paragraphSet = new Set();
 
             // 開始位置の段落を取得
             let startParagraph = range.startContainer;
@@ -5724,7 +5970,7 @@ class BasicTextEditor extends
                 startParagraph = startParagraph.parentElement;
             }
             if (startParagraph && startParagraph.nodeName === 'P') {
-                paragraphs.add(startParagraph);
+                paragraphSet.add(startParagraph);
             }
 
             // 終了位置の段落を取得
@@ -5733,7 +5979,7 @@ class BasicTextEditor extends
                 endParagraph = endParagraph.parentElement;
             }
             if (endParagraph && endParagraph.nodeName === 'P') {
-                paragraphs.add(endParagraph);
+                paragraphSet.add(endParagraph);
             }
 
             // 選択範囲内の段落をすべて取得
@@ -5742,65 +5988,75 @@ class BasicTextEditor extends
             const endIndex = allParagraphs.indexOf(endParagraph);
             if (startIndex !== -1 && endIndex !== -1) {
                 for (let i = startIndex; i <= endIndex; i++) {
-                    paragraphs.add(allParagraphs[i]);
+                    paragraphSet.add(allParagraphs[i]);
                 }
             }
 
-            // 各段落について更新
-            paragraphs.forEach(paragraph => {
-                if (paragraph && paragraph.nodeName === 'P') {
-                    // 段落内のすべてのフォントサイズを取得
-                    // line-height計算用（仮身含む全要素）とXML保存用（テキスト要素のみ）を分離
-                    let maxFontSizeForLineHeight = 14; // line-height計算用（仮身含む）
-                    let maxFontSizeForText = 14;       // XML保存用（テキスト要素のみ）
+            paragraphs = Array.from(paragraphSet);
+        }
 
-                    const allElements = paragraph.querySelectorAll('font, span');
-                    allElements.forEach(el => {
-                        if (el.style.fontSize) {
-                            const rawSize = parseFloat(el.style.fontSize);
-                            if (!isNaN(rawSize)) {
-                                // px単位の場合はpt単位に変換（1pt = 4/3px）
-                                const sizePt = el.style.fontSize.includes('px') ? window.convertPxToPt(rawSize) : rawSize;
+        // 各段落について更新
+        paragraphs.forEach(paragraph => {
+            this._updateSingleParagraphLineHeight(paragraph);
+        });
+    }
 
-                                // line-height計算用は全要素を含む
-                                if (sizePt > maxFontSizeForLineHeight) {
-                                    maxFontSizeForLineHeight = sizePt;
-                                }
+    /**
+     * 単一段落のline-heightとfont-sizeを更新
+     * @param {HTMLElement} paragraph - 対象の段落要素
+     */
+    _updateSingleParagraphLineHeight(paragraph) {
+        if (!paragraph || paragraph.nodeName !== 'P') return;
 
-                                // XML保存用は仮身要素を除外（chszは仮身表示用であり段落のテキストフォントサイズとは無関係）
-                                const isVirtualObject = (el.classList && el.classList.contains('virtual-object')) ||
-                                                        (el.closest && el.closest('.virtual-object'));
-                                if (!isVirtualObject && sizePt > maxFontSizeForText) {
-                                    maxFontSizeForText = sizePt;
-                                }
-                            }
-                        }
-                    });
+        // 段落内のすべてのフォントサイズを取得
+        // line-height計算用（仮身含む全要素）とXML保存用（テキスト要素のみ）を分離
+        let maxFontSizeForLineHeight = 14; // line-height計算用（仮身含む）
+        let maxFontSizeForText = 14;       // XML保存用（テキスト要素のみ）
 
-                    // tab-formatからline-height比率を取得
-                    let lineHeightRatio = 1.5; // デフォルト
-                    const tabFormatAttr = paragraph.getAttribute('data-tab-format');
-                    if (tabFormatAttr) {
-                        try {
-                            const tabFormat = JSON.parse(tabFormatAttr);
-                            const heightVal = parseFloat(tabFormat.height);
-                            if (!isNaN(heightVal) && heightVal > 0) {
-                                lineHeightRatio = 1 + heightVal; // ギャップ率→総合比率
-                            }
-                        } catch (e) { /* ignore parse error */ }
+        const allElements = paragraph.querySelectorAll('font, span');
+        allElements.forEach(el => {
+            if (el.style.fontSize) {
+                const rawSize = parseFloat(el.style.fontSize);
+                if (!isNaN(rawSize)) {
+                    // px単位の場合はpt単位に変換（1pt = 4/3px）
+                    const sizePt = el.style.fontSize.includes('px') ? window.convertPxToPt(rawSize) : rawSize;
+
+                    // line-height計算用は全要素を含む
+                    if (sizePt > maxFontSizeForLineHeight) {
+                        maxFontSizeForLineHeight = sizePt;
                     }
 
-                    // line-heightを設定（pt→px変換: ×4/3）
-                    // ※仮身を含む全要素の最大フォントサイズを使用（段落の行高さに仮身サイズが影響するため）
-                    const lineHeight = window.convertPtToPx(maxFontSizeForLineHeight) * lineHeightRatio;
-                    paragraph.style.lineHeight = `${lineHeight}px`;
-
-                    // 段落レベルのfont-sizeを更新（XML保存時にextractFontSize()が正しい値を返すように）
-                    // ※テキスト要素のみの最大フォントサイズを使用（仮身のchszは段落のテキストフォントサイズとは無関係）
-                    paragraph.style.fontSize = `${maxFontSizeForText}pt`;
+                    // XML保存用は仮身要素を除外（chszは仮身表示用であり段落のテキストフォントサイズとは無関係）
+                    const isVirtualObject = (el.classList && el.classList.contains('virtual-object')) ||
+                                            (el.closest && el.closest('.virtual-object'));
+                    if (!isVirtualObject && sizePt > maxFontSizeForText) {
+                        maxFontSizeForText = sizePt;
+                    }
                 }
-            });
+            }
+        });
+
+        // tab-formatからline-height比率を取得
+        let lineHeightRatio = 1.5; // デフォルト
+        const tabFormatAttr = paragraph.getAttribute('data-tab-format');
+        if (tabFormatAttr) {
+            try {
+                const tabFormat = JSON.parse(tabFormatAttr);
+                const heightVal = parseFloat(tabFormat.height);
+                if (!isNaN(heightVal) && heightVal > 0) {
+                    lineHeightRatio = 1 + heightVal; // ギャップ率→総合比率
+                }
+            } catch (e) { /* ignore parse error */ }
         }
+
+        // line-heightを設定（pt→px変換: ×4/3）
+        // ※仮身を含む全要素の最大フォントサイズを使用（段落の行高さに仮身サイズが影響するため）
+        const lineHeight = window.convertPtToPx(maxFontSizeForLineHeight) * lineHeightRatio;
+        paragraph.style.lineHeight = `${lineHeight}px`;
+
+        // 段落レベルのfont-sizeを更新（XML保存時にextractFontSize()が正しい値を返すように）
+        // ※テキスト要素のみの最大フォントサイズを使用（仮身のchszは段落のテキストフォントサイズとは無関係）
+        paragraph.style.fontSize = `${maxFontSizeForText}pt`;
     }
 
     /**
@@ -6348,6 +6604,39 @@ class BasicTextEditor extends
             this.mutationObserver.disconnect();
             this.mutationObserver = null;
         }
+        // タイマーのクリア
+        if (this.updateHeightTimer) {
+            clearTimeout(this.updateHeightTimer);
+            this.updateHeightTimer = null;
+        }
+        // メモリ解放: DOM参照・データのクリア
+        this.selectedImage = null;
+        this.selectedFigureSegment = null;
+        this.figureSegmentClipboard = null;
+        this.imageClipboard = null;
+        this.virtualObjectClipboard = null;
+        this.draggingImage = null;
+        this.draggingVirtualObject = null;
+        this.draggingVirtualObjectData = null;
+        this.contextMenuSelectedImage = null;
+        this.contextMenuVirtualObject = null;
+        this.recentFonts = [];
+        this.systemFonts = [];
+        this.editor = null;
+        if (this.dblClickDragState && this.dblClickDragState.rafId) {
+            cancelAnimationFrame(this.dblClickDragState.rafId);
+            this.dblClickDragState.rafId = null;
+        }
+        // ダブルクリック+ドラッグ用のグローバルイベントリスナーを解除
+        if (this._dblClickDragMouseMoveHandler) {
+            document.removeEventListener('mousemove', this._dblClickDragMouseMoveHandler);
+            this._dblClickDragMouseMoveHandler = null;
+        }
+        if (this._dblClickDragMouseUpHandler) {
+            document.removeEventListener('mouseup', this._dblClickDragMouseUpHandler);
+            this._dblClickDragMouseUpHandler = null;
+        }
+        this.dblClickDragState = null;
         super.destroy();
     }
 
@@ -7207,7 +7496,10 @@ class BasicTextEditor extends
         // 親ウィンドウからグローバルクリップボードを取得
         const globalClipboard = await this.getGlobalClipboard();
 
-        if (globalClipboard && globalClipboard.link_id) {
+        if (globalClipboard && globalClipboard.type === 'tad-xml' && globalClipboard.xml) {
+            // 仮身を含むXMLフラグメントがある場合（右クリックコピー等）
+            await this.pasteTadXmlFragment(globalClipboard.xml, globalClipboard.text);
+        } else if (globalClipboard && globalClipboard.link_id) {
             // 仮身データがある場合
             this.insertVirtualObjectLink(globalClipboard);
             // refCount+1（グローバルクリップボードからのペースト = 新しい参照が作成される）
@@ -7219,7 +7511,7 @@ class BasicTextEditor extends
             this.setStatus('画像をクリップボードから貼り付けました');
         } else if (globalClipboard && globalClipboard.type === 'text' && globalClipboard.text) {
             // テキストデータがある場合（グローバルクリップボード優先）
-            document.execCommand('insertText', false, globalClipboard.text);
+            this.insertPlainText(globalClipboard.text);
             this.setStatus('テキストをクリップボードから貼り付けました');
         } else if (globalClipboard && globalClipboard.type === 'figure-segment') {
             // 図形セグメント（グラフ等）はCanvas描画で貼り付け（xmlTadデータ保持）
@@ -7257,7 +7549,7 @@ class BasicTextEditor extends
             this.setClipboard(null);
         } else if (globalClipboard && globalClipboard.type === 'text' && globalClipboard.text) {
             // テキストデータがある場合（グローバルクリップボード優先）
-            document.execCommand('insertText', false, globalClipboard.text);
+            this.insertPlainText(globalClipboard.text);
             this.setStatus('テキストをクリップボードから移動しました');
             // グローバルクリップボードをクリア（移動なので）
             this.setClipboard(null);
@@ -7279,14 +7571,42 @@ class BasicTextEditor extends
      * テキストをクリップボードにコピー（Clipboard API使用）
      */
     async copyTextToClipboard() {
+        console.log('[EDITOR:DEBUG] copyTextToClipboard 呼び出し');
         const selection = window.getSelection();
         // 現在の選択テキスト、または保存済みの選択テキストを使用
         // （メニュークリック時にフォーカスが外れて選択が消える場合の対策）
         const selectedText = selection.toString() || this.lastSelectedText;
 
         if (selectedText) {
-            // グローバルクリップボードにテキストを保存（確実な方法）
-            this.setTextClipboard(selectedText);
+            // selection.toString()は<p>境界で\n\nを返すため、\nに正規化
+            const normalizedText = selectedText.replace(/\n\n/g, '\n');
+
+            // 選択範囲に仮身(virtual-object)を含むか確認
+            // 含む場合はグローバルクリップボードにXMLとして保存（仮身情報を保持するため）
+            let xmlContent = null;
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                const container = range.cloneContents();
+                if (container.querySelector('.virtual-object')) {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.appendChild(container);
+                    // 段落ごとに個別処理してXML生成（複数段落対応 + fontSize明示付与）
+                    xmlContent = this.buildCopyXmlFromContainer(tempDiv, selection);
+                }
+            }
+
+            if (xmlContent) {
+                // 仮身を含む場合: XMLをグローバルクリップボードに保存（type: 'tad-xml'）
+                console.log('[EDITOR:DEBUG] copyTextToClipboard XMLを保存:', xmlContent);
+                this.setClipboard({
+                    type: 'tad-xml',
+                    xml: xmlContent,
+                    text: normalizedText
+                });
+            } else {
+                // 通常テキスト: グローバルクリップボードにテキストとして保存
+                this.setTextClipboard(normalizedText);
+            }
 
             // テキストコピー時はローカルの画像・仮身クリップボードをクリア
             // （ペースト時にテキストが優先されるようにする）
@@ -7310,13 +7630,41 @@ class BasicTextEditor extends
      * テキストをクリップボードに移動（Clipboard API使用）
      */
     async cutTextToClipboard() {
+        console.log('[EDITOR:DEBUG] cutTextToClipboard 呼び出し');
         const selection = window.getSelection();
         // 現在の選択テキスト、または保存済みの選択テキストを使用
         const selectedText = selection.toString() || this.lastSelectedText;
 
         if (selectedText) {
-            // グローバルクリップボードにテキストを保存（確実な方法）
-            this.setTextClipboard(selectedText);
+            // selection.toString()は<p>境界で\n\nを返すため、\nに正規化
+            const normalizedText = selectedText.replace(/\n\n/g, '\n');
+
+            // 選択範囲に仮身(virtual-object)を含むか確認
+            // 含む場合はグローバルクリップボードにXMLとして保存（仮身情報を保持するため）
+            let xmlContent = null;
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                const container = range.cloneContents();
+                if (container.querySelector('.virtual-object')) {
+                    const tempDiv = document.createElement('div');
+                    tempDiv.appendChild(container);
+                    // 段落ごとに個別処理してXML生成（複数段落対応 + fontSize明示付与）
+                    xmlContent = this.buildCopyXmlFromContainer(tempDiv, selection);
+                }
+            }
+
+            if (xmlContent) {
+                // 仮身を含む場合: XMLをグローバルクリップボードに保存（type: 'tad-xml'）
+                console.log('[EDITOR:DEBUG] cutTextToClipboard XMLを保存:', xmlContent);
+                this.setClipboard({
+                    type: 'tad-xml',
+                    xml: xmlContent,
+                    text: normalizedText
+                });
+            } else {
+                // 通常テキスト: グローバルクリップボードにテキストとして保存
+                this.setTextClipboard(normalizedText);
+            }
 
             // テキストコピー時はローカルの画像・仮身クリップボードをクリア
             // （ペースト時にテキストが優先されるようにする）
@@ -7343,27 +7691,63 @@ class BasicTextEditor extends
     }
 
     /**
-     * システムクリップボードからテキストをペースト（Clipboard API使用）
+     * プレーンテキストをHTMLに変換してエディタに挿入
+     * \n\n（改段落）は段落区切り（</p><p>）に、\n（改行）は<br>に変換する
+     * @param {string} text - 挿入するテキスト
+     */
+    insertPlainText(text) {
+        if (!text) return;
+        const normalized = normalizePasteText(text);
+
+        // カーソル位置の段落からline-heightスタイルを取得して新段落に引き継ぐ
+        let paragraphStyle = '';
+        const selection = window.getSelection();
+        if (selection.rangeCount > 0) {
+            let currentP = selection.getRangeAt(0).startContainer;
+            while (currentP && currentP.nodeName !== 'P' && currentP !== this.editor) {
+                currentP = currentP.parentElement;
+            }
+            if (currentP && currentP.nodeName === 'P') {
+                if (currentP.style.lineHeight) {
+                    paragraphStyle += `line-height: ${currentP.style.lineHeight};`;
+                }
+                if (currentP.style.fontSize) {
+                    paragraphStyle += `font-size: ${currentP.style.fontSize};`;
+                }
+            }
+        }
+
+        // \n\nで段落分割、各段落内の\nを<br>に変換
+        const paragraphs = normalized.split('\n\n');
+        const htmlParts = paragraphs.map(para => {
+            return para.split('\n').map(line => escapeHtml(line)).join('<br>');
+        });
+
+        if (htmlParts.length === 1) {
+            // 単一段落（改段落なし）: <br>のみで結合
+            document.execCommand('insertHTML', false, htmlParts[0]);
+        } else {
+            // 複数段落: </p><p>で段落を区切る
+            const styleAttr = paragraphStyle ? ` style="${paragraphStyle}"` : '';
+            const html = htmlParts.join(`</p><p${styleAttr}>`);
+            document.execCommand('insertHTML', false, html);
+        }
+    }
+
+    /**
+     * システムクリップボードからテキストをペースト（Electron IPC経由）
      */
     async pasteTextFromClipboard() {
         try {
-            const text = await navigator.clipboard.readText();
+            const text = await this.getSystemClipboardText();
             if (text) {
-                // テキストを挿入
-                document.execCommand('insertText', false, text);
-                this.updateParagraphLineHeight(); // 段落のline-heightを更新
+                this.insertPlainText(text);
+                this.updateParagraphLineHeight(true); // 全段落のline-heightを更新
                 this.setStatus('クリップボードから貼り付けました');
             } else {
                 this.setStatus('クリップボードにデータがありません');
             }
         } catch (error) {
-            // NotAllowedError: クロスプラグイン間でフォーカスがない場合に発生
-            // グローバルクリップボードで対応済みのため、システムクリップボードアクセス失敗は無視
-            if (error.name === 'NotAllowedError') {
-                this.setStatus('貼り付け可能なデータがありません');
-                return;
-            }
-            // その他のエラーも同様に処理（危険なdocument.execCommand('paste')は使用しない）
             this.setStatus('貼り付けに失敗しました');
         }
     }
@@ -7606,25 +7990,17 @@ class BasicTextEditor extends
      */
     async pasteMoveTextFromClipboard() {
         try {
-            const text = await navigator.clipboard.readText();
+            const text = await this.getSystemClipboardText();
             if (text) {
-                // テキストを挿入
-                document.execCommand('insertText', false, text);
-                this.updateParagraphLineHeight(); // 段落のline-heightを更新
+                this.insertPlainText(text);
+                this.updateParagraphLineHeight(true); // 全段落のline-heightを更新
                 // システムクリップボードをクリア
-                await navigator.clipboard.writeText('');
+                try { await navigator.clipboard.writeText(''); } catch (e) { /* ignore */ }
                 this.setStatus('クリップボードから移動しました');
             } else {
                 this.setStatus('クリップボードにデータがありません');
             }
         } catch (error) {
-            // NotAllowedError: クロスプラグイン間でフォーカスがない場合に発生
-            // グローバルクリップボードで対応済みのため、システムクリップボードアクセス失敗は無視
-            if (error.name === 'NotAllowedError') {
-                this.setStatus('移動可能なデータがありません');
-                return;
-            }
-            // その他のエラーも同様に処理（危険なdocument.execCommand('paste')は使用しない）
             this.setStatus('移動に失敗しました');
         }
     }

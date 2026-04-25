@@ -158,10 +158,12 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
         }, { capture: true });
 
         // document全体でのmousemove
-        document.addEventListener('mousemove', throttledDragMouseMove);
+        this._dblClickDragMouseMoveHandler = throttledDragMouseMove;
+        document.addEventListener('mousemove', this._dblClickDragMouseMoveHandler);
 
         // document全体でのmouseup
-        document.addEventListener('mouseup', (e) => {
+        this._dblClickDragMouseUpHandler = (e) => {
+            if (!this.dblClickDragState) return;
             logger.debug('[FIGURE EDITOR] ★★★ document mouseup検知 ★★★');
             logger.debug('[FIGURE EDITOR] document mouseup: isDblClickDrag=' + this.dblClickDragState.isDblClickDrag + ', isDblClickDragCandidate=' + this.dblClickDragState.isDblClickDragCandidate + ', button=' + e.button);
 
@@ -230,7 +232,8 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
                 // プラグイン固有のクリーンアップ
                 this.dblClickDragState.dblClickedShape = null;
             }
-        });
+        };
+        document.addEventListener('mouseup', this._dblClickDragMouseUpHandler);
     }
 
     /**

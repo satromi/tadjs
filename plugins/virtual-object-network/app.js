@@ -2495,6 +2495,14 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             el.classList.remove('highlight');
         });
     }
+
+    destroy() {
+        if (this.childMessageBus) {
+            this.childMessageBus.stop();
+            this.childMessageBus = null;
+        }
+        super.destroy();
+    }
 }
 
 // DOMContentLoaded後に初期化

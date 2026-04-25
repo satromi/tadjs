@@ -525,6 +525,17 @@ class UserConfigApp extends window.PluginBase {
     }
 
     // updateWindowConfig() は基底クラス PluginBase で定義
+
+    /**
+     * メモリ解放: プラグイン固有のクリーンアップ
+     */
+    destroy() {
+        if (this.timeUpdateInterval) {
+            clearInterval(this.timeUpdateInterval);
+            this.timeUpdateInterval = null;
+        }
+        super.destroy();
+    }
 }
 
 // DOMContentLoaded後に初期化

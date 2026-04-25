@@ -44,7 +44,7 @@
     <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
     <script type="module">
         import {
-            convertPtToPx, convertPxToPt, rgbToHex, hexToRgb, invertColor,
+            convertPtToPx, convertPxToPt, rgbToHex, hexToRgb, invertColor, escapeHtml, normalizePasteText,
             DEFAULT_TIMEOUT_MS, LONG_OPERATION_TIMEOUT_MS, ICON_LOAD_TIMEOUT_MS, UI_UPDATE_DELAY_MS,
             VOBJ_BORDER_WIDTH, VOBJ_PADDING_VERTICAL, VOBJ_TITLEBAR_PADDING_VERTICAL, DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT, DEFAULT_VOBJ_HEIGHT,
             DEFAULT_FRCOL, DEFAULT_CHCOL, DEFAULT_TBCOL, DEFAULT_BGCOL,
@@ -55,6 +55,8 @@
         window.rgbToHex = rgbToHex;
         window.hexToRgb = hexToRgb;
         window.invertColor = invertColor;
+        window.escapeHtml = escapeHtml;
+        window.normalizePasteText = normalizePasteText;
         window.DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
         window.LONG_OPERATION_TIMEOUT_MS = LONG_OPERATION_TIMEOUT_MS;
         window.ICON_LOAD_TIMEOUT_MS = ICON_LOAD_TIMEOUT_MS;

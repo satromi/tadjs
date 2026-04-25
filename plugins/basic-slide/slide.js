@@ -1015,6 +1015,10 @@ function initSlidePlugin() {
         requestFullscreen() {
             this.enterPresentationMode();
         }
+
+        destroy() {
+            super.destroy();
+        }
     }
 
     // プラグインを初期化

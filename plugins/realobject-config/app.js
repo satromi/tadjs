@@ -676,6 +676,12 @@ class RealObjectConfigApp extends PluginBase {
     handleMenuAction(action) {
         // 現時点では特になし
     }
+
+    destroy() {
+        this.realObjectData = null;
+        this.originalApplist = null;
+        super.destroy();
+    }
 }
 
 // DOMContentLoaded後に初期化

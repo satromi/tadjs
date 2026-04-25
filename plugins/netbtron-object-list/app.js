@@ -7331,6 +7331,24 @@ class NetBtronViewer extends window.PluginBase {
     onCrossWindowDropSuccess(data) {
         logger.debug('[NetBtronViewer] [Hook] onCrossWindowDropSuccess:', data);
     }
+
+    destroy() {
+        this.virtualObjects = [];
+        if (this.selectedVirtualObjects) this.selectedVirtualObjects.clear();
+        if (this.childMessageBus) {
+            this.childMessageBus.stop();
+            this.childMessageBus = null;
+        }
+        if (this.recreateVirtualObjectTimer) {
+            clearTimeout(this.recreateVirtualObjectTimer);
+            this.recreateVirtualObjectTimer = null;
+        }
+        if (this.iframeReenableTimeout) {
+            clearTimeout(this.iframeReenableTimeout);
+            this.iframeReenableTimeout = null;
+        }
+        super.destroy();
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

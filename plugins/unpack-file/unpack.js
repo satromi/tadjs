@@ -249,6 +249,7 @@ class MaskData {
 
 // デフォルトマスク1-13を定義（4x4パターン）
 function initializeDefaultMasks() {
+    maskDefinitions.clear();
     // マスク1: 0000000000000000 (全て描画しない)
     maskDefinitions.set(1, new MaskData(1, 4, 4, [0x00, 0x00, 0x00, 0x00]));    
     // マスク2: 1000000000100000
@@ -279,6 +280,7 @@ function initializeDefaultMasks() {
 
 // デフォルトマーカー定義（JIS X 9051-84 16ドット用字形）
 function initializeDefaultMarkers() {
+    markerDefinitions.clear();
     markerDefinitions.set(0, { id: 0, type: 0, size: 16, fgCol: '#000000', shape: 'dot' });
     markerDefinitions.set(1, { id: 1, type: 0, size: 16, fgCol: '#000000', shape: 'plus' });
     markerDefinitions.set(2, { id: 2, type: 0, size: 16, fgCol: '#000000', shape: 'star' });
@@ -290,7 +292,7 @@ let tadRaw;
 let tadRawBuffer;
 let tadDataView;
 let tadPos = 0;
-const tadRecordDataArray = [];
+let tadRecordDataArray = [];
 
 
 
@@ -1581,6 +1583,27 @@ function processExtractedFiles(lHead) {
     }
 
     logger.info('[UnpackJS] 解凍ファイル処理完了:', archiveFiles.length, '個の実身');
+
+    // メモリ解放: 解凍処理で使用した大規模データをクリア
+    tadRecordDataArray = [];
+    tadRawDataArray = {};
+    generatedImages = [];
+    recordTypeMap = {};
+    calcRecordTypeMap = {};
+    lheadToCanvasMap = {};
+    lHead = [];
+    for (const key of Object.keys(imageCounters)) {
+        delete imageCounters[key];
+    }
+    lh5Decoder = null;
+    decode_buf = null;
+    tadRaw = null;
+    tadRawBuffer = null;
+    tadDataView = null;
+    if (typeof window !== 'undefined') {
+        window.currentRawData = null;
+    }
+    logger.info('[UnpackJS] 解凍処理用データのメモリを解放しました');
 }
 
 /**
@@ -2645,7 +2668,7 @@ function tsFontTypeSetFusen(segLen, tadSeg) {
             break;  // 超幅広
     }
 
-    if (isXmlDumpEnabled) {
+    if (isXmlDumpEnabled()) {
         // XML出力（文章セグメント内の場合のみ）
         xmlBuffer.push(`<font style="${fontStyle}" weight="${fontWeight}" stretch="${fontStretch}" stretchscale="${scaleX}"/>`);
     }
@@ -2675,7 +2698,7 @@ function tsFontSizeSetFusen(segLen,tadSeg) {
     }
 
     // XML出力（文章セグメント内の場合のみ）
-    if(isXmlDumpEnabled) {
+    if (isXmlDumpEnabled()) {
         xmlBuffer.push(`<font size="${textFontSize}"/>`);
     }
 }
@@ -2719,7 +2742,7 @@ function tsFontSpacingSetFusen(segLen, tadSeg) {
     }
 
     // XML出力（文章セグメント内の場合のみ）
-    if(isXmlDumpEnabled) {
+    if (isXmlDumpEnabled()) {
         xmlBuffer.push(`<font direction="${textSpacingDirection}" kerning="${textSpacingKerning}" pattern="${textSpacingPattern}" space="${textSpacingPitch}"/>`);
     }
 }
@@ -2742,7 +2765,7 @@ function tsFontColorSetFusen(segLen, tadSeg) {
     textFontColor = color.color;
 
     // XML出力（文章セグメント内の場合のみ）
-    if(isXmlDumpEnabled) {
+    if (isXmlDumpEnabled()) {
         xmlBuffer.push(`<font color="${textFontColor}"/>`);
     }
 }
@@ -3323,7 +3346,7 @@ function tadTextStyleLineStart(segLen, tadSeg, UB_SubID) {
         return;
     }
 
-    if (isXmlDumpEnabled && xmlTag !== null && isInDocSegment) {
+    if (isXmlDumpEnabled() && xmlTag !== null && isInDocSegment) {
         xmlBuffer.push(`${xmlTag}`);
     }
 }
@@ -3391,7 +3414,7 @@ function tadTextStyleLineEnd(segLen, tadSeg, UB_SubID) {
         return;
     }
 
-    if (isXmlDumpEnabled && xmlTag !== null && isInDocSegment) {
+    if (isXmlDumpEnabled() && xmlTag !== null && isInDocSegment) {
         xmlBuffer.push(`${xmlTag}`);
     }
 
@@ -3502,7 +3525,7 @@ function tsImageSegment(segLen, tadSeg) {
 
         // XMLタグを追加（エディタ用形式: left/top/right/bottom/href）
         figureZIndexCounter++;
-        const xmlTag = `<image lineType="0" lineWidth="1" l_pat="0" f_pat="0" angle="0" rotation="0" flipH="false" flipV="false" left="${imageSeg.bounds.left}" top="${imageSeg.bounds.top}" right="${imageSeg.bounds.right}" bottom="${imageSeg.bounds.bottom}" href="${filename}" zIndex="${figureZIndexCounter}"/>\r\n`;
+        const xmlTag = `<image lineType="0" lineWidth="1" l_pat="0" f_pat="0" angle="0" rotation="0" flipH="false" flipV="false" left="${imageSeg.view.left}" top="${imageSeg.view.top}" right="${imageSeg.view.right}" bottom="${imageSeg.view.bottom}" href="${filename}" zIndex="${figureZIndexCounter}"/>\r\n`;
         xmlBuffer.push(xmlTag);
         resetFigureModifier();
         resetFigureTransformState();
@@ -3554,7 +3577,7 @@ function getPixelColor(imageSeg, srcX, srcY) {
             if (colorMap.length >= 2 && colorMap[bit] && colorMap[bit].r !== undefined) {
                 return [colorMap[bit].r, colorMap[bit].g, colorMap[bit].b];
             }
-            const mono = bit ? 255 : 0;
+            const mono = bit ? 0 : 255;  // BTRON: bit1=前景(黒), bit0=背景(白)
             return [mono, mono, mono];
         }
 
@@ -5115,6 +5138,7 @@ function initTAD(x = 0, y = 0) {
     segmentStack = [];
 
     colorPattern = [];
+    colorMap = [];
 
     // 図形修飾・変換状態をリセット
     resetFigureModifier();
@@ -5207,7 +5231,7 @@ function tsVirtualObjSegment(segLen, tadSeg) {
     }
 
     // XMLのリンク情報を保存
-    if(isXmlDumpEnabled) {
+    if (isXmlDumpEnabled()) {
         // newLink.link_idは1-indexed、realIdMapは0-indexedなので-1する
         const linkedFileIndex = newLink.link_id - 1;
         const realId = realIdMap.get(linkedFileIndex) || newLink.link_id;
@@ -6098,9 +6122,18 @@ function onAddFile(event) {
     isInDocSegment = false;
     currentIndentLevel = 0;
 
-    // 新設計：TADファイル描画バッファシステムをリセット
+    // メモリ解放: 前回の解凍データをクリア
     tadRawDataArray = {};
-    
+    tadRecordDataArray = [];
+    generatedImages = [];
+    archiveFiles = [];
+    tadRaw = null;
+    tadRawBuffer = null;
+    tadDataView = null;
+    if (typeof window !== 'undefined') {
+        window.currentRawData = null;
+    }
+
     logger.debug('TAD file drawing system reset');
     
     

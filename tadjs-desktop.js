@@ -3683,6 +3683,9 @@ ${url}
                         if (toolPanelWindow) {
                             // MessageBusから登録解除
                             this.parentMessageBus.unregisterChild(toolPanelWindowId);
+                            // メモリ解放: iframeのsrcを解除してGCを促進
+                            const tpIframe = toolPanelWindow.querySelector('iframe');
+                            if (tpIframe) tpIframe.src = 'about:blank';
                             toolPanelWindow.remove();
                             this.windows.delete(toolPanelWindowId);
                         }
@@ -3701,6 +3704,8 @@ ${url}
                     const findReplaceWindow = document.getElementById(findReplaceWindowId);
                     if (findReplaceWindow) {
                         this.parentMessageBus.unregisterChild(findReplaceWindowId);
+                        const frIframe = findReplaceWindow.querySelector('iframe');
+                        if (frIframe) frIframe.src = 'about:blank';
                         findReplaceWindow.remove();
                         this.windows.delete(findReplaceWindowId);
                     }
@@ -3717,6 +3722,8 @@ ${url}
                     const findReplaceWindow = document.getElementById(findReplaceWindowId);
                     if (findReplaceWindow) {
                         this.parentMessageBus.unregisterChild(findReplaceWindowId);
+                        const cfrIframe = findReplaceWindow.querySelector('iframe');
+                        if (cfrIframe) cfrIframe.src = 'about:blank';
                         findReplaceWindow.remove();
                         this.windows.delete(findReplaceWindowId);
                     }
@@ -3732,6 +3739,8 @@ ${url}
                     const childPanelWindow = document.getElementById(childPanelWindowId);
                     if (childPanelWindow) {
                         this.parentMessageBus.unregisterChild(childPanelWindowId);
+                        const cpIframe = childPanelWindow.querySelector('iframe');
+                        if (cpIframe) cpIframe.src = 'about:blank';
                         childPanelWindow.remove();
                         this.windows.delete(childPanelWindowId);
                     }
@@ -3789,6 +3798,11 @@ ${url}
         const shouldFocusPrevious = this.activeWindow === windowId;
 
         setTimeout(() => {
+            // メモリ解放: iframeのsrcを解除してGCを促進
+            const closingIframe = win.element.querySelector('iframe');
+            if (closingIframe) {
+                closingIframe.src = 'about:blank';
+            }
             win.element.remove();
             this.windows.delete(windowId);
             this.closingWindows.delete(windowId);
@@ -4424,6 +4438,34 @@ ${url}
                 } else {
                     logger.warn(`[TADjs] 画像データがありません: ${imgFileName}`);
                 }
+            }
+
+            // メモリ解放: ディスク保存済みのファイルキャッシュを解放
+            let freedCount = 0;
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const recordNo = file.recordNo !== undefined ? file.recordNo : 0;
+                const xtadFileName = `${file.fileId}_${recordNo}.xtad`;
+                const jsonFileName = `${file.fileId}.json`;
+                if (this.fileObjects[xtadFileName]) {
+                    delete this.fileObjects[xtadFileName];
+                    freedCount++;
+                }
+                if (this.fileObjects[jsonFileName]) {
+                    delete this.fileObjects[jsonFileName];
+                    freedCount++;
+                }
+            }
+            for (let i = 0; i < images.length; i++) {
+                const image = images[i];
+                const imgFileName = `${image.fileId}_${image.recordNo}_${image.imgNo}.png`;
+                if (this.fileObjects[imgFileName]) {
+                    delete this.fileObjects[imgFileName];
+                    freedCount++;
+                }
+            }
+            if (freedCount > 0) {
+                logger.info(`[TADjs] メモリ解放: ディスク保存済みの${freedCount}個のファイルキャッシュを解放`);
             }
 
             logger.info('[TADjs] 実身ファイルセット処理完了（XTAD:', files.length, '個、画像:', images.length, '個）');

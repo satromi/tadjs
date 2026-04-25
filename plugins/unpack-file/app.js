@@ -317,6 +317,10 @@ class UnpackFileManager extends window.PluginBase {
 
             logger.info('[UnpackFile] すべてのファイル情報送信完了');
 
+            // メモリ解放: 送信完了後に不要なデータを解放
+            this.rawData = null;
+            logger.info('[UnpackFile] メモリ解放: rawData/generatedImagesを解放');
+
         } catch (error) {
             logger.error('[UnpackFile] 実身ファイルセット生成エラー:', error);
         }
@@ -573,6 +577,16 @@ class UnpackFileManager extends window.PluginBase {
     handleDragEnd(event) {
         // スタイルを元に戻す
         event.target.style.opacity = '1';
+    }
+
+    /**
+     * メモリ解放: プラグイン固有のクリーンアップ
+     */
+    destroy() {
+        this.rawData = null;
+        this.archiveFiles = [];
+        this.fileIdMap.clear();
+        super.destroy();
     }
 }
 

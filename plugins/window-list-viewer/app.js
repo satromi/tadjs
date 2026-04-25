@@ -91,6 +91,10 @@ class WindowListViewer extends window.PluginBase {
     executeMenuAction(action) {
         // メニューアクションなし
     }
+
+    destroy() {
+        super.destroy();
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

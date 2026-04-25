@@ -604,11 +604,16 @@ export const TextTadParserMixin = (Base) => class extends Base {
 
     /**
      * tadXMLをエディタに描画（TAD XMLタグをそのまま使用）
+     * @param {string} tadXML - TAD XML文字列
+     * @param {object} options - { returnHtml: true でeditor.innerHTML上書きせずHTML文字列を返却 }
+     * @returns {Promise<string|undefined>} returnHtml:trueのときHTML文字列
      */
-    async renderTADXML(tadXML) {
+    async renderTADXML(tadXML, options = {}) {
+        const returnHtml = options.returnHtml === true;
+
         if (!tadXML) {
-            this.editor.innerHTML = '<p>XMLデータの解析に失敗しました</p>';
-            return;
+            if (!returnHtml) this.editor.innerHTML = '<p>XMLデータの解析に失敗しました</p>';
+            return returnHtml ? '' : undefined;
         }
 
         try {
@@ -619,15 +624,18 @@ export const TextTadParserMixin = (Base) => class extends Base {
             // パースエラーチェック
             const parseError = xmlDoc.querySelector('parsererror');
             if (parseError) {
-                this.editor.innerHTML = '<p>XMLパースエラー</p>';
-                return;
+                if (!returnHtml) this.editor.innerHTML = '<p>XMLパースエラー</p>';
+                return returnHtml ? '' : undefined;
             }
 
             // <realtime>要素を検出した場合は専用処理
+            // (returnHtmlモードでは非対応: realtimeコンテンツを含むコピペは想定しない)
             const realtimeEl = xmlDoc.querySelector('realtime');
             if (realtimeEl) {
-                await this.renderRealtimeContent(realtimeEl, xmlDoc);
-                return;
+                if (!returnHtml) {
+                    await this.renderRealtimeContent(realtimeEl, xmlDoc);
+                }
+                return returnHtml ? '' : undefined;
             }
 
             // インライン<figure>ブロックを事前抽出（ネストされた<document>問題の回避）
@@ -670,14 +678,16 @@ export const TextTadParserMixin = (Base) => class extends Base {
                     });
                     // 図形セグメントの後に編集可能な文章セグメントを追加
                     figureHtml += '<document><p></p></document>';
-                    this.editor.innerHTML = figureHtml;
-                    this.initFigureSegmentIframes();
-                    this.viewMode = 'formatted';
-                    return;
+                    if (!returnHtml) {
+                        this.editor.innerHTML = figureHtml;
+                        this.initFigureSegmentIframes();
+                        this.viewMode = 'formatted';
+                    }
+                    return returnHtml ? figureHtml : undefined;
                 }
                 logger.warn('[EDITOR] <document>タグが見つかりません');
-                this.editor.innerHTML = '<p>Document要素が見つかりません</p>';
-                return;
+                if (!returnHtml) this.editor.innerHTML = '<p>Document要素が見つかりません</p>';
+                return returnHtml ? '' : undefined;
             }
 
             let docContent = docMatch[1];
@@ -742,7 +752,9 @@ export const TextTadParserMixin = (Base) => class extends Base {
             }
 
             // ページ追跡を初期化（条件付き改ページ用）
-            this.initPageTracker();
+            if (!returnHtml) {
+                this.initPageTracker();
+            }
 
             // テキストスタイル状態を段落ループの外で初期化（段落間引き継ぎ用）
             const textStyleState = new window.TextStyleStateManager();
@@ -1160,8 +1172,11 @@ export const TextTadParserMixin = (Base) => class extends Base {
 
                 // <figure>が実際の図形描画要素を含むか検証
                 // <document>のみの<figure>（テキストボックスのみ）はテキストとして展開
+                // 注: TS_TRANSFORM など座標情報を持つ全ての描画要素を網羅すること
                 const figure = tmpDoc.querySelector('figure');
-                const hasDrawingElements = figure && figure.querySelector('rect, ellipse, polyline, group, image');
+                const hasDrawingElements = figure && figure.querySelector(
+                    'rect, ellipse, polyline, polygon, line, arc, chord, elliptical_arc, curve, spline, group, image, pixelmap, marker, transform'
+                );
                 if (!hasDrawingElements) {
                     const docEls = figure ? figure.querySelectorAll('document') : [];
                     let textHtml = '';
@@ -1193,6 +1208,11 @@ export const TextTadParserMixin = (Base) => class extends Base {
                 );
             });
 
+            // returnHtmlモードではHTMLを返して終了（editor.innerHTML書き換え・後処理はスキップ）
+            if (returnHtml) {
+                return htmlContent || '';
+            }
+
             if (htmlContent) {
                 this.editor.innerHTML = htmlContent;
 
@@ -1219,6 +1239,9 @@ export const TextTadParserMixin = (Base) => class extends Base {
             this.viewMode = 'formatted';
         } catch (error) {
             logger.error('[EDITOR] XML描画エラー:', error);
+            if (returnHtml) {
+                return '';
+            }
             this.editor.innerHTML = '<p>XMLの描画に失敗しました</p><pre>' + this.escapeHtml(error.message) + '</pre>';
         }
     }

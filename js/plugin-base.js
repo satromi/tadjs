@@ -1740,6 +1740,32 @@ export class PluginBase {
     }
 
     /**
+     * システムクリップボードからテキストを取得（Electron IPC経由）
+     * iframeではnavigator.clipboard.readText()がPermission制限で失敗するため、
+     * 親ウィンドウ経由でElectronのclipboard APIを使用する
+     * @returns {Promise<string|null>} クリップボードのテキスト、失敗時はnull
+     */
+    async getSystemClipboardText() {
+        if (!window.parent || window.parent === window) {
+            return null;
+        }
+        const messageId = this.generateMessageId('text-clipboard');
+        this.messageBus.send('get-text-clipboard', {
+            messageId: messageId,
+            windowId: this.windowId
+        });
+        try {
+            const result = await this.messageBus.waitFor('text-clipboard-data', DEFAULT_TIMEOUT_MS,
+                (data) => data.messageId === messageId
+            );
+            return (result && result.text) ? result.text : null;
+        } catch (error) {
+            logger.warn(`[${this.pluginName}] システムクリップボードテキスト取得タイムアウト:`, error);
+            return null;
+        }
+    }
+
+    /**
      * HTMLImageElementからDataURLを生成
      * @param {HTMLImageElement} imageElement - 画像要素
      * @param {string} [mimeType='image/png'] - MIMEタイプ
@@ -2262,6 +2288,9 @@ export class PluginBase {
      * サブクラスでオーバーライドして追加のクリーンアップを行う場合はsuper.destroy()を呼ぶこと
      */
     destroy() {
+        // 二重実行防止
+        if (this._destroyed) return;
+        this._destroyed = true;
         // setupWindowActivation のリスナー解除
         if (this._windowActivationHandler) {
             document.removeEventListener('mousedown', this._windowActivationHandler);
@@ -2277,6 +2306,32 @@ export class PluginBase {
             document.removeEventListener('click', this._contextMenuClickHandler);
             this._contextMenuClickHandler = null;
             this._contextMenuSetup = false;
+        }
+        // メモリ解放: データメンバのクリア
+        if (this.openedRealObjects) {
+            this.openedRealObjects.clear();
+        }
+        if (this.childPanelWindows) {
+            this.childPanelWindows.clear();
+        }
+        if (this.iconManager) {
+            if (typeof this.iconManager.clearCache === 'function') {
+                this.iconManager.clearCache();
+            }
+            this.iconManager = null;
+        }
+        if (this._requestQueueManager) {
+            this._requestQueueManager = null;
+        }
+        this.iconData = null;
+        // スクロールバー関連Observer切断（plugin-base-scrollbar.jsで設定）
+        if (this._scrollbarResizeObserver) {
+            this._scrollbarResizeObserver.disconnect();
+            this._scrollbarResizeObserver = null;
+        }
+        if (this._scrollbarMutationObserver) {
+            this._scrollbarMutationObserver.disconnect();
+            this._scrollbarMutationObserver = null;
         }
         // MessageBus の停止
         if (this.messageBus) {

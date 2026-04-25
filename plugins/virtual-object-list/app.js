@@ -4673,6 +4673,11 @@ class VirtualObjectListApp extends window.PluginBase {
             this.extractTADXMLFromElement(editorElement, xmlParts);
             xmlParts.push('\r\n</p>\r\n');
         } else {
+            // 自己閉じタグ方式のため、前段落のfontSize/fontFamilyが次段落に継承される。
+            // 現段落のサイズが前段落と異なる場合（デフォルトに戻る場合含む）、
+            // 明示的にタグを出力してリセットする必要がある。
+            let prevFontSize = '14';    // デフォルト
+            let prevFontFamily = '';
             paragraphs.forEach((p) => {
                 xmlParts.push('<p>\r\n');
 
@@ -4689,11 +4694,15 @@ class VirtualObjectListApp extends window.PluginBase {
 
                 // フォント情報を自己閉じタグとして追加
                 // ※色はペアタグ方式でSPAN要素レベルで処理するため、段落レベルでは出力しない
-                if (fontFamily) {
-                    xmlParts.push(`<font face="${fontFamily}"/>`);
+                const currentFontFamily = fontFamily || '';
+                if (currentFontFamily !== prevFontFamily) {
+                    xmlParts.push(`<font face="${currentFontFamily}"/>`);
+                    prevFontFamily = currentFontFamily;
                 }
-                if (fontSize) {
-                    xmlParts.push(`<font size="${fontSize}"/>`);
+                const currentFontSize = fontSize || '14';
+                if (currentFontSize !== prevFontSize) {
+                    xmlParts.push(`<font size="${currentFontSize}"/>`);
+                    prevFontSize = currentFontSize;
                 }
 
                 // 段落の内容を取得
@@ -7303,6 +7312,34 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // ドラッグモードはcleanupVirtualObjectDragState()で既にリセット済み
         // isRightButtonPressedはPluginBaseで管理
+    }
+
+    /**
+     * メモリ解放: プラグイン固有のクリーンアップ
+     */
+    destroy() {
+        this.virtualObjects = [];
+        if (this.selectedVirtualObjects) this.selectedVirtualObjects.clear();
+        this.clipboard = null;
+        this.vobjDragState = null;
+        this.edgeScrollState = null;
+        this.contextMenuVirtualObject = null;
+        if (this.expandedIframes) this.expandedIframes.clear();
+        if (this.iconRequestMap) this.iconRequestMap.clear();
+        if (this.imagePathRequestMap) this.imagePathRequestMap.clear();
+        if (this.childMessageBus) {
+            this.childMessageBus.stop();
+            this.childMessageBus = null;
+        }
+        if (this.recreateVirtualObjectTimer) {
+            clearTimeout(this.recreateVirtualObjectTimer);
+            this.recreateVirtualObjectTimer = null;
+        }
+        if (this.iframeReenableTimeout) {
+            clearTimeout(this.iframeReenableTimeout);
+            this.iframeReenableTimeout = null;
+        }
+        super.destroy();
     }
 
 }

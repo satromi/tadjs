@@ -213,7 +213,23 @@ function createWindow() {
     });
 
     // カスタムメニューを作成
+    // Editメニューは role ベースで定義することでCtrl+C/V/X等のアクセラレータを
+    // Chromiumに正しく伝搬させる（Edit roleがないとcontenteditable内でも
+    // ブラウザのネイティブcopy/cut/paste動作が機能しない場合があるため）
     const menuTemplate = [
+        {
+            label: 'Edit',
+            submenu: [
+                { role: 'undo' },
+                { role: 'redo' },
+                { type: 'separator' },
+                { role: 'cut' },
+                { role: 'copy' },
+                { role: 'paste' },
+                { role: 'delete' },
+                { role: 'selectAll' }
+            ]
+        },
         {
             label: 'View',
             submenu: [

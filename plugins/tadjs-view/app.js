@@ -658,6 +658,22 @@ class TADjsViewPlugin extends window.PluginBase {
     warn(...args) {
         logger.warn('[TADjsView]', ...args);
     }
+
+    /**
+     * メモリ解放: プラグイン固有のクリーンアップ
+     */
+    destroy() {
+        // TAD描画データのクリア
+        this.fileData = null;
+        this.linkRecordList = null;
+        this.tadRecordDataArray = null;
+        this.canvas = null;
+        // tad.jsのグローバルデータをリセット
+        if (typeof window.resetTadFileSystem === 'function') {
+            window.resetTadFileSystem();
+        }
+        super.destroy();
+    }
 }
 
 // DOMContentLoaded後に初期化

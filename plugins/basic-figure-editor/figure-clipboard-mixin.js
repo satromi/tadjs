@@ -144,6 +144,20 @@ export const FigureClipboardMixin = (Base) => class extends Base {
                 return;
             }
 
+            // ★ awaitの前にclipboardDataのデータを同期的に読み取る
+            // （DataTransferオブジェクトはawait後に無効化されるため）
+            const imageBlobs = [];
+            if (e.clipboardData && e.clipboardData.items) {
+                for (let i = 0; i < e.clipboardData.items.length; i++) {
+                    if (e.clipboardData.items[i].type.startsWith('image/')) {
+                        const blob = e.clipboardData.items[i].getAsFile();
+                        if (blob) {
+                            imageBlobs.push(blob);
+                        }
+                    }
+                }
+            }
+
             // ローカルクリップボードを優先チェック（図形データ）
             // 直近のローカル操作を優先する（basic-text-editorと同様の挙動）
             if (this.clipboard && this.clipboard.length > 0) {
@@ -187,19 +201,16 @@ export const FigureClipboardMixin = (Base) => class extends Base {
                 return;
             }
 
-            // 画像データをチェック
-            const items = e.clipboardData.items;
-            for (let i = 0; i < items.length; i++) {
-                if (items[i].type.startsWith('image/')) {
-                    e.preventDefault();
-                    const blob = items[i].getAsFile();
-                    logger.debug('[FIGURE EDITOR] 画像をクリップボードからペースト');
-                    // 論理座標の中央に配置
-                    const x = this.canvas.width / this.zoomLevel / 2;
-                    const y = this.canvas.height / this.zoomLevel / 2;
-                    await this.insertImage(x, y, blob);
-                    return;
-                }
+            // 画像データをチェック（事前に読み取ったblobを使用）
+            if (imageBlobs.length > 0) {
+                e.preventDefault();
+                const blob = imageBlobs[0];
+                logger.debug('[FIGURE EDITOR] 画像をクリップボードからペースト');
+                // 論理座標の中央に配置
+                const x = this.canvas.width / this.zoomLevel / 2;
+                const y = this.canvas.height / this.zoomLevel / 2;
+                await this.insertImage(x, y, blob);
+                return;
             }
         });
     }

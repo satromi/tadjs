@@ -195,6 +195,10 @@ class UrlLinkExec extends window.PluginBase {
             }
         }
     }
+
+    destroy() {
+        super.destroy();
+    }
 }
 
 // プラグインを初期化

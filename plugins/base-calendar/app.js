@@ -231,9 +231,12 @@ class BaseCalendarApp extends window.PluginBase {
             // カレンダーは自動でリサイズされるので特別な処理は不要
         });
 
+        // documentレベルのリスナー参照を保持（destroy時に破棄するため）
+        this.documentHandlers = this.documentHandlers || {};
+
         // 範囲選択中のmousemove処理
-        document.addEventListener('mousemove', (e) => {
-            if (this.dayCreationDrag.isActive && this.rangeSelectionState.isActive) {
+        this.documentHandlers.rangeMousemove = (e) => {
+            if (this.dayCreationDrag?.isActive && this.rangeSelectionState?.isActive) {
                 const grid = document.getElementById('calendarGrid');
                 if (grid) {
                     const rect = grid.getBoundingClientRect();
@@ -242,19 +245,21 @@ class BaseCalendarApp extends window.PluginBase {
                     this.updateRangeSelection(x, y);
                 }
             }
-        });
+        };
+        document.addEventListener('mousemove', this.documentHandlers.rangeMousemove);
 
         // 範囲選択中にマウスがグリッド外に出た場合の終了処理
-        document.addEventListener('mouseup', () => {
-            if (this.rangeSelectionState.isActive) {
+        this.documentHandlers.rangeMouseup = () => {
+            if (this.rangeSelectionState?.isActive) {
                 this.endRangeSelection();
             }
-        });
+        };
+        document.addEventListener('mouseup', this.documentHandlers.rangeMouseup);
 
         // 自由仮身のドラッグ処理（documentレベル）
-        document.addEventListener('mousemove', (e) => {
-            if (!this.virtualObjectDragState.isDragging) return;
-            if (!this.vobjDragState.currentElement) return;
+        this.documentHandlers.vobjMousemove = (e) => {
+            if (!this.virtualObjectDragState?.isDragging) return;
+            if (!this.vobjDragState?.currentElement) return;
 
             // ドラッグ移動を検出
             if (this.detectVirtualObjectDragMove(e)) {
@@ -267,12 +272,13 @@ class BaseCalendarApp extends window.PluginBase {
                 element.style.left = `${this.vobjDragState.initialLeft + dx}px`;
                 element.style.top = `${this.vobjDragState.initialTop + dy}px`;
             }
-        });
+        };
+        document.addEventListener('mousemove', this.documentHandlers.vobjMousemove);
 
         // 自由仮身のドラッグ終了処理（documentレベル）
-        document.addEventListener('mouseup', () => {
-            if (!this.virtualObjectDragState.isDragging) return;
-            if (!this.vobjDragState.currentElement) return;
+        this.documentHandlers.vobjMouseup = () => {
+            if (!this.virtualObjectDragState?.isDragging) return;
+            if (!this.vobjDragState?.currentElement) return;
 
             if (this.virtualObjectDragState.hasMoved) {
                 // 座標を更新
@@ -298,7 +304,8 @@ class BaseCalendarApp extends window.PluginBase {
             this.vobjDragState.currentObject = null;
             this.vobjDragState.currentElement = null;
             this.vobjDragState.vobjIndex = null;
-        });
+        };
+        document.addEventListener('mouseup', this.documentHandlers.vobjMouseup);
     }
 
     /**
@@ -3502,6 +3509,44 @@ ${dayText}
             [{ label: 'OK', value: 'ok' }],
             0
         );
+    }
+
+    /**
+     * メモリ解放: プラグイン固有のクリーンアップ
+     */
+    destroy() {
+        // documentレベルのイベントリスナーを破棄（クローズ後のnull参照エラー防止）
+        if (this.documentHandlers) {
+            if (this.documentHandlers.rangeMousemove) {
+                document.removeEventListener('mousemove', this.documentHandlers.rangeMousemove);
+            }
+            if (this.documentHandlers.rangeMouseup) {
+                document.removeEventListener('mouseup', this.documentHandlers.rangeMouseup);
+            }
+            if (this.documentHandlers.vobjMousemove) {
+                document.removeEventListener('mousemove', this.documentHandlers.vobjMousemove);
+            }
+            if (this.documentHandlers.vobjMouseup) {
+                document.removeEventListener('mouseup', this.documentHandlers.vobjMouseup);
+            }
+            this.documentHandlers = null;
+        }
+
+        this.virtualObjects = [];
+        if (this.selectedVirtualObjects) this.selectedVirtualObjects.clear();
+        this.monthVirtualObjects = [];
+        this.calendarContainer = null;
+        this.calendarGrid = null;
+        this.holidayMap = null;
+        this.currentMonthXmlData = null;
+        this.vobjDragState = null;
+        this.dayCreationDrag = null;
+        this.contextMenuVirtualObject = null;
+        if (this.recreateVirtualObjectTimer) {
+            clearTimeout(this.recreateVirtualObjectTimer);
+            this.recreateVirtualObjectTimer = null;
+        }
+        super.destroy();
     }
 }
 

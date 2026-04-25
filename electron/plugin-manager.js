@@ -717,6 +717,17 @@ class PluginManager {
 
                 // loadイベントを待つ
                 iframe.addEventListener('load', () => {
+                    // about:blankのloadイベントは無視する
+                    let iframeUrl = '';
+                    try {
+                        iframeUrl = iframe.contentWindow?.location?.href || '';
+                    } catch (e) {
+                        // cross-originの場合はプラグインURLがロードされたと判断
+                        iframeUrl = 'loaded';
+                    }
+                    if (iframeUrl === 'about:blank') {
+                        return; // about:blankのloadイベントは無視
+                    }
                     console.log('iframe loaded:', iframeId);
                     // plugin-readyを待つが、フォールバックタイムアウトも設定
                     if (!messageSent && !fallbackTimeoutId) {
@@ -731,7 +742,19 @@ class PluginManager {
                 });
 
                 // 既に読み込まれている場合に備えてフォールバックタイムアウトを設定
-                if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
+                // 注意: about:blankのreadyStateも'complete'になるため、
+                // 実際にプラグインURLがロードされているかも確認する
+                let isActuallyLoaded = false;
+                try {
+                    const iframeUrl = iframe.contentWindow?.location?.href;
+                    isActuallyLoaded = iframe.contentDocument &&
+                        iframe.contentDocument.readyState === 'complete' &&
+                        iframeUrl && iframeUrl !== 'about:blank';
+                } catch (e) {
+                    // cross-originエラーの場合はloadイベントに委ねる
+                    isActuallyLoaded = false;
+                }
+                if (isActuallyLoaded) {
                     console.log('iframe already loaded, waiting for plugin-ready:', iframeId);
                     if (!fallbackTimeoutId) {
                         fallbackTimeoutId = setTimeout(() => {

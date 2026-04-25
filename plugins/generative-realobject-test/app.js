@@ -779,6 +779,14 @@ class LLMCollaboration extends window.PluginBase {
         await this.killPty();
         return super.handleCloseRequest();
     }
+
+    destroy() {
+        if (this._resizeObserver) {
+            this._resizeObserver.disconnect();
+            this._resizeObserver = null;
+        }
+        super.destroy();
+    }
 }
 
 // プラグインを初期化

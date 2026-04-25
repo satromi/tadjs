@@ -560,6 +560,10 @@ class SystemConfigApp extends window.PluginBase {
     }
 
     // updateWindowConfig() は基底クラス PluginBase で定義
+
+    destroy() {
+        super.destroy();
+    }
 }
 
 // DOMContentLoaded後に初期化

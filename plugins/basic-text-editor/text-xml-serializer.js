@@ -8,6 +8,12 @@ const logger = window.getLogger('BasicTextEditor');
 export const TextXmlSerializerMixin = (Base) => class extends Base {
     async convertEditorToXML() {
         logger.debug('[EDITOR] convertEditorToXML開始');
+
+        // 保存前に全段落のfont-sizeを最新化
+        // （updateParagraphLineHeightが呼ばれていない段落のstyle.fontSizeがnullだと
+        //   前段落のサイズを誤って継承してしまうため）
+        this.updateParagraphLineHeight(true);
+
         logger.debug('[EDITOR] エディタHTML:', this.editor.innerHTML.substring(0, 500));
 
         const xmlParts = ['<tad version="1.0" encoding="UTF-8">\r\n'];
@@ -134,6 +140,10 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
                         // ペアタグで囲む場合、extractTADXMLFromElement()で重複タグが出力されないよう
                         // paragraphFontState.sizeを更新
                         paragraphFontState.size = effectiveFontSize;
+                    } else {
+                        // 段落のフォントサイズがデフォルト(14)の場合も、paragraphFontState.sizeを
+                        // 現段落の実際のサイズに更新する（前段落の非デフォルトサイズが残らないようにする）
+                        paragraphFontState.size = effectiveFontSize || '14';
                     }
 
                     // 次の段落のために現在の状態を保存
@@ -792,10 +802,11 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
         const stripped = content.replace(/<br\s*\/?>/g, '').replace(/\r?\n/g, '').trim();
         if (!stripped) return false;
 
-        // font sizeタグの外にテキストやlinkがあるかチェック
-        // アプローチ: fontタグの外にあるテキストノードを探す
-        let depth = 0;
-        let hasContentOutsideFont = false;
+        // font SIZEタグの外にテキストやlinkがあるかチェック
+        // ※font colorやfont faceタグはsizeラッピングとは無関係なのでカウントしない
+        // スタックで開始タグの種類（'size' or 'other'）を追跡し、</font>を正しく対応付ける
+        const fontStack = [];  // 'size' | 'other'
+        let hasContentOutsideFontSize = false;
         let i = 0;
         while (i < stripped.length) {
             if (stripped[i] === '<') {
@@ -803,25 +814,28 @@ export const TextXmlSerializerMixin = (Base) => class extends Base {
                 if (tagEnd === -1) break;
                 const tag = stripped.substring(i, tagEnd + 1);
 
-                if (tag.match(/^<font\s+(size|color|face)="/)) {
-                    depth++;
+                if (tag.match(/^<font\s+size="/)) {
+                    fontStack.push('size');
+                } else if (tag.match(/^<font\s+(color|face|space)="/)) {
+                    fontStack.push('other');
                 } else if (tag === '</font>') {
-                    depth--;
+                    fontStack.pop();  // 最後に開かれたfontタグを閉じる
                 }
                 // 自己閉じタグ（link, brなど）はfontタグの外にあってもコンテンツとは見なさない
                 i = tagEnd + 1;
             } else {
-                // テキストノード
-                if (depth === 0) {
-                    // fontタグの外にテキストがある
-                    hasContentOutsideFont = true;
+                // テキストノード - font sizeタグ内にあるかチェック
+                const hasSizeInStack = fontStack.includes('size');
+                if (!hasSizeInStack) {
+                    // font sizeタグの外にテキストがある
+                    hasContentOutsideFontSize = true;
                     break;
                 }
                 i++;
             }
         }
 
-        return !hasContentOutsideFont;
+        return !hasContentOutsideFontSize;
     }
 
     /**

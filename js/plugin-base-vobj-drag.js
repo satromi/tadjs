@@ -50,6 +50,10 @@ export function applyVobjDragMethods(PluginBaseClass) {
      * @returns {boolean} ドラッグを開始すべきならtrue
      */
     proto.shouldStartDblClickDrag = function(event, threshold = 5) {
+        // destroy済み（dblClickDragStateがnull）の場合はfalse
+        if (!this.dblClickDragState) {
+            return false;
+        }
         // ダブルクリック候補でない、または既にドラッグ中の場合はfalse
         if (!this.dblClickDragState.isDblClickDragCandidate || this.dblClickDragState.isDblClickDrag) {
             return false;

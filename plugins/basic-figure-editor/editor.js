@@ -4940,6 +4940,65 @@ class BasicFigureEditor extends
     // requestCopyVirtualObject() と requestDeleteVirtualObject() は
     // PluginBase共通メソッドに移行済み
 
+    /**
+     * メモリ解放: プラグイン固有のクリーンアップ
+     */
+    destroy() {
+        // requestAnimationFrameのキャンセル
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+            this.animationFrameId = null;
+        }
+        // タイマーのクリア
+        if (this.dragCooldownTimeout) {
+            clearTimeout(this.dragCooldownTimeout);
+            this.dragCooldownTimeout = null;
+        }
+        if (this.virtualObjectDragTimeout) {
+            clearTimeout(this.virtualObjectDragTimeout);
+            this.virtualObjectDragTimeout = null;
+        }
+        if (this.recreateVirtualObjectTimer) {
+            clearTimeout(this.recreateVirtualObjectTimer);
+            this.recreateVirtualObjectTimer = null;
+        }
+        // 大規模データのクリア
+        this.shapes = [];
+        this.selectedShapes = [];
+        this.clipboard = [];
+        this.undoStack = [];
+        this.redoStack = [];
+        this.transformVertices = [];
+        this.rotationOriginals = [];
+        this.visibleConnectors = [];
+        this.dragOffsets = [];
+        this.currentPath = [];
+        this.customPatterns = {};
+        this.customMasks = {};
+        if (this.markerDefinitions) this.markerDefinitions.clear();
+        this.tadData = null;
+        this.editingTextBox = null;
+        this.editingPixelmap = null;
+        this.toolPanel = null;
+        // ダブルクリック+ドラッグ用のグローバルイベントリスナーを解除
+        if (this._dblClickDragMouseMoveHandler) {
+            document.removeEventListener('mousemove', this._dblClickDragMouseMoveHandler);
+            this._dblClickDragMouseMoveHandler = null;
+        }
+        if (this._dblClickDragMouseUpHandler) {
+            document.removeEventListener('mouseup', this._dblClickDragMouseUpHandler);
+            this._dblClickDragMouseUpHandler = null;
+        }
+        this.dblClickDragState = null;
+        this.currentShape = null;
+        this.selectionRect = null;
+        this.resizePreviewBox = null;
+        // Canvas参照のクリア
+        this.ctx = null;
+        this.canvas = null;
+        super.destroy();
+    }
+
 }
 
 

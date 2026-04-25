@@ -1769,6 +1769,29 @@ class PlayerApp extends PluginBase {
         document.body.style.backgroundColor = color;
     }
 
+    /**
+     * メモリ解放: プラグイン固有のクリーンアップ
+     */
+    destroy() {
+        if (this.timeUpdateInterval) {
+            clearInterval(this.timeUpdateInterval);
+            this.timeUpdateInterval = null;
+        }
+        if (this.audioElement) {
+            this.audioElement.pause();
+            this.audioElement.src = '';
+            this.audioElement = null;
+        }
+        this.parser = null;
+        this.playerContainer = null;
+        this.seekbarContainer = null;
+        this.seekbarSlider = null;
+        this.btnPlayPause = null;
+        this.btnStop = null;
+        this.btnRepeat = null;
+        super.destroy();
+    }
+
 }
 
 // アプリケーション開始

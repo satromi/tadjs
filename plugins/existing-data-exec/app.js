@@ -192,6 +192,10 @@ class ExistingDataExec extends window.PluginBase {
             }
         }
     }
+
+    destroy() {
+        super.destroy();
+    }
 }
 
 // プラグインを初期化

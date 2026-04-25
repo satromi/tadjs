@@ -104,6 +104,31 @@ export class MessageBus {
         }
         this.callbacks.clear();
 
+        // waitersのタイムアウトをクリア（waitersはMap<string, Array>型）
+        if (this.waiters && typeof this.waiters.entries === 'function') {
+            for (const [messageType, waiterList] of this.waiters.entries()) {
+                if (Array.isArray(waiterList)) {
+                    for (const waiter of waiterList) {
+                        if (waiter.timeoutId) {
+                            clearTimeout(waiter.timeoutId);
+                        }
+                    }
+                }
+            }
+            this.waiters.clear();
+        }
+
+        // 子iframe管理情報をクリア（親モード時）
+        if (this.children) {
+            this.children.clear();
+        }
+        if (this.windowToChild) {
+            this.windowToChild.clear();
+        }
+        if (this.pluginToChild) {
+            this.pluginToChild.clear();
+        }
+
         this.log('MessageBus stopped');
     }
 

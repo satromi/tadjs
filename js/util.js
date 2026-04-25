@@ -501,3 +501,14 @@ export function unescapeXml(text) {
         .replace(/&lt;/g, '<')
         .replace(/&amp;/g, '&');
 }
+
+/**
+ * ペースト用テキストの改行コード正規化
+ * Windows改行(\r\n)およびCR(\r)を LF(\n)に統一する
+ * @param {string} text - 正規化するテキスト
+ * @returns {string} 正規化されたテキスト
+ */
+export function normalizePasteText(text) {
+    if (typeof text !== 'string') return '';
+    return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}

@@ -637,6 +637,10 @@ class RealObjectSearchApp extends window.PluginBase {
             }
         });
     }
+
+    destroy() {
+        super.destroy();
+    }
 }
 
 // DOMContentLoaded後に初期化

@@ -899,6 +899,10 @@ class KanaTypingTrainer extends PluginBase {
         };
     }
 
+    destroy() {
+        super.destroy();
+    }
+
 }
 
 // プラグインインスタンス生成

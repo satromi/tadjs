@@ -253,6 +253,16 @@ let figureModifierState = {
     endArrow: false                 // 終了点に矢印を描画
 };
 
+// 図形座標変換セグメント（TS_TRANSFORM）状態管理
+// 直後の1図形セグメントに対して、傾斜→回転→移動の順に座標変換を適用する
+let figureTransformState = {
+    active: false,                  // 変換が有効か
+    dh: 0,                          // 水平移動量
+    dv: 0,                          // 垂直移動量
+    hangle: 0,                      // 回転角度（度、反時計回り）
+    vangle: 0                       // 傾斜角度（度、-90 < vangle < +90）
+};
+
 // 図形設定
 let drawLineColor = '#000000';
 let drawLineWidth = 1;
@@ -333,6 +343,7 @@ class MaskData {
 
 // デフォルトマスク1-13を定義（4x4パターン）
 function initializeDefaultMasks() {
+    maskDefinitions.clear();
     // マスク1: 0% (全て描画しない)
     maskDefinitions.set(1, new MaskData(1, 4, 4, [0x00, 0x00, 0x00, 0x00]));
     // マスク2: 12.5%
@@ -363,6 +374,7 @@ function initializeDefaultMasks() {
 
 // デフォルトマーカー定義（JIS X 9051-84 16ドット用字形）
 function initializeDefaultMarkers() {
+    markerDefinitions.clear();
     markerDefinitions.set(0, { id: 0, type: 0, size: 16, fgCol: '#000000', shape: 'dot' });
     markerDefinitions.set(1, { id: 1, type: 0, size: 16, fgCol: '#000000', shape: 'plus' });
     markerDefinitions.set(2, { id: 2, type: 0, size: 16, fgCol: '#000000', shape: 'star' });
@@ -5741,7 +5753,7 @@ function getPixelColor(imageSeg, srcX, srcY) {
             if (colorMap.length >= 2 && colorMap[bit] && colorMap[bit].r !== undefined) {
                 return [colorMap[bit].r, colorMap[bit].g, colorMap[bit].b];
             }
-            const mono = bit ? 255 : 0;
+            const mono = bit ? 0 : 255;  // BTRON: bit1=前景(黒), bit0=背景(白)
             return [mono, mono, mono];
         }
 
@@ -6251,10 +6263,20 @@ function tsFigRectAngleDraw(segLen, tadSeg) {
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(tadSeg[4]);
-    const figX = Number(tadSeg[5]);
-    const figY = Number(tadSeg[6]);
-    const figW = Number(tadSeg[7]) - figX;
-    const figH = Number(tadSeg[8]) - figY;
+    let figX = Number(tadSeg[5]);
+    let figY = Number(tadSeg[6]);
+    let figW = Number(tadSeg[7]) - figX;
+    let figH = Number(tadSeg[8]) - figY;
+
+    // 直前のTS_TRANSFORMセグメントによる座標変換を適用（左上・右下の2点を変換）
+    if (figureTransformState.active) {
+        const tl = applyFigureTransform(figX, figY);
+        const br = applyFigureTransform(figX + figW, figY + figH);
+        figX = tl.x;
+        figY = tl.y;
+        figW = br.x - tl.x;
+        figH = br.y - tl.y;
+    }
 
     ctx.save(); // 現在の状態を保存
 
@@ -6266,7 +6288,7 @@ function tsFigRectAngleDraw(segLen, tadSeg) {
     const oldColors = setColorPattern(l_pat, f_pat);
 
     if(isXmlDumpEnabled()) {
-        xmlBuffer.push(`<rect round="0" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${figX}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}">\r\n`);
+        xmlBuffer.push(`<rect round="0" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}">\r\n`);
     }
 
     ctx.beginPath();
@@ -6291,15 +6313,18 @@ function tsFigRectAngleDraw(segLen, tadSeg) {
     }
 
     ctx.restore(); // 保存した状態に戻す
-    
+
     drawFillColor = oldColors.fillColor;
     drawLineColor = oldColors.lineColor;
     if (oldColors.fillStyle) {
         ctx.fillStyle = oldColors.fillStyle;
     }
-    
+
     // 線属性を復元
     restoreLineAttribute(oldLineSettings);
+
+    // 直前のTS_TRANSFORMはこの1図形にのみ有効
+    resetFigureTransformState();
 
     return;
 }
@@ -6322,10 +6347,20 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
     const angle = Number(tadSeg[4]);
     const figRH = Number(tadSeg[5]);
     const figRV = Number(tadSeg[6]);
-    const figX = Number(tadSeg[7]);
-    const figY = Number(tadSeg[8]);
-    const figW = Number(tadSeg[9]) - figX;
-    const figH = Number(tadSeg[10]) - figY;
+    let figX = Number(tadSeg[7]);
+    let figY = Number(tadSeg[8]);
+    let figW = Number(tadSeg[9]) - figX;
+    let figH = Number(tadSeg[10]) - figY;
+
+    // 直前のTS_TRANSFORMセグメントによる座標変換を適用（左上・右下の2点を変換）
+    if (figureTransformState.active) {
+        const tl = applyFigureTransform(figX, figY);
+        const br = applyFigureTransform(figX + figW, figY + figH);
+        figX = tl.x;
+        figY = tl.y;
+        figW = br.x - tl.x;
+        figH = br.y - tl.y;
+    }
 
     ctx.save(); // 現在の状態を保存
 
@@ -6337,7 +6372,7 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
     const oldColors = setColorPattern(l_pat, f_pat);
 
     if(isXmlDumpEnabled()) {
-        xmlBuffer.push(`<rect round="1" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${figX}" figRH="${figRH}" figRV="${figRV}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}">\r\n`);
+        xmlBuffer.push(`<rect round="1" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" figRH="${figRH}" figRV="${figRV}" left="${figX}" top="${figY}" right="${figX + figW}" bottom="${figY + figH}">\r\n`);
     }
 
     if (angle !== 0) {
@@ -6372,15 +6407,18 @@ function tsFigRoundRectAngleDraw(segLen, tadSeg) {
     }
 
     ctx.restore(); // 保存した状態に戻す
-    
+
     drawFillColor = oldColors.fillColor;
     drawLineColor = oldColors.lineColor;
     if (oldColors.fillStyle) {
         ctx.fillStyle = oldColors.fillStyle;
     }
-    
+
     // 線属性を復元
     restoreLineAttribute(oldLineSettings);
+
+    // 直前のTS_TRANSFORMはこの1図形にのみ有効
+    resetFigureTransformState();
 
     return;
 }
@@ -6413,45 +6451,39 @@ function tsFigPolygonDraw(segLen, tadSeg) {
     // カラーパターンを設定
     const oldColors = setColorPattern(l_pat, f_pat);
 
-    let x = Number(tadSeg[6]);
-    let y = Number(tadSeg[7]);
+    // 点配列を構築し、必要に応じて座標変換を適用
+    const polygonPoints = [];
+    for (let offsetLen = 6; offsetLen < tadSeg.length; offsetLen += 2) {
+        const px = Number(tadSeg[offsetLen]);
+        const py = Number(tadSeg[offsetLen + 1]);
+        polygonPoints.push([px, py]);
+    }
+    const transformedPoints = figureTransformState.active
+        ? applyFigureTransformToPoints(polygonPoints)
+        : polygonPoints;
 
     if(isXmlDumpEnabled()) {
-        const pointsArray = [];
-        for(let offsetLen=6;offsetLen<tadSeg.length;offsetLen+=2) {
-            const px = Number(tadSeg[offsetLen]);
-            const py = Number(tadSeg[offsetLen+1]);
-            pointsArray.push(`${px},${py}`);
-        }
+        const pointsArray = transformedPoints.map(p => `${p[0]},${p[1]}`);
         xmlBuffer.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" points="${pointsArray.join(' ')}">\r\n`);
     }
 
     ctx.strokeStyle = drawLineColor
     ctx.beginPath();
-    ctx.moveTo(x,y);
-
-    let polygonPoint = 'polygon ';
-    for(let offsetLen=8;offsetLen<tadSeg.length;offsetLen++) {
-        if (offsetLen % 2 === 0) {
-            polygonPoint += ' x:';
-            x = Number(tadSeg[offsetLen]);
-        } else {
-            polygonPoint += ' y:';
-            y = Number(tadSeg[offsetLen]);
-            ctx.lineTo(x,y);
+    if (transformedPoints.length > 0) {
+        ctx.moveTo(transformedPoints[0][0], transformedPoints[0][1]);
+        for (let i = 1; i < transformedPoints.length; i++) {
+            ctx.lineTo(transformedPoints[i][0], transformedPoints[i][1]);
         }
-        polygonPoint += IntToHex((tadSeg[offsetLen]),4).replace('0x','');
     }
-    logger.debug(`[Figure] polygonPoint: ${polygonPoint}`);
     ctx.closePath();
-    
+
     // 塗りつぶしを先に実行
     // setColorPatternでfillStyleが設定されていない場合のみdrawFillColorを設定
     if (ctx.fillStyle === oldColors.fillStyle || !oldColors.fillStyle) {
         ctx.fillStyle = drawFillColor;
     }
     ctx.fill();
-    
+
     // 線幅が0より大きい場合のみ枠線を描画
     if (drawLineWidth > 0) {
         ctx.strokeStyle = drawLineColor;
@@ -6464,9 +6496,12 @@ function tsFigPolygonDraw(segLen, tadSeg) {
     if (oldColors.fillStyle) {
         ctx.fillStyle = oldColors.fillStyle;
     }
-    
+
     // 線属性を復元
     restoreLineAttribute(oldLineSettings);
+
+    // 直前のTS_TRANSFORMはこの1図形にのみ有効
+    resetFigureTransformState();
 
     return;
 }
@@ -6494,16 +6529,19 @@ function tsFigLineDraw(segLen, tadSeg) {
     // 線色のみカラーパターンを設定
     const oldLineColor = setLineColorPattern(l_pat);
 
-    let x = Number(tadSeg[3]);
-    let y = Number(tadSeg[4]);
+    // 点配列を構築し、必要に応じて座標変換を適用
+    const linePoints = [];
+    for (let offsetLen = 3; offsetLen < tadSeg.length; offsetLen += 2) {
+        const px = Number(tadSeg[offsetLen]);
+        const py = Number(tadSeg[offsetLen + 1]);
+        linePoints.push([px, py]);
+    }
+    const transformedPoints = figureTransformState.active
+        ? applyFigureTransformToPoints(linePoints)
+        : linePoints;
 
     if(isXmlDumpEnabled()) {
-        const pointsArray = [];
-        for(let offsetLen=3;offsetLen<tadSeg.length;offsetLen+=2) {
-            const px = Number(tadSeg[offsetLen]);
-            const py = Number(tadSeg[offsetLen+1]);
-            pointsArray.push(`${px},${py}`);
-        }
+        const pointsArray = transformedPoints.map(p => `${p[0]},${p[1]}`);
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
         xmlBuffer.push(`<line lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="0" start_arrow="${startArrow}" end_arrow="${endArrow}" points="${pointsArray.join(' ')}">\r\n`);
@@ -6511,21 +6549,12 @@ function tsFigLineDraw(segLen, tadSeg) {
 
     ctx.strokeStyle = drawLineColor;
     ctx.beginPath();
-    ctx.moveTo(x,y);
-
-    let linePoint = 'line   ';
-    for(let offsetLen=5;offsetLen<tadSeg.length;offsetLen++) {
-        if (offsetLen % 2 === 0) {
-            linePoint += ' y:';
-            y = Number(tadSeg[offsetLen]);
-            ctx.lineTo(x,y);
-        } else {
-            linePoint += ' x:';
-            x = Number(tadSeg[offsetLen]);
+    if (transformedPoints.length > 0) {
+        ctx.moveTo(transformedPoints[0][0], transformedPoints[0][1]);
+        for (let i = 1; i < transformedPoints.length; i++) {
+            ctx.lineTo(transformedPoints[i][0], transformedPoints[i][1]);
         }
-        linePoint += IntToHex((tadSeg[offsetLen]),4).replace('0x','');
     }
-    logger.debug(`[Figure] linePoint: ${linePoint}`);
 
     // 線幅が0より大きい場合のみ描画
     if (drawLineWidth > 0) {
@@ -6533,25 +6562,25 @@ function tsFigLineDraw(segLen, tadSeg) {
     }
 
     // 矢印修飾がある場合のみ矢印を描画
-    if (figureModifierState.hasArrow && tadSeg.length >= 6) {
-        const startX = Number(tadSeg[3]);
-        const startY = Number(tadSeg[4]);
-        const endX = Number(tadSeg[tadSeg.length - 2]);
-        const endY = Number(tadSeg[tadSeg.length - 1]);
+    if (figureModifierState.hasArrow && transformedPoints.length >= 2) {
+        const startX = transformedPoints[0][0];
+        const startY = transformedPoints[0][1];
+        const endX = transformedPoints[transformedPoints.length - 1][0];
+        const endY = transformedPoints[transformedPoints.length - 1][1];
 
         // 開始点の矢印（最初の線分の方向）
         if (figureModifierState.startArrow) {
-            const secondX = tadSeg.length > 6 ? Number(tadSeg[5]) : endX;
-            const secondY = tadSeg.length > 6 ? Number(tadSeg[6]) : endY;
+            const secondX = transformedPoints.length > 2 ? transformedPoints[1][0] : endX;
+            const secondY = transformedPoints.length > 2 ? transformedPoints[1][1] : endY;
             const startAngle = Math.atan2(secondY - startY, secondX - startX);
             drawArrow(ctx, startX, startY, startAngle + Math.PI); // 反対方向
         }
 
         // 終了点の矢印（最後の線分の方向）
         if (figureModifierState.endArrow) {
-            const prevIndex = tadSeg.length >= 8 ? tadSeg.length - 4 : 3;
-            const prevX = Number(tadSeg[prevIndex]);
-            const prevY = Number(tadSeg[prevIndex + 1]);
+            const prevIndex = transformedPoints.length >= 3 ? transformedPoints.length - 2 : 0;
+            const prevX = transformedPoints[prevIndex][0];
+            const prevY = transformedPoints[prevIndex][1];
             const endAngle = Math.atan2(endY - prevY, endX - prevX);
             drawArrow(ctx, endX, endY, endAngle);
         }
@@ -6562,10 +6591,13 @@ function tsFigLineDraw(segLen, tadSeg) {
 
     // 色設定を復元
     drawLineColor = oldLineColor;
-    
+
     // 線属性を復元
     restoreLineAttribute(oldLineSettings);
-    
+
+    // 直前のTS_TRANSFORMはこの1図形にのみ有効
+    resetFigureTransformState();
+
     return;
 }
 
@@ -6588,10 +6620,21 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     const l_pat = Number(tadSeg[2]);
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
-    const frameLeft = Number(uh2h(tadSeg[5]));
-    const frameTop = Number(uh2h(tadSeg[6]));
-    const frameRight = Number(uh2h(tadSeg[7]));
-    const frameBottom = Number(uh2h(tadSeg[8]));
+    let frameLeft = Number(uh2h(tadSeg[5]));
+    let frameTop = Number(uh2h(tadSeg[6]));
+    let frameRight = Number(uh2h(tadSeg[7]));
+    let frameBottom = Number(uh2h(tadSeg[8]));
+
+    // 直前のTS_TRANSFORMセグメントによる座標変換を適用（バウンディングの2点を変換）
+    if (figureTransformState.active) {
+        const tl = applyFigureTransform(frameLeft, frameTop);
+        const br = applyFigureTransform(frameRight, frameBottom);
+        frameLeft = tl.x;
+        frameTop = tl.y;
+        frameRight = br.x;
+        frameBottom = br.y;
+    }
+
     const radiusX = ( frameRight - frameLeft ) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
     const frameCenterX = frameLeft + radiusX;
@@ -6634,9 +6677,12 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     if (oldColors.fillStyle) {
         ctx.fillStyle = oldColors.fillStyle;
     }
-    
+
     // 線属性を復元
     restoreLineAttribute(oldLineSettings);
+
+    // 直前のTS_TRANSFORMはこの1図形にのみ有効
+    resetFigureTransformState();
 
     return;
 }
@@ -6664,16 +6710,32 @@ function tsFigArcDraw(segLen, tadSeg) {
     const angle = Number(uh2h(tadSeg[4]));
 
     // フレーム座標（half-openなので right と bottom に +1）
-    const frameLeft = Number(uh2h(tadSeg[5]));
-    const frameTop = Number(uh2h(tadSeg[6]));
-    const frameRight = Number(uh2h(tadSeg[7])) + 1;
-    const frameBottom = Number(uh2h(tadSeg[8])) + 1;
+    let frameLeft = Number(uh2h(tadSeg[5]));
+    let frameTop = Number(uh2h(tadSeg[6]));
+    let frameRight = Number(uh2h(tadSeg[7])) + 1;
+    let frameBottom = Number(uh2h(tadSeg[8])) + 1;
 
     // 開始・終了点
-    const startX = Number(uh2h(tadSeg[9]));
-    const startY = Number(uh2h(tadSeg[10]));
-    const endX = Number(uh2h(tadSeg[11]));
-    const endY = Number(uh2h(tadSeg[12]));
+    let startX = Number(uh2h(tadSeg[9]));
+    let startY = Number(uh2h(tadSeg[10]));
+    let endX = Number(uh2h(tadSeg[11]));
+    let endY = Number(uh2h(tadSeg[12]));
+
+    // 直前のTS_TRANSFORMセグメントによる座標変換を適用（バウンディングの2点と始終点を変換）
+    if (figureTransformState.active) {
+        const tl = applyFigureTransform(frameLeft, frameTop);
+        const br = applyFigureTransform(frameRight, frameBottom);
+        const s = applyFigureTransform(startX, startY);
+        const e = applyFigureTransform(endX, endY);
+        frameLeft = tl.x;
+        frameTop = tl.y;
+        frameRight = br.x;
+        frameBottom = br.y;
+        startX = s.x;
+        startY = s.y;
+        endX = e.x;
+        endY = e.y;
+    }
 
     const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
@@ -6747,17 +6809,20 @@ function tsFigArcDraw(segLen, tadSeg) {
         if (figureModifierState.startArrow) {
             // 開始点から中心方向の角度を計算
             const angleToCenter = Math.atan2(centerY - startY, centerX - startX);
-            drawArrow(startX, startY, angleToCenter);
+            drawArrow(ctx, startX, startY, angleToCenter);
         }
 
         if (figureModifierState.endArrow) {
             // 終了点から中心方向の角度を計算
             const angleToCenter = Math.atan2(centerY - endY, centerX - endX);
-            drawArrow(endX, endY, angleToCenter);
+            drawArrow(ctx, endX, endY, angleToCenter);
         }
 
         resetFigureModifier();
     }
+
+    // 直前のTS_TRANSFORMはこの1図形にのみ有効
+    resetFigureTransformState();
 
     return;
 }
@@ -6785,16 +6850,32 @@ function tsFigChordDraw(segLen, tadSeg) {
     const angle = Number(uh2h(tadSeg[4]));
 
     // フレーム座標（half-openなので right と bottom に +1）
-    const frameLeft = Number(uh2h(tadSeg[5]));
-    const frameTop = Number(uh2h(tadSeg[6]));
-    const frameRight = Number(uh2h(tadSeg[7])) + 1;
-    const frameBottom = Number(uh2h(tadSeg[8])) + 1;
+    let frameLeft = Number(uh2h(tadSeg[5]));
+    let frameTop = Number(uh2h(tadSeg[6]));
+    let frameRight = Number(uh2h(tadSeg[7])) + 1;
+    let frameBottom = Number(uh2h(tadSeg[8])) + 1;
 
     // 開始・終了点の指定位置
-    const startx = Number(uh2h(tadSeg[9]));
-    const starty = Number(uh2h(tadSeg[10]));
-    const endx = Number(uh2h(tadSeg[11]));
-    const endy = Number(uh2h(tadSeg[12]));
+    let startx = Number(uh2h(tadSeg[9]));
+    let starty = Number(uh2h(tadSeg[10]));
+    let endx = Number(uh2h(tadSeg[11]));
+    let endy = Number(uh2h(tadSeg[12]));
+
+    // 直前のTS_TRANSFORMセグメントによる座標変換を適用（バウンディングの2点と始終点を変換）
+    if (figureTransformState.active) {
+        const tl = applyFigureTransform(frameLeft, frameTop);
+        const br = applyFigureTransform(frameRight, frameBottom);
+        const s = applyFigureTransform(startx, starty);
+        const e = applyFigureTransform(endx, endy);
+        frameLeft = tl.x;
+        frameTop = tl.y;
+        frameRight = br.x;
+        frameBottom = br.y;
+        startx = s.x;
+        starty = s.y;
+        endx = e.x;
+        endy = e.y;
+    }
 
     const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
@@ -6868,9 +6949,12 @@ function tsFigChordDraw(segLen, tadSeg) {
     if (oldColors.fillStyle) {
         ctx.fillStyle = oldColors.fillStyle;
     }
-    
+
     // 線属性を復元
     restoreLineAttribute(oldLineSettings);
+
+    // 直前のTS_TRANSFORMはこの1図形にのみ有効
+    resetFigureTransformState();
 
     return;
 }
@@ -6901,14 +6985,31 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     const oldLineColor = setLineColorPattern(l_pat);
 
     const angle = Number(uh2h(tadSeg[3]));
-    const frameLeft = Number(uh2h(tadSeg[4]));
-    const frameTop = Number(uh2h(tadSeg[5]));
-    const frameRight = Number(uh2h(tadSeg[6]));
-    const frameBottom = Number(uh2h(tadSeg[7]));
-    const startX = Number(uh2h(tadSeg[8]));
-    const startY = Number(uh2h(tadSeg[9]));
-    const endX = Number(uh2h(tadSeg[10]));
-    const endY = Number(uh2h(tadSeg[11]));
+    let frameLeft = Number(uh2h(tadSeg[4]));
+    let frameTop = Number(uh2h(tadSeg[5]));
+    let frameRight = Number(uh2h(tadSeg[6]));
+    let frameBottom = Number(uh2h(tadSeg[7]));
+    let startX = Number(uh2h(tadSeg[8]));
+    let startY = Number(uh2h(tadSeg[9]));
+    let endX = Number(uh2h(tadSeg[10]));
+    let endY = Number(uh2h(tadSeg[11]));
+
+    // 直前のTS_TRANSFORMセグメントによる座標変換を適用（バウンディング2点と始終点を変換）
+    if (figureTransformState.active) {
+        const tl = applyFigureTransform(frameLeft, frameTop);
+        const br = applyFigureTransform(frameRight, frameBottom);
+        const s = applyFigureTransform(startX, startY);
+        const e = applyFigureTransform(endX, endY);
+        frameLeft = tl.x;
+        frameTop = tl.y;
+        frameRight = br.x;
+        frameBottom = br.y;
+        startX = s.x;
+        startY = s.y;
+        endX = e.x;
+        endY = e.y;
+    }
+
     const radiusX = ( frameRight - frameLeft ) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
     const frameCenterX = frameLeft + radiusX;
@@ -6936,9 +7037,12 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
 
     // 色設定を復元
     drawLineColor = oldLineColor;
-    
+
     // 線属性を復元
     restoreLineAttribute(oldLineSettings);
+
+    // 直前のTS_TRANSFORMはこの1図形にのみ有効
+    resetFigureTransformState();
 
     return;
 }
@@ -6974,6 +7078,15 @@ function tsFigPolylineDraw(segLen, tadSeg) {
         polyline.x = Number(uh2h(tadSeg[5 + (i * 2)]));
         polyline.y = Number(uh2h(tadSeg[6 + (i * 2)]));
         polyLines.push(polyline);
+    }
+
+    // 直前のTS_TRANSFORMセグメントによる座標変換を適用（全点を変換）
+    if (figureTransformState.active) {
+        for (let i = 0; i < polyLines.length; i++) {
+            const t = applyFigureTransform(polyLines[i].x, polyLines[i].y);
+            polyLines[i].x = t.x;
+            polyLines[i].y = t.y;
+        }
     }
 
     if(isXmlDumpEnabled()) {
@@ -7017,18 +7130,21 @@ function tsFigPolylineDraw(segLen, tadSeg) {
             // 開始点から次の点への角度を計算
             const secondPoint = polyLines[1];
             const angle = Math.atan2(secondPoint.y - firstPoint.y, secondPoint.x - firstPoint.x);
-            drawArrow(firstPoint.x, firstPoint.y, angle);
+            drawArrow(ctx, firstPoint.x, firstPoint.y, angle);
         }
 
         if (figureModifierState.endArrow && polyLines.length >= 2) {
             // 終了点から前の点への角度を計算
             const prevPoint = polyLines[polyLines.length - 2];
             const angle = Math.atan2(lastPoint.y - prevPoint.y, lastPoint.x - prevPoint.x);
-            drawArrow(lastPoint.x, lastPoint.y, angle);
+            drawArrow(ctx, lastPoint.x, lastPoint.y, angle);
         }
 
         resetFigureModifier();
     }
+
+    // 直前のTS_TRANSFORMはこの1図形にのみ有効
+    resetFigureTransformState();
 }
 
 /**
@@ -7081,6 +7197,15 @@ function tsFigCurveDraw(segLen, tadSeg) {
         points.push({ x: x, y: y });
     }
 
+    // 直前のTS_TRANSFORMセグメントによる座標変換を適用（全点を変換）
+    if (figureTransformState.active) {
+        for (let i = 0; i < points.length; i++) {
+            const t = applyFigureTransform(points[i].x, points[i].y);
+            points[i].x = t.x;
+            points[i].y = t.y;
+        }
+    }
+
     // 閉じた曲線かどうかを判定
     const isClosed = (points[0].x === points[np - 1].x && points[0].y === points[np - 1].y);
 
@@ -7119,13 +7244,16 @@ function tsFigCurveDraw(segLen, tadSeg) {
     }
     
     ctx.restore(); // 状態を復元
-    
+
     // 色設定を復元
     drawFillColor = oldColors.fillColor;
     drawLineColor = oldColors.lineColor;
-    
+
     // 線属性を復元
     restoreLineAttribute(oldLineSettings);
+
+    // 直前のTS_TRANSFORMはこの1図形にのみ有効
+    resetFigureTransformState();
 }
 
 /**
@@ -8021,6 +8149,7 @@ function getFigureMemo(index) {
 
 /**
  * 図形要素修飾セグメントを処理
+ * 副ID 0x00: 矢印修飾、副ID 0x01: 座標変換
  * @param {number} segLen セグメント長
  * @param {Array} tadSeg セグメントデータ
  */
@@ -8030,6 +8159,25 @@ function tsFigureModifier(segLen, tadSeg) {
         return;
     }
 
+    const UB_SubID = getTopUBinUH(tadSeg[0]);
+
+    if (UB_SubID === Number(0x00)) {
+        // 矢印修飾
+        tsFigureArrowsModifier(segLen, tadSeg);
+    } else if (UB_SubID === Number(0x01)) {
+        // 座標変換セグメント
+        tsFigureTransformation(segLen, tadSeg);
+    } else {
+        logger.debug(`[Figure] 図形要素修飾セグメント: 未対応のUB_SubID=0x${UB_SubID.toString(16)}`);
+    }
+}
+
+/**
+ * 図形要素矢印修飾セグメント（副ID 0x00）を処理
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tsFigureArrowsModifier(segLen, tadSeg) {
     const arrow = tadSeg[1]; // UHのビット列
 
     // ビット解析: xxxxxxxxxxxxxxES
@@ -8044,6 +8192,126 @@ function tsFigureModifier(segLen, tadSeg) {
     figureModifierState.endArrow = endArrow;
 
     logger.debug(`[Figure] 図形要素修飾セグメント: arrow=0x${arrow.toString(16)}, startArrow=${startArrow}, endArrow=${endArrow}`);
+}
+
+/**
+ * 図形座標変換セグメント（副ID 0x01）を処理
+ * 直後の1図形セグメントに適用される座標変換パラメータを設定する。
+ * 変形順序: 傾斜(vangle) → 回転(hangle) → 移動(dh,dv)
+ * @param {number} segLen セグメント長
+ * @param {Array} tadSeg セグメントデータ
+ */
+function tsFigureTransformation(segLen, tadSeg) {
+    // セグメント長チェック: 0x0006（dh,dvのみ）または 0x0008/0x000A（全パラメータ）
+    if (segLen !== Number(0x0006) && segLen !== Number(0x0008) && segLen !== Number(0x000A)) {
+        logger.debug("[Figure] 座標変換セグメント: セグメント長が不正 segLen=0x" + segLen.toString(16));
+        return;
+    }
+
+    // 移動量を取得（符号付き16ビット整数として解釈）
+    const dh = uh2h(tadSeg[1]);
+    const dv = uh2h(tadSeg[2]);
+
+    // 回転角度（省略時は0）
+    let hangle = 0;
+    if (segLen >= Number(0x0008) && tadSeg[3] !== undefined) {
+        hangle = uh2h(tadSeg[3]);
+    }
+
+    // 傾斜角度（省略時は0）
+    let vangle = 0;
+    if (segLen >= Number(0x000A) && tadSeg[4] !== undefined) {
+        vangle = uh2h(tadSeg[4]);
+        // 傾斜角度の範囲チェック: -90 < vangle < +90
+        if (vangle <= -90 || vangle >= 90) {
+            logger.debug("[Figure] 座標変換セグメント: 傾斜角度が範囲外 vangle=" + vangle);
+            vangle = Math.max(-89, Math.min(89, vangle));
+        }
+    }
+
+    // 変換状態を設定（直後のセグメントで使用）
+    figureTransformState.active = true;
+    figureTransformState.dh = dh;
+    figureTransformState.dv = dv;
+    figureTransformState.hangle = hangle;
+    figureTransformState.vangle = vangle;
+
+    // XML出力
+    if (isXmlDumpEnabled()) {
+        xmlBuffer.push(`<transform dh="${dh}" dv="${dv}" hangle="${hangle}" vangle="${vangle}" />\r\n`);
+    }
+
+    logger.debug(`[Figure] 座標変換セグメント: dh=${dh}, dv=${dv}, hangle=${hangle}, vangle=${vangle}`);
+}
+
+/**
+ * 図形座標変換状態をリセット
+ */
+function resetFigureTransformState() {
+    figureTransformState.active = false;
+    figureTransformState.dh = 0;
+    figureTransformState.dv = 0;
+    figureTransformState.hangle = 0;
+    figureTransformState.vangle = 0;
+}
+
+/**
+ * 座標に変換を適用
+ * 変形順序: 傾斜(vangle) → 回転(hangle) → 移動(dh,dv)
+ * 変換が無効の場合は元の座標をそのまま返す。
+ *
+ * @param {number} x 元のX座標
+ * @param {number} y 元のY座標
+ * @returns {{x: number, y: number}} 変換後の座標
+ */
+function applyFigureTransform(x, y) {
+    if (!figureTransformState.active) {
+        return { x, y };
+    }
+
+    let newX = x;
+    let newY = y;
+
+    // 1. 傾斜処理（vangle）
+    // 水平方向の直線は変化せず、垂直方向は傾く。正のvangleで右下がりになる。
+    if (figureTransformState.vangle !== 0) {
+        const vangleRad = figureTransformState.vangle * Math.PI / 180;
+        const shear = Math.tan(vangleRad);
+        newX = newX + newY * shear;
+    }
+
+    // 2. 回転処理（hangle）
+    // 原点(0,0)を中心に反時計回りに回転
+    if (figureTransformState.hangle !== 0) {
+        const hangleRad = figureTransformState.hangle * Math.PI / 180;
+        const cos = Math.cos(hangleRad);
+        const sin = Math.sin(hangleRad);
+        const rotatedX = newX * cos - newY * sin;
+        const rotatedY = newX * sin + newY * cos;
+        newX = rotatedX;
+        newY = rotatedY;
+    }
+
+    // 3. 移動処理（dh, dv）
+    newX += figureTransformState.dh;
+    newY += figureTransformState.dv;
+
+    return { x: Math.round(newX), y: Math.round(newY) };
+}
+
+/**
+ * 座標配列に変換を適用
+ * @param {Array} points [[x1,y1], [x2,y2], ...] 形式の座標配列
+ * @returns {Array} 変換後の座標配列
+ */
+function applyFigureTransformToPoints(points) {
+    if (!figureTransformState.active) {
+        return points;
+    }
+    return points.map(point => {
+        const transformed = applyFigureTransform(point[0], point[1]);
+        return [transformed.x, transformed.y];
+    });
 }
 
 /**
@@ -8445,6 +8713,7 @@ function initTAD(x = 0, y = 0) {
     drawFillColor = '#FFFFFF';
     backgroundColor = '#FFFFFF';
     colorMap = [];
+    imageSegments = [];
 
     // メモ・レコードを初期化
     clearDocumentMemos();
@@ -9933,12 +10202,25 @@ function onAddFile(event) {
     isInDocSegment = false;
     currentIndentLevel = 0;
 
-    // 新設計：TADファイル描画バッファシステムをリセット
+    // メモリ解放: 描画バッファ・画像セグメントをクリア
     tadFileCanvases = {};
     tadFileContexts = {};
     tadFileDrawBuffers = {};
     tadRawDataArray = {};
     tabScrollStates = {};
+    imageSegments = [];
+    // imageCountersのクリア（constなのでプロパティを個別削除）
+    for (const key of Object.keys(imageCounters)) {
+        delete imageCounters[key];
+    }
+
+    // メモリ解放: BPK解凍用データをクリア
+    tadRaw = null;
+    tadRawBuffer = null;
+    tadDataView = null;
+    if (typeof window !== 'undefined') {
+        window.currentRawData = null;
+    }
 
     // index.html側のタブDOMをリセット＆タブ0を再作成
     if (typeof resetAllTabs === 'function') {
@@ -10104,6 +10386,7 @@ if (typeof window !== 'undefined') {
         tadFileDrawBuffers = {};
         tadRawDataArray = {};
         tabScrollStates = {};
+        imageSegments = [];
         isProcessingBpk = false;
         currentFileIndex = 0;
         linkRecordList = [];

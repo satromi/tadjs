@@ -1174,7 +1174,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         });
 
         // document全体でのmousemove（ダブルクリックドラッグ処理用）
-        document.addEventListener('mousemove', (e) => {
+        this._dblClickDragMouseMoveHandler = (e) => {
             // PluginBase共通メソッドでドラッグ開始判定
             if (this.shouldStartDblClickDrag(e)) {
                 logger.debug('[CalcEditor] ダブルクリックドラッグ確定');
@@ -1182,12 +1182,13 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
 
             // ダブルクリックドラッグ中の処理（視覚的フィードバックは省略）
             // 他のプラグインではdragPreviewを表示するが、calc-editorでは不要
-        });
+        };
+        document.addEventListener('mousemove', this._dblClickDragMouseMoveHandler);
 
         // document全体でのmouseup（ダブルクリックドラッグ終了処理用）
-        document.addEventListener('mouseup', (e) => {
+        this._dblClickDragMouseUpHandler = (e) => {
             // ダブルクリックドラッグ確定中のmouseupで実身複製を実行
-            if (this.dblClickDragState.isDblClickDrag && e.button === 0) {
+            if (this.dblClickDragState && this.dblClickDragState.isDblClickDrag && e.button === 0) {
                 const sourceCell = this.dblClickDragState.dblClickedCell;
                 if (sourceCell) {
                     // ドロップ位置のセルを取得
@@ -1208,13 +1209,14 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
             }
 
             // ダブルクリック候補のmouseupで通常のdblclickイベントに委譲
-            if (this.dblClickDragState.isDblClickDragCandidate && e.button === 0) {
+            if (this.dblClickDragState && this.dblClickDragState.isDblClickDragCandidate && e.button === 0) {
                 logger.debug('[CalcEditor] ダブルクリック検出（移動なし）、ダブルクリックイベントに委譲');
                 // PluginBase共通メソッドでクリーンアップ
                 this.cleanupDblClickDragState();
                 // dblclickイベントが発火するので、ここでは何もしない
             }
-        });
+        };
+        document.addEventListener('mouseup', this._dblClickDragMouseUpHandler);
 
         // document全体でのmousedown（仮身ドラッグ中の右ボタン検出用）
         // 右ボタン処理はPluginBaseのsetupVirtualObjectRightButtonHandlers()で処理
@@ -7609,6 +7611,40 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         }
 
         return false;
+    }
+
+    /**
+     * メモリ解放: プラグイン固有のクリーンアップ
+     */
+    destroy() {
+        // 大規模Mapデータのクリア
+        if (this.cells) this.cells.clear();
+        if (this.virtualObjects) this.virtualObjects.clear();
+        if (this.columnWidths) this.columnWidths.clear();
+        if (this.rowHeights) this.rowHeights.clear();
+        if (this.mergedCells) this.mergedCells.clear();
+        // グラフ関連のクリア
+        this.charts = [];
+        this.chartCtx = null;
+        this.chartCanvas = null;
+        this.selectedChart = null;
+        // その他のデータクリア
+        this.clipboard = null;
+        this.contextMenuImage = null;
+        this.contextMenuVirtualObject = null;
+        this.selectedVirtualObjectCell = null;
+        this.selectedImageCell = null;
+        // ダブルクリック+ドラッグ用のグローバルイベントリスナーを解除
+        if (this._dblClickDragMouseMoveHandler) {
+            document.removeEventListener('mousemove', this._dblClickDragMouseMoveHandler);
+            this._dblClickDragMouseMoveHandler = null;
+        }
+        if (this._dblClickDragMouseUpHandler) {
+            document.removeEventListener('mouseup', this._dblClickDragMouseUpHandler);
+            this._dblClickDragMouseUpHandler = null;
+        }
+        this.dblClickDragState = null;
+        super.destroy();
     }
 }
 
