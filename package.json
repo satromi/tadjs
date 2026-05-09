@@ -1,6 +1,6 @@
 {
   "name": "tadjs-desktop",
-  "version": "0.40.0",
+  "version": "0.41.0",
   "description": "TADjs Desktop Environment with Plugin System",
   "main": "electron/main.js",
   "scripts": {
@@ -34,8 +34,8 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
-    "electron": "^41.3.0",
-    "electron-builder": "^24.9.1",
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1",
     "electron-packager": "^17.1.2",
     "jsmediatags": "^3.9.7",
     "prebuild-install": "^7.1.3",

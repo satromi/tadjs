@@ -92,6 +92,9 @@ let textCharData = [];
 // textCharDirection は未使用のため削除済み
 let imagePoint = [];
 let tronCodeMask = [];
+// 入れ子図形/文章開始セグメント用スタック（仕様準拠の累積変換管理）
+// 各エントリ: { type, view, draw, hUnit, vUnit, cumulative: { offsetX, offsetY, scaleX, scaleY }, ctxTransformApplied: boolean }
+let figureStack = [];
 let startTadSegment = false;
 let startByImageSegment = false;
 let cantNextLineFlg = 0; // 改行禁止フラグ
@@ -150,6 +153,35 @@ function isInTextSegment() {
 // セグメントタイプが図形セグメントかどうか
 function isInFigureSegment() {
     return segmentStack.some(seg => seg === SEGMENT_TYPE.FIGURE);
+}
+
+// 図形セグメントのネスト数を取得（親も含む全FIGURE数）
+function figureSegmentNestDepth() {
+    return segmentStack.filter(seg => seg === SEGMENT_TYPE.FIGURE).length;
+}
+
+/**
+ * 図形/文章開始セグメントの増分変換を計算
+ * - ルート (深さ 1): identity (incremental transform は使わない、既存挙動維持)
+ * - ネスト (深さ ≥ 2): 親 draw 座標系 → 自身 draw 座標系の増分変換
+ *   - 自身 draw (x, y) → 親 draw (view.left + (x - draw.left) * scaleX, view.top + (y - draw.top) * scaleY)
+ *   - ctx.transform(scaleX, 0, 0, scaleY, dx, dy) として適用
+ * @param {{view: object, draw: object}} self
+ * @returns {{scaleX, scaleY, dx, dy}}
+ */
+function computeFigureIncrementalTransform(self) {
+    const selfDrawW = self.draw.right - self.draw.left;
+    const selfDrawH = self.draw.bottom - self.draw.top;
+    const selfViewW = self.view.right - self.view.left;
+    const selfViewH = self.view.bottom - self.view.top;
+    const scaleX = (selfDrawW > 0 && selfViewW > 0) ? (selfViewW / selfDrawW) : 1;
+    const scaleY = (selfDrawH > 0 && selfViewH > 0) ? (selfViewH / selfDrawH) : 1;
+    return {
+        scaleX,
+        scaleY,
+        dx: self.view.left - self.draw.left * scaleX,
+        dy: self.view.top - self.draw.top * scaleY
+    };
 }
 
 // 直接の親が文章セグメントかどうか
@@ -1693,6 +1725,69 @@ function fwrite (p, s, n) {
     const char = String.fromCharCode.apply(null, p.slice(0, s * n));
 }
 
+/**
+ * 画像セグメント color バイトの解析（BTRON仕様: Ixxx PRRR）
+ */
+function parseImageColor(colorByte) {
+    return {
+        invert: (colorByte >> 7) & 0x01,
+        palette: (colorByte >> 3) & 0x01,
+        mode: colorByte & 0x07,
+        raw: colorByte
+    };
+}
+
+function extractChannelValue(pixelValue, cinfoEntry) {
+    const bitPos = (cinfoEntry >> 8) & 0xFF;
+    const bitWidth = cinfoEntry & 0xFF;
+    if (bitWidth === 0) return 0;
+    const mask = (1 << bitWidth) - 1;
+    return (pixelValue >>> bitPos) & mask;
+}
+
+function expandChannelTo8bit(channelValue, bitWidth) {
+    if (bitWidth === 0) return 0;
+    if (bitWidth === 8) return channelValue & 0xFF;
+    if (bitWidth > 8) return (channelValue >> (bitWidth - 8)) & 0xFF;
+    let result = 0;
+    let remaining = 8;
+    let value = channelValue;
+    while (remaining >= bitWidth) {
+        remaining -= bitWidth;
+        result |= (value << remaining);
+    }
+    if (remaining > 0) {
+        result |= (value >> (bitWidth - remaining));
+    }
+    return result & 0xFF;
+}
+
+function readSegUH(segData, offset) {
+    if (offset + 1 >= segData.length) return 0;
+    return segData[offset] | (segData[offset + 1] << 8);
+}
+
+function readSegUW(segData, offset) {
+    if (offset + 3 >= segData.length) return 0;
+    return (segData[offset] | (segData[offset + 1] << 8) |
+            (segData[offset + 2] << 16) | (segData[offset + 3] << 24)) >>> 0;
+}
+
+function readSegColor(segData, offset) {
+    if (offset + 3 >= segData.length) return null;
+    const raw = readSegUW(segData, offset);
+    return parseColor(raw);
+}
+
+function calcMaskOptimalRowbytes(width) {
+    if (width <= 16) return 2;
+    if (width <= 32) return 4;
+    if (width <= 48) return 6;
+    let rb = Math.ceil(width / 8);
+    if (rb % 2) rb++;
+    return rb;
+}
+
 /* limits.h */
 // CHAR_BIT参照用の関数
 function getCHAR_BIT() {
@@ -2265,7 +2360,36 @@ function tsTextStart(tadSeg) {
 
     textCharPoint.push([textChar.view.left,textChar.view.top,viewW,viewH,textChar.draw.left,textChar.draw.top,drawW,drawH]);
     textCharData.push(textChar);
-    
+
+    // 入れ子対応: 文章開始セグメントの状態を figureStack に push
+    // 文章中の文章開始は背景・スコープ用途で位置情報無効だが、スコープ追跡のため push する
+    const isNested = figureStack.length >= 1;
+    let textIncremental = null;
+    // 図形中の文章開始は位置・大きさ共に有効のため、増分変換を計算
+    if (isNested && figureStack[figureStack.length - 1].type === 'figure') {
+        const selfDrawW = textChar.draw.right - textChar.draw.left;
+        const selfDrawH = textChar.draw.bottom - textChar.draw.top;
+        const selfViewW = textChar.view.right - textChar.view.left;
+        const selfViewH = textChar.view.bottom - textChar.view.top;
+        if (selfDrawW > 0 && selfDrawH > 0 && selfViewW > 0 && selfViewH > 0) {
+            textIncremental = computeFigureIncrementalTransform({ view: textChar.view, draw: textChar.draw });
+        }
+    }
+    figureStack.push({
+        type: 'text',
+        view: { left: textChar.view.left, top: textChar.view.top, right: textChar.view.right, bottom: textChar.view.bottom },
+        draw: { left: textChar.draw.left, top: textChar.draw.top, right: textChar.draw.right, bottom: textChar.draw.bottom },
+        hUnit: textChar.h_unit,
+        vUnit: textChar.v_unit,
+        incremental: textIncremental,
+        ctxTransformApplied: false
+    });
+    if (textIncremental && typeof ctx !== 'undefined' && ctx) {
+        ctx.save();
+        ctx.transform(textIncremental.scaleX, 0, 0, textIncremental.scaleY, textIncremental.dx, textIncremental.dy);
+        figureStack[figureStack.length - 1].ctxTransformApplied = true;
+    }
+
     // 詳細モード時のルーラを描画（文章開始時）
     drawDetailModeRulerAsSegment();
 }
@@ -2758,6 +2882,15 @@ function tsTextEnd(tadSeg) {
     }
     // 現在のセグメントタイプを更新
     currentSegmentType = segmentStack.length > 0 ? segmentStack[segmentStack.length - 1] : SEGMENT_TYPE.NONE;
+
+    // 入れ子対応: figureStack からポップ、ctx 変換が適用されていれば復元
+    if (figureStack.length > 0 && figureStack[figureStack.length - 1].type === 'text') {
+        const top = figureStack[figureStack.length - 1];
+        if (top.ctxTransformApplied && typeof ctx !== 'undefined' && ctx) {
+            ctx.restore();
+        }
+        figureStack.pop();
+    }
 
     const textChar = textCharData[textNest-1];
 
@@ -5454,48 +5587,107 @@ function tsImageSegment(segLen, tadSeg) {
     // 傾き情報
     imageSeg.slope = uh2h(tadSeg[10]);
     
-    // 基本的な色情報の読み取り（シンプル化）
-    const colorValue = uh2uw([tadSeg[12], tadSeg[11]])[0];
-    imageSeg.color = parseColor(colorValue);
-    
-    // カラー情報配列
-    imageSeg.cinfo[0] = uh2h(tadSeg[12]);
-    imageSeg.cinfo[1] = uh2h(tadSeg[13]);
-    imageSeg.cinfo[2] = uh2h(tadSeg[14]);
-    imageSeg.cinfo[3] = uh2h(tadSeg[15]);
-    
+    // ★ color フィールドは UH (2バイト)。仕様: Ixxx PRRR
+    const colorByte = uh2h(tadSeg[11]) & 0xFFFF;
+    imageSeg.colorByte = colorByte;
+    imageSeg.colorInfo = parseImageColor(colorByte & 0xFF);
+    // 後方互換: 旧コード用に parseColor 結果も保持
+    imageSeg.color = parseColor(colorByte);
+
+    // カラー情報配列 (cinfo[0..3])
+    imageSeg.cinfo[0] = uh2h(tadSeg[12]) & 0xFFFF;
+    imageSeg.cinfo[1] = uh2h(tadSeg[13]) & 0xFFFF;
+    imageSeg.cinfo[2] = uh2h(tadSeg[14]) & 0xFFFF;
+    imageSeg.cinfo[3] = uh2h(tadSeg[15]) & 0xFFFF;
+
     // 画像の詳細情報
     imageSeg.extlen = uh2uw([tadSeg[17], tadSeg[16]])[0];   // extlen (UW)
     imageSeg.extend = uh2uw([tadSeg[19], tadSeg[18]])[0];   // extoff (UW)
     imageSeg.mask = uh2uw([tadSeg[21], tadSeg[20]])[0];     // maskoffset (UW)
     imageSeg.compac = uh2h(tadSeg[22]);                     // compac (UH)
     imageSeg.planes = uh2h(tadSeg[23]);                     // planes (UH)
-    imageSeg.pixbits = uh2h(tadSeg[24]);                    // pixbits (UH)
-    imageSeg.rowbytes = uh2h(tadSeg[25]);                   // rowbytes (UH)
-    
+    imageSeg.pixbits = uh2h(tadSeg[24]) & 0xFFFF;           // pixbits (UH)
+    imageSeg.rowbytes = uh2h(tadSeg[25]) & 0xFFFF;          // rowbytes (UH)
+
     // バウンディング情報
     imageSeg.bounds.left = uh2h(tadSeg[26]);
     imageSeg.bounds.top = uh2h(tadSeg[27]);
     imageSeg.bounds.right = uh2h(tadSeg[28]);
     imageSeg.bounds.bottom = uh2h(tadSeg[29]);
-    
+
     // 画像の幅と高さを計算
     const width = imageSeg.bounds.right - imageSeg.bounds.left;
     const height = imageSeg.bounds.bottom - imageSeg.bounds.top;
-    
-    logger.debug(`[Image] 画像情報: ${width}x${height}, planes=${imageSeg.planes}, pixbits=${imageSeg.pixbits} (0x${imageSeg.pixbits.toString(16)}), rowbytes=${imageSeg.rowbytes}`);
+
+    logger.debug(`[Image] 画像情報: ${width}x${height}, planes=${imageSeg.planes}, pixbits=0x${imageSeg.pixbits.toString(16)}, rowbytes=${imageSeg.rowbytes}`);
     logger.debug(`[Image] bounds: left=${imageSeg.bounds.left}, top=${imageSeg.bounds.top}, right=${imageSeg.bounds.right}, bottom=${imageSeg.bounds.bottom}`);
-    
-    // プレーンオフセット情報を読み取り
-    const planeOffsetStart = 30; // プレーンオフセットの開始位置
-    
-    // 最初のプレーンオフセットから実際の画像データ開始位置を特定
-    const imageDataStart = planeOffsetStart + imageSeg.planes * 2; // 各プレーンオフセット分をスキップ
-    
+    logger.debug(`[Image] color=0x${colorByte.toString(16)}, I=${imageSeg.colorInfo.invert}, P=${imageSeg.colorInfo.palette}, R=${imageSeg.colorInfo.mode}`);
+
+    // ★ セグメント全体のバイト配列を構築（オフセット計算用、0x00=Esc Sub Id 起点）
+    const segData = new Uint8Array(4 + tadSeg.length * 2);
+    segData[0] = 0xFF;
+    segData[1] = 0xE5;
+    for (let i = 0; i < tadSeg.length; i++) {
+        const w = tadSeg[i] & 0xFFFF;
+        segData[4 + i * 2] = w & 0xFF;
+        segData[4 + i * 2 + 1] = (w >> 8) & 0xFF;
+    }
+    imageSeg.segData = segData;
+
+    // ★ base_off[] (各プレーンのデータオフセット)
+    imageSeg.base_off = [];
+    for (let p = 0; p < imageSeg.planes; p++) {
+        imageSeg.base_off.push(readSegUW(segData, 0x40 + p * 4));
+    }
+    // ★ base_off がテーブル自身 (0x40-0x3F+planes*4) を指している場合の補正
+    // BTRON エンコーダによっては base_off[0]=0x40 と書かれ、テーブルのバイトをピクセル
+    // として読んでしまう (+4 ずれの原因)。テーブル終端まで進めて補正する。
+    const baseOffTableEnd = 0x40 + imageSeg.planes * 4;
+    imageSeg.base_off = imageSeg.base_off.map(off => off < baseOffTableEnd ? baseOffTableEnd : off);
+
+    // ★ カラーマップ方式 (P=1) の場合、cmap[] を読み取り
+    imageSeg.cmap = null;
+    if (imageSeg.colorInfo.palette === 1) {
+        const cmapBytes = imageSeg.cinfo[0];
+        const cmapOffset = ((imageSeg.cinfo[2] & 0xFFFF) << 16) | (imageSeg.cinfo[3] & 0xFFFF);
+        if (cmapBytes > 0 && cmapOffset > 0 && cmapOffset + cmapBytes <= segData.length) {
+            const colorCount = Math.floor(cmapBytes / 4);
+            const cmap = [];
+            for (let i = 0; i < colorCount; i++) {
+                const c = readSegColor(segData, cmapOffset + i * 4);
+                cmap.push(c || { r: 0, g: 0, b: 0, transparent: false });
+            }
+            imageSeg.cmap = cmap;
+            logger.debug(`[Image] ★ カラーマップ読み取り: ${colorCount}色`);
+        }
+    }
+
+    // ★ 拡張情報の解析 (ext_id=0: 背景色)
+    imageSeg.bgColor = null;
+    if (imageSeg.extlen > 0 && imageSeg.extend > 0) {
+        let off = imageSeg.extend;
+        const endOff = off + imageSeg.extlen;
+        while (off + 4 <= endOff && off + 4 <= segData.length) {
+            const extId = readSegUH(segData, off);
+            const itemLen = readSegUH(segData, off + 2);
+            const isOffsetForm = (extId & 0x8000) !== 0;
+            const realId = extId & 0x7FFF;
+
+            if (realId === 0) {
+                const bgOffset = isOffsetForm ? readSegUW(segData, off + 4) : (off + 4);
+                imageSeg.bgColor = readSegColor(segData, bgOffset);
+            }
+
+            off += isOffsetForm ? 8 : (itemLen + 4);
+        }
+    }
+
+    // プレーンデータの抽出（互換性維持）
+    const planeOffsetStart = 30;
+    const imageDataStart = planeOffsetStart + imageSeg.planes * 2;
+
     if (segLen > imageDataStart * 2) {
         const imageDataLen = segLen - (imageDataStart * 2);
-        
-        // ビットマップデータを抽出（従来の方法）
         if (imageDataLen > 0) {
             imageSeg.bitmap = new Uint8Array(imageDataLen);
             for (let i = 0; i < Math.floor(imageDataLen / 2); i++) {
@@ -5509,7 +5701,7 @@ function tsImageSegment(segLen, tadSeg) {
             }
         }
     }
-    
+
     // 画像セグメントをリストに追加
     imageSegments.push(imageSeg);
 
@@ -5596,10 +5788,13 @@ function tsImageSegment(segLen, tadSeg) {
 
     } else if (isInFigureSegment()) {
         // 図形セグメント内での画像
-
-        drawImageSegment(imageSeg, imageSeg.view.left, imageSeg.view.top);
+        // 画像の view.left/top は figDraw 座標系での位置。drawImageSegment 内部で
+        // imageSeg.view.left/top を加算するため、追加 offset は 0 でなければ二重加算になる
+        // (以前のコードは view.left/top を offset として渡し、結果として位置が view.left/top
+        // 分余計にずれていた)
+        drawImageSegment(imageSeg, 0, 0);
         // 画像描画後の仮想領域を拡張
-        expandVirtualArea(imageSeg.view.left, imageSeg.view.top, 
+        expandVirtualArea(imageSeg.view.left, imageSeg.view.top,
                         imageSeg.view.right, imageSeg.view.bottom);
     } else {
         // 独立した画像として描画
@@ -5687,7 +5882,8 @@ function drawBitmapData(imageSeg, x, y, width, height) {
     const scaleX = imgWidth / width;
     const scaleY = imgHeight / height;
 
-    // ビットマップデータをImageDataに変換
+    // ビットマップデータをImageDataに変換（マスクをアルファチャンネルに反映）
+    const hasMask = imageSeg.mask && imageSeg.mask > 0;
     for (let py = 0; py < height; py++) {
         const srcY = (py * scaleY) | 0;
         let destIndex = py * width * 4;
@@ -5699,7 +5895,7 @@ function drawBitmapData(imageSeg, x, y, width, height) {
             data[destIndex] = c[0];
             data[destIndex + 1] = c[1];
             data[destIndex + 2] = c[2];
-            data[destIndex + 3] = 255;
+            data[destIndex + 3] = hasMask ? ((getMaskValue(imageSeg, srcX, srcY) === 0) ? 0 : 255) : 255;
             destIndex += 4;
         }
     }
@@ -5716,113 +5912,144 @@ function drawBitmapData(imageSeg, x, y, width, height) {
  * @returns {Array} [r, g, b]
  */
 function getPixelColor(imageSeg, srcX, srcY) {
+    // segData ベースの新実装（仕様準拠）
+    if (imageSeg.segData && imageSeg.base_off && imageSeg.base_off.length > 0) {
+        return getPixelColorSpecCompliant(imageSeg, srcX, srcY);
+    }
+    return [255, 255, 255]; // フォールバック
+}
+
+function readPixelFromPlane(imageSeg, planeOffset, srcX, srcY) {
+    const segData = imageSeg.segData;
+    if (!segData || planeOffset === 0) return 0;
+
+    const pixelcount = imageSeg.pixbits & 0xFF;
+    const pixeldatawidth = (imageSeg.pixbits >> 8) & 0xFF;
+    const stride = pixeldatawidth > 0 ? pixeldatawidth : pixelcount;
+    const rowbytes = imageSeg.rowbytes;
+
+    if (stride <= 8) {
+        const bitOffset = srcX * stride;
+        const byteIdx = planeOffset + srcY * rowbytes + Math.floor(bitOffset / 8);
+        if (byteIdx >= segData.length) return 0;
+        const byte = segData[byteIdx];
+        const bitInByte = bitOffset % 8;
+        const shift = 8 - stride - bitInByte;
+        const mask = (1 << stride) - 1;
+        return (byte >>> shift) & mask;
+    } else if (stride === 16) {
+        const byteIdx = planeOffset + srcY * rowbytes + srcX * 2;
+        if (byteIdx + 1 >= segData.length) return 0;
+        return segData[byteIdx] | (segData[byteIdx + 1] << 8);
+    } else if (stride === 24) {
+        const byteIdx = planeOffset + srcY * rowbytes + srcX * 3;
+        if (byteIdx + 2 >= segData.length) return 0;
+        return segData[byteIdx] | (segData[byteIdx + 1] << 8) | (segData[byteIdx + 2] << 16);
+    } else if (stride === 32) {
+        const byteIdx = planeOffset + srcY * rowbytes + srcX * 4;
+        if (byteIdx + 3 >= segData.length) return 0;
+        return (segData[byteIdx] | (segData[byteIdx + 1] << 8) |
+                (segData[byteIdx + 2] << 16) | (segData[byteIdx + 3] << 24)) >>> 0;
+    }
+    return 0;
+}
+
+function readPixelValueFromPlanes(imageSeg, srcX, srcY) {
+    if (imageSeg.planes === 1 || imageSeg.base_off.length === 1) {
+        return readPixelFromPlane(imageSeg, imageSeg.base_off[0], srcX, srcY);
+    }
+    let pixelValue = 0;
+    const bitsPerPlane = imageSeg.pixbits & 0xFF;
+    for (let p = 0; p < imageSeg.planes; p++) {
+        const planeBits = readPixelFromPlane(imageSeg, imageSeg.base_off[p], srcX, srcY);
+        pixelValue |= (planeBits << (p * bitsPerPlane));
+    }
+    return pixelValue >>> 0;
+}
+
+function getMaskValue(imageSeg, srcX, srcY) {
+    if (!imageSeg.mask || imageSeg.mask === 0) return 1;
+    const segData = imageSeg.segData;
+    if (!segData) return 1;
+    const width = imageSeg.bounds.right - imageSeg.bounds.left;
+    const maskRowbytes = calcMaskOptimalRowbytes(width);
+    const byteIdx = imageSeg.mask + srcY * maskRowbytes + Math.floor(srcX / 8);
+    if (byteIdx >= segData.length) return 1;
+    return (segData[byteIdx] >>> (7 - (srcX % 8))) & 1;
+}
+
+function getPixelColorSpecCompliant(imageSeg, srcX, srcY) {
+    const pixelValue = readPixelValueFromPlanes(imageSeg, srcX, srcY);
+    const colorInfo = imageSeg.colorInfo || { invert: 0, palette: 0, mode: 0 };
+    let r, g, b;
+
+    if (colorInfo.palette === 1) {
+        // カラーマップ方式
+        const cmap = imageSeg.cmap || (typeof colorMap !== 'undefined' && colorMap.length > 0 ? colorMap : null);
+        if (cmap && cmap[pixelValue] && cmap[pixelValue].r !== undefined) {
+            r = cmap[pixelValue].r;
+            g = cmap[pixelValue].g;
+            b = cmap[pixelValue].b;
+        } else {
+            r = g = b = pixelValue & 0xFF;
+        }
+    } else if (colorInfo.mode === 0) {
+        // 直接白黒方式
+        const cinfoEntry = imageSeg.cinfo[0] || (imageSeg.pixbits & 0xFF);
+        const bw = cinfoEntry & 0xFF || 8;
+        const luminance = expandChannelTo8bit(extractChannelValue(pixelValue, cinfoEntry), bw);
+        const v = (colorInfo.invert === 0) ? (255 - luminance) : luminance;
+        r = g = b = v;
+    } else if (colorInfo.mode === 1) {
+        // 直接RGB方式
+        const rRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[0]), imageSeg.cinfo[0] & 0xFF);
+        const gRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[1]), imageSeg.cinfo[1] & 0xFF);
+        const bRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[2]), imageSeg.cinfo[2] & 0xFF);
+        if (colorInfo.invert === 0) {
+            r = 255 - rRaw; g = 255 - gRaw; b = 255 - bRaw;
+        } else {
+            r = rRaw; g = gRaw; b = bRaw;
+        }
+    } else if (colorInfo.mode === 2) {
+        // 直接CMY/CMYK方式
+        const cRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[0]), imageSeg.cinfo[0] & 0xFF);
+        const mRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[1]), imageSeg.cinfo[1] & 0xFF);
+        const yRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[2]), imageSeg.cinfo[2] & 0xFF);
+        const kRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[3]), imageSeg.cinfo[3] & 0xFF);
+        let cVal = cRaw, mVal = mRaw, yVal = yRaw, kVal = kRaw;
+        if (colorInfo.invert === 1) {
+            cVal = 255 - cVal; mVal = 255 - mVal; yVal = 255 - yVal; kVal = 255 - kVal;
+        }
+        r = Math.round((255 - cVal) * (255 - kVal) / 255);
+        g = Math.round((255 - mVal) * (255 - kVal) / 255);
+        b = Math.round((255 - yVal) * (255 - kVal) / 255);
+    } else {
+        r = g = b = 0;
+    }
+
+    return [r & 0xFF, g & 0xFF, b & 0xFF];
+}
+
+// 旧実装は dead code として残されないよう削除（unused fallback）
+function _legacyGetPixelColor(imageSeg, srcX, srcY) {
     if (!imageSeg.bitmap || imageSeg.bitmap.length === 0) {
         return [0, 0, 0];
     }
-
-    // pixbitsを解釈
-    const pixelcount = imageSeg.pixbits & 0xFF;      // 実際のビット数
-    const pixeldatawidth = (imageSeg.pixbits >> 8) & 0xFF; // データ幅
-
-    // データ幅に基づいてバイト数を計算
-    let bytesPerPixel;
-    if (pixeldatawidth > 0) {
-        bytesPerPixel = Math.ceil(pixeldatawidth / 8);
-    } else {
-        bytesPerPixel = Math.ceil(pixelcount / 8);
-    }
-
-    // rowbytesを考慮した行バイト数を計算
+    const pixelcount = imageSeg.pixbits & 0xFF;
+    const pixeldatawidth = (imageSeg.pixbits >> 8) & 0xFF;
+    let bytesPerPixel = pixeldatawidth > 0 ? Math.ceil(pixeldatawidth / 8) : Math.ceil(pixelcount / 8);
     const imgWidth = imageSeg.bounds.right - imageSeg.bounds.left;
-    let effectiveRowbytes;
-    if (imageSeg.rowbytes > 0) {
-        effectiveRowbytes = imageSeg.rowbytes;
-    } else if (pixelcount < 8) {
-        effectiveRowbytes = Math.ceil(imgWidth * pixelcount / 8);
-    } else {
-        effectiveRowbytes = imgWidth * bytesPerPixel;
-    }
-
-    // ピクセルカウントに基づいて色を取得
+    let effectiveRowbytes = imageSeg.rowbytes > 0 ? imageSeg.rowbytes : (pixelcount < 8 ? Math.ceil(imgWidth * pixelcount / 8) : imgWidth * bytesPerPixel);
     switch(pixelcount) {
-        case 1: { // 1bit モノクロ
-            const byteIdx = srcY * effectiveRowbytes + Math.floor(srcX / 8);
-            const bitIndex = srcX % 8;
-            if (byteIdx >= imageSeg.bitmap.length) return [0, 0, 0];
-            const bit = (imageSeg.bitmap[byteIdx] >> (7 - bitIndex)) & 1;
-            if (colorMap.length >= 2 && colorMap[bit] && colorMap[bit].r !== undefined) {
-                return [colorMap[bit].r, colorMap[bit].g, colorMap[bit].b];
-            }
-            const mono = bit ? 0 : 255;  // BTRON: bit1=前景(黒), bit0=背景(白)
-            return [mono, mono, mono];
-        }
-
-        case 2: { // 2bit パレット (4色)
-            const byteIdx = srcY * effectiveRowbytes + Math.floor(srcX / 4);
-            const bitShift = (3 - (srcX % 4)) * 2;
-            if (byteIdx >= imageSeg.bitmap.length) return [0, 0, 0];
-            const palIndex = (imageSeg.bitmap[byteIdx] >> bitShift) & 0x03;
-            if (colorMap.length > palIndex && colorMap[palIndex] && colorMap[palIndex].r !== undefined) {
-                return [colorMap[palIndex].r, colorMap[palIndex].g, colorMap[palIndex].b];
-            }
-            const gray = Math.round(palIndex * 255 / 3);
-            return [gray, gray, gray];
-        }
-
-        case 4: { // 4bit パレット (16色)
-            const byteIdx = srcY * effectiveRowbytes + Math.floor(srcX / 2);
-            const isHighNibble = (srcX % 2) === 0;
-            if (byteIdx >= imageSeg.bitmap.length) return [0, 0, 0];
-            const palIndex = isHighNibble ? (imageSeg.bitmap[byteIdx] >> 4) & 0x0F : imageSeg.bitmap[byteIdx] & 0x0F;
-            if (colorMap.length > palIndex && colorMap[palIndex] && colorMap[palIndex].r !== undefined) {
-                return [colorMap[palIndex].r, colorMap[palIndex].g, colorMap[palIndex].b];
-            }
-            const gray = Math.round(palIndex * 255 / 15);
-            return [gray, gray, gray];
-        }
-
-        case 8: { // 8bit グレースケール or パレット
-            const byteIndex = srcY * effectiveRowbytes + srcX * bytesPerPixel;
-            if (byteIndex >= imageSeg.bitmap.length) return [0, 0, 0];
-            const value = imageSeg.bitmap[byteIndex];
-            if (colorMap.length > value && colorMap[value] && colorMap[value].r !== undefined) {
-                return [colorMap[value].r, colorMap[value].g, colorMap[value].b];
-            }
-            return [value, value, value];
-        }
-
-        case 16: { // 16bit カラー (5-6-5 RGB)
-            const byteIndex = srcY * effectiveRowbytes + srcX * bytesPerPixel;
-            if (byteIndex + 1 >= imageSeg.bitmap.length) return [0, 0, 0];
-            const rgb16 = (imageSeg.bitmap[byteIndex + 1] << 8) | imageSeg.bitmap[byteIndex];
-            const r5 = (rgb16 >> 11) & 0x1F;
-            const g6 = (rgb16 >> 5) & 0x3F;
-            const b5 = rgb16 & 0x1F;
-            // 正しい値拡張: 5bit→8bit (0→0, 31→255), 6bit→8bit (0→0, 63→255)
-            const r16 = (r5 << 3) | (r5 >> 2);
-            const g16 = (g6 << 2) | (g6 >> 4);
-            const b16 = (b5 << 3) | (b5 >> 2);
-            return [r16, g16, b16];
-        }
-
-        case 24: { // 24bit フルカラー
+        case 24: {
             const byteIndex = srcY * effectiveRowbytes + srcX * bytesPerPixel;
             if (byteIndex + 2 >= imageSeg.bitmap.length) return [0, 0, 0];
-            return [
-                imageSeg.bitmap[byteIndex + 2], // R
-                imageSeg.bitmap[byteIndex + 1], // G
-                imageSeg.bitmap[byteIndex]      // B
-            ];
+            return [imageSeg.bitmap[byteIndex + 2], imageSeg.bitmap[byteIndex + 1], imageSeg.bitmap[byteIndex]];
         }
-
-        case 32: { // 32bit フルカラー+アルファ
+        case 32: {
             const byteIndex = srcY * effectiveRowbytes + srcX * bytesPerPixel;
             if (byteIndex + 3 >= imageSeg.bitmap.length) return [0, 0, 0];
-            return [
-                imageSeg.bitmap[byteIndex + 2], // R
-                imageSeg.bitmap[byteIndex + 1], // G
-                imageSeg.bitmap[byteIndex]      // B
-            ];
+            return [imageSeg.bitmap[byteIndex + 2], imageSeg.bitmap[byteIndex + 1], imageSeg.bitmap[byteIndex]];
         }
 
         default: {
@@ -5887,7 +6114,8 @@ function generatePngImage(imageSeg) {
             const imageData = tempCtx.createImageData(width, height);
             const data = imageData.data;
 
-            // ビットマップデータをImageDataに変換
+            // ビットマップデータをImageDataに変換（マスクをアルファに反映）
+            const hasMask = imageSeg.mask && imageSeg.mask > 0;
             for (let y = 0; y < height; y++) {
                 for (let x = 0; x < width; x++) {
                     const destIndex = (y * width + x) * 4;
@@ -5896,7 +6124,7 @@ function generatePngImage(imageSeg) {
                     data[destIndex] = r;         // R
                     data[destIndex + 1] = g;     // G
                     data[destIndex + 2] = b;     // B
-                    data[destIndex + 3] = 255;   // A（不透明）
+                    data[destIndex + 3] = hasMask ? ((getMaskValue(imageSeg, x, y) === 0) ? 0 : 255) : 255;
                 }
             }
 
@@ -6033,8 +6261,8 @@ function tsFigStart(tadSeg) {
     // XMLダンプ機能が有効な場合、図形開始セグメントの情報をXML形式で出力
     if (isXmlDumpEnabled()) {
         xmlBuffer.push('<figure>\r\n');
-        xmlBuffer.push(`<figView top="${figSeg.view.top}" left="${figSeg.view.left}" right="${figSeg.view.right}" bottom="${figSeg.view.bottom}"/>\r\n`);
-        xmlBuffer.push(`<figDraw top="${figSeg.draw.top}" left="${figSeg.draw.left}" right="${figSeg.draw.right}" bottom="${figSeg.draw.bottom}"/>\r\n`);
+        xmlBuffer.push(`<figView left="${figSeg.view.left}" top="${figSeg.view.top}" right="${figSeg.view.right}" bottom="${figSeg.view.bottom}"/>\r\n`);
+        xmlBuffer.push(`<figDraw left="${figSeg.draw.left}" top="${figSeg.draw.top}" right="${figSeg.draw.right}" bottom="${figSeg.draw.bottom}"/>\r\n`);
         xmlBuffer.push(`<figScale hunit="${figSeg.h_unit}" vunit="${figSeg.v_unit}"/>\r\n`);
         isXmlFig = true;
     }
@@ -6048,7 +6276,7 @@ function tsFigStart(tadSeg) {
         drawW = figSeg.draw.right - drawX;
         drawH = figSeg.draw.bottom - drawY;
         
-    } else if (isInFigureSegment() > 1 && startByImageSegment) {
+    } else if (figureSegmentNestDepth() > 1 && startByImageSegment) {
         viewX = figSeg.view.left;
         viewY = figSeg.view.top;
         viewW = figSeg.view.right - viewX;
@@ -6070,7 +6298,25 @@ function tsFigStart(tadSeg) {
     logger.debug(`[Figure] figSeg draw: left=${figSeg.draw.left}, top=${figSeg.draw.top}, right=${figSeg.draw.right}, bottom=${figSeg.draw.bottom}`);
 
     imagePoint.push([viewX,viewY,viewW,viewH,drawX,drawY,drawW,drawH]);
-    
+
+    // 入れ子対応: 図形開始セグメントの状態を figureStack に push
+    const isNested = figureStack.length >= 1;
+    const incremental = isNested ? computeFigureIncrementalTransform({ view: figSeg.view, draw: figSeg.draw }) : null;
+    figureStack.push({
+        type: 'figure',
+        view: { left: figSeg.view.left, top: figSeg.view.top, right: figSeg.view.right, bottom: figSeg.view.bottom },
+        draw: { left: figSeg.draw.left, top: figSeg.draw.top, right: figSeg.draw.right, bottom: figSeg.draw.bottom },
+        hUnit: figSeg.h_unit,
+        vUnit: figSeg.v_unit,
+        incremental: incremental,
+        ctxTransformApplied: false
+    });
+    // ネスト時 (深さ ≥ 2) のみ canvas に増分変換を適用
+    if (isNested && incremental && typeof ctx !== 'undefined' && ctx) {
+        ctx.save();
+        ctx.transform(incremental.scaleX, 0, 0, incremental.scaleY, incremental.dx, incremental.dy);
+        figureStack[figureStack.length - 1].ctxTransformApplied = true;
+    }
 }
 
 /**
@@ -6106,10 +6352,19 @@ function tsFigEnd(tadSeg) {
     }
     // 現在のセグメントタイプを更新
     currentSegmentType = segmentStack.length > 0 ? segmentStack[segmentStack.length - 1] : SEGMENT_TYPE.NONE;
-    
+
     // imagePointスタックからもポップ
     if (imagePoint.length > 0) {
         imagePoint.pop();
+    }
+
+    // 入れ子対応: figureStack からポップ、ctx 変換が適用されていれば復元
+    if (figureStack.length > 0) {
+        const top = figureStack[figureStack.length - 1];
+        if (top.ctxTransformApplied && typeof ctx !== 'undefined' && ctx) {
+            ctx.restore();
+        }
+        figureStack.pop();
     }
 
     // XMLダンプ機能が有効な場合、図形終了タグを出力
@@ -6622,6 +6877,7 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     const angle = Number(uh2h(tadSeg[4]));
     let frameLeft = Number(uh2h(tadSeg[5]));
     let frameTop = Number(uh2h(tadSeg[6]));
+    // BTRON仕様: frameはhalf-open(バイナリ上で実座標+1)。width=right-leftで正しく計算可能
     let frameRight = Number(uh2h(tadSeg[7]));
     let frameBottom = Number(uh2h(tadSeg[8]));
 
@@ -6635,10 +6891,11 @@ function tsFigEllipseDraw(segLen, tadSeg) {
         frameBottom = br.y;
     }
 
-    const radiusX = ( frameRight - frameLeft ) / 2;
+    // BTRON binary frame は四隅すべて実座標+1。natural 楕円中心は -1 シフト
+    const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
-    const frameCenterX = frameLeft + radiusX;
-    const frameCenterY = frameTop + radiusY;
+    const frameCenterX = (frameLeft + frameRight) / 2 - 1;
+    const frameCenterY = (frameTop + frameBottom) / 2 - 1;
 
     const radianAngle = angle * Math.PI / 180;
 
@@ -6651,7 +6908,8 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     const oldColors = setColorPattern(l_pat, f_pat);
 
     if(isXmlDumpEnabled()) {
-        xmlBuffer.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}">\r\n`);
+        // XML 出力: frame ベース (BTRON 仕様忠実、cx/cy/rx/ry は派生値)
+        xmlBuffer.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" frameLeft="${frameLeft}" frameTop="${frameTop}" frameRight="${frameRight}" frameBottom="${frameBottom}">\r\n`);
     }
 
     ctx.beginPath();
@@ -6709,11 +6967,11 @@ function tsFigArcDraw(segLen, tadSeg) {
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
 
-    // フレーム座標（half-openなので right と bottom に +1）
+    // フレーム座標（バイナリ上は実座標+1の half-open。width=right-leftで正しく計算可能）
     let frameLeft = Number(uh2h(tadSeg[5]));
     let frameTop = Number(uh2h(tadSeg[6]));
-    let frameRight = Number(uh2h(tadSeg[7])) + 1;
-    let frameBottom = Number(uh2h(tadSeg[8])) + 1;
+    let frameRight = Number(uh2h(tadSeg[7]));
+    let frameBottom = Number(uh2h(tadSeg[8]));
 
     // 開始・終了点
     let startX = Number(uh2h(tadSeg[9]));
@@ -6737,14 +6995,16 @@ function tsFigArcDraw(segLen, tadSeg) {
         endY = e.y;
     }
 
+    // BTRON binary frame は四隅すべて実座標+1。natural 楕円中心は -1 シフト
     const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
-    const centerX = frameLeft + radiusX;
-    const centerY = frameTop + radiusY;
+    const centerX = (frameLeft + frameRight) / 2 - 1;
+    const centerY = (frameTop + frameBottom) / 2 - 1;
 
     // 開始・終了角度を計算（楕円上の点から角度を求める）
-    const startAngle = Math.atan2((startY - centerY) / radiusY, (startX - centerX) / radiusX);
-    const endAngle = Math.atan2((endY - centerY) / radiusY, (endX - centerX) / radiusX);
+    // BTRON binary は startX/Y, endX/Y も frame 同様に +1 シフトで格納されているので -1 する
+    const startAngle = Math.atan2((startY - 1 - centerY) / radiusY, (startX - 1 - centerX) / radiusX);
+    const endAngle = Math.atan2((endY - 1 - centerY) / radiusY, (endX - 1 - centerX) / radiusX);
 
     const radianAngle = angle * Math.PI / 180;
 
@@ -6753,9 +7013,10 @@ function tsFigArcDraw(segLen, tadSeg) {
 
     ctx.save(); // 現在の状態を保存
 
-    // フレーム矩形でクリッピング
+    // クリッピング: natural な楕円外接矩形 = (frameLeft-1, frameTop-1) ～ (frameRight-1, frameBottom-1)
+    // 幅・高さは frameRight - frameLeft / frameBottom - frameTop で正しい (BTRON binary は四隅+1 シフト)
     ctx.beginPath();
-    ctx.rect(frameLeft, frameTop, frameRight - frameLeft, frameBottom - frameTop);
+    ctx.rect(frameLeft - 1, frameTop - 1, frameRight - frameLeft, frameBottom - frameTop);
     ctx.clip();
 
     // 線属性を適用
@@ -6765,14 +7026,18 @@ function tsFigArcDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
+        // XML 出力: frame + 生 PNT のみ。cx/cy/rx/ry/startAngle/endAngle は派生値のため出力しない
+        xmlBuffer.push(`<arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" frameLeft="${frameLeft}" frameTop="${frameTop}" frameRight="${frameRight}" frameBottom="${frameBottom}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
     }
+
+    // miter spike が bbox 外に飛び出すのを防ぐ (ctx.save/restore で自動復元)
+    ctx.lineJoin = 'bevel';
 
     ctx.beginPath();
 
-    // 中心から開始点へ
+    // 中心から始点へ (ctx.ellipse の implicit lineTo が中心→arc 始点の半径線を描く)
+    // 注: 旧コードでは lineTo(startX, startY) で raw direction 点へジグザグしていた
     ctx.moveTo(centerX, centerY);
-    ctx.lineTo(startX, startY);
 
     // 開始点から終了点へ楕円弧（時計回り）
     ctx.ellipse(centerX, centerY, radiusX, radiusY, radianAngle, startAngle, endAngle, false);
@@ -6849,11 +7114,11 @@ function tsFigChordDraw(segLen, tadSeg) {
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
 
-    // フレーム座標（half-openなので right と bottom に +1）
+    // フレーム座標（バイナリ上は実座標+1の half-open。width=right-leftで正しく計算可能）
     let frameLeft = Number(uh2h(tadSeg[5]));
     let frameTop = Number(uh2h(tadSeg[6]));
-    let frameRight = Number(uh2h(tadSeg[7])) + 1;
-    let frameBottom = Number(uh2h(tadSeg[8])) + 1;
+    let frameRight = Number(uh2h(tadSeg[7]));
+    let frameBottom = Number(uh2h(tadSeg[8]));
 
     // 開始・終了点の指定位置
     let startx = Number(uh2h(tadSeg[9]));
@@ -6877,27 +7142,20 @@ function tsFigChordDraw(segLen, tadSeg) {
         endy = e.y;
     }
 
+    // BTRON binary frame は四隅すべて実座標+1。natural 楕円中心は -1 シフト
     const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
-    const frameCenterX = frameLeft + radiusX;
-    const frameCenterY = frameTop + radiusY;
+    const frameCenterX = (frameLeft + frameRight) / 2 - 1;
+    const frameCenterY = (frameTop + frameBottom) / 2 - 1;
 
-    // 楕円の中心とstart/endを結ぶ直線が楕円と交わる点を計算
-    // 開始点の角度を計算
-    const startAngleRaw = Math.atan2(starty - frameCenterY, startx - frameCenterX);
-    // 楕円上の実際の開始点を計算
-    const startXOnEllipse = frameCenterX + radiusX * Math.cos(startAngleRaw);
-    const startYOnEllipse = frameCenterY + radiusY * Math.sin(startAngleRaw);
-
-    // 終了点の角度を計算
-    const endAngleRaw = Math.atan2(endy - frameCenterY, endx - frameCenterX);
-    // 楕円上の実際の終了点を計算
-    const endXOnEllipse = frameCenterX + radiusX * Math.cos(endAngleRaw);
-    const endYOnEllipse = frameCenterY + radiusY * Math.sin(endAngleRaw);
-
-    // 楕円座標系での角度を計算
-    const startAngle = Math.atan2((startYOnEllipse - frameCenterY) / radiusY, (startXOnEllipse - frameCenterX) / radiusX);
-    const endAngle = Math.atan2((endYOnEllipse - frameCenterY) / radiusY, (endXOnEllipse - frameCenterX) / radiusX);
+    // 楕円の中心と start/end を結ぶ直線が楕円と交わる点 (parametric 角度を直接算出)
+    // BTRON binary は startX/Y, endX/Y も frame 同様に +1 シフトで格納されているので -1 する
+    const startAngle = Math.atan2((starty - 1 - frameCenterY) / radiusY, (startx - 1 - frameCenterX) / radiusX);
+    const endAngle = Math.atan2((endy - 1 - frameCenterY) / radiusY, (endx - 1 - frameCenterX) / radiusX);
+    const startXOnEllipse = frameCenterX + radiusX * Math.cos(startAngle);
+    const startYOnEllipse = frameCenterY + radiusY * Math.sin(startAngle);
+    const endXOnEllipse = frameCenterX + radiusX * Math.cos(endAngle);
+    const endYOnEllipse = frameCenterY + radiusY * Math.sin(endAngle);
 
     const radianAngle = angle * Math.PI / 180;
 
@@ -6907,9 +7165,9 @@ function tsFigChordDraw(segLen, tadSeg) {
 
     ctx.save(); // 現在の状態を保存
 
-    // フレーム矩形でクリッピング
+    // クリッピング: natural な楕円外接矩形 = (frameLeft-1, frameTop-1) ～ (frameRight-1, frameBottom-1)
     ctx.beginPath();
-    ctx.rect(frameLeft, frameTop, frameRight - frameLeft, frameBottom - frameTop);
+    ctx.rect(frameLeft - 1, frameTop - 1, frameRight - frameLeft, frameBottom - frameTop);
     ctx.clip();
 
     // 線属性を適用
@@ -6919,8 +7177,12 @@ function tsFigChordDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<chord lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startXOnEllipse}" startY="${startYOnEllipse}" endX="${endXOnEllipse}" endY="${endYOnEllipse}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
+        // XML 出力: frame + 生 PNT (binary 由来の startx/starty/endx/endy) のみ
+        xmlBuffer.push(`<chord lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" frameLeft="${frameLeft}" frameTop="${frameTop}" frameRight="${frameRight}" frameBottom="${frameBottom}" startX="${startx}" startY="${starty}" endX="${endx}" endY="${endy}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
     }
+
+    // miter spike が bbox 外に飛び出すのを防ぐ (ctx.save/restore で自動復元される)
+    ctx.lineJoin = 'bevel';
 
     ctx.beginPath();
 
@@ -6987,6 +7249,7 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     const angle = Number(uh2h(tadSeg[3]));
     let frameLeft = Number(uh2h(tadSeg[4]));
     let frameTop = Number(uh2h(tadSeg[5]));
+    // BTRON仕様: frameはhalf-open(バイナリ上で実座標+1)。width=right-leftで正しく計算可能
     let frameRight = Number(uh2h(tadSeg[6]));
     let frameBottom = Number(uh2h(tadSeg[7]));
     let startX = Number(uh2h(tadSeg[8]));
@@ -7010,12 +7273,14 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
         endY = e.y;
     }
 
-    const radiusX = ( frameRight - frameLeft ) / 2;
+    // BTRON binary frame は四隅すべて実座標+1。natural 楕円中心は -1 シフト
+    const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
-    const frameCenterX = frameLeft + radiusX;
-    const frameCenterY = frameTop + radiusY;
-    const radianStart = Math.atan2(startY - frameCenterY, startX - frameCenterX)
-    const radianEnd = Math.atan2(endY - frameCenterY, endX - frameCenterX)
+    const frameCenterX = (frameLeft + frameRight) / 2 - 1;
+    const frameCenterY = (frameTop + frameBottom) / 2 - 1;
+    // startX/Y, endX/Y も同様に +1 シフトで格納されているので -1 + 楕円上 parametric 角に正規化
+    const radianStart = Math.atan2((startY - 1 - frameCenterY) / radiusY, (startX - 1 - frameCenterX) / radiusX);
+    const radianEnd = Math.atan2((endY - 1 - frameCenterY) / radiusY, (endX - 1 - frameCenterX) / radiusX);
     const radianAngle = angle * Math.PI / 180;
 
     logger.debug(`[Figure] ellipticalArc: angle=${radianAngle}, center=(${frameCenterX}, ${frameCenterY}), start=(${startX}, ${startY}), radius=(${radiusX}, ${radiusY}), radianStart=${radianStart}, radianEnd=${radianEnd}`);
@@ -7023,7 +7288,8 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<elliptical_arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${radianStart}" endAngle="${radianEnd}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
+        // XML 出力: frame + 生 PNT のみ (Sub ID 07 楕円弧は f_pat 無し)
+        xmlBuffer.push(`<elliptical_arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" angle="${angle}" frameLeft="${frameLeft}" frameTop="${frameTop}" frameRight="${frameRight}" frameBottom="${frameBottom}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
     }
 
     ctx.beginPath();
@@ -8371,6 +8637,7 @@ class TADParserState {
             textCharData: [...textCharData],
             tronCodeMask: [...tronCodeMask],
             imagePoint: [...imagePoint],
+            figureStack: figureStack.map(e => ({...e, view: {...e.view}, draw: {...e.draw}, incremental: e.incremental ? {...e.incremental} : null})),
             groupList: [...groupList],
 
             // フォント関連
@@ -8446,6 +8713,7 @@ class TADParserState {
         textCharData = [...s.textCharData];
         tronCodeMask = [...s.tronCodeMask];
         imagePoint = [...s.imagePoint];
+        figureStack = s.figureStack ? s.figureStack.map(e => ({...e, view: {...e.view}, draw: {...e.draw}, incremental: e.incremental ? {...e.incremental} : null})) : [];
         groupList = [...s.groupList];
 
         // フォント関連
@@ -8620,6 +8888,7 @@ function initTAD(x = 0, y = 0) {
     // textCharDirection は未使用のため削除済み
     imagePoint = [];
     tronCodeMask = [];
+    figureStack = [];
     groupList = [];
 
     // TADセグメント処理フラグを初期化

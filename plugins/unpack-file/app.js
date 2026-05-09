@@ -319,6 +319,10 @@ class UnpackFileManager extends window.PluginBase {
 
             // メモリ解放: 送信完了後に不要なデータを解放
             this.rawData = null;
+            // unpack.js側のgeneratedImagesもクリア（送信済みなので不要）
+            if (typeof window.clearGeneratedImages === 'function') {
+                window.clearGeneratedImages();
+            }
             logger.info('[UnpackFile] メモリ解放: rawData/generatedImagesを解放');
 
         } catch (error) {

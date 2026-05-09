@@ -1239,11 +1239,12 @@ export const CalcChartMixin = (Base) => class extends Base {
             const bottom = Math.round(shape.endY - originY);
             xmlParts.push(`<rect lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="0" left="${left}" top="${top}" right="${right}" bottom="${bottom}" zIndex="${zIndex}"/>\r\n`);
         } else if (shape.type === 'ellipse') {
-            const cx = Math.round(((shape.startX + shape.endX) / 2) - originX);
-            const cy = Math.round(((shape.startY + shape.endY) / 2) - originY);
-            const rx = Math.round(Math.abs(shape.endX - shape.startX) / 2);
-            const ry = Math.round(Math.abs(shape.endY - shape.startY) / 2);
-            xmlParts.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="0" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" zIndex="${zIndex}"/>\r\n`);
+            // frame ベース (BTRON 仕様忠実)
+            const ellLeft = Math.round(Math.min(shape.startX, shape.endX) - originX);
+            const ellTop = Math.round(Math.min(shape.startY, shape.endY) - originY);
+            const ellRight = Math.round(Math.max(shape.startX, shape.endX) - originX);
+            const ellBottom = Math.round(Math.max(shape.startY, shape.endY) - originY);
+            xmlParts.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="0" frameLeft="${ellLeft}" frameTop="${ellTop}" frameRight="${ellRight}" frameBottom="${ellBottom}" zIndex="${zIndex}"/>\r\n`);
         } else if (shape.type === 'document') {
             const left = Math.round(shape.startX - originX);
             const top = Math.round(shape.startY - originY);
@@ -2003,7 +2004,7 @@ export const CalcChartMixin = (Base) => class extends Base {
 
             // ellipse要素を生成（各データ点、f_patで塗り色を指定）
             for (const point of points) {
-                xtad += `<ellipse lineType="0" lineWidth="0" l_pat="0" f_pat="${colorPatId}" angle="0" cx="${point.x}" cy="${point.y}" rx="4" ry="4" zIndex="${zIndex--}"/>\n`;
+                xtad += `<ellipse lineType="0" lineWidth="0" l_pat="0" f_pat="${colorPatId}" angle="0" frameLeft="${point.x - 4}" frameTop="${point.y - 4}" frameRight="${point.x + 4}" frameBottom="${point.y + 4}" zIndex="${zIndex--}"/>\n`;
             }
         }
 
@@ -2094,7 +2095,7 @@ export const CalcChartMixin = (Base) => class extends Base {
 
             // ellipse要素を生成（各データ点、f_patで塗り色を指定）
             for (const point of points) {
-                xtad += `<ellipse lineType="0" lineWidth="0" l_pat="0" f_pat="${colorPatId}" angle="0" cx="${point.x}" cy="${point.y}" rx="4" ry="4" zIndex="${zIndex--}"/>\n`;
+                xtad += `<ellipse lineType="0" lineWidth="0" l_pat="0" f_pat="${colorPatId}" angle="0" frameLeft="${point.x - 4}" frameTop="${point.y - 4}" frameRight="${point.x + 4}" frameBottom="${point.y + 4}" zIndex="${zIndex--}"/>\n`;
             }
         }
 
@@ -2388,16 +2389,35 @@ export const CalcChartMixin = (Base) => class extends Base {
         }
 
         // <ellipse> 要素をパース（折れ線グラフのデータ点用、円はrx=ryで表現）
+        // 新形式: frameLeft/frameTop/frameRight/frameBottom、旧形式: cx/cy/rx/ry
         const ellipsePattern = /<ellipse\s+[^>]+\/>/g;
         let ellipseMatch;
         while ((ellipseMatch = ellipsePattern.exec(innerContent)) !== null) {
             const tag = ellipseMatch[0];
-            const cx = getAttr(tag, 'cx');
-            const cy = getAttr(tag, 'cy');
-            const rx = getAttr(tag, 'rx');
-            const ry = getAttr(tag, 'ry');
+            const frameLeft = getAttr(tag, 'frameLeft');
+            const frameTop = getAttr(tag, 'frameTop');
+            const frameRight = getAttr(tag, 'frameRight');
+            const frameBottom = getAttr(tag, 'frameBottom');
+            let cx, cy, rx, ry;
+            if (frameLeft !== null) {
+                // 新形式: frame から導出
+                const fl = parseFloat(frameLeft);
+                const ft = parseFloat(frameTop);
+                const fr = parseFloat(frameRight);
+                const fb = parseFloat(frameBottom);
+                cx = (fl + fr) / 2;
+                cy = (ft + fb) / 2;
+                rx = (fr - fl) / 2;
+                ry = (fb - ft) / 2;
+            } else {
+                // 旧形式: cx/cy/rx/ry
+                cx = parseFloat(getAttr(tag, 'cx'));
+                cy = parseFloat(getAttr(tag, 'cy'));
+                rx = parseFloat(getAttr(tag, 'rx'));
+                ry = parseFloat(getAttr(tag, 'ry'));
+            }
 
-            if (cx !== null && cy !== null && rx !== null) {
+            if (!Number.isNaN(cx) && !Number.isNaN(cy) && !Number.isNaN(rx)) {
                 const f_pat = parseInt(getAttr(tag, 'f_pat')) || 0;
                 // f_patからresolvePatternColorで塗り色を解決
                 const fillColor = (f_pat >= 1 && typeof resolvePatternColor === 'function')
@@ -2406,9 +2426,9 @@ export const CalcChartMixin = (Base) => class extends Base {
 
                 elements.push({
                     type: 'circle',
-                    cx: parseFloat(cx),
-                    cy: parseFloat(cy),
-                    r: parseFloat(rx),  // rx=ryの円としてrxを半径に使用
+                    cx: cx,
+                    cy: cy,
+                    r: rx,  // rx=ryの円としてrxを半径に使用
                     fillC: fillColor,
                     l_pat: parseInt(getAttr(tag, 'l_pat')) || 0,
                     f_pat: f_pat,

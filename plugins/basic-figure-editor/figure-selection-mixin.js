@@ -93,7 +93,24 @@ export const FigureSelectionMixin = (Base) => class extends Base {
     getShapeBoundingBox(shape) {
         let minX, maxX, minY, maxY;
 
-        if (shape.points && shape.points.length > 0) {
+        if (shape.type === 'nested-figure' && shape.figView) {
+            // 入れ子図形は figView (親 draw 座標系内) をバウンディングボックスとする
+            minX = Math.min(shape.figView.left, shape.figView.right);
+            maxX = Math.max(shape.figView.left, shape.figView.right);
+            minY = Math.min(shape.figView.top, shape.figView.bottom);
+            maxY = Math.max(shape.figView.top, shape.figView.bottom);
+        } else if (shape.type === 'ellipse') {
+            // 完全楕円: frame (楕円の外接矩形) を visual extent として返す
+            // - 回転がある場合は frame の四隅を回転して bbox を算出
+            return this._computeFrameBoundingBox(shape);
+        } else if (shape.type === 'arc' || shape.type === 'chord' ||
+                   shape.type === 'elliptical_arc') {
+            // BTRON 仕様: 弧型/扇形/楕円弧の選択枠は frame ではなく実描画範囲 (visual extent)
+            // - sweep 範囲内の楕円上点 (start, end, sweep 内 cardinal 極値)
+            // - shape.angle (楕円自身の回転) を考慮した極値
+            // - arc (扇形) は中心点を含む (中心-端点間の線分も描画されるため)
+            return this._computeArcBoundingBox(shape);
+        } else if (shape.points && shape.points.length > 0) {
             // polygon: points配列からバウンディングボックスを計算
             minX = Math.min(...shape.points.map(p => p.x));
             maxX = Math.max(...shape.points.map(p => p.x));
@@ -113,6 +130,186 @@ export const FigureSelectionMixin = (Base) => class extends Base {
             maxY = Math.max(shape.startY, shape.endY);
         } else {
             return null;
+        }
+
+        return { minX, maxX, minY, maxY };
+    }
+
+    /**
+     * BTRON 仕様準拠: 楕円系 shape の bounding box は frame (楕円外接矩形) 全体
+     * - chord/arc/elliptical_arc/ellipse の選択枠 = 楕円の外接矩形 = BTRON binary の RECT
+     * - shape.angle (楕円自身の回転、度数法) がある場合は frame の四隅を回転中心 (cx, cy)
+     *   で回転させて、その外接矩形を bbox とする
+     * @param {Object} shape
+     * @returns {{minX, maxX, minY, maxY}}
+     */
+    _computeFrameBoundingBox(shape) {
+        // shape.frame があれば優先、無ければ旧形式 (cx/rx) からフォールバック
+        const frame = shape.frame || (
+            shape.centerX !== undefined && shape.radiusX !== undefined
+                ? {
+                    left: shape.centerX - shape.radiusX,
+                    top: shape.centerY - shape.radiusY,
+                    right: shape.centerX + shape.radiusX,
+                    bottom: shape.centerY + shape.radiusY
+                }
+                : null
+        );
+        if (!frame) {
+            // 最終フォールバック: startX/Y/endX/Y
+            const sx = shape.startX ?? 0;
+            const sy = shape.startY ?? 0;
+            const ex = shape.endX ?? 0;
+            const ey = shape.endY ?? 0;
+            return {
+                minX: Math.min(sx, ex),
+                maxX: Math.max(sx, ex),
+                minY: Math.min(sy, ey),
+                maxY: Math.max(sy, ey)
+            };
+        }
+
+        // BTRON binary frame は四隅すべて実座標+1 で格納されるため、natural な楕円中心は -1 シフト
+        const cx = (frame.left + frame.right) / 2 - 1;
+        const cy = (frame.top + frame.bottom) / 2 - 1;
+        const rx = (frame.right - frame.left) / 2;
+        const ry = (frame.bottom - frame.top) / 2;
+        const rot = (shape.angle || 0) * Math.PI / 180;
+
+        if (Math.abs(rot) < 1e-9) {
+            // 回転無し: ellipse の visible 範囲 (cx ± rx, cy ± ry)
+            return {
+                minX: cx - rx,
+                maxX: cx + rx,
+                minY: cy - ry,
+                maxY: cy + ry
+            };
+        }
+
+        // 回転あり: 回転された楕円の bbox 半径
+        // half_w = sqrt((rx*cosR)² + (ry*sinR)²),  half_h = sqrt((rx*sinR)² + (ry*cosR)²)
+        const cosR = Math.cos(rot);
+        const sinR = Math.sin(rot);
+        const halfW = Math.sqrt((rx * cosR) ** 2 + (ry * sinR) ** 2);
+        const halfH = Math.sqrt((rx * sinR) ** 2 + (ry * cosR) ** 2);
+        return {
+            minX: cx - halfW,
+            maxX: cx + halfW,
+            minY: cy - halfH,
+            maxY: cy + halfH
+        };
+    }
+
+    /**
+     * arc/chord/elliptical_arc の visual bounding box
+     * - 楕円上点 = (cx + rx*cos(t)*cosR - ry*sin(t)*sinR, cy + rx*cos(t)*sinR + ry*sin(t)*cosR)
+     * - sweep [sa, ea] 範囲内の楕円上点の極値を取る
+     * - sa, ea (端点パラメトリック角) と、sweep 内に入る X/Y 極値角 (回転考慮) を候補にする
+     * - arc (扇形) のみ中心点も bbox に加える
+     * @param {Object} shape
+     * @returns {{minX, maxX, minY, maxY}}
+     */
+    _computeArcBoundingBox(shape) {
+        const frame = shape.frame || (
+            shape.centerX !== undefined && shape.radiusX !== undefined
+                ? {
+                    left: shape.centerX - shape.radiusX,
+                    top: shape.centerY - shape.radiusY,
+                    right: shape.centerX + shape.radiusX,
+                    bottom: shape.centerY + shape.radiusY
+                }
+                : null
+        );
+        if (!frame) {
+            const sx = shape.startX ?? 0;
+            const sy = shape.startY ?? 0;
+            const ex = shape.endX ?? 0;
+            const ey = shape.endY ?? 0;
+            return {
+                minX: Math.min(sx, ex),
+                maxX: Math.max(sx, ex),
+                minY: Math.min(sy, ey),
+                maxY: Math.max(sy, ey)
+            };
+        }
+
+        // BTRON binary frame は四隅すべて実座標+1 で格納されるため、cx/cy は -1 シフト
+        const cx = (frame.left + frame.right) / 2 - 1;
+        const cy = (frame.top + frame.bottom) / 2 - 1;
+        const rx = (frame.right - frame.left) / 2;
+        const ry = (frame.bottom - frame.top) / 2;
+        const rot = (shape.angle || 0) * Math.PI / 180;
+        const cosR = Math.cos(rot);
+        const sinR = Math.sin(rot);
+
+        // sweep 角度を取得 (start/end の楕円 projection、未指定なら全周)
+        // BTRON binary は startX/Y, endX/Y も frame 同様に +1 シフトされて格納されている
+        let sa = 0;
+        let ea = 2 * Math.PI;
+        if (shape.startX !== undefined && shape.endX !== undefined &&
+            typeof this.projectPointOntoEllipse === 'function') {
+            const sp = this.projectPointOntoEllipse(cx, cy, rx, ry, shape.startX - 1, shape.startY - 1);
+            const ep = this.projectPointOntoEllipse(cx, cy, rx, ry, shape.endX - 1, shape.endY - 1);
+            sa = sp.angle;
+            ea = ep.angle;
+        } else if (shape.startX !== undefined && shape.endX !== undefined) {
+            sa = Math.atan2((shape.startY - 1 - cy) / ry, (shape.startX - 1 - cx) / rx);
+            ea = Math.atan2((shape.endY - 1 - cy) / ry, (shape.endX - 1 - cx) / rx);
+        }
+        const TAU = 2 * Math.PI;
+        // anticlockwise=false 描画: ea > sa の方向で sweep
+        while (ea < sa) ea += TAU;
+        while (ea - sa > TAU) ea -= TAU;
+
+        // 楕円上点を実座標へマップ
+        const ellipsePoint = (t) => {
+            const ux = rx * Math.cos(t);
+            const uy = ry * Math.sin(t);
+            return {
+                x: cx + ux * cosR - uy * sinR,
+                y: cy + ux * sinR + uy * cosR
+            };
+        };
+
+        // sweep 範囲内の角度かチェック (sa, ea, sa+k*TAU を考慮)
+        const isInSweep = (t) => {
+            // sa <= t' <= ea を満たす t' = t + k*TAU が存在するか
+            for (let k = -2; k <= 2; k++) {
+                const tt = t + k * TAU;
+                if (tt >= sa - 1e-9 && tt <= ea + 1e-9) return true;
+            }
+            return false;
+        };
+
+        // X 極値の候補: dp.x/dt = -rx*sin(t)*cosR - ry*cos(t)*sinR = 0
+        //   tan(t) = -ry*sinR / (rx*cosR)
+        // Y 極値の候補: dp.y/dt = -rx*sin(t)*sinR + ry*cos(t)*cosR = 0
+        //   tan(t) = ry*cosR / (rx*sinR)
+        const candidates = [sa, ea];
+        // X 極値
+        const tx0 = Math.atan2(-ry * sinR, rx * cosR);
+        candidates.push(tx0, tx0 + Math.PI);
+        // Y 極値
+        const ty0 = Math.atan2(ry * cosR, rx * sinR);
+        candidates.push(ty0, ty0 + Math.PI);
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        const addPoint = (p) => {
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+        };
+
+        for (const t of candidates) {
+            if (t === sa || t === ea || isInSweep(t)) {
+                addPoint(ellipsePoint(t));
+            }
+        }
+
+        // arc (扇形): 中心点を加える (中心から端点への線分も bbox に影響)
+        if (shape.type === 'arc') {
+            addPoint({ x: cx, y: cy });
         }
 
         return { minX, maxX, minY, maxY };

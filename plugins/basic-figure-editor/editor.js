@@ -781,8 +781,10 @@ class BasicFigureEditor extends
 
             if (this.embeddedMode && this.figView) {
                 // 埋め込みモード: figView寸法をそのまま使用（min 800x600制約なし、zoomLevel=1固定）
-                finalWidth = (this.figView.right - this.figView.left) || 200;
-                finalHeight = (this.figView.bottom - this.figView.top) || 200;
+                // figScale (UNITS) を考慮してピクセル単位に変換
+                const scale = this.getFigScalePixelFactor();
+                finalWidth = ((this.figView.right - this.figView.left) * scale.x) || 200;
+                finalHeight = ((this.figView.bottom - this.figView.top) * scale.y) || 200;
             } else {
                 // 通常モード: コンテンツサイズとウィンドウサイズの大きい方、最小サイズも保証
                 const contentSize = this.calculateContentSize();
@@ -871,13 +873,20 @@ class BasicFigureEditor extends
             maxBottom = Math.max(maxBottom, bottom);
         });
 
-        // マージンを追加
-        const contentWidth = maxRight + MARGIN;
-        const contentHeight = maxBottom + MARGIN;
+        // figView の左上が (0,0) でない場合、描画は ctx.translate(-figView.left, -figView.top)
+        // で正規化されるため、必要なキャンバス幅は (maxRight - figView.left)
+        // figScale もピクセル換算に効く
+        const figOffsetX = this.figView ? this.figView.left : 0;
+        const figOffsetY = this.figView ? this.figView.top : 0;
+        const scale = this.getFigScalePixelFactor();
+
+        // マージンを追加（キャンバスはピクセル単位）
+        const contentWidth = (maxRight - figOffsetX) * scale.x + MARGIN;
+        const contentHeight = (maxBottom - figOffsetY) * scale.y + MARGIN;
 
         return {
-            width: contentWidth,
-            height: contentHeight
+            width: Math.max(contentWidth, 0),
+            height: Math.max(contentHeight, 0)
         };
     }
 
@@ -1025,7 +1034,7 @@ class BasicFigureEditor extends
         const height = Math.abs(shape.endY - shape.startY);
         // 論理座標を物理座標に変換してDOM配置
         const pos = this.logicalToPhysical(minX, minY);
-        const size = this.logicalToPhysical(width, height);
+        const size = this.logicalSizeToPhysical(width, height);
 
         editor.style.position = 'absolute';
         editor.style.left = `${pos.x}px`;
@@ -1325,14 +1334,14 @@ class BasicFigureEditor extends
                 }
                 break;
 
-            case 'ellipse':
-                const centerX = shape.startX + width / 2;
-                const centerY = shape.startY + height / 2;
-                const radiusX = Math.abs(width / 2);
-                const radiusY = Math.abs(height / 2);
+            case 'ellipse': {
+                // BTRON 仕様: frame ベースで cx/cy/rx/ry を都度導出
+                const { cx, cy, rx, ry } = this.getEllipseDrawParams(shape);
+                // angle は度数法で格納されている。Canvas API はラジアン
+                const angleRadian = shape.angle !== undefined ? (shape.angle * Math.PI / 180) : 0;
 
                 this.ctx.beginPath();
-                this.ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+                this.ctx.ellipse(cx, cy, rx, ry, angleRadian, 0, 2 * Math.PI);
                 const fillEnabledEllipse = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
                 if (fillEnabledEllipse) {
                     this.ctx.fill();
@@ -1341,6 +1350,7 @@ class BasicFigureEditor extends
                     this.ctx.stroke();
                 }
                 break;
+            }
 
             case 'triangle':
                 // 三角形描画
@@ -1372,61 +1382,108 @@ class BasicFigureEditor extends
                 }
                 break;
 
-            case 'arc':
-                // 扇形（円弧 + 中心点への線）
-                const arcCenterX = shape.startX + width / 2;
-                const arcCenterY = shape.startY + height / 2;
-                const arcRadiusX = Math.abs(width / 2);
-                const arcRadiusY = Math.abs(height / 2);
+            case 'arc': {
+                // BTRON 仕様 Sub ID 03: 扇形（楕円弧 + 中心への半径 2 本 = パイ型）
+                // frame ベースで cx/rx を導出し、生 PNT (startX/Y/endX/Y) を楕円上に projection
+                const { cx, cy, rx, ry, startAngle, endAngle } = this.getEllipseDrawParams(shape);
+                const { sa: arcSa, ea: arcEa } = this.normalizeArcAngles(startAngle, endAngle);
+                const arcAngleRadian = shape.angle !== undefined ? (shape.angle * Math.PI / 180) : 0;
+                // 始点を明示計算 (Canvas implicit moveTo に依存しない)
+                const arcCosR = Math.cos(arcAngleRadian);
+                const arcSinR = Math.sin(arcAngleRadian);
+                const arcSx = cx + rx * Math.cos(arcSa) * arcCosR - ry * Math.sin(arcSa) * arcSinR;
+                const arcSy = cy + rx * Math.cos(arcSa) * arcSinR + ry * Math.sin(arcSa) * arcCosR;
 
+                // miter spike が bbox 外に飛び出すのを防ぐため lineJoin=bevel
+                const arcPrevJoin = this.ctx.lineJoin;
+                this.ctx.lineJoin = 'bevel';
                 this.ctx.beginPath();
-                this.ctx.moveTo(arcCenterX, arcCenterY);
-                this.ctx.ellipse(arcCenterX, arcCenterY, arcRadiusX, arcRadiusY,
-                                 shape.angle ?? 0,
-                                 shape.startAngle ?? 0,
-                                 shape.endAngle ?? Math.PI / 2);
-                this.ctx.closePath();
+                this.ctx.moveTo(cx, cy);  // 中心へ移動 (パイ型のため)
+                this.ctx.lineTo(arcSx, arcSy);  // 中心から始点へ半径
+                this.ctx.ellipse(cx, cy, rx, ry, arcAngleRadian, arcSa, arcEa, false);
+                this.ctx.closePath();  // 終点から中心へ半径
                 const fillEnabledArc = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
                 if (fillEnabledArc) {
                     this.ctx.fill();
                 }
                 this.ctx.stroke();
+                this.ctx.lineJoin = arcPrevJoin;
                 break;
+            }
 
-            case 'chord':
-                // 弦（円弧の両端を直線で結ぶ）
-                const chordCenterX = shape.startX + width / 2;
-                const chordCenterY = shape.startY + height / 2;
-                const chordRadiusX = Math.abs(width / 2);
-                const chordRadiusY = Math.abs(height / 2);
+            case 'chord': {
+                // BTRON 仕様 Sub ID 04: 弓形（楕円弧 + 弦 = セグメント型）
+                const { cx, cy, rx, ry, startAngle, endAngle } = this.getEllipseDrawParams(shape);
+                const { sa: chordSa, ea: chordEa } = this.normalizeArcAngles(startAngle, endAngle);
+                const chordAngleRadian = shape.angle !== undefined ? (shape.angle * Math.PI / 180) : 0;
+                // 始点を明示計算 (Canvas implicit moveTo に依存しない)
+                const chordCosR = Math.cos(chordAngleRadian);
+                const chordSinR = Math.sin(chordAngleRadian);
+                const chordSx = cx + rx * Math.cos(chordSa) * chordCosR - ry * Math.sin(chordSa) * chordSinR;
+                const chordSy = cy + rx * Math.cos(chordSa) * chordSinR + ry * Math.sin(chordSa) * chordCosR;
 
+                // miter spike が bbox 外に飛び出すのを防ぐため lineJoin=bevel
+                const chordPrevJoin = this.ctx.lineJoin;
+                this.ctx.lineJoin = 'bevel';
                 this.ctx.beginPath();
-                this.ctx.ellipse(chordCenterX, chordCenterY, chordRadiusX, chordRadiusY,
-                                 shape.angle ?? 0,
-                                 shape.startAngle ?? 0,
-                                 shape.endAngle ?? Math.PI / 2);
-                this.ctx.closePath();
+                this.ctx.moveTo(chordSx, chordSy);  // 明示的に始点へ移動
+                this.ctx.ellipse(cx, cy, rx, ry, chordAngleRadian, chordSa, chordEa, false);
+                this.ctx.closePath();  // 終点から始点へ弦が形成される
                 const fillEnabledChord = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
                 if (fillEnabledChord) {
                     this.ctx.fill();
                 }
                 this.ctx.stroke();
+                this.ctx.lineJoin = chordPrevJoin;
                 break;
+            }
 
-            case 'elliptical_arc':
-                // 楕円弧（円弧のみ、閉じない）
-                const ellArcCenterX = shape.startX + width / 2;
-                const ellArcCenterY = shape.startY + height / 2;
-                const ellArcRadiusX = Math.abs(width / 2);
-                const ellArcRadiusY = Math.abs(height / 2);
+            case 'elliptical_arc': {
+                // BTRON 仕様 Sub ID 07: 楕円弧（線のみ、閉じない、塗り潰しなし）
+                const { cx, cy, rx, ry, startAngle, endAngle } = this.getEllipseDrawParams(shape);
+                const { sa: ellSa, ea: ellEa } = this.normalizeArcAngles(startAngle, endAngle);
+                const ellArcAngleRadian = shape.angle !== undefined ? (shape.angle * Math.PI / 180) : 0;
+                // 始点を明示計算
+                const ellCosR = Math.cos(ellArcAngleRadian);
+                const ellSinR = Math.sin(ellArcAngleRadian);
+                const ellSx = cx + rx * Math.cos(ellSa) * ellCosR - ry * Math.sin(ellSa) * ellSinR;
+                const ellSy = cy + rx * Math.cos(ellSa) * ellSinR + ry * Math.sin(ellSa) * ellCosR;
 
+                // 楕円弧は閉じないため lineJoin の影響は端点のみだが念のため bevel
+                const ellPrevJoin = this.ctx.lineJoin;
+                this.ctx.lineJoin = 'bevel';
                 this.ctx.beginPath();
-                this.ctx.ellipse(ellArcCenterX, ellArcCenterY, ellArcRadiusX, ellArcRadiusY,
-                                 shape.angle ?? 0,
-                                 shape.startAngle ?? 0,
-                                 shape.endAngle ?? Math.PI / 2);
+                this.ctx.moveTo(ellSx, ellSy);  // 明示的に始点へ移動
+                this.ctx.ellipse(cx, cy, rx, ry, ellArcAngleRadian, ellSa, ellEa, false);
                 this.ctx.stroke();
+                this.ctx.lineJoin = ellPrevJoin;
+
+                // 矢印描画 (楕円弧は開いた曲線なので矢印対象。arc / chord は閉じるので不要)
+                if (shape.start_arrow || shape.end_arrow) {
+                    const arrowType = shape.arrow_type || 'simple';
+                    // 終点座標
+                    const ellEx = cx + rx * Math.cos(ellEa) * ellCosR - ry * Math.sin(ellEa) * ellSinR;
+                    const ellEy = cy + rx * Math.cos(ellEa) * ellSinR + ry * Math.sin(ellEa) * ellCosR;
+                    // 接線方向 (回転後楕円上の点を t で微分)
+                    //   tan_x = -rx*sin(t)*cosR - ry*cos(t)*sinR
+                    //   tan_y = -rx*sin(t)*sinR + ry*cos(t)*cosR
+                    if (shape.end_arrow) {
+                        const tanXe = -rx * Math.sin(ellEa) * ellCosR - ry * Math.cos(ellEa) * ellSinR;
+                        const tanYe = -rx * Math.sin(ellEa) * ellSinR + ry * Math.cos(ellEa) * ellCosR;
+                        // 終点では弧が出ていく方向 (= +t 方向) に向ける
+                        const endArrowAngle = Math.atan2(tanYe, tanXe);
+                        this.drawArrow(ellEx, ellEy, endArrowAngle, arrowType, shape.lineWidth, shape.strokeColor);
+                    }
+                    if (shape.start_arrow) {
+                        const tanXs = -rx * Math.sin(ellSa) * ellCosR - ry * Math.cos(ellSa) * ellSinR;
+                        const tanYs = -rx * Math.sin(ellSa) * ellSinR + ry * Math.cos(ellSa) * ellCosR;
+                        // 始点では弧が向かう方向の逆 (= -t 方向) に向ける
+                        const startArrowAngle = Math.atan2(-tanYs, -tanXs);
+                        this.drawArrow(ellSx, ellSy, startArrowAngle, arrowType, shape.lineWidth, shape.strokeColor);
+                    }
+                }
                 break;
+            }
 
             case 'pencil':
             case 'brush':
@@ -1558,6 +1615,14 @@ class BasicFigureEditor extends
                             shape.path[last].y
                         );
                     }
+                    // closed="1" の場合は閉路化して塗り潰し
+                    if (shape.closed) {
+                        this.ctx.closePath();
+                        const fillEnabledCurve = shape.fillEnabled !== undefined ? shape.fillEnabled : true;
+                        if (fillEnabledCurve) {
+                            this.ctx.fill();
+                        }
+                    }
                     this.ctx.stroke();
                 }
                 break;
@@ -1566,6 +1631,33 @@ class BasicFigureEditor extends
                 // グループ化された図形
                 if (shape.shapes) {
                     shape.shapes.forEach(s => this.drawShape(s));
+                }
+                break;
+
+            case 'nested-figure':
+                // 入れ子図形開始セグメント (図形中の図形)
+                // 親 draw 座標系 → 自 draw 座標系の増分変換を適用して再帰描画
+                // view 配置は startX/startY/endX/endY を真のソースとし、move 操作後も追随する
+                if (shape.shapes) {
+                    this.ctx.save();
+                    if (shape.figDraw) {
+                        const sd = shape.figDraw;
+                        const svLeft = shape.startX !== undefined ? Math.min(shape.startX, shape.endX) : (shape.figView ? shape.figView.left : 0);
+                        const svTop = shape.startY !== undefined ? Math.min(shape.startY, shape.endY) : (shape.figView ? shape.figView.top : 0);
+                        const svRight = shape.endX !== undefined ? Math.max(shape.startX, shape.endX) : (shape.figView ? shape.figView.right : 0);
+                        const svBottom = shape.endY !== undefined ? Math.max(shape.startY, shape.endY) : (shape.figView ? shape.figView.bottom : 0);
+                        const sdW = sd.right - sd.left;
+                        const sdH = sd.bottom - sd.top;
+                        const svW = svRight - svLeft;
+                        const svH = svBottom - svTop;
+                        const scaleX = (sdW > 0 && svW > 0) ? (svW / sdW) : 1;
+                        const scaleY = (sdH > 0 && svH > 0) ? (svH / sdH) : 1;
+                        const dx = svLeft - sd.left * scaleX;
+                        const dy = svTop - sd.top * scaleY;
+                        this.ctx.transform(scaleX, 0, 0, scaleY, dx, dy);
+                    }
+                    shape.shapes.forEach(s => this.drawShape(s));
+                    this.ctx.restore();
                 }
                 break;
 
@@ -1681,9 +1773,20 @@ class BasicFigureEditor extends
         this.ctx.save();
         this.ctx.scale(this.zoomLevel, this.zoomLevel);
 
-        // 埋め込みモード: figViewの原点分だけキャンバスを移動
+        // figScale (UNITS) によるスケール変換
+        // 負値 = DPI、正値 = 倍率、0 = スケールなし
+        // canvas 表示は 96 DPI 前提で、document 単位 (1 unit = 1/|hunit| inch) を pixel に変換する
+        const scale = this.getFigScalePixelFactor();
+        const needsScale = scale.x !== 1 || scale.y !== 1;
+        if (needsScale) {
+            this.ctx.save();
+            this.ctx.scale(scale.x, scale.y);
+        }
+
+        // figViewの原点分だけキャンバスを移動（仕様: 図形要素は draw 座標系の絶対値で記述）
         // figViewが(left, top)始まりの場合、図形座標を(0, 0)基準で描画するためにオフセット
-        const needsViewportTranslate = this.embeddedMode && this.figView &&
+        // BTRON仕様の任意起点 figView (例: left=11, top=16) を canvas (0,0) へ正規化する
+        const needsViewportTranslate = this.figView &&
             (this.figView.left !== 0 || this.figView.top !== 0);
         if (needsViewportTranslate) {
             this.ctx.save();
@@ -1712,6 +1815,9 @@ class BasicFigureEditor extends
 
         // 埋め込みモード: ビューポート移動を復元
         if (needsViewportTranslate) {
+            this.ctx.restore();
+        }
+        if (needsScale) {
             this.ctx.restore();
         }
 
@@ -1800,6 +1906,23 @@ class BasicFigureEditor extends
         this.ctx.save();
         this.ctx.scale(this.zoomLevel, this.zoomLevel);
 
+        // figScale (UNITS) によるスケール変換 — redrawImmediate と整合
+        // 負値 = DPI、正値 = 倍率、0 = スケールなし
+        const scale = this.getFigScalePixelFactor();
+        const needsScale = scale.x !== 1 || scale.y !== 1;
+        if (needsScale) {
+            this.ctx.save();
+            this.ctx.scale(scale.x, scale.y);
+        }
+
+        // figView の原点オフセットを適用 — redrawImmediate と整合
+        const needsViewportTranslate = this.figView &&
+            (this.figView.left !== 0 || this.figView.top !== 0);
+        if (needsViewportTranslate) {
+            this.ctx.save();
+            this.ctx.translate(-this.figView.left, -this.figView.top);
+        }
+
         // 格子点を描画（最後部）
         if (this.gridMode === 'show' || this.gridMode === 'snap') {
             this.drawGrid();
@@ -1817,6 +1940,15 @@ class BasicFigureEditor extends
         this.selectedShapes.forEach(shape => {
             this.drawSelectionHighlight(shape);
         });
+
+        // figView translate を復元
+        if (needsViewportTranslate) {
+            this.ctx.restore();
+        }
+        // figScale を復元
+        if (needsScale) {
+            this.ctx.restore();
+        }
 
         // 選択中の図形にコネクタは表示しない（ユーザー要望により無効化）
         // this.selectedShapes.forEach(shape => {
@@ -1925,9 +2057,14 @@ class BasicFigureEditor extends
      * @returns {{x: number, y: number}} 論理座標
      */
     physicalToLogical(px, py) {
+        // figView の左上が (0,0) でない場合、論理座標は figView.left/top を起点とする
+        const offsetX = this.figView ? this.figView.left : 0;
+        const offsetY = this.figView ? this.figView.top : 0;
+        // figScale (UNITS): 負値 = DPI、正値 = 比率。canvas は 96 DPI 想定
+        const scale = this.getFigScalePixelFactor();
         return {
-            x: px / this.zoomLevel,
-            y: py / this.zoomLevel
+            x: (px / this.zoomLevel) / scale.x + offsetX,
+            y: (py / this.zoomLevel) / scale.y + offsetY
         };
     }
 
@@ -1938,10 +2075,155 @@ class BasicFigureEditor extends
      * @returns {{x: number, y: number}} 物理座標
      */
     logicalToPhysical(lx, ly) {
+        // figView の左上が (0,0) でない場合、物理座標は figView.left/top を引いて 0 始まりにする
+        const offsetX = this.figView ? this.figView.left : 0;
+        const offsetY = this.figView ? this.figView.top : 0;
+        const scale = this.getFigScalePixelFactor();
         return {
-            x: lx * this.zoomLevel,
-            y: ly * this.zoomLevel
+            x: (lx - offsetX) * scale.x * this.zoomLevel,
+            y: (ly - offsetY) * scale.y * this.zoomLevel
         };
+    }
+
+    /**
+     * 論理サイズから物理サイズへ変換（オフセットを適用しない、figScale と zoomLevel のみ）
+     * @param {number} lw - 論理幅
+     * @param {number} lh - 論理高さ
+     * @returns {{x: number, y: number}} 物理サイズ
+     */
+    logicalSizeToPhysical(lw, lh) {
+        const scale = this.getFigScalePixelFactor();
+        return {
+            x: lw * scale.x * this.zoomLevel,
+            y: lh * scale.y * this.zoomLevel
+        };
+    }
+
+    /**
+     * figScale (UNITS型) から canvas (96 DPI) へのピクセル係数を計算
+     * - 負値: -DPI (例: -120 = 120 DPI、1 unit = 1/120 inch)
+     * - 正値: 倍率
+     * - 0 / 未設定: 1.0 (現状と互換)
+     * @returns {{x: number, y: number}}
+     */
+    getFigScalePixelFactor() {
+        const CANVAS_DPI = 96;
+        const fs = this.figScale;
+        if (!fs) return { x: 1, y: 1 };
+        const hunit = Number(fs.hunit) || 0;
+        const vunit = Number(fs.vunit) || 0;
+        const factorX = hunit === 0 ? 1 : (hunit < 0 ? CANVAS_DPI / Math.abs(hunit) : hunit);
+        const factorY = vunit === 0 ? 1 : (vunit < 0 ? CANVAS_DPI / Math.abs(vunit) : vunit);
+        return { x: factorX, y: factorY };
+    }
+
+    /**
+     * frame から ellipse パラメータ (cx, cy, rx, ry) を導出
+     * BTRON binary frame は四隅すべて「実座標+1」(visible_pixel + 1) で格納されるため、
+     * natural な楕円中心は frame から -1 シフトして算出する。
+     * 例: frame=(768, 529, 848, 851) → cx=807, cy=689, rx=40, ry=161
+     * @param {{left, top, right, bottom}} frame
+     * @returns {{cx, cy, rx, ry}}
+     */
+    deriveEllipseParams(frame) {
+        return {
+            cx: (frame.left + frame.right) / 2 - 1,
+            cy: (frame.top + frame.bottom) / 2 - 1,
+            rx: (frame.right - frame.left) / 2,
+            ry: (frame.bottom - frame.top) / 2
+        };
+    }
+
+    /**
+     * BTRON binary の生 PNT (中心からの方向ベクトル基準点) を楕円上に projection
+     * 中心から PNT への直線が楕円と交わる点を計算する。
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} rx
+     * @param {number} ry
+     * @param {number} px - PNT.x
+     * @param {number} py - PNT.y
+     * @returns {{x, y, angle}} 楕円上の交点とパラメトリック角度
+     */
+    projectPointOntoEllipse(cx, cy, rx, ry, px, py) {
+        const dx = px - cx;
+        const dy = py - cy;
+        if ((dx === 0 && dy === 0) || rx === 0 || ry === 0) {
+            return { x: cx + rx, y: cy, angle: 0 };
+        }
+        // 楕円方程式: ((x-cx)/rx)² + ((y-cy)/ry)² = 1, x-cx = t·dx, y-cy = t·dy
+        // → t² · ((dx/rx)² + (dy/ry)²) = 1
+        const t = 1 / Math.sqrt((dx / rx) ** 2 + (dy / ry) ** 2);
+        const ex = cx + t * dx;
+        const ey = cy + t * dy;
+        return {
+            x: ex,
+            y: ey,
+            angle: Math.atan2((ey - cy) / ry, (ex - cx) / rx)
+        };
+    }
+
+    /**
+     * shape (chord/arc/elliptical_arc/ellipse) から描画用パラメータを取得
+     * frame ベースで cx/rx/sa/ea を都度導出する
+     * @param {Object} shape
+     * @returns {{cx, cy, rx, ry, startAngle, endAngle}}
+     */
+    getEllipseDrawParams(shape) {
+        const frame = shape.frame || this._fallbackFrameFromShape(shape);
+        const { cx, cy, rx, ry } = this.deriveEllipseParams(frame);
+        let startAngle = 0;
+        let endAngle = 2 * Math.PI;
+        if (shape.startX !== undefined && shape.endX !== undefined &&
+            (shape.type === 'chord' || shape.type === 'arc' || shape.type === 'elliptical_arc')) {
+            // BTRON binary は startX/Y, endX/Y も frame 同様に +1 シフトされて格納されている
+            // 例: 楕円の真上 (cx, cy-ry) は startX = cx+1, startY = cy-ry+1 で記録される
+            const startProj = this.projectPointOntoEllipse(cx, cy, rx, ry, shape.startX - 1, shape.startY - 1);
+            const endProj = this.projectPointOntoEllipse(cx, cy, rx, ry, shape.endX - 1, shape.endY - 1);
+            startAngle = startProj.angle;
+            endAngle = endProj.angle;
+        }
+        return { cx, cy, rx, ry, startAngle, endAngle };
+    }
+
+    /**
+     * Canvas `ctx.ellipse(..., sa, ea, anticlockwise=false)` で確実に短い弧を描画するため
+     * sa/ea を正規化する。Canvas 実装の差異に依存せず、増加方向で sa < ea になるよう調整。
+     * @param {number} sa 開始角 (ラジアン)
+     * @param {number} ea 終了角 (ラジアン)
+     * @returns {{sa, ea}} 正規化された角度
+     */
+    normalizeArcAngles(sa, ea) {
+        const TAU = 2 * Math.PI;
+        let normalizedEa = ea;
+        // CW 方向 (anticlockwise=false) で sa から ea へ +0..+TAU の sweep を確保
+        while (normalizedEa < sa) normalizedEa += TAU;
+        while (normalizedEa - sa > TAU) normalizedEa -= TAU;
+        return { sa, ea: normalizedEa };
+    }
+
+    /**
+     * shape.frame が無い旧形式 shape から frame を逆算 (後方互換用)
+     * @private
+     */
+    _fallbackFrameFromShape(shape) {
+        if (shape.centerX !== undefined && shape.radiusX !== undefined) {
+            return {
+                left: shape.centerX - shape.radiusX,
+                top: shape.centerY - shape.radiusY,
+                right: shape.centerX + shape.radiusX,
+                bottom: shape.centerY + shape.radiusY
+            };
+        }
+        if (shape.startX !== undefined && shape.endX !== undefined) {
+            return {
+                left: Math.min(shape.startX, shape.endX),
+                top: Math.min(shape.startY, shape.endY),
+                right: Math.max(shape.startX, shape.endX),
+                bottom: Math.max(shape.startY, shape.endY)
+            };
+        }
+        return { left: 0, top: 0, right: 0, bottom: 0 };
     }
 
     /**
@@ -1987,7 +2269,7 @@ class BasicFigureEditor extends
                 const width = Math.abs((shape.endX || 0) - (shape.startX || 0));
                 const height = Math.abs((shape.endY || 0) - (shape.startY || 0));
                 const pos = this.logicalToPhysical(shape.startX, shape.startY);
-                const size = this.logicalToPhysical(width, height);
+                const size = this.logicalSizeToPhysical(width, height);
                 shape.vobjElement.style.left = pos.x + 'px';
                 shape.vobjElement.style.top = pos.y + 'px';
                 shape.vobjElement.style.width = size.x + 'px';
@@ -3233,12 +3515,12 @@ class BasicFigureEditor extends
 
     /**
      * 全図形タイプ統一の回転角度を返す（度数法）
-     * arc系: shape.angle（ラジアン）を度数法に変換
+     * arc系/ellipse: shape.angle は BTRON仕様で度数法（XML上 "60" は60度）
      * その他: shape.rotation（度数法）
      */
     getEffectiveRotationDeg(shape) {
-        if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') {
-            return (shape.angle || 0) * 180 / Math.PI;
+        if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc' || shape.type === 'ellipse') {
+            return shape.angle || 0;
         }
         if (shape.type === 'vobj') return 0;
         return shape.rotation || 0;
@@ -3922,13 +4204,31 @@ class BasicFigureEditor extends
     moveShapeForAlignment(shape, dx, dy) {
         if (dx === 0 && dy === 0) return;
 
+        // 入れ子図形は figView (親 draw 座標系内) のみ移動。子は自 draw 座標系で
+        // 変換 (ctx.transform) 経由で描かれるため、子座標は触らない。
+        if (shape.type === 'nested-figure' && shape.figView) {
+            shape.figView.left += dx;
+            shape.figView.right += dx;
+            shape.figView.top += dy;
+            shape.figView.bottom += dy;
+            return;
+        }
+
         // 基本座標
         if (shape.startX !== undefined) shape.startX += dx;
         if (shape.startY !== undefined) shape.startY += dy;
         if (shape.endX !== undefined) shape.endX += dx;
         if (shape.endY !== undefined) shape.endY += dy;
 
-        // arc系の中心座標
+        // 楕円系: frame (新形式) を delta で移動
+        if (shape.frame) {
+            shape.frame.left += dx;
+            shape.frame.right += dx;
+            shape.frame.top += dy;
+            shape.frame.bottom += dy;
+        }
+
+        // arc系の中心座標 (旧形式 fallback)
         if (shape.centerX !== undefined) shape.centerX += dx;
         if (shape.centerY !== undefined) shape.centerY += dy;
 
@@ -4880,7 +5180,7 @@ class BasicFigureEditor extends
         // Canvas の論理座標を物理座標に変換し、さらに画面座標に変換
         const rect = this.canvas.getBoundingClientRect();
         const physPos = this.logicalToPhysical(shape.startX, shape.startY);
-        const physSize = this.logicalToPhysical(shape.endX - shape.startX, shape.endY - shape.startY);
+        const physSize = this.logicalSizeToPhysical(shape.endX - shape.startX, shape.endY - shape.startY);
 
         const screenX = rect.left + physPos.x;
         const screenY = rect.top + physPos.y;

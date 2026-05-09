@@ -29,6 +29,13 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
         this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
         this.canvas.addEventListener('dblclick', (e) => this.handleDoubleClick(e));
 
+        // マウスがキャンバス外に出た際は道具パネルの座標表示をクリア
+        this.canvas.addEventListener('mouseleave', () => {
+            if (typeof this.sendToToolPanel === 'function') {
+                this.sendToToolPanel({ type: 'update-mouse-coords', x: null, y: null });
+            }
+        });
+
         // キーボードショートカット
         document.addEventListener('keydown', (e) => {
             this.handleKeyboardShortcuts(e);
@@ -665,6 +672,15 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
         this.lastMouseX = currentX;
         this.lastMouseY = currentY;
 
+        // 道具パネルにマウス座標 (BTRON 単位、整数化) を通知
+        if (typeof this.sendToToolPanel === 'function') {
+            this.sendToToolPanel({
+                type: 'update-mouse-coords',
+                x: Math.round(currentX),
+                y: Math.round(currentY)
+            });
+        }
+
         // 変形モード中の処理
         if (this.isTransformMode) {
             if (this.isDraggingVertex) {
@@ -991,11 +1007,21 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
                     shape.startX = newStartX;
                     shape.startY = newStartY;
 
-                    // 弧系図形のcenterX/Yも連動して移動
-                    if ((shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') &&
-                        shape.centerX !== undefined) {
-                        shape.centerX += deltaX;
-                        shape.centerY += deltaY;
+                    // 弧系図形・楕円: frame と centerX/Y (旧形式 fallback) を delta で同期
+                    // BTRON 仕様: 生 PNT (startX/Y/endX/Y) は中心からの方向ベクトル基準点なので
+                    // frame と同じ delta で移動すれば形状は不変
+                    if ((shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc' ||
+                         shape.type === 'ellipse')) {
+                        if (shape.frame) {
+                            shape.frame.left += deltaX;
+                            shape.frame.right += deltaX;
+                            shape.frame.top += deltaY;
+                            shape.frame.bottom += deltaY;
+                        }
+                        if (shape.centerX !== undefined) {
+                            shape.centerX += deltaX;
+                            shape.centerY += deltaY;
+                        }
                     }
 
                     // グループの場合、子図形も移動

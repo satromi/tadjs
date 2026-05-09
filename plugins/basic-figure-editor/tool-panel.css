@@ -239,3 +239,15 @@ button {
     font-weight: bold;
     white-space: nowrap;
 }
+
+/* マウス座標表示 (BTRON 単位) */
+.mouse-coords-label {
+    display: inline-block;
+    font-size: 10px;
+    font-family: Consolas, "Courier New", monospace;
+    white-space: nowrap;
+    margin-left: 6px;
+    align-self: center;
+    min-width: 110px;
+    color: #333;
+}

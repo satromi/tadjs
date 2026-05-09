@@ -4419,23 +4419,54 @@ class VirtualObjectListApp extends window.PluginBase {
 
     /**
      * TAD XMLから段落要素を抽出（基本文章編集から移植）
+     * BTRON仕様準拠: 多重ネスト <document> / <figure> を DOMParser で堅牢に処理
      */
     parseTextElements(tadXML) {
         logger.debug('[VirtualObjectList] parseTextElements開始');
         const textElements = [];
 
-        const docMatch = /<document>([\s\S]*?)<\/document>/i.exec(tadXML);
-        if (!docMatch) {
+        const parser = new DOMParser();
+        let xmlDoc;
+        try {
+            const wrapped = /^\s*<\?xml/i.test(tadXML) || /^\s*<tad/i.test(tadXML)
+                ? tadXML
+                : `<root>${tadXML}</root>`;
+            xmlDoc = parser.parseFromString(wrapped, 'text/xml');
+        } catch (e) {
+            logger.warn('[VirtualObjectList] XML パース失敗:', e);
+            return textElements;
+        }
+
+        // ルート document を取得 (figure 配下の document を拾わない)
+        let docElem = null;
+        const tadElem = xmlDoc.querySelector('tad');
+        if (tadElem) {
+            for (const child of Array.from(tadElem.children)) {
+                if (child.tagName.toLowerCase() === 'document') { docElem = child; break; }
+            }
+        }
+        if (!docElem) {
+            const root = xmlDoc.documentElement;
+            if (root) {
+                for (const child of Array.from(root.children)) {
+                    if (child.tagName.toLowerCase() === 'document') { docElem = child; break; }
+                }
+            }
+            if (!docElem) docElem = xmlDoc.querySelector('document');
+        }
+        if (!docElem) {
             logger.warn('[VirtualObjectList] <document>タグが見つかりません');
             return textElements;
         }
 
-        const docContent = docMatch[1];
-        const paragraphRegex = /<p>([\s\S]*?)<\/p>/gi;
-        let pMatch;
+        // 直下の <p> 要素のみを段落として処理 (ネスト document 配下の <p> は除外)
+        const paragraphs = [];
+        for (const child of Array.from(docElem.children)) {
+            if (child.tagName.toLowerCase() === 'p') paragraphs.push(child);
+        }
 
-        while ((pMatch = paragraphRegex.exec(docContent)) !== null) {
-            const paragraphContent = pMatch[1];
+        for (const pElem of paragraphs) {
+            const paragraphContent = pElem.innerHTML;
 
             const fontColorMatch = /<font\s+color="([^"]*)"\s*\/>/i.exec(paragraphContent);
             const fontColor = fontColorMatch ? fontColorMatch[1] : '';
@@ -4588,21 +4619,48 @@ class VirtualObjectListApp extends window.PluginBase {
         }
 
         try {
-            // <document>...</document>を抽出
-            const docMatch = /<document>([\s\S]*?)<\/document>/i.exec(xmlContent);
-            if (!docMatch) {
+            // BTRON仕様準拠: 多重ネスト <document> / <figure> を DOMParser で堅牢に処理
+            const parser = new DOMParser();
+            let xmlDoc;
+            try {
+                const wrapped = /^\s*<\?xml/i.test(xmlContent) || /^\s*<tad/i.test(xmlContent)
+                    ? xmlContent
+                    : `<root>${xmlContent}</root>`;
+                xmlDoc = parser.parseFromString(wrapped, 'text/xml');
+            } catch (e) {
                 return xmlContent;
             }
 
-            const docContent = docMatch[1];
+            // ルート document を取得 (figure 配下の document を拾わない)
+            let docElem = null;
+            const tadElem = xmlDoc.querySelector('tad');
+            if (tadElem) {
+                for (const child of Array.from(tadElem.children)) {
+                    if (child.tagName.toLowerCase() === 'document') { docElem = child; break; }
+                }
+            }
+            if (!docElem) {
+                const root = xmlDoc.documentElement;
+                if (root) {
+                    for (const child of Array.from(root.children)) {
+                        if (child.tagName.toLowerCase() === 'document') { docElem = child; break; }
+                    }
+                }
+                if (!docElem) docElem = xmlDoc.querySelector('document');
+            }
+            if (!docElem) {
+                return xmlContent;
+            }
 
-            // <p>タグで段落に分割
-            const paragraphRegex = /<p>([\s\S]*?)<\/p>/gi;
+            // 直下の <p> 要素のみを段落として処理
+            const paragraphs = [];
+            for (const child of Array.from(docElem.children)) {
+                if (child.tagName.toLowerCase() === 'p') paragraphs.push(child);
+            }
+
             let htmlContent = '';
-            let pMatch;
-
-            while ((pMatch = paragraphRegex.exec(docContent)) !== null) {
-                let paragraphContent = pMatch[1].trim();
+            for (const pElem of paragraphs) {
+                let paragraphContent = pElem.innerHTML.trim();
                 let style = 'margin: 0.5em 0;';
 
                 // フォントサイズ

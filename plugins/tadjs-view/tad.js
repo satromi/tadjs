@@ -71,6 +71,8 @@ let textCharData = [];
 let textCharDirection = [];
 let imagePoint = [];
 let tronCodeMask = [];
+// 入れ子図形/文章開始セグメント用スタック（仕様準拠の累積変換管理）
+let figureStack = [];
 let startTadSegment = false;
 let startByImageSegment = false;
 let cantNextLineFlg = 0; // 改行禁止フラグ
@@ -110,6 +112,31 @@ function isInTextSegment() {
 // セグメントタイプが図形セグメントかどうか
 function isInFigureSegment() {
     return segmentStack.some(seg => seg === SEGMENT_TYPE.FIGURE);
+}
+
+// 図形セグメントのネスト数を取得（親も含む全FIGURE数）
+function figureSegmentNestDepth() {
+    return segmentStack.filter(seg => seg === SEGMENT_TYPE.FIGURE).length;
+}
+
+/**
+ * 図形/文章開始セグメントの増分変換を計算
+ * - 自身 draw (x, y) → 親 draw (view.left + (x - draw.left) * scaleX, view.top + (y - draw.top) * scaleY)
+ * - ctx.transform(scaleX, 0, 0, scaleY, dx, dy) として適用
+ */
+function computeFigureIncrementalTransform(self) {
+    const selfDrawW = self.draw.right - self.draw.left;
+    const selfDrawH = self.draw.bottom - self.draw.top;
+    const selfViewW = self.view.right - self.view.left;
+    const selfViewH = self.view.bottom - self.view.top;
+    const scaleX = (selfDrawW > 0 && selfViewW > 0) ? (selfViewW / selfDrawW) : 1;
+    const scaleY = (selfDrawH > 0 && selfViewH > 0) ? (selfViewH / selfDrawH) : 1;
+    return {
+        scaleX,
+        scaleY,
+        dx: self.view.left - self.draw.left * scaleX,
+        dy: self.view.top - self.draw.top * scaleY
+    };
 }
 
 // 直接の親が文章セグメントかどうか
@@ -2204,7 +2231,34 @@ function tsTextStart(tadSeg) {
 
     textCharPoint.push([textChar.view.left,textChar.view.top,viewW,viewH,textChar.draw.left,textChar.draw.top,drawW,drawH]);
     textCharData.push(textChar);
-    
+
+    // 入れ子対応: 文章開始セグメントの状態を figureStack に push
+    const isNestedTxt = figureStack.length >= 1;
+    let textIncremental = null;
+    if (isNestedTxt && figureStack[figureStack.length - 1].type === 'figure') {
+        const sdW = textChar.draw.right - textChar.draw.left;
+        const sdH = textChar.draw.bottom - textChar.draw.top;
+        const svW = textChar.view.right - textChar.view.left;
+        const svH = textChar.view.bottom - textChar.view.top;
+        if (sdW > 0 && sdH > 0 && svW > 0 && svH > 0) {
+            textIncremental = computeFigureIncrementalTransform({ view: textChar.view, draw: textChar.draw });
+        }
+    }
+    figureStack.push({
+        type: 'text',
+        view: { left: textChar.view.left, top: textChar.view.top, right: textChar.view.right, bottom: textChar.view.bottom },
+        draw: { left: textChar.draw.left, top: textChar.draw.top, right: textChar.draw.right, bottom: textChar.draw.bottom },
+        hUnit: textChar.h_unit,
+        vUnit: textChar.v_unit,
+        incremental: textIncremental,
+        ctxTransformApplied: false
+    });
+    if (textIncremental && typeof ctx !== 'undefined' && ctx) {
+        ctx.save();
+        ctx.transform(textIncremental.scaleX, 0, 0, textIncremental.scaleY, textIncremental.dx, textIncremental.dy);
+        figureStack[figureStack.length - 1].ctxTransformApplied = true;
+    }
+
     // 詳細モード時のルーラを描画（文章開始時）
     drawDetailModeRulerAsSegment();
 }
@@ -2632,6 +2686,15 @@ function tsTextEnd(tadSeg) {
     }
     // 現在のセグメントタイプを更新
     currentSegmentType = segmentStack.length > 0 ? segmentStack[segmentStack.length - 1] : SEGMENT_TYPE.NONE;
+
+    // 入れ子対応: figureStack からポップ、ctx 変換が適用されていれば復元
+    if (figureStack.length > 0 && figureStack[figureStack.length - 1].type === 'text') {
+        const top = figureStack[figureStack.length - 1];
+        if (top.ctxTransformApplied && typeof ctx !== 'undefined' && ctx) {
+            ctx.restore();
+        }
+        figureStack.pop();
+    }
 
     const textChar = textCharData[textNest-1];
 
@@ -5294,10 +5357,13 @@ function tsImageSegment(segLen, tadSeg) {
 
     } else if (isInFigureSegment()) {
         // 図形セグメント内での画像
-
-        drawImageSegment(imageSeg, imageSeg.view.left, imageSeg.view.top);
+        // 画像の view.left/top は figDraw 座標系での位置。drawImageSegment 内部で
+        // imageSeg.view.left/top を加算するため、追加 offset は 0 でなければ二重加算になる
+        // (以前のコードは view.left/top を offset として渡し、結果として位置が view.left/top
+        // 分余計にずれていた)
+        drawImageSegment(imageSeg, 0, 0);
         // 画像描画後の仮想領域を拡張
-        expandVirtualArea(imageSeg.view.left, imageSeg.view.top, 
+        expandVirtualArea(imageSeg.view.left, imageSeg.view.top,
                         imageSeg.view.right, imageSeg.view.bottom);
     } else {
         // 独立した画像として描画
@@ -5388,7 +5454,7 @@ function drawBitmapData(imageSeg, x, y, width, height) {
             const srcY = Math.floor((py / height) * imgHeight);
             const srcIndex = srcY * imgWidth + srcX;
             const destIndex = (py * width + px) * 4;
-            
+
             const [r, g, b] = getPixelColor(imageSeg, srcIndex);
             data[destIndex] = r;         // R
             data[destIndex + 1] = g;     // G
@@ -5676,8 +5742,8 @@ function tsFigStart(tadSeg) {
     // XMLダンプ機能が有効な場合、図形開始セグメントの情報をXML形式で出力
     if (isXmlDumpEnabled()) {
         xmlBuffer.push('<figure>\r\n');
-        xmlBuffer.push(`<figView top="${figSeg.view.top}" left="${figSeg.view.left}" right="${figSeg.view.right}" bottom="${figSeg.view.bottom}"/>\r\n`);
-        xmlBuffer.push(`<figDraw top="${figSeg.draw.top}" left="${figSeg.draw.left}" right="${figSeg.draw.right}" bottom="${figSeg.draw.bottom}"/>\r\n`);
+        xmlBuffer.push(`<figView left="${figSeg.view.left}" top="${figSeg.view.top}" right="${figSeg.view.right}" bottom="${figSeg.view.bottom}"/>\r\n`);
+        xmlBuffer.push(`<figDraw left="${figSeg.draw.left}" top="${figSeg.draw.top}" right="${figSeg.draw.right}" bottom="${figSeg.draw.bottom}"/>\r\n`);
         xmlBuffer.push(`<figScale hunit="${figSeg.h_unit}" vunit="${figSeg.v_unit}"/>\r\n`);
         isXmlFig = true;
     }
@@ -5691,7 +5757,7 @@ function tsFigStart(tadSeg) {
         drawW = figSeg.draw.right - drawX;
         drawH = figSeg.draw.bottom - drawY;
         
-    } else if (isInFigureSegment() > 1 && startByImageSegment) {
+    } else if (figureSegmentNestDepth() > 1 && startByImageSegment) {
         viewX = figSeg.view.left;
         viewY = figSeg.view.top;
         viewW = figSeg.view.right - viewX;
@@ -5713,7 +5779,24 @@ function tsFigStart(tadSeg) {
     logger.debug(`figSeg draw: left=${figSeg.draw.left}, top=${figSeg.draw.top}, right=${figSeg.draw.right}, bottom=${figSeg.draw.bottom}`);
 
     imagePoint.push([viewX,viewY,viewW,viewH,drawX,drawY,drawW,drawH]);
-    
+
+    // 入れ子対応: 図形開始セグメントの状態を figureStack に push
+    const isNested = figureStack.length >= 1;
+    const incremental = isNested ? computeFigureIncrementalTransform({ view: figSeg.view, draw: figSeg.draw }) : null;
+    figureStack.push({
+        type: 'figure',
+        view: { left: figSeg.view.left, top: figSeg.view.top, right: figSeg.view.right, bottom: figSeg.view.bottom },
+        draw: { left: figSeg.draw.left, top: figSeg.draw.top, right: figSeg.draw.right, bottom: figSeg.draw.bottom },
+        hUnit: figSeg.h_unit,
+        vUnit: figSeg.v_unit,
+        incremental: incremental,
+        ctxTransformApplied: false
+    });
+    if (isNested && incremental && typeof ctx !== 'undefined' && ctx) {
+        ctx.save();
+        ctx.transform(incremental.scaleX, 0, 0, incremental.scaleY, incremental.dx, incremental.dy);
+        figureStack[figureStack.length - 1].ctxTransformApplied = true;
+    }
 }
 
 /**
@@ -5749,10 +5832,19 @@ function tsFigEnd(tadSeg) {
     }
     // 現在のセグメントタイプを更新
     currentSegmentType = segmentStack.length > 0 ? segmentStack[segmentStack.length - 1] : SEGMENT_TYPE.NONE;
-    
+
     // imagePointスタックからもポップ
     if (imagePoint.length > 0) {
         imagePoint.pop();
+    }
+
+    // 入れ子対応: figureStack からポップ、ctx 変換が適用されていれば復元
+    if (figureStack.length > 0) {
+        const top = figureStack[figureStack.length - 1];
+        if (top.ctxTransformApplied && typeof ctx !== 'undefined' && ctx) {
+            ctx.restore();
+        }
+        figureStack.pop();
     }
 
     // XMLダンプ機能が有効な場合、図形終了タグを出力
@@ -5764,7 +5856,7 @@ function tsFigEnd(tadSeg) {
 
 /**
  * 図形要素セグメント 長方形セグメントを描画
- * @param {int} segLen 
+ * @param {int} segLen
  * @param {{0x0000[]} tadSeg 
  * @returns 
  */
@@ -6253,10 +6345,11 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     const frameTop = Number(uh2h(tadSeg[6]));
     const frameRight = Number(uh2h(tadSeg[7]));
     const frameBottom = Number(uh2h(tadSeg[8]));
-    const radiusX = ( frameRight - frameLeft ) / 2;
+    // BTRON binary frame は四隅すべて実座標+1。natural 楕円中心は -1 シフト
+    const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
-    const frameCenterX = frameLeft + radiusX;
-    const frameCenterY = frameTop + radiusY;
+    const frameCenterX = (frameLeft + frameRight) / 2 - 1;
+    const frameCenterY = (frameTop + frameBottom) / 2 - 1;
 
     const radianAngle = angle * Math.PI / 180;
 
@@ -6273,7 +6366,8 @@ function tsFigEllipseDraw(segLen, tadSeg) {
     const oldColors = setColorPattern(l_pat, f_pat);
 
     if(isXmlDumpEnabled()) {
-        xmlBuffer.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}">\r\n`);
+        // XML 出力: frame ベース (BTRON 仕様忠実、cx/cy/rx/ry は派生値)
+        xmlBuffer.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" frameLeft="${frameLeft}" frameTop="${frameTop}" frameRight="${frameRight}" frameBottom="${frameBottom}">\r\n`);
     }
 
     ctx.beginPath();
@@ -6328,26 +6422,29 @@ function tsFigArcDraw(segLen, tadSeg) {
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
 
-    // フレーム座標（half-openなので right と bottom に +1）
+    // フレーム座標（バイナリ上は実座標+1の half-open。width=right-leftで正しく計算可能。
+    // unpack.js / tad.js と整合: 余計な +1 は不要）
     const frameLeft = Number(uh2h(tadSeg[5]));
     const frameTop = Number(uh2h(tadSeg[6]));
-    const frameRight = Number(uh2h(tadSeg[7])) + 1;
-    const frameBottom = Number(uh2h(tadSeg[8])) + 1;
+    const frameRight = Number(uh2h(tadSeg[7]));
+    const frameBottom = Number(uh2h(tadSeg[8]));
 
-    // 開始・終了点
+    // 開始・終了点 (BTRON binary の生 PNT、楕円中心からの方向ベクトル基準点)
     const startX = Number(uh2h(tadSeg[9]));
     const startY = Number(uh2h(tadSeg[10]));
     const endX = Number(uh2h(tadSeg[11]));
     const endY = Number(uh2h(tadSeg[12]));
 
+    // BTRON binary frame は四隅すべて実座標+1。natural 楕円中心は -1 シフト
     const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
-    const centerX = frameLeft + radiusX;
-    const centerY = frameTop + radiusY;
+    const centerX = (frameLeft + frameRight) / 2 - 1;
+    const centerY = (frameTop + frameBottom) / 2 - 1;
 
     // 開始・終了角度を計算（楕円上の点から角度を求める）
-    const startAngle = Math.atan2((startY - centerY) / radiusY, (startX - centerX) / radiusX);
-    const endAngle = Math.atan2((endY - centerY) / radiusY, (endX - centerX) / radiusX);
+    // BTRON binary は startX/Y, endX/Y も frame 同様に +1 シフトで格納されているので -1 する
+    const startAngle = Math.atan2((startY - 1 - centerY) / radiusY, (startX - 1 - centerX) / radiusX);
+    const endAngle = Math.atan2((endY - 1 - centerY) / radiusY, (endX - 1 - centerX) / radiusX);
 
     const radianAngle = angle * Math.PI / 180;
 
@@ -6356,9 +6453,9 @@ function tsFigArcDraw(segLen, tadSeg) {
 
     ctx.save(); // 現在の状態を保存
 
-    // フレーム矩形でクリッピング
+    // クリッピング: natural な楕円外接矩形 = (frameLeft-1, frameTop-1) ～ (frameRight-1, frameBottom-1)
     ctx.beginPath();
-    ctx.rect(frameLeft, frameTop, frameRight - frameLeft, frameBottom - frameTop);
+    ctx.rect(frameLeft - 1, frameTop - 1, frameRight - frameLeft, frameBottom - frameTop);
     ctx.clip();
 
     // 線属性を適用
@@ -6368,14 +6465,17 @@ function tsFigArcDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${centerX}" cy="${centerY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
+        // XML 出力: frame + 生 PNT のみ。cx/cy/rx/ry/startAngle/endAngle は派生値のため出力しない
+        xmlBuffer.push(`<arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" frameLeft="${frameLeft}" frameTop="${frameTop}" frameRight="${frameRight}" frameBottom="${frameBottom}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
     }
+
+    // miter spike が bbox 外に飛び出すのを防ぐ (ctx.save/restore で自動復元)
+    ctx.lineJoin = 'bevel';
 
     ctx.beginPath();
 
-    // 中心から開始点へ
+    // 中心から始点へ (ctx.ellipse の implicit lineTo が中心→arc 始点の半径線を描く)
     ctx.moveTo(centerX, centerY);
-    ctx.lineTo(startX, startY);
 
     // 開始点から終了点へ楕円弧（時計回り）
     ctx.ellipse(centerX, centerY, radiusX, radiusY, radianAngle, startAngle, endAngle, false);
@@ -6449,11 +6549,11 @@ function tsFigChordDraw(segLen, tadSeg) {
     const f_pat = Number(tadSeg[3]);
     const angle = Number(uh2h(tadSeg[4]));
 
-    // フレーム座標（half-openなので right と bottom に +1）
+    // フレーム座標 (バイナリ上は実座標+1の half-open。width=right-left で正しく計算可能)
     const frameLeft = Number(uh2h(tadSeg[5]));
     const frameTop = Number(uh2h(tadSeg[6]));
-    const frameRight = Number(uh2h(tadSeg[7])) + 1;
-    const frameBottom = Number(uh2h(tadSeg[8])) + 1;
+    const frameRight = Number(uh2h(tadSeg[7]));
+    const frameBottom = Number(uh2h(tadSeg[8]));
 
     // 開始・終了点の指定位置
     const startx = Number(uh2h(tadSeg[9]));
@@ -6461,27 +6561,20 @@ function tsFigChordDraw(segLen, tadSeg) {
     const endx = Number(uh2h(tadSeg[11]));
     const endy = Number(uh2h(tadSeg[12]));
 
+    // BTRON binary frame は四隅すべて実座標+1。natural 楕円中心は -1 シフト
     const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
-    const frameCenterX = frameLeft + radiusX;
-    const frameCenterY = frameTop + radiusY;
+    const frameCenterX = (frameLeft + frameRight) / 2 - 1;
+    const frameCenterY = (frameTop + frameBottom) / 2 - 1;
 
-    // 楕円の中心とstart/endを結ぶ直線が楕円と交わる点を計算
-    // 開始点の角度を計算
-    const startAngleRaw = Math.atan2(starty - frameCenterY, startx - frameCenterX);
-    // 楕円上の実際の開始点を計算
-    const startXOnEllipse = frameCenterX + radiusX * Math.cos(startAngleRaw);
-    const startYOnEllipse = frameCenterY + radiusY * Math.sin(startAngleRaw);
-
-    // 終了点の角度を計算
-    const endAngleRaw = Math.atan2(endy - frameCenterY, endx - frameCenterX);
-    // 楕円上の実際の終了点を計算
-    const endXOnEllipse = frameCenterX + radiusX * Math.cos(endAngleRaw);
-    const endYOnEllipse = frameCenterY + radiusY * Math.sin(endAngleRaw);
-
-    // 楕円座標系での角度を計算
-    const startAngle = Math.atan2((startYOnEllipse - frameCenterY) / radiusY, (startXOnEllipse - frameCenterX) / radiusX);
-    const endAngle = Math.atan2((endYOnEllipse - frameCenterY) / radiusY, (endXOnEllipse - frameCenterX) / radiusX);
+    // 楕円の中心と start/end を結ぶ直線が楕円と交わる点 (parametric 角度を直接算出)
+    // BTRON binary は startX/Y, endX/Y も frame 同様に +1 シフトで格納されているので -1 する
+    const startAngle = Math.atan2((starty - 1 - frameCenterY) / radiusY, (startx - 1 - frameCenterX) / radiusX);
+    const endAngle = Math.atan2((endy - 1 - frameCenterY) / radiusY, (endx - 1 - frameCenterX) / radiusX);
+    const startXOnEllipse = frameCenterX + radiusX * Math.cos(startAngle);
+    const startYOnEllipse = frameCenterY + radiusY * Math.sin(startAngle);
+    const endXOnEllipse = frameCenterX + radiusX * Math.cos(endAngle);
+    const endYOnEllipse = frameCenterY + radiusY * Math.sin(endAngle);
 
     const radianAngle = angle * Math.PI / 180;
 
@@ -6491,9 +6584,9 @@ function tsFigChordDraw(segLen, tadSeg) {
 
     ctx.save(); // 現在の状態を保存
 
-    // フレーム矩形でクリッピング
+    // クリッピング: natural な楕円外接矩形 = (frameLeft-1, frameTop-1) ～ (frameRight-1, frameBottom-1)
     ctx.beginPath();
-    ctx.rect(frameLeft, frameTop, frameRight - frameLeft, frameBottom - frameTop);
+    ctx.rect(frameLeft - 1, frameTop - 1, frameRight - frameLeft, frameBottom - frameTop);
     ctx.clip();
 
     // 線属性を適用
@@ -6503,8 +6596,12 @@ function tsFigChordDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<chord lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startXOnEllipse}" startY="${startYOnEllipse}" endX="${endXOnEllipse}" endY="${endYOnEllipse}" startAngle="${startAngle}" endAngle="${endAngle}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
+        // XML 出力: frame + 生 PNT (binary 由来の startx/starty/endx/endy) のみ
+        xmlBuffer.push(`<chord lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" frameLeft="${frameLeft}" frameTop="${frameTop}" frameRight="${frameRight}" frameBottom="${frameBottom}" startX="${startx}" startY="${starty}" endX="${endx}" endY="${endy}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
     }
+
+    // miter spike が bbox 外に飛び出すのを防ぐ (ctx.save/restore で自動復元)
+    ctx.lineJoin = 'bevel';
 
     ctx.beginPath();
 
@@ -6574,12 +6671,14 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     const startY = Number(uh2h(tadSeg[9]));
     const endX = Number(uh2h(tadSeg[10]));
     const endY = Number(uh2h(tadSeg[11]));
-    const radiusX = ( frameRight - frameLeft ) / 2;
+    // BTRON binary frame は四隅すべて実座標+1。natural 楕円中心は -1 シフト
+    const radiusX = (frameRight - frameLeft) / 2;
     const radiusY = (frameBottom - frameTop) / 2;
-    const frameCenterX = frameLeft + radiusX;
-    const frameCenterY = frameTop + radiusY;
-    const radianStart = Math.atan2(startY - frameCenterY, startX - frameCenterX)
-    const radianEnd = Math.atan2(endY - frameCenterY, endX - frameCenterX)
+    const frameCenterX = (frameLeft + frameRight) / 2 - 1;
+    const frameCenterY = (frameTop + frameBottom) / 2 - 1;
+    // startX/Y, endX/Y も同様に +1 シフトで格納されているので -1 + 楕円上 parametric 角に正規化
+    const radianStart = Math.atan2((startY - 1 - frameCenterY) / radiusY, (startX - 1 - frameCenterX) / radiusX);
+    const radianEnd = Math.atan2((endY - 1 - frameCenterY) / radiusY, (endX - 1 - frameCenterX) / radiusX);
     const radianAngle = angle * Math.PI / 180;
 
     logger.debug(radianAngle);
@@ -6595,7 +6694,8 @@ function tsFigEllipticalArcDraw(segLen, tadSeg) {
     if(isXmlDumpEnabled()) {
         const startArrow = figureModifierState.startArrow ? '1' : '0';
         const endArrow = figureModifierState.endArrow ? '1' : '0';
-        xmlBuffer.push(`<elliptical_arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" angle="${angle}" cx="${frameCenterX}" cy="${frameCenterY}" rx="${radiusX}" ry="${radiusY}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" startAngle="${radianStart}" endAngle="${radianEnd}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
+        // XML 出力: frame + 生 PNT のみ (Sub ID 07 楕円弧は f_pat 無し)
+        xmlBuffer.push(`<elliptical_arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" angle="${angle}" frameLeft="${frameLeft}" frameTop="${frameTop}" frameRight="${frameRight}" frameBottom="${frameBottom}" startX="${startX}" startY="${startY}" endX="${endX}" endY="${endY}" start_arrow="${startArrow}" end_arrow="${endArrow}">\r\n`);
     }
 
     ctx.beginPath();
@@ -7630,6 +7730,7 @@ function initTAD(x = 0, y = 0) {
     textSpacingPitch = 0.125;
     currentSegmentType = SEGMENT_TYPE.NONE;
     segmentStack = [];
+    figureStack = [];
     currentLineOffset = 0;
     tabRulerLineMoveFlag = false;
     tabRulerLinePoint = 0;

@@ -121,13 +121,15 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             // 図形要素を解析
             this.shapes = [];
 
-            // figScaleデフォルト初期化（UNITS型: -72 = 72DPI）
-            this.figScale = { hunit: -72, vunit: -72 };
+            // figScaleデフォルト初期化（UNITS型: -96 = canvas 96 DPI と等価）
+            this.figScale = { hunit: -96, vunit: -96 };
 
-            // figView/figDraw/figScale要素から設定情報を読み込む
-            const figViewElem = figureElem.querySelector('figView');
-            const figDrawElem = figureElem.querySelector('figDraw');
-            const figScaleElem = figureElem.querySelector('figScale');
+            // figView/figDraw/figScale要素から設定情報を読み込む（ルート figure の直接の子のみ。
+            // ネストされた figure 配下の figView を拾わないよう、直下の子を探索する）
+            const rootChildren = Array.from(figureElem.children);
+            const figViewElem = rootChildren.find(c => c.tagName.toLowerCase() === 'figview') || null;
+            const figDrawElem = rootChildren.find(c => c.tagName.toLowerCase() === 'figdraw') || null;
+            const figScaleElem = rootChildren.find(c => c.tagName.toLowerCase() === 'figscale') || null;
 
             if (figViewElem) {
                 // 表示領域を読み込み（今後のキャンバスサイズ設定に使用可能）
@@ -218,6 +220,9 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
                     shape = this.parsePixelmapElement(elem);
                 } else if (tagName === 'group') {
                     shape = this.parseGroupElement(elem);
+                } else if (tagName === 'figure') {
+                    // ネストされた図形開始セグメント
+                    shape = this.parseNestedFigureElement(elem);
                 } else if (tagName === 'markerdefine') {
                     this.parseMarkerDefineElement(elem);
                 } else if (tagName === 'marker') {
@@ -277,6 +282,122 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             this.shapes = [];
             this.redraw();
         }
+    }
+
+    /**
+     * ネストされた <figure> 要素を nested-figure shape としてパース
+     * - figView/figDraw/figScale を保持
+     * - 再帰的に子要素を nested shape の shapes に格納
+     * - 描画時は累積変換 (親 draw → 自 draw) を適用
+     * @param {Element} figureElem
+     * @returns {Object} nested-figure shape
+     */
+    parseNestedFigureElement(figureElem) {
+        const directChildren = Array.from(figureElem.children);
+        const figViewElem = directChildren.find(c => c.tagName.toLowerCase() === 'figview') || null;
+        const figDrawElem = directChildren.find(c => c.tagName.toLowerCase() === 'figdraw') || null;
+        const figScaleElem = directChildren.find(c => c.tagName.toLowerCase() === 'figscale') || null;
+
+        const nestedFigView = figViewElem ? {
+            top: parseFloat(figViewElem.getAttribute('top')) || 0,
+            left: parseFloat(figViewElem.getAttribute('left')) || 0,
+            right: parseFloat(figViewElem.getAttribute('right')) || 0,
+            bottom: parseFloat(figViewElem.getAttribute('bottom')) || 0
+        } : null;
+        const nestedFigDraw = figDrawElem ? {
+            top: parseFloat(figDrawElem.getAttribute('top')) || 0,
+            left: parseFloat(figDrawElem.getAttribute('left')) || 0,
+            right: parseFloat(figDrawElem.getAttribute('right')) || 0,
+            bottom: parseFloat(figDrawElem.getAttribute('bottom')) || 0
+        } : null;
+        const nestedFigScale = figScaleElem ? this.parseDocScaleElement(figScaleElem) : { hunit: -96, vunit: -96 };
+
+        // 子要素を再帰的にパース
+        const childShapes = this.parseFigureBodyChildren(figureElem);
+
+        // 既存の移動・選択ロジックは startX/startY/endX/endY を前提とするため、
+        // figView の四隅をエイリアスとして同シェイプに保持する。
+        // これにより group と同等の操作 (移動・選択枠表示) が再利用できる。
+        const startX = nestedFigView ? nestedFigView.left : 0;
+        const startY = nestedFigView ? nestedFigView.top : 0;
+        const endX = nestedFigView ? nestedFigView.right : 0;
+        const endY = nestedFigView ? nestedFigView.bottom : 0;
+
+        return {
+            type: 'nested-figure',
+            figView: nestedFigView,
+            figDraw: nestedFigDraw,
+            figScale: nestedFigScale,
+            shapes: childShapes,
+            startX, startY, endX, endY
+        };
+    }
+
+    /**
+     * <figure> 要素の図形要素子要素を再帰的にパースして shape 配列を返す
+     * （ルート figure 用のループ処理を再利用するためのヘルパー）
+     * @param {Element} figureElem
+     * @returns {Array} shape 配列
+     */
+    parseFigureBodyChildren(figureElem) {
+        const result = [];
+        let pendingTransform = null;
+        const children = Array.from(figureElem.children);
+        for (let i = 0; i < children.length; i++) {
+            const elem = children[i];
+            const tagName = elem.tagName.toLowerCase();
+
+            if (tagName === 'transform') {
+                pendingTransform = {
+                    dh: parseFloat(elem.getAttribute('dh')) || 0,
+                    dv: parseFloat(elem.getAttribute('dv')) || 0,
+                    hangle: parseFloat(elem.getAttribute('hangle')) || 0,
+                    vangle: parseFloat(elem.getAttribute('vangle')) || 0
+                };
+                continue;
+            }
+            if (tagName === 'figview' || tagName === 'figdraw' || tagName === 'figscale') {
+                continue;
+            }
+
+            let shape = null;
+            if (tagName === 'line') shape = this.parseLineElement(elem);
+            else if (tagName === 'rect') shape = this.parseRectElement(elem);
+            else if (tagName === 'ellipse') shape = this.parseEllipseElement(elem);
+            else if (tagName === 'text') {
+                const nextElem = i + 1 < children.length ? children[i + 1] : null;
+                if (nextElem && nextElem.tagName.toLowerCase() === 'document') {
+                    shape = this.parseDocumentElement(elem, nextElem);
+                    i++;
+                } else {
+                    shape = this.parseTextElement(elem);
+                }
+            }
+            else if (tagName === 'polyline') shape = this.parsePolylineElement(elem);
+            else if (tagName === 'spline') shape = this.parseSplineElement(elem);
+            else if (tagName === 'curve') shape = this.parseCurveElement(elem);
+            else if (tagName === 'polygon') shape = this.parsePolygonElement(elem);
+            else if (tagName === 'link') shape = this.parseLinkElement(elem);
+            else if (tagName === 'arc') shape = this.parseArcElement(elem);
+            else if (tagName === 'chord') shape = this.parseChordElement(elem);
+            else if (tagName === 'elliptical_arc') shape = this.parseEllipticalArcElement(elem);
+            else if (tagName === 'image') shape = this.parseImageElement(elem);
+            else if (tagName === 'pixelmap') shape = this.parsePixelmapElement(elem);
+            else if (tagName === 'group') shape = this.parseGroupElement(elem);
+            else if (tagName === 'figure') shape = this.parseNestedFigureElement(elem);
+            else if (tagName === 'document') {
+                const textElem = elem.querySelector('text');
+                if (textElem) shape = this.parseDocumentElement(textElem, elem);
+            }
+            else if (tagName === 'marker') shape = this.parseMarkerElement(elem);
+
+            if (shape && pendingTransform) {
+                this.applyTransformToShape(shape, pendingTransform);
+                pendingTransform = null;
+            }
+            if (shape) result.push(shape);
+        }
+        return result;
     }
 
     /**
@@ -667,10 +788,22 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
         }
 
         // 通常の長方形
-        // cornerRadius属性があれば使用、なければroundフラグから推定（後方互換性）
-        const cornerRadius = elem.hasAttribute('cornerRadius')
-            ? parseFloat(elem.getAttribute('cornerRadius'))
-            : (round > 0 ? 5 : 0);
+        // cornerRadius を解決:
+        //   1) cornerRadius 属性があれば使用 (新形式・editor 内部保存形式)
+        //   2) figRH/figRV 属性があれば平均を使用 (BTRON 仕様: 角丸め半径、unpack.js が round=1 の rect で出力)
+        //   3) round=1 でフォールバックの 5
+        //   4) round=0 なら 0
+        let cornerRadius;
+        if (elem.hasAttribute('cornerRadius')) {
+            cornerRadius = parseFloat(elem.getAttribute('cornerRadius'));
+        } else if (elem.hasAttribute('figRH') || elem.hasAttribute('figRV')) {
+            const figRH = parseFloat(elem.getAttribute('figRH')) || 0;
+            const figRV = parseFloat(elem.getAttribute('figRV')) || 0;
+            // BTRON 仕様: figRH/figRV は角丸め直径。半径換算で /2
+            cornerRadius = (figRH + figRV) / 4;
+        } else {
+            cornerRadius = round > 0 ? 5 : 0;
+        }
 
         return {
             type: round > 0 ? 'roundRect' : 'rect',
@@ -693,23 +826,24 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
     }
 
     parseEllipseElement(elem) {
-        // tad.js形式: <ellipse l_atr="..." l_pat="..." f_pat="..." angle="..." cx="..." cy="..." rx="..." ry="...">
-        const cx = parseFloat(elem.getAttribute('cx')) || 0;
-        const cy = parseFloat(elem.getAttribute('cy')) || 0;
-        const rx = parseFloat(elem.getAttribute('rx')) || 0;
-        const ry = parseFloat(elem.getAttribute('ry')) || 0;
+        // 新形式: frame (left/top/right/bottom) ベース。BTRON binary の RECT に対応
+        // 旧形式: cx/cy/rx/ry ベース (後方互換)
         const angle = parseFloat(elem.getAttribute('angle')) || 0;
         const rotation = parseFloat(elem.getAttribute('rotation')) || 0;
+
+        const frame = this._parseFrameFromElement(elem);
 
         const { lineType, lineWidth } = this._parseLineTypeAndWidth(elem);
         const { linePatternId, fillPatternId, fillEnabled, strokeColor, fillColor } = this._parsePatternAndColors(elem);
 
         return {
             type: 'ellipse',
-            startX: cx - rx,
-            startY: cy - ry,
-            endX: cx + rx,
-            endY: cy + ry,
+            frame: frame,
+            // 編集系コードの startX/Y/endX/Y 互換のため frame の四隅をエイリアスとして保持
+            startX: frame.left,
+            startY: frame.top,
+            endX: frame.right,
+            endY: frame.bottom,
             strokeColor: strokeColor,
             fillColor: fillColor,
             lineWidth: lineWidth,
@@ -721,6 +855,40 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             rotation: rotation,
             zIndex: this._parseZIndex(elem)
         };
+    }
+
+    /**
+     * XML 要素から frame (BTRON RECT) をパース
+     * - 新形式: frameLeft/frameTop/frameRight/frameBottom
+     * - 旧形式: cx/cy/rx/ry から逆算
+     * @private
+     * @param {Element} elem
+     * @returns {{left, top, right, bottom}}
+     */
+    _parseFrameFromElement(elem) {
+        // 新形式: frameLeft/frameTop/frameRight/frameBottom
+        if (elem.getAttribute('frameLeft') !== null) {
+            return {
+                left: parseFloat(elem.getAttribute('frameLeft')) || 0,
+                top: parseFloat(elem.getAttribute('frameTop')) || 0,
+                right: parseFloat(elem.getAttribute('frameRight')) || 0,
+                bottom: parseFloat(elem.getAttribute('frameBottom')) || 0
+            };
+        }
+        // 旧形式: cx/cy/rx/ry から逆算
+        if (elem.getAttribute('cx') !== null) {
+            const cx = parseFloat(elem.getAttribute('cx')) || 0;
+            const cy = parseFloat(elem.getAttribute('cy')) || 0;
+            const rx = parseFloat(elem.getAttribute('rx')) || 0;
+            const ry = parseFloat(elem.getAttribute('ry')) || 0;
+            return {
+                left: cx - rx,
+                top: cy - ry,
+                right: cx + rx,
+                bottom: cy + ry
+            };
+        }
+        return { left: 0, top: 0, right: 0, bottom: 0 };
     }
 
     parseTextElement(elem) {
@@ -872,7 +1040,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
     }
 
     parsePolylineElement(elem) {
-        // tad.js形式: <polyline l_atr="..." l_pat="..." points="x1,y1 x2,y2 ...">
+        // tad.js形式: <polyline l_atr="..." l_pat="..." round="..." start_arrow="..." end_arrow="..." arrow_type="..." points="x1,y1 x2,y2 ...">
         const pointsStr = elem.getAttribute('points');
         const points = [];
 
@@ -891,6 +1059,10 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         // 回転属性を取得
         const rotation = parseFloat(elem.getAttribute('rotation')) || 0;
+        // 矢印属性 (BTRON 仕様: start_arrow / end_arrow / arrow_type)
+        const startArrow = parseInt(elem.getAttribute('start_arrow'), 10) || 0;
+        const endArrow = parseInt(elem.getAttribute('end_arrow'), 10) || 0;
+        const arrowType = elem.getAttribute('arrow_type') || 'simple';
 
         return {
             type: 'polyline',
@@ -902,6 +1074,9 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             linePatternId: linePatternId,
             fillEnabled: false,
             rotation: rotation,
+            start_arrow: startArrow,
+            end_arrow: endArrow,
+            arrow_type: arrowType,
             zIndex: this._parseZIndex(elem)
         };
     }
@@ -960,10 +1135,16 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         // 回転属性を取得
         const curveRotation = parseFloat(elem.getAttribute('rotation')) || 0;
+        // closed 属性を取得 (closed="1" で閉曲線として fill 可能)
+        const curveClosed = elem.getAttribute('closed') === '1';
+        // type 属性 (0=B-spline 風, 他は予約)
+        const curveType = parseInt(elem.getAttribute('type'), 10) || 0;
 
         return {
             type: 'curve',
             path: points,
+            closed: curveClosed,
+            curveType: curveType,
             strokeColor: strokeColor,
             fillColor: fillEnabled ? fillColor : 'transparent',
             lineWidth: lineWidth,
@@ -994,10 +1175,16 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
         const { lineType, lineWidth } = this._parseLineTypeAndWidth(elem);
         const { linePatternId, fillPatternId, fillEnabled, strokeColor, fillColor } = this._parsePatternAndColors(elem);
 
-        // cornerRadius属性があれば使用、なければ0（後方互換性）
-        const cornerRadius = elem.hasAttribute('cornerRadius')
-            ? parseFloat(elem.getAttribute('cornerRadius'))
-            : 0;
+        // cornerRadius を解決:
+        //   1) cornerRadius 属性があれば使用 (新形式・editor 内部保存形式)
+        //   2) round 属性があれば使用 (BTRON 仕様: 角丸め直径、unpack.js が出力)
+        //   3) どちらもなければ 0
+        let cornerRadius = 0;
+        if (elem.hasAttribute('cornerRadius')) {
+            cornerRadius = parseFloat(elem.getAttribute('cornerRadius'));
+        } else if (elem.hasAttribute('round')) {
+            cornerRadius = parseFloat(elem.getAttribute('round')) || 0;
+        }
 
         // 回転属性を取得
         const polygonRotation = parseFloat(elem.getAttribute('rotation')) || 0;
@@ -1531,11 +1718,13 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
     }
 
     parseGroupElement(elem) {
-        // グループセグメント: <group left="..." top="..." right="..." bottom="...">子図形...</group>
+        // グループセグメント: <group left="..." top="..." right="..." bottom="..." zIndex="...">子図形...</group>
         const left = parseFloat(elem.getAttribute('left')) || 0;
         const top = parseFloat(elem.getAttribute('top')) || 0;
         const right = parseFloat(elem.getAttribute('right')) || 100;
         const bottom = parseFloat(elem.getAttribute('bottom')) || 100;
+        // group 自身の zIndex 属性 (現行 serializer は出力する。旧データには無いことがある)
+        const groupZIndexAttr = this._parseZIndex(elem);
 
         // 子図形を解析
         const childShapes = [];
@@ -1599,6 +1788,19 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             }
         }
 
+        // 子要素の zIndex から group 自身の zIndex を導出 (タグ属性が無い旧データ対応)
+        // 子の最小 zIndex を採用することで、group が「子の最も背面の位置」に配置される。
+        // これにより BTRON xtad の構造順 (segment 列) と整合する。
+        let derivedZIndex = groupZIndexAttr;
+        if (derivedZIndex === null || derivedZIndex === undefined) {
+            const childZIndices = childShapes
+                .map(c => c && c.zIndex)
+                .filter(z => z !== null && z !== undefined && !Number.isNaN(z));
+            if (childZIndices.length > 0) {
+                derivedZIndex = Math.min(...childZIndices);
+            }
+        }
+
         return {
             type: 'group',
             shapes: childShapes,
@@ -1608,48 +1810,31 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             endY: bottom,
             strokeColor: '#000000',
             fillColor: 'transparent',
-            lineWidth: 1
+            lineWidth: 1,
+            zIndex: derivedZIndex
         };
     }
 
     parseArcElement(elem) {
-        // tad.js形式: <arc l_atr="..." l_pat="..." f_pat="..." angle="..." cx="..." cy="..." rx="..." ry="..." startX="..." startY="..." endX="..." endY="..." startAngle="..." endAngle="...">
-        const centerX = parseFloat(elem.getAttribute('cx')) || 0;
-        const centerY = parseFloat(elem.getAttribute('cy')) || 0;
-        const radiusX = parseFloat(elem.getAttribute('rx')) || 0;
-        const radiusY = parseFloat(elem.getAttribute('ry')) || 0;
-        // startX/endXがXMLに存在しない場合はcx/cy/rx/ryから計算
-        let startX, startY, endX, endY;
-        if (elem.getAttribute('startX') !== null) {
-            startX = parseFloat(elem.getAttribute('startX')) || 0;
-            startY = parseFloat(elem.getAttribute('startY')) || 0;
-            endX = parseFloat(elem.getAttribute('endX')) || 0;
-            endY = parseFloat(elem.getAttribute('endY')) || 0;
-        } else {
-            startX = centerX - radiusX;
-            startY = centerY - radiusY;
-            endX = centerX + radiusX;
-            endY = centerY + radiusY;
-        }
-        const startAngle = parseFloat(elem.getAttribute('startAngle')) || 0;
-        const endAngle = parseFloat(elem.getAttribute('endAngle')) || 0;
+        // 新形式: frame + 生 PNT (startX/Y/endX/Y は中心からの方向ベクトル基準点)
+        // 旧形式: cx/cy/rx/ry ベース (後方互換)
         const angle = parseFloat(elem.getAttribute('angle')) || 0;
+        const frame = this._parseFrameFromElement(elem);
+        const { startX, startY, endX, endY } = this._parseStartEndFromElement(elem, frame);
 
         const { lineType, lineWidth } = this._parseLineTypeAndWidth(elem);
         const { linePatternId, fillPatternId, fillEnabled, strokeColor, fillColor } = this._parsePatternAndColors(elem);
+        const startArrow = parseInt(elem.getAttribute('start_arrow'), 10) || 0;
+        const endArrow = parseInt(elem.getAttribute('end_arrow'), 10) || 0;
+        const arrowType = elem.getAttribute('arrow_type') || 'simple';
 
         return {
             type: 'arc',
-            centerX: centerX,
-            centerY: centerY,
-            radiusX: radiusX,
-            radiusY: radiusY,
+            frame: frame,
             startX: startX,
             startY: startY,
             endX: endX,
             endY: endY,
-            startAngle: startAngle,
-            endAngle: endAngle,
             angle: angle,
             strokeColor: strokeColor,
             fillColor: fillColor,
@@ -1658,48 +1843,33 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             linePatternId: linePatternId,
             fillEnabled: fillEnabled,
             fillPatternId: fillPatternId,
+            start_arrow: startArrow,
+            end_arrow: endArrow,
+            arrow_type: arrowType,
             zIndex: this._parseZIndex(elem)
         };
     }
 
     parseChordElement(elem) {
-        // tad.js形式: <chord l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." cx="..." cy="..." rx="..." ry="..." startX="..." startY="..." endX="..." endY="..." startAngle="..." endAngle="...">
-        const centerX = parseFloat(elem.getAttribute('cx')) || 0;
-        const centerY = parseFloat(elem.getAttribute('cy')) || 0;
-        const radiusX = parseFloat(elem.getAttribute('rx')) || 0;
-        const radiusY = parseFloat(elem.getAttribute('ry')) || 0;
-        // startX/endXがXMLに存在しない場合はcx/cy/rx/ryから計算
-        let startX, startY, endX, endY;
-        if (elem.getAttribute('startX') !== null) {
-            startX = parseFloat(elem.getAttribute('startX')) || 0;
-            startY = parseFloat(elem.getAttribute('startY')) || 0;
-            endX = parseFloat(elem.getAttribute('endX')) || 0;
-            endY = parseFloat(elem.getAttribute('endY')) || 0;
-        } else {
-            startX = centerX - radiusX;
-            startY = centerY - radiusY;
-            endX = centerX + radiusX;
-            endY = centerY + radiusY;
-        }
-        const startAngle = parseFloat(elem.getAttribute('startAngle')) || 0;
-        const endAngle = parseFloat(elem.getAttribute('endAngle')) || 0;
+        // 新形式: frame + 生 PNT (startX/Y/endX/Y は中心からの方向ベクトル基準点)
+        // 旧形式: cx/cy/rx/ry ベース (後方互換)
         const angle = parseFloat(elem.getAttribute('angle')) || 0;
+        const frame = this._parseFrameFromElement(elem);
+        const { startX, startY, endX, endY } = this._parseStartEndFromElement(elem, frame);
 
         const { lineType, lineWidth } = this._parseLineTypeAndWidth(elem);
         const { linePatternId, fillPatternId, fillEnabled, strokeColor, fillColor } = this._parsePatternAndColors(elem);
+        const startArrow = parseInt(elem.getAttribute('start_arrow'), 10) || 0;
+        const endArrow = parseInt(elem.getAttribute('end_arrow'), 10) || 0;
+        const arrowType = elem.getAttribute('arrow_type') || 'simple';
 
         return {
             type: 'chord',
-            centerX: centerX,
-            centerY: centerY,
-            radiusX: radiusX,
-            radiusY: radiusY,
+            frame: frame,
             startX: startX,
             startY: startY,
             endX: endX,
             endY: endY,
-            startAngle: startAngle,
-            endAngle: endAngle,
             angle: angle,
             strokeColor: strokeColor,
             fillColor: fillColor,
@@ -1708,48 +1878,33 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             linePatternId: linePatternId,
             fillEnabled: fillEnabled,
             fillPatternId: fillPatternId,
+            start_arrow: startArrow,
+            end_arrow: endArrow,
+            arrow_type: arrowType,
             zIndex: this._parseZIndex(elem)
         };
     }
 
     parseEllipticalArcElement(elem) {
-        // tad.js形式: <elliptical_arc l_atr="..." l_pat="..." angle="..." cx="..." cy="..." rx="..." ry="..." startX="..." startY="..." endX="..." endY="..." startAngle="..." endAngle="...">
-        const centerX = parseFloat(elem.getAttribute('cx')) || 0;
-        const centerY = parseFloat(elem.getAttribute('cy')) || 0;
-        const radiusX = parseFloat(elem.getAttribute('rx')) || 0;
-        const radiusY = parseFloat(elem.getAttribute('ry')) || 0;
-        // startX/endXがXMLに存在しない場合はcx/cy/rx/ryから計算
-        let startX, startY, endX, endY;
-        if (elem.getAttribute('startX') !== null) {
-            startX = parseFloat(elem.getAttribute('startX')) || 0;
-            startY = parseFloat(elem.getAttribute('startY')) || 0;
-            endX = parseFloat(elem.getAttribute('endX')) || 0;
-            endY = parseFloat(elem.getAttribute('endY')) || 0;
-        } else {
-            startX = centerX - radiusX;
-            startY = centerY - radiusY;
-            endX = centerX + radiusX;
-            endY = centerY + radiusY;
-        }
-        const startAngle = parseFloat(elem.getAttribute('startAngle')) || 0;
-        const endAngle = parseFloat(elem.getAttribute('endAngle')) || 0;
+        // 新形式: frame + 生 PNT。Sub ID 07 楕円弧は f_pat 無し
+        // 旧形式: cx/cy/rx/ry ベース (後方互換)
         const angle = parseFloat(elem.getAttribute('angle')) || 0;
+        const frame = this._parseFrameFromElement(elem);
+        const { startX, startY, endX, endY } = this._parseStartEndFromElement(elem, frame);
 
         const { lineType, lineWidth } = this._parseLineTypeAndWidth(elem);
         const { linePatternId, strokeColor } = this._parsePatternAndColors(elem, { fillEnabled: false });
+        const startArrow = parseInt(elem.getAttribute('start_arrow'), 10) || 0;
+        const endArrow = parseInt(elem.getAttribute('end_arrow'), 10) || 0;
+        const arrowType = elem.getAttribute('arrow_type') || 'simple';
 
         return {
             type: 'elliptical_arc',
-            centerX: centerX,
-            centerY: centerY,
-            radiusX: radiusX,
-            radiusY: radiusY,
+            frame: frame,
             startX: startX,
             startY: startY,
             endX: endX,
             endY: endY,
-            startAngle: startAngle,
-            endAngle: endAngle,
             angle: angle,
             strokeColor: strokeColor,
             fillColor: 'transparent',
@@ -1757,7 +1912,33 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             lineType: lineType,
             linePatternId: linePatternId,
             fillEnabled: false,
+            start_arrow: startArrow,
+            end_arrow: endArrow,
+            arrow_type: arrowType,
             zIndex: this._parseZIndex(elem)
+        };
+    }
+
+    /**
+     * arc/chord/elliptical_arc から start/end PNT をパース
+     * 旧形式の場合は cx/cy/rx/ry から逆算
+     * @private
+     */
+    _parseStartEndFromElement(elem, frame) {
+        if (elem.getAttribute('startX') !== null) {
+            return {
+                startX: parseFloat(elem.getAttribute('startX')) || 0,
+                startY: parseFloat(elem.getAttribute('startY')) || 0,
+                endX: parseFloat(elem.getAttribute('endX')) || 0,
+                endY: parseFloat(elem.getAttribute('endY')) || 0
+            };
+        }
+        // フォールバック: frame の四隅
+        return {
+            startX: frame.left,
+            startY: frame.top,
+            endX: frame.right,
+            endY: frame.bottom
         };
     }
 };

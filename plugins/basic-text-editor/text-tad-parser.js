@@ -508,29 +508,74 @@ export const TextTadParserMixin = (Base) => class extends Base {
     /**
      * TAD XMLから段落要素を抽出
      * <text>タグはレイアウト情報なので無視し、<document>内の<p>タグから直接テキストを抽出
+     * BTRON仕様準拠: 多重ネスト <document> / <figure> を DOMParser で堅牢に処理
      */
     async parseTextElements(tadXML) {
         logger.debug('[EDITOR] parseTextElements開始');
         const textElements = [];
 
-        // <document>...</document>を抽出
-        const docMatch = /<document>([\s\S]*?)<\/document>/i.exec(tadXML);
+        // DOMParser で堅牢にパース（多重ネスト <document> / <figure> 対応）
+        const parser = new DOMParser();
+        let xmlDoc;
+        try {
+            // tad ルート要素がない場合に備えてラップ
+            const wrapped = /^\s*<\?xml/i.test(tadXML) || /^\s*<tad/i.test(tadXML)
+                ? tadXML
+                : `<root>${tadXML}</root>`;
+            xmlDoc = parser.parseFromString(wrapped, 'text/xml');
+        } catch (e) {
+            logger.warn('[EDITOR] XML パース失敗:', e);
+            return textElements;
+        }
 
-        if (!docMatch) {
+        // ルート document を取得（最も外側の document を優先）
+        // - tad > document の場合は tad 直下の document を取る
+        // - figure 内の文字枠用 document はスキップする (figure 内は事前除外不要)
+        let docElem = null;
+        const tadElem = xmlDoc.querySelector('tad');
+        if (tadElem) {
+            // tad の直下の document を探す（figure 配下ではない）
+            for (const child of Array.from(tadElem.children)) {
+                if (child.tagName.toLowerCase() === 'document') {
+                    docElem = child;
+                    break;
+                }
+            }
+        }
+        if (!docElem) {
+            // tad なしの場合は documentElement の直接の子を見る (figure 配下の document を拾わないため)
+            const root = xmlDoc.documentElement;
+            if (root) {
+                for (const child of Array.from(root.children)) {
+                    if (child.tagName.toLowerCase() === 'document') {
+                        docElem = child;
+                        break;
+                    }
+                }
+            }
+            if (!docElem) {
+                // それでも見つからない場合のみ全体検索 (フォールバック)
+                docElem = xmlDoc.querySelector('document');
+            }
+        }
+
+        if (!docElem) {
             logger.warn('[EDITOR] <document>タグが見つかりません');
             return textElements;
         }
 
-        const docContent = docMatch[1];
-        logger.debug('[EDITOR] <document>内容抽出完了, 長さ:', docContent.length);
+        // 直下の <p> タグを取得（ネストされた document 配下の <p> は除外）
+        const paragraphs = [];
+        for (const child of Array.from(docElem.children)) {
+            if (child.tagName.toLowerCase() === 'p') {
+                paragraphs.push(child);
+            }
+        }
 
-        // <p>タグで段落に分割
-        const paragraphRegex = /<p>([\s\S]*?)<\/p>/gi;
-        let pMatch;
         let paragraphCount = 0;
-
-        while ((pMatch = paragraphRegex.exec(docContent)) !== null) {
-            const paragraphContent = pMatch[1];
+        for (const pElem of paragraphs) {
+            // serializer で内部 XML を取得 (子要素含む)
+            const paragraphContent = pElem.innerHTML;
             paragraphCount++;
             logger.debug(`[EDITOR] 段落${paragraphCount}:`, paragraphContent.substring(0, 100));
 
@@ -638,15 +683,53 @@ export const TextTadParserMixin = (Base) => class extends Base {
                 return returnHtml ? '' : undefined;
             }
 
-            // インライン<figure>ブロックを事前抽出（ネストされた<document>問題の回避）
-            // <figure>内のテキストボックスが<document>を含むため、
-            // 先に<figure>を除去しないと外側の<document>正規表現が誤マッチする
+            // インライン<figure>ブロックを事前抽出（ネストされた<figure>/<document>問題の回避）
+            // BTRON仕様準拠: 入れ子の <figure> はバランス取りで正しく抽出する。
+            // 単純な非貪欲正規表現では <figure>...<figure>...</figure>...</figure> の外側が
+            // 最初の </figure> で終端されてしまうため、深さカウンタで対応する。
             const figureBlocks = [];
-            tadXML = tadXML.replace(/<figure[^>]*>[\s\S]*?<\/figure>/gi, (match) => {
-                const index = figureBlocks.length;
-                figureBlocks.push(match);
-                return `__FIGURE_PLACEHOLDER_${index}__`;
-            });
+            {
+                const reFigStart = /<figure(?:\s[^>]*)?>/gi;
+                const reFigEnd = /<\/figure\s*>/gi;
+                let result = '';
+                let i = 0;
+                while (i < tadXML.length) {
+                    reFigStart.lastIndex = i;
+                    const startMatch = reFigStart.exec(tadXML);
+                    if (!startMatch) { result += tadXML.substring(i); break; }
+                    result += tadXML.substring(i, startMatch.index);
+                    // バランス取り: 開始タグを 1 として終了タグを探す
+                    let depth = 1;
+                    let pos = startMatch.index + startMatch[0].length;
+                    while (depth > 0) {
+                        reFigStart.lastIndex = pos;
+                        reFigEnd.lastIndex = pos;
+                        const nextStart = reFigStart.exec(tadXML);
+                        const nextEnd = reFigEnd.exec(tadXML);
+                        if (!nextEnd) { depth = -1; break; }
+                        if (nextStart && nextStart.index < nextEnd.index) {
+                            depth++;
+                            pos = nextStart.index + nextStart[0].length;
+                        } else {
+                            depth--;
+                            pos = nextEnd.index + nextEnd[0].length;
+                            if (depth === 0) break;
+                        }
+                    }
+                    if (depth < 0) {
+                        // バランスが取れなかった場合は開始タグだけ保持して進める
+                        result += startMatch[0];
+                        i = startMatch.index + startMatch[0].length;
+                        continue;
+                    }
+                    const block = tadXML.substring(startMatch.index, pos);
+                    const idx = figureBlocks.length;
+                    figureBlocks.push(block);
+                    result += `__FIGURE_PLACEHOLDER_${idx}__`;
+                    i = pos;
+                }
+                tadXML = result;
+            }
 
             // <document>...</document>を抽出（<figure>除去済みなので安全）
             const docMatch = /<document[^>]*>([\s\S]*?)<\/document>/i.exec(tadXML);

@@ -84,6 +84,17 @@ class ToolPanel {
                     type: 'update-zoom-level',
                     zoomLevel: this.zoomLevel
                 });
+            } else if (event.data && event.data.type === 'update-mouse-coords') {
+                // マウス座標表示更新 (BTRON 単位、x/y が null なら表示クリア)
+                const label = document.getElementById('mouseCoordsLabel');
+                if (label) {
+                    if (event.data.x === null || event.data.y === null ||
+                        event.data.x === undefined || event.data.y === undefined) {
+                        label.textContent = '';
+                    } else {
+                        label.textContent = `x:${event.data.x} y:${event.data.y}`;
+                    }
+                }
             } else if (event.data && event.data.type === 'tool-selected') {
                 // ツール選択状態を更新
                 this.updateToolSelection(event.data.tool);
