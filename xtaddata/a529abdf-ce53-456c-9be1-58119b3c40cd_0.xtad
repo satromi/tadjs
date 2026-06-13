@@ -8,8 +8,7 @@
 <pattern id="128" width="1" height="1" ncol="1" fgcolors="#1a1a2e" bgcolor="#ffffff"/>
 </patterns>
 
-<!-- 背景矩形 -->
-<rect lineType="0" lineWidth="0" l_pat="0" f_pat="128" left="0" top="0" right="1920" bottom="1080" zIndex="0"/>
+<!-- 背景色は JSON metadata window.backgroundColor で指定 (<rect> は背景に使わない) -->
 
 <!-- メインタイトル -->
 <document>
@@ -17,7 +16,7 @@
 <docDraw drawleft="100" drawtop="350" drawright="1820" drawbottom="500"/>
 <docScale hunit="-72" vunit="-72"/>
 <text id="mainTitle" lang="0" bpat="0" zIndex="90"/>
-<font size="72"/>
+<font size="54"/>
 <font face="sans-serif"/>
 <font color="#FFFFFF"/>
 <p align="center">実時間制御TAD</p>
@@ -29,7 +28,7 @@
 <docDraw drawleft="100" drawtop="550" drawright="1820" drawbottom="650"/>
 <docScale hunit="-72" vunit="-72"/>
 <text id="subTitle" lang="0" bpat="0" zIndex="80"/>
-<font size="36"/>
+<font size="27"/>
 <font color="#AAAAAA"/>
 <p align="center">マルチメディアプレゼンテーションのための拡張仕様</p>
 </document>
@@ -40,7 +39,7 @@
 <docDraw drawleft="100" drawtop="900" drawright="1820" drawbottom="1000"/>
 <docScale hunit="-72" vunit="-72"/>
 <text id="date" lang="0" bpat="0" zIndex="70"/>
-<font size="24"/>
+<font size="18"/>
 <font color="#888888"/>
 <p align="center">2026年1月</p>
 </document>

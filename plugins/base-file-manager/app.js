@@ -20,6 +20,8 @@ class BaseFileManager extends window.PluginBase {
         this.fileData = null; // ファイルデータ
         this.isFullscreen = false; // 全画面表示フラグ
         this.iconCache = new Map(); // アイコンキャッシュ (realId -> base64)
+        this.metadataCache = new Map(); // メタデータキャッシュ (realId -> { metadata, ts })
+        this.METADATA_CACHE_TTL = 60_000; // 60秒
         this.isLoadingBaseFiles = false; // 原紙ファイル読み込み中フラグ（二重呼び出し防止）
 
         // MessageBusはPluginBaseで初期化済み
@@ -189,6 +191,9 @@ class BaseFileManager extends window.PluginBase {
         }
         this.isLoadingBaseFiles = true;
 
+        // 再読込時はメタデータキャッシュを破棄
+        this.metadataCache.clear();
+
         try {
             // 1. システム原紙を読み込み
             this.messageBus.send('request-base-plugins');
@@ -333,6 +338,18 @@ class BaseFileManager extends window.PluginBase {
      * @returns {Promise<Object|null>} メタデータ、または読み込み失敗時はnull
      */
     async loadRealObjectMetadata(realId) {
+        // パストラバーサル防止: realId にパス区切り・親参照が含まれる場合は拒否
+        // (realId は linkId 由来で、 不正な .bpk では `../` を仕込まれうる)
+        if (!realId || /[\/\\]|\.\./.test(realId)) {
+            logger.error('[BaseFileManager] 不正なrealId形式のため読み込み拒否:', realId);
+            return null;
+        }
+        // TTL 内のキャッシュがあれば返す
+        const cached = this.metadataCache.get(realId);
+        if (cached && (Date.now() - cached.ts) < this.METADATA_CACHE_TTL) {
+            return cached.metadata;
+        }
+
         try {
             const jsonFileName = `${realId}.json`;
 
@@ -348,7 +365,9 @@ class BaseFileManager extends window.PluginBase {
                 try {
                     const response = await fetch(url);
                     if (response.ok) {
-                        return await response.json();
+                        const metadata = await response.json();
+                        this.metadataCache.set(realId, { metadata, ts: Date.now() });
+                        return metadata;
                     }
                 } catch (e) {
                     // 次のURLを試す

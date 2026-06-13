@@ -22,8 +22,13 @@ export const CalcChartMixin = (Base) => class extends Base {
         if (gridBody) {
             const updateCanvasSize = () => {
                 const rect = gridBody.getBoundingClientRect();
-                this.chartCanvas.width = rect.width;
-                this.chartCanvas.height = rect.height;
+                // High-DPI 対応: バッキングストアを devicePixelRatio 倍にして物理画素レベルでくっきり描画
+                const dpr = window.devicePixelRatio || 1;
+                this.chartDpr = dpr;
+                this.chartLogicalWidth = rect.width;
+                this.chartLogicalHeight = rect.height;
+                this.chartCanvas.width = Math.ceil(rect.width * dpr);
+                this.chartCanvas.height = Math.ceil(rect.height * dpr);
                 this.chartCanvas.style.width = `${rect.width}px`;
                 this.chartCanvas.style.height = `${rect.height}px`;
                 // 既存のグラフを再描画
@@ -338,8 +343,12 @@ export const CalcChartMixin = (Base) => class extends Base {
     drawCharts() {
         if (!this.chartCtx || !this.chartCanvas) return;
 
-        // キャンバスをクリア
+        // High-DPI 対応: 物理サイズでクリア (transform を identity に戻してから)
+        this.chartCtx.setTransform(1, 0, 0, 1, 0, 0);
         this.chartCtx.clearRect(0, 0, this.chartCanvas.width, this.chartCanvas.height);
+        // DPR を base transform として適用 (以降の描画は論理 px で動作)
+        const dpr = this.chartDpr || 1;
+        this.chartCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
         // 用紙枠を描画（グラフの下に描画）
         this.drawPaperFrame();
@@ -395,13 +404,15 @@ export const CalcChartMixin = (Base) => class extends Base {
         ctx.lineWidth = 2;
         ctx.setLineDash([8, 4]);
 
-        // 垂直ページ境界線
+        // 垂直ページ境界線 (DPR 適用後の論理座標で判定)
+        const logicalW = this.chartLogicalWidth || this.chartCanvas.width;
+        const logicalH = this.chartLogicalHeight || this.chartCanvas.height;
         for (let i = 1; i < numPagesX; i++) {
             const x = this.rowHeaderWidth + paperWidthPx * i - scrollX;
-            if (x > 0 && x < this.chartCanvas.width) {
+            if (x > 0 && x < logicalW) {
                 ctx.beginPath();
                 ctx.moveTo(x, 0);
-                ctx.lineTo(x, this.chartCanvas.height);
+                ctx.lineTo(x, logicalH);
                 ctx.stroke();
             }
         }
@@ -409,10 +420,10 @@ export const CalcChartMixin = (Base) => class extends Base {
         // 水平ページ境界線
         for (let i = 1; i < numPagesY; i++) {
             const y = this.colHeaderHeight + paperHeightPx * i - scrollY;
-            if (y > 0 && y < this.chartCanvas.height) {
+            if (y > 0 && y < logicalH) {
                 ctx.beginPath();
                 ctx.moveTo(0, y);
-                ctx.lineTo(this.chartCanvas.width, y);
+                ctx.lineTo(logicalW, y);
                 ctx.stroke();
             }
         }
@@ -484,7 +495,7 @@ export const CalcChartMixin = (Base) => class extends Base {
         // 以下は新規グラフ作成時（elementsがない場合）の処理
         if (!data || !data.labels || data.labels.length === 0) {
             ctx.fillStyle = GRAY_COLOR;
-            ctx.font = '12px sans-serif';
+            ctx.font = `${window.convertPtToPx(12)}px sans-serif`;
             ctx.textAlign = 'center';
             ctx.fillText('データなし', x + width / 2, y + height / 2);
             return;
@@ -528,7 +539,7 @@ export const CalcChartMixin = (Base) => class extends Base {
 
         // X軸ラベル
         ctx.fillStyle = '#000000';
-        ctx.font = '10px sans-serif';
+        ctx.font = `${window.convertPtToPx(10)}px sans-serif`;
         ctx.textAlign = 'center';
         for (let i = 0; i < numLabels; i++) {
             const labelX = chartArea.x + groupWidth * i + groupWidth / 2;
@@ -563,7 +574,7 @@ export const CalcChartMixin = (Base) => class extends Base {
         // 以下は新規グラフ作成時（elementsがない場合）の処理
         if (!data || !data.labels || data.labels.length === 0) {
             ctx.fillStyle = GRAY_COLOR;
-            ctx.font = '12px sans-serif';
+            ctx.font = `${window.convertPtToPx(12)}px sans-serif`;
             ctx.textAlign = 'center';
             ctx.fillText('データなし', x + width / 2, y + height / 2);
             return;
@@ -613,7 +624,7 @@ export const CalcChartMixin = (Base) => class extends Base {
 
         // X軸ラベル
         ctx.fillStyle = '#000000';
-        ctx.font = '10px sans-serif';
+        ctx.font = `${window.convertPtToPx(10)}px sans-serif`;
         ctx.textAlign = 'center';
         for (let i = 0; i < numLabels; i++) {
             const labelX = chartArea.x + groupWidth * i + groupWidth / 2;
@@ -647,7 +658,7 @@ export const CalcChartMixin = (Base) => class extends Base {
         // 以下は新規グラフ作成時（elementsがない場合）の処理
         if (!data || !data.labels || data.labels.length === 0) {
             ctx.fillStyle = GRAY_COLOR;
-            ctx.font = '12px sans-serif';
+            ctx.font = `${window.convertPtToPx(12)}px sans-serif`;
             ctx.textAlign = 'center';
             ctx.fillText('データなし', x + width / 2, y + height / 2);
             return;
@@ -710,7 +721,7 @@ export const CalcChartMixin = (Base) => class extends Base {
 
         // X軸ラベル
         ctx.fillStyle = '#000000';
-        ctx.font = '10px sans-serif';
+        ctx.font = `${window.convertPtToPx(10)}px sans-serif`;
         ctx.textAlign = 'center';
         for (let i = 0; i < numLabels; i++) {
             const labelX = chartArea.x + (numLabels > 1 ? pointSpacing * i : chartArea.width / 2);
@@ -745,7 +756,7 @@ export const CalcChartMixin = (Base) => class extends Base {
         // 以下は新規グラフ作成時（elementsがない場合）の処理
         if (!data || !data.labels || data.labels.length === 0) {
             ctx.fillStyle = GRAY_COLOR;
-            ctx.font = '12px sans-serif';
+            ctx.font = `${window.convertPtToPx(12)}px sans-serif`;
             ctx.textAlign = 'center';
             ctx.fillText('データなし', x + width / 2, y + height / 2);
             return;
@@ -817,7 +828,7 @@ export const CalcChartMixin = (Base) => class extends Base {
 
         // X軸ラベル
         ctx.fillStyle = '#000000';
-        ctx.font = '10px sans-serif';
+        ctx.font = `${window.convertPtToPx(10)}px sans-serif`;
         ctx.textAlign = 'center';
         for (let i = 0; i < numLabels; i++) {
             const labelX = chartArea.x + (numLabels > 1 ? pointSpacing * i : chartArea.width / 2);
@@ -849,7 +860,8 @@ export const CalcChartMixin = (Base) => class extends Base {
             } else if (elem.type === 'text') {
                 // テキスト描画
                 ctx.fillStyle = elem.color || DEFAULT_FRCOL;
-                ctx.font = `${elem.fontSize || 10}px ${elem.fontFace || 'sans-serif'}`;
+                // elem.fontSize は pt 値として扱う (BTRON 仕様準拠)
+                ctx.font = `${window.convertPtToPx(elem.fontSize || 10)}px ${elem.fontFace || 'sans-serif'}`;
                 ctx.textAlign = elem.align || 'left';
                 ctx.textBaseline = 'top';
 
@@ -2224,6 +2236,38 @@ export const CalcChartMixin = (Base) => class extends Base {
             return match ? match[1] : null;
         };
 
+        // ヘルパー: f_pat/l_pat から色を解決（堅牢なフォールバック付き）
+        // resolvePatternColor が利用できなくても customPatterns から直接 fgcolors を引き出す
+        const resolveColor = (patternId) => {
+            if (!patternId || patternId < 1) return null;
+            // 1) グローバル resolvePatternColor (figure-editor と共通) を試す
+            const fn = (typeof window !== 'undefined' && window.resolvePatternColor)
+                || (typeof resolvePatternColor === 'function' ? resolvePatternColor : null);
+            if (fn) {
+                const c = fn(patternId, customPatterns);
+                if (c) return c;
+            }
+            // 2) customPatterns から直接 fgcolors を引き出す (resolvePatternColor が
+            //    type='solid' を期待するが parseChartMaskPatterns は type=0 で保存するため
+            //    fgcolors フォールバックが効かないケースに備える)
+            const pat = customPatterns && customPatterns[patternId];
+            if (pat) {
+                if (pat.color) return pat.color;
+                if (pat.fgcolors) {
+                    const first = String(pat.fgcolors).split(',')[0].trim();
+                    if (first) return first;
+                }
+            }
+            // 3) DEFAULT_PATTERNS から solid 色を取得
+            const dp = (typeof window !== 'undefined' && window.DEFAULT_PATTERNS)
+                || (typeof DEFAULT_PATTERNS !== 'undefined' ? DEFAULT_PATTERNS : null);
+            if (dp && patternId >= 1 && patternId < dp.length) {
+                const p = dp[patternId];
+                if (p && p.type === 'solid') return p.color;
+            }
+            return null;
+        };
+
         // <rect> 要素をパース（正式形式のみ対応）
         const rectPattern = /<rect\s+[^>]+\/>/g;
         let rectMatch;
@@ -2239,13 +2283,11 @@ export const CalcChartMixin = (Base) => class extends Base {
             if (left !== null && top !== null && right !== null && bottom !== null) {
                 const f_pat = parseInt(getAttr(tag, 'f_pat')) || 0;
                 const l_pat = parseInt(getAttr(tag, 'l_pat')) || 0;
-                // f_pat/l_patからresolvePatternColorで色を解決（figure-editorと共通パターン）
-                const fillC = (f_pat >= 1 && typeof resolvePatternColor === 'function')
-                    ? (resolvePatternColor(f_pat, customPatterns) || getAttr(tag, 'fillColor') || GRAY_COLOR)
-                    : (getAttr(tag, 'fillColor') || GRAY_COLOR);
-                const bdC = (l_pat >= 1 && typeof resolvePatternColor === 'function')
-                    ? (resolvePatternColor(l_pat, customPatterns) || getAttr(tag, 'strokeColor'))
-                    : getAttr(tag, 'strokeColor');
+                // f_pat/l_pat から堅牢に色解決
+                const fillC = (f_pat >= 1 ? resolveColor(f_pat) : null)
+                    || getAttr(tag, 'fillColor') || GRAY_COLOR;
+                const bdC = (l_pat >= 1 ? resolveColor(l_pat) : null)
+                    || getAttr(tag, 'strokeColor');
                 elements.push({
                     type: 'rect',
                     x: parseFloat(left),
@@ -2362,10 +2404,9 @@ export const CalcChartMixin = (Base) => class extends Base {
 
                 if (points.length > 0) {
                     const l_pat = parseInt(getAttr(tag, 'l_pat')) || 0;
-                    // l_patからresolvePatternColorで線色を解決
-                    const strokeColor = (l_pat >= 1 && typeof resolvePatternColor === 'function')
-                        ? (resolvePatternColor(l_pat, customPatterns) || getAttr(tag, 'strokeColor') || DEFAULT_FRCOL)
-                        : (getAttr(tag, 'strokeColor') || DEFAULT_FRCOL);
+                    // l_pat から堅牢に線色解決
+                    const strokeColor = (l_pat >= 1 ? resolveColor(l_pat) : null)
+                        || getAttr(tag, 'strokeColor') || DEFAULT_FRCOL;
                     // lineWidth形式を優先、l_atr形式もサポート（後方互換性）
                     let strokeWidth = 1;
                     if (getAttr(tag, 'lineWidth') !== null) {
@@ -2419,10 +2460,9 @@ export const CalcChartMixin = (Base) => class extends Base {
 
             if (!Number.isNaN(cx) && !Number.isNaN(cy) && !Number.isNaN(rx)) {
                 const f_pat = parseInt(getAttr(tag, 'f_pat')) || 0;
-                // f_patからresolvePatternColorで塗り色を解決
-                const fillColor = (f_pat >= 1 && typeof resolvePatternColor === 'function')
-                    ? (resolvePatternColor(f_pat, customPatterns) || getAttr(tag, 'fillColor') || DEFAULT_FRCOL)
-                    : (getAttr(tag, 'fillColor') || DEFAULT_FRCOL);
+                // f_pat から堅牢に塗り色解決
+                const fillColor = (f_pat >= 1 ? resolveColor(f_pat) : null)
+                    || getAttr(tag, 'fillColor') || DEFAULT_FRCOL;
 
                 elements.push({
                     type: 'circle',

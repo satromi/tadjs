@@ -18,6 +18,14 @@ body {
     background: var(--btron-bg-legacy);
 }
 
+/* 埋め込みモード (text-editor 等の figure-segment iframe 内) では透過にして、
+ * 親プラグイン (例: スライド) が背景色を制御できるようにする */
+body.embedded-mode,
+body.embedded-mode .editor-container,
+body.embedded-mode .figure-canvas {
+    background: transparent;
+}
+
 .plugin-content {
     overflow: auto;
     position: absolute;
@@ -262,7 +270,8 @@ body {
 /* 仮身（Virtual Object）スタイル */
 .virtual-object {
     /* 基本スタイルはインラインで設定されるため、ここでは共通の動作のみ定義 */
-    transition: all 0.2s;
+    /* transition は transform を含めない (合成レイヤー昇格を避けて ClearType を維持) */
+    transition: filter 0.2s, box-shadow 0.2s, background-color 0.2s;
     user-select: none;
 }
 

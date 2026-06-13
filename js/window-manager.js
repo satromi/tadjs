@@ -281,6 +281,20 @@ export class WindowManager {
             normalRect: { x: opts.x, y: opts.y, width: opts.width, height: opts.height }
         });
 
+        // 作成完了通知 (setActiveWindow より前に発火)
+        // ツールパネル等が toolPanelRelations を setActiveWindow より早く登録するため
+        if (opts.onCreated) {
+            logger.info('[WM] createWindow: onCreated callback 実行前 windowId=', windowId);
+            try {
+                opts.onCreated(windowId);
+                logger.info('[WM] createWindow: onCreated callback 実行後 windowId=', windowId);
+            } catch (err) {
+                logger.warn('createWindow: onCreated callback でエラー:', err);
+            }
+        } else {
+            logger.info('[WM] createWindow: opts.onCreated なし windowId=', windowId, 'cssClass=', opts.cssClass);
+        }
+
         // アクティブウインドウに設定
         this.setActiveWindow(windowId);
 
@@ -305,10 +319,57 @@ export class WindowManager {
             return;
         }
 
-        // 前のアクティブウィンドウに非アクティブ化を通知
-        // （既に登録解除されているウィンドウにはメッセージを送信しない）
+        const _tpr = this.getToolPanelRelations ? this.getToolPanelRelations() : null;
+
+        // アプローチ 2: windowId が ToolPanel の場合、 親エディタへ redirect
+        // (WindowManager.activeWindow は常に親エディタを保持し、
+        //  ToolPanel が active 切替対象にならない構造にする)
+        let effectiveWindowId = windowId;
+        let isToolPanelTarget = false;
+        if (windowId && _tpr && _tpr[windowId] && this.parentMessageBus) {
+            const _parentIframe = _tpr[windowId].editorIframe;
+            const _parentWindowId = _parentIframe
+                ? this.parentMessageBus.getWindowIdFromIframe(_parentIframe)
+                : null;
+            if (_parentWindowId && this.windows.has(_parentWindowId)) {
+                effectiveWindowId = _parentWindowId;
+                isToolPanelTarget = true;
+            }
+        }
+
         const previousActiveWindow = this.activeWindow;
-        if (previousActiveWindow && previousActiveWindow !== windowId && this.parentMessageBus) {
+
+        // ツールパネル⇔親エディタ間の active 切替時、エディタへの ACT/DEACT を抑制
+        // (ツールパネルは親エディタの補助 window のため、focus 往復で DEACT/ACT ループを引き起こす)
+        const toolPanelRelations = this.getToolPanelRelations ? this.getToolPanelRelations() : null;
+        let skipDeactivateNotify = false;
+        let skipActivateNotify = false;
+        if (toolPanelRelations && this.parentMessageBus) {
+            // ケース1: 親エディタ → ツールパネル (新 windowId がツールパネル、前がその親エディタ)
+            if (toolPanelRelations[windowId]) {
+                const parentIframe = toolPanelRelations[windowId].editorIframe;
+                const parentWindowId = parentIframe
+                    ? this.parentMessageBus.getWindowIdFromIframe(parentIframe)
+                    : null;
+                if (parentWindowId && parentWindowId === previousActiveWindow) {
+                    skipDeactivateNotify = true;
+                }
+            }
+            // ケース2: ツールパネル → 親エディタ (前 windowId がツールパネル、新がその親エディタ)
+            if (previousActiveWindow && toolPanelRelations[previousActiveWindow]) {
+                const parentIframe = toolPanelRelations[previousActiveWindow].editorIframe;
+                const parentWindowId = parentIframe
+                    ? this.parentMessageBus.getWindowIdFromIframe(parentIframe)
+                    : null;
+                if (parentWindowId && parentWindowId === windowId) {
+                    skipActivateNotify = true;
+                }
+            }
+        }
+
+        // 前のアクティブウィンドウに非アクティブ化を通知
+        // 比較は effectiveWindowId 基準 (redirect 結果 previousActiveWindow と一致するなら同一論理 window)
+        if (!skipDeactivateNotify && previousActiveWindow && previousActiveWindow !== effectiveWindowId && this.parentMessageBus) {
             if (this.parentMessageBus.isWindowRegistered(previousActiveWindow)) {
                 this.parentMessageBus.sendToWindow(previousActiveWindow, 'window-deactivated', {});
             }
@@ -320,18 +381,27 @@ export class WindowManager {
             win.classList.add('inactive');
         });
 
-        if (windowId && this.windows.has(windowId)) {
-            const window = this.windows.get(windowId);
+        // ToolPanel target の場合、 ToolPanel 自身も装飾上の前面表示を保持
+        if (isToolPanelTarget) {
+            const _tpEl = this.windows.get(windowId)?.element;
+            if (_tpEl) {
+                _tpEl.classList.add('front-window');
+                _tpEl.classList.remove('inactive');
+            }
+        }
+
+        if (effectiveWindowId && this.windows.has(effectiveWindowId)) {
+            const window = this.windows.get(effectiveWindowId);
             window.element.classList.add('front-window');
             window.element.classList.remove('inactive');
-            this.activeWindow = windowId;
+            this.activeWindow = effectiveWindowId;
 
-            // フォーカス履歴を更新
-            const existingIndex = this.windowFocusHistory.indexOf(windowId);
+            // フォーカス履歴を更新 (effective = 親エディタ 主体)
+            const existingIndex = this.windowFocusHistory.indexOf(effectiveWindowId);
             if (existingIndex !== -1) {
                 this.windowFocusHistory.splice(existingIndex, 1);
             }
-            this.windowFocusHistory.push(windowId);
+            this.windowFocusHistory.push(effectiveWindowId);
 
             // 最前面に移動（ただし、alwaysOnTopウィンドウは除外して計算）
             const maxZ = Math.max(...Array.from(document.querySelectorAll('.window:not(.always-on-top)')).map(w =>
@@ -343,27 +413,36 @@ export class WindowManager {
             }
 
             // ウィンドウ内のiframeにフォーカスを設定
+            // アプローチ 1: ToolPanel iframe へは focus しない (Chromium blur 連鎖防止)
+            // 通常は effectiveWindowId が親エディタなので ToolPanel になることは無いが、
+            // 万一 redirect されなかった場合の防御として判定を残す
+            const _isEffectiveToolPanel = !!(_tpr && _tpr[effectiveWindowId]);
             const iframe = window.element.querySelector('iframe');
-            if (iframe) {
+            if (iframe && !_isEffectiveToolPanel) {
                 try {
                     iframe.focus();
-                    logger.debug('iframeにフォーカスを設定:', windowId);
+                    logger.debug('iframeにフォーカスを設定:', effectiveWindowId);
                 } catch (error) {
                     logger.warn('iframeへのフォーカス設定に失敗:', error);
                 }
+            } else if (iframe && _isEffectiveToolPanel) {
+                logger.debug('[WM] ToolPanel への iframe.focus() を skip (blur 連鎖防止):', effectiveWindowId);
             } else {
                 try {
                     window.element.focus();
-                    logger.debug('ウィンドウ要素にフォーカスを設定:', windowId);
+                    logger.debug('ウィンドウ要素にフォーカスを設定:', effectiveWindowId);
                 } catch (error) {
                     logger.warn('ウィンドウへのフォーカス設定に失敗:', error);
                 }
             }
 
             // 新しいアクティブウィンドウにアクティブ化を通知
-            // （まだ登録されていないウィンドウにはメッセージを送信しない）
-            if (this.parentMessageBus && this.parentMessageBus.isWindowRegistered(windowId)) {
-                this.parentMessageBus.sendToWindow(windowId, 'window-activated', {});
+            // effectiveWindowId 基準 + previousActiveWindow と異なる場合のみ送信
+            if (!skipActivateNotify
+                && this.parentMessageBus
+                && this.parentMessageBus.isWindowRegistered(effectiveWindowId)
+                && previousActiveWindow !== effectiveWindowId) {
+                this.parentMessageBus.sendToWindow(effectiveWindowId, 'window-activated', {});
             }
         } else {
             this.activeWindow = null;

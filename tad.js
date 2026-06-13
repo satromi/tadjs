@@ -1667,6 +1667,27 @@ function getBottomUBinUH(UH) {
     return bottomUB;
 }
 
+// BTRON システム標準カラーマップ (16色)。
+// COLOR モード0 (カラーマップ指定) で文書内にカラーマップ定義セグメントがない場合に使用する
+const BTRON_STANDARD_COLORMAP = [
+    '#ffffff', // 0: 白
+    '#00009f', // 1: 青
+    '#00ef00', // 2: 緑
+    '#00efef', // 3: シアン
+    '#ff0000', // 4: 赤
+    '#ef00ff', // 5: マゼンタ
+    '#dfdf00', // 6: 黄
+    '#7f7f9f', // 7: 灰
+    '#dfdfdf', // 8: 明灰
+    '#7f9fff', // 9: 明青
+    '#bfffaf', // 10: 明緑
+    '#cfffff', // 11: 明シアン
+    '#ff6f6f', // 12: 明赤
+    '#ef8fff', // 13: 明マゼンタ
+    '#efff9f', // 14: 明黄
+    '#000000'  // 15: 黒
+];
+
 /**
  * カラーを取得
  * @param {*} raw 32bit値
@@ -1685,16 +1706,26 @@ function parseColor(raw, offset = 0) {
     }
 
     if (modeBits === 0) {
-        // 28bitカラー（下位28bitがカラー値）
-        const color28 = raw & 0x0FFFFFFF;
-        const r = (color28 >>> 16) & 0xFF;
-        const g = (color28 >>> 8) & 0xFF;
-        const b = color28 & 0xFF;
-        logger.debug(`[Color] parseColor: transparent=${transparentMode}, modeBits=${modeBits}, rgb28=${color28}`);
+        // カラーマップ指定: 下位ビットはカラーマップ番号 (RGB 値ではない)。
+        // 文書内のカラーマップ定義 → システム標準カラーマップ の順で実際の色に解決する
+        const index = raw & 0x0FFFFFFF;
+        let hex;
+        if (typeof colorMap !== 'undefined' && colorMap[index] && colorMap[index].color) {
+            hex = colorMap[index].color;
+        } else if (index < BTRON_STANDARD_COLORMAP.length) {
+            hex = BTRON_STANDARD_COLORMAP[index];
+        } else {
+            logger.debug(`[Color] parseColor: カラーマップ番号 ${index} が未定義のため黒にフォールバック`);
+            hex = '#000000';
+        }
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        logger.debug(`[Color] parseColor: transparent=${transparentMode}, modeBits=${modeBits}, cmapIndex=${index} -> ${hex}`);
         return {
             transparent: transparentMode,
-            mode: modeBits, // 28bitカラー
-            color: `#${color28.toString(16).padStart(6, '0')}`,
+            mode: modeBits, // カラーマップ指定
+            color: hex,
             r, g, b
         };
     }
@@ -3023,11 +3054,40 @@ function tsSizeOfColumnSetFusen(segLen, tadSeg) {
     if (segLen < Number(0x0004)) {
         return;
     }
-    // 図形TADの場合は無視される
     if (startByImageSegment) {
         return;
     }
-    // TODO: 未実装
+
+    const ATTR = getLastUBinUH(tadSeg[0]);
+    const K = (ATTR >> 7) & 0x01;
+    const column = Number(ATTR & 0x0F);
+    const colsp = Number(tadSeg[1]);
+
+    if (segLen > Number(0x0004)) {
+        const topUB = getTopUBinUH(tadSeg[2]);
+        const lastUB = getLastUBinUH(tadSeg[2]);
+        const lastDIWW = (lastUB >> 4) & 0x0F;
+        const lastDensity = (lastDIWW >> 3) & 0x01;
+        const lastLine = (lastDIWW >> 2) & 0x01;
+        const lastWidth = lastDIWW & 0x03;
+        const lastType = Number(lastUB & 0x0F);
+        const topDIWW = (topUB >> 4) & 0x0F;
+        const topDensity = (topDIWW >> 3) & 0x01;
+        const topLine = (topDIWW >> 2) & 0x01;
+        const topWidth = topDIWW & 0x03;
+        const topType = Number(topUB & 0x0F);
+
+        logger.debug(`[Fusen] Column set: column=${column}, K=${K}, colsp=${colsp}, lastType=${lastType}, topType=${topType}`);
+
+        if (isXmlDumpEnabled) {
+            xmlBuffer.push(`<column column="${column}" balance="${K}" colsp="${colsp}" colline="${lastDIWW}" linenum="${lastLine}" lineDensity="${lastDensity}" lineWidth="${lastWidth}" lineType="${lastType}" colline2="${topDIWW}" linenum2="${topLine}" lineDensity2="${topDensity}" lineWidth2="${topWidth}" lineType2="${topType}" />\r\n`);
+        }
+    } else {
+        logger.debug(`[Fusen] Column set: column=${column}, K=${K}, colsp=${colsp}`);
+        if (isXmlDumpEnabled) {
+            xmlBuffer.push(`<column column="${column}" balance="${K}" colsp="${colsp}" />\r\n`);
+        }
+    }
 }
 
 /**
@@ -3036,6 +3096,40 @@ function tsSizeOfColumnSetFusen(segLen, tadSeg) {
  * @param {0x0000[]} tadSeg 
  * @returns 
  */
+function tsPageNumberFusen(segLen, tadSeg) {
+    if (segLen < 4) return;
+    if (startByImageSegment) return;
+    const r = getLastUBinUH(tadSeg[0]);
+    const step = r > 127 ? r - 256 : r;
+    const num = Number(tadSeg[1]);
+    if (isXmlDumpEnabled()) xmlBuffer.push('<page-number step="' + step + '" num="' + num + '" />\r\n');
+}
+
+function tsFrameOpenFusen(segLen, tadSeg) {
+    if (segLen < Number(0x000A)) return;
+    if (startByImageSegment) return;
+
+    const ATTR = getLastUBinUH(tadSeg[0]);
+    const A = (ATTR >> 7) & 0x01;
+    const P = (ATTR >> 6) & 0x01;
+    const K = (ATTR >> 5) & 0x01;
+    const H = (ATTR >> 2) & 0x03;
+    const V = (ATTR >> 0) & 0x03;
+
+    const areaTop = Number(uh2h(tadSeg[1]));
+    const areaLeft = Number(uh2h(tadSeg[2]));
+    const areaBottomRaw = Number(uh2h(tadSeg[3]));
+    const areaRightRaw = Number(uh2h(tadSeg[4]));
+    const areaBottom = areaBottomRaw - 1;
+    const areaRight = areaRightRaw - 1;
+
+    logger.debug(`[Frame] 枠あけ: ATTR=0x${ATTR.toString(16).padStart(2,'0')} A=${A} P=${P} K=${K} H=${H} V=${V} area=(t:${areaTop}, l:${areaLeft}, b:${areaBottom}, r:${areaRight})`);
+
+    if (isXmlDumpEnabled()) {
+        xmlBuffer.push(`<frame-open abs="${A}" halign="${H}" valign="${V}" page="${P}" wrap="${K}" top="${areaTop}" left="${areaLeft}" bottom="${areaBottom}" right="${areaRight}" />\r\n`);
+    }
+}
+
 function tsPageBreakConditionFusen(segLen, tadSeg) {
     if (segLen < Number(0x0004)) {
         return;
@@ -3464,16 +3558,16 @@ function tadPageSetFusen(segLen, tadSeg) {
         tsDocSizeOfPaperOverlaySetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x05)) {
         logger.debug("[Fusen] 枠あけ指定付箋");
-        // TODO: 未実装
+        tsFrameOpenFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x06)) {
         logger.debug("[Fusen] ページ番号指定付箋");
-        // TODO: 未実装
+        tsPageNumberFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x07)) {
         logger.debug("[Fusen] 条件改ページ指定付箋");
         tsPageBreakConditionFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x08)) {
         logger.debug("[Fusen] 充填行指定付箋");
-        tsFillLineFusen(segLen, tadSeg);
+        tsFillLineSetFusen(segLen, tadSeg);
     }
 }
 
@@ -3567,6 +3661,9 @@ function tsRulerLineAlignmentSetFusen(segLen, tadSeg) {
 function tsRulerLineDirectionSetFusen(segLen, tadSeg) {
     textDirection = Number(getLastUBinUH(tadSeg[0]));
     logger.debug(`[Fusen] 文字方向 : ${textDirection}`);
+    if (isXmlDumpEnabled && isInDocSegment) {
+        xmlBuffer.push(`<text direction="${textDirection}"/>`);
+    }
 }
 
 /**
@@ -3585,7 +3682,7 @@ function formatScale(scaleValue) {
         return `${a / b}`;
     } else {
         const n = scaleValue & 0x7FFF;
-        return `${n}`;
+        return `abs:${n}`;
     }
 }
 
@@ -3639,6 +3736,41 @@ function tsRulerTabFormatSetFusen(segLen, tadSeg) {
     }
 }
 
+function tsRulerFieldFormatSetFusen(segLen, tadSeg) {
+    if (segLen < Number(0x000A)) return;
+    const ATTR = getLastUBinUH(tadSeg[0]);
+    const R = (ATTR >>> 7) & 0b1;
+    const P = ATTR & 0b11;
+    const heightRaw = tadSeg[1];
+    const pargapRaw = tadSeg[2];
+    const line = Number(tadSeg[3]);
+    const nfld = uh2h(tadSeg[4]);
+    const fields = [];
+    if (nfld > 0) {
+        for (let i = 0; i < nfld; i++) {
+            const base = 5 + i * 5;
+            if (base + 4 >= tadSeg.length) break;
+            fields.push({
+                fld: uh2h(tadSeg[base]),
+                left: uh2h(tadSeg[base + 1]),
+                right: uh2h(tadSeg[base + 2]),
+                margin: uh2h(tadSeg[base + 3]),
+                f_attr: Number(tadSeg[base + 4])
+            });
+        }
+    }
+    if (isXmlDumpEnabled && isInDocSegment) {
+        const heightStr = formatScale(heightRaw);
+        const pargapStr = formatScale(pargapRaw);
+        let xml = `<field-format R="${R}" P="${P}" height="${heightStr}" pargap="${pargapStr}" line="${line}" nfld="${nfld}">`;
+        for (const f of fields) {
+            xml += `<field fld="${f.fld}" left="${f.left}" right="${f.right}" margin="${f.margin}" f_attr="${f.f_attr}" />`;
+        }
+        xml += '</field-format>';
+        xmlBuffer.push(xml);
+    }
+}
+
 /**
  * 行頭移動指定付箋を処理
  * @param {int} segLen 
@@ -3676,7 +3808,7 @@ function tadRulerSetFusen(segLen, tadSeg) {
         tsRulerTabFormatSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x03)) {
         logger.debug("[Fusen] フィールド書式指定付箋");
-        // TODO: 未実装
+        tsRulerFieldFormatSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x04)) {
         logger.debug("[Fusen] 文字方向指定付箋");
         tsRulerLineDirectionSetFusen(segLen, tadSeg);
@@ -4184,6 +4316,20 @@ function tsFontSizeSetFusen(segLen,tadSeg) {
     }
 }
 
+function tsFontScaleSetFusen(segLen, tadSeg) {
+    if (segLen < Number(0x0006)) return;
+    let ha = (tadSeg[1] >>> 8) & 0xFF;
+    let hb = (tadSeg[1] >>> 0) & 0xFF;
+    if (hb === 0) { ha = 1; hb = 1; }
+    let wa = (tadSeg[2] >>> 8) & 0xFF;
+    let wb = (tadSeg[2] >>> 0) & 0xFF;
+    if (wb === 0) { wa = 1; wb = 1; }
+    logger.debug(`[Font] 文字拡大/縮小: hRatio=${ha}/${hb}, wRatio=${wa}/${wb}`);
+    if (isXmlDumpEnabled) {
+        xmlBuffer.push(`<font hRatio="${ha}/${hb}" wRatio="${wa}/${wb}"/>`);
+    }
+}
+
 function tsFontSpacingSetFusen(segLen, tadSeg) {
     if (segLen < Number(0x0002)) {
         return;
@@ -4271,6 +4417,7 @@ function tadFontSetFusen(segLen, tadSeg) {
         tsFontSizeSetFusen(segLen,tadSeg);
     } else if (UB_SubID === Number(0x03)) {
         logger.debug("[Font] 文字拡大／縮小指定付箋");
+        tsFontScaleSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x04)) {
         logger.debug("[Font] 文字間隔指定付箋");
         tsFontSpacingSetFusen(segLen, tadSeg);
@@ -4635,6 +4782,14 @@ function tsFixedWidthSpaceFusen(segLen, tadSeg) {
     fixedWidthSpaceState.active = true;
     fixedWidthSpaceState.scaleData = widthData;
 
+    if (isXmlDumpEnabled && isInDocSegment) {
+        const wRaw = Number(widthData);
+        let wStr;
+        if ((wRaw >>> 15) & 0x01) { wStr = 'abs:' + (wRaw & 0x7FFF); }
+        else { const a = (wRaw >>> 8) & 0x7F; const b = wRaw & 0xFF; wStr = (b === 0 ? '1/1' : a + '/' + b); }
+        xmlBuffer.push('<fixed-space width="' + wStr + '" />');
+    }
+
     logger.debug(`[Fusen] 固定幅空白指定付箋: 状態設定完了 scaleData=${IntToHex(widthData, 4)}`);
 }
 
@@ -4647,12 +4802,25 @@ function tsFillCharFusen(segLen, tadSeg) {
     if (segLen < 2) {
         return;
     }
-    // セグメントからTRON文字コードを取得
-    const fillChar = charTronCode(tadSeg[1]);
-    if (fillChar) {
-        fillCharState.char = fillChar;
-        logger.debug(`[Fusen] 充填文字指定付箋: char="${fillChar}"`);
+    // セグメントからTRON文字コード列を取得
+    let fillStr = '';
+    for (let i = 1; i < segLen / 2; i++) {
+        const ch = charTronCode(tadSeg[i]);
+        if (ch) fillStr += ch;
     }
+    if (fillStr) {
+        fillCharState.char = fillStr;
+        logger.debug(`[Fusen] 充填文字指定付箋: str="${fillStr}"`);
+    }
+    if (isXmlDumpEnabled) {
+        const escaped = fillStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        xmlBuffer.push(`<fill-char str="${escaped}" />\r\n`);
+    }
+}
+
+function tsFillLineSetFusen(segLen, tadSeg) {
+    if (startByImageSegment) return;
+    if (isXmlDumpEnabled) xmlBuffer.push('<fill-line />\r\n');
 }
 
 /**
@@ -4692,16 +4860,28 @@ function tsFillLineFusen(segLen, tadSeg) {
  * @param {Array} tadSeg セグメントデータ
  */
 function tsWariatsukiStartFusen(segLen, tadSeg) {
+    if (segLen < 4) return;
     wariatsukiState.active = true;
     wariatsukiState.startTextWidth = textWidth;
     wariatsukiState.chars = [];
     wariatsukiState.charWidths = [];
 
-    if (isXmlDumpEnabled() && isInDocSegment) {
-        xmlBuffer.push('<wariatsuki>');
+    const kind = getLastUBinUH(tadSeg[0]);
+    const widthRaw = Number(tadSeg[1]);
+    let widthStr;
+    if ((widthRaw >>> 15) & 0x01) {
+        widthStr = 'abs:' + (widthRaw & 0x7FFF);
+    } else {
+        const a = (widthRaw >>> 8) & 0x7F;
+        const b = widthRaw & 0xFF;
+        widthStr = b === 0 ? '1/1' : a + '/' + b;
     }
 
-    logger.debug('[Fusen] 文字割付け開始');
+    if (isXmlDumpEnabled() && isInDocSegment) {
+        xmlBuffer.push('<char-layout kind="' + kind + '" width="' + widthStr + '">');
+    }
+
+    logger.debug('[Fusen] 文字割付け開始 kind=' + kind + ' width=' + widthStr);
 }
 
 /**
@@ -4715,7 +4895,7 @@ function tsWariatsukiEndFusen(segLen, tadSeg) {
     }
 
     if (isXmlDumpEnabled() && isInDocSegment) {
-        xmlBuffer.push('</wariatsuki>');
+        xmlBuffer.push('</char-layout>');
     }
 
     wariatsukiState.active = false;
@@ -4953,25 +5133,27 @@ function tadTextStyleFusen(segLen, tadSeg) {
         logger.debug("[Fusen] 上（右）傍点開始");
         textDecorations.botenUpper = true;
         if (isXmlDumpEnabled && isInDocSegment) {
-            xmlBuffer.push('<botenUpper>');
+            const _attrU = getLastUBinUH(tadSeg[0]);
+            xmlBuffer.push('<bouten side="upper" kind="' + (_attrU & 0x0F) + '">');
         }
     } else if (UB_SubID === Number(0x09)) {
         logger.debug("[Fusen] 上（右）傍点終了");
         textDecorations.botenUpper = null;
         if (isXmlDumpEnabled && isInDocSegment) {
-            xmlBuffer.push('</botenUpper>');
+            xmlBuffer.push('</bouten>');
         }
     } else if (UB_SubID === Number(0x0A)) {
         logger.debug("[Fusen] 下（左）傍点開始");
         textDecorations.botenLower = true;
         if (isXmlDumpEnabled && isInDocSegment) {
-            xmlBuffer.push('<botenLower>');
+            const _attrL = getLastUBinUH(tadSeg[0]);
+            xmlBuffer.push('<bouten side="lower" kind="' + (_attrL & 0x0F) + '">');
         }
     } else if (UB_SubID === Number(0x0B)) {
         logger.debug("[Fusen] 下（左）傍点終了");
         textDecorations.botenLower = null;
         if (isXmlDumpEnabled && isInDocSegment) {
-            xmlBuffer.push('</botenLower>');
+            xmlBuffer.push('</bouten>');
         }
     } else if (UB_SubID === Number(0x0C)) {
         logger.debug("[Fusen] 反転開始");
@@ -5643,18 +5825,32 @@ function tsImageSegment(segLen, tadSeg) {
     // BTRON エンコーダによっては base_off[0]=0x40 と書かれ、テーブルのバイトをピクセル
     // として読んでしまう (+4 ずれの原因)。テーブル終端まで進めて補正する。
     const baseOffTableEnd = 0x40 + imageSeg.planes * 4;
-    imageSeg.base_off = imageSeg.base_off.map(off => off < baseOffTableEnd ? baseOffTableEnd : off);
+    imageSeg.base_off = imageSeg.base_off.map(off => {
+        if (imageSeg.planes === 1) {
+            return off < baseOffTableEnd ? baseOffTableEnd : off;
+        } else {
+            const lastEntry = baseOffTableEnd - 4;
+            return off < lastEntry ? baseOffTableEnd : off;
+        }
+    });
 
     // ★ カラーマップ方式 (P=1) の場合、cmap[] を読み取り
     imageSeg.cmap = null;
     if (imageSeg.colorInfo.palette === 1) {
         const cmapBytes = imageSeg.cinfo[0];
         const cmapOffset = ((imageSeg.cinfo[2] & 0xFFFF) << 16) | (imageSeg.cinfo[3] & 0xFFFF);
-        if (cmapBytes > 0 && cmapOffset > 0 && cmapOffset + cmapBytes <= segData.length) {
+        // BTRON エンコーダの一部 (16色画像等) は cinfo[3] が cmap 直前の数バイトを指す不具合があるため
+        // cmap がセグメント末尾近くにあるケースのみ末尾に snap させる
+        let alignedCmapOffset = cmapOffset;
+        const endBasedOffset = segData.length - cmapBytes;
+        if (cmapOffset > 0 && endBasedOffset > cmapOffset && (endBasedOffset - cmapOffset) <= 8) {
+            alignedCmapOffset = endBasedOffset;
+        }
+        if (cmapBytes > 0 && alignedCmapOffset > 0 && alignedCmapOffset + cmapBytes <= segData.length) {
             const colorCount = Math.floor(cmapBytes / 4);
             const cmap = [];
             for (let i = 0; i < colorCount; i++) {
-                const c = readSegColor(segData, cmapOffset + i * 4);
+                const c = readSegColor(segData, alignedCmapOffset + i * 4);
                 cmap.push(c || { r: 0, g: 0, b: 0, transparent: false });
             }
             imageSeg.cmap = cmap;
@@ -6001,15 +6197,10 @@ function getPixelColorSpecCompliant(imageSeg, srcX, srcY) {
         const v = (colorInfo.invert === 0) ? (255 - luminance) : luminance;
         r = g = b = v;
     } else if (colorInfo.mode === 1) {
-        // 直接RGB方式
-        const rRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[0]), imageSeg.cinfo[0] & 0xFF);
-        const gRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[1]), imageSeg.cinfo[1] & 0xFF);
-        const bRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[2]), imageSeg.cinfo[2] & 0xFF);
-        if (colorInfo.invert === 0) {
-            r = 255 - rRaw; g = 255 - gRaw; b = 255 - bRaw;
-        } else {
-            r = rRaw; g = gRaw; b = bRaw;
-        }
+        // 直接RGB方式: 画素値そのまま色値 (invert 反転は mode=0 白黒専用)
+        r = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[0]), imageSeg.cinfo[0] & 0xFF);
+        g = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[1]), imageSeg.cinfo[1] & 0xFF);
+        b = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[2]), imageSeg.cinfo[2] & 0xFF);
     } else if (colorInfo.mode === 2) {
         // 直接CMY/CMYK方式
         const cRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[0]), imageSeg.cinfo[0] & 0xFF);
@@ -6199,16 +6390,16 @@ function resetTextDecorations() {
  * @param {*} tadSeg 
  */
 function textLigatureFusen(segLen, tadSeg) {
-
+    if (isXmlDumpEnabled) xmlBuffer.push('<combchar>');
 }
 
 /**
  * 結合終了指定付箋を処理
- * @param {*} segLen 
- * @param {*} tadSeg 
+ * @param {*} segLen
+ * @param {*} tadSeg
  */
 function textLigatureFusenEnd(segLen, tadSeg) {
-
+    if (isXmlDumpEnabled) xmlBuffer.push('</combchar>');
 }
 
 /**
@@ -7702,7 +7893,33 @@ function tsFigDraw(segLen, tadSeg) {
         tsFigCurveDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x0A)) {
         tsFigMarkerDraw(segLen, tadSeg);
+    } else if (UB_SubID === Number(0x0B)) {
+        logger.debug("[Figure] 任意図形セグメント");
+        tsFigFreefigDraw(segLen, tadSeg);
     }
+}
+
+function emitFreefigXmlTad(mode, f_pat, sy, nr, bx, nh, hArr) {
+    if (!isXmlDumpEnabled) return;
+    figureZIndexCounter++;
+    const hStr = hArr.join(',');
+    xmlBuffer.push('<freefig mode="' + mode + '" f_pat="' + f_pat + '" sy="' + sy + '" nr="' + nr + '" bx="' + bx + '" nh="' + nh + '" h="' + hStr + '" zIndex="' + figureZIndexCounter + '" />\r\n');
+}
+
+function tsFigFreefigDraw(segLen, tadSeg) {
+    if (segLen < Number(0x000E)) return;
+    const mode = getLastUBinUH(tadSeg[0]);
+    const f_pat = Number(tadSeg[1]);
+    const sy = Number(tadSeg[2]);
+    const nr = Number(tadSeg[3]);
+    const bx = Number(uh2h(tadSeg[4]));
+    const nh = Number(tadSeg[5]);
+    const hArr = [];
+    for (let i = 0; i < nh; i++) {
+        if (6 + i < tadSeg.length) hArr.push(Number(tadSeg[6 + i]));
+    }
+    logger.debug(`[Figure] 任意図形: mode=${mode}, f_pat=${f_pat}, sy=${sy}, nr=${nr}, bx=${bx}, nh=${nh}`);
+    emitFreefigXmlTad(mode, f_pat, sy, nr, bx, nh, hArr);
 }
 
 /**
@@ -8272,6 +8489,14 @@ function tsFigureMarginSetFusen(segLen, tadSeg) {
  * @param {*} tadSeg 
  * @returns 
  */
+function tsFigPageNumberFusen(segLen, tadSeg) {
+    if (segLen < 4) return;
+    const r = getLastUBinUH(tadSeg[0]);
+    const step = r > 127 ? r - 256 : r;
+    const num = Number(tadSeg[1]);
+    if (isXmlDumpEnabled && isInDocSegment) xmlBuffer.push('<figpagenumber step="' + step + '" num="' + num + '" />\r\n');
+}
+
 function tsFigurePageFusen(segLen, tadSeg) {
     const UB_SubID = getTopUBinUH(tadSeg[0]);
 
@@ -8293,6 +8518,7 @@ function tsFigurePageFusen(segLen, tadSeg) {
         logger.debug("[Figure] 未定義");
     } else if (UB_SubID === Number(0x06)) {
         logger.debug("[Figure] ページ番号指定付箋");
+        tsFigPageNumberFusen(segLen, tadSeg);
     }
 }
 
@@ -8458,6 +8684,10 @@ function tsFigureArrowsModifier(segLen, tadSeg) {
     figureModifierState.endArrow = endArrow;
 
     logger.debug(`[Figure] 図形要素修飾セグメント: arrow=0x${arrow.toString(16)}, startArrow=${startArrow}, endArrow=${endArrow}`);
+    if (isXmlDumpEnabled && isInDocSegment) {
+        const arrowAttr = (startArrow ? 'S' : '') + (endArrow ? 'E' : '');
+        xmlBuffer.push('<figmodifier arrow="' + arrowAttr + '" />');
+    }
 }
 
 /**
@@ -9636,11 +9866,39 @@ function tadPerse(segID, segLen, tadSeg, nowPos) {
     }
 }
 
+// TRONコード変換用 TextDecoder キャッシュ (補助漢字: euc-jp / GB: gbk / KS: euc-kr)
+const _tronTextDecoders = {};
+function decodeTronBytes(bytes, encoding) {
+    try {
+        if (!_tronTextDecoders[encoding]) _tronTextDecoders[encoding] = new TextDecoder(encoding);
+        const s = _tronTextDecoders[encoding].decode(new Uint8Array(bytes));
+        // デコーダで未定義のコードポイント (U+FFFD) は 〓 に正規化
+        return s.replace(/�/g, '〓');
+    } catch (e) {
+        return '〓';
+    }
+}
+
+/**
+ * TRONコードの hi/lo オクテットをゾーン線形番号 (0..48399) に変換
+ * Aゾーン: hi 21-7E, lo 21-7E / Bゾーン: hi 80-FD, lo 21-7E
+ * Cゾーン: hi 21-7E, lo 80-FD / Dゾーン: hi 80-FD, lo 80-FD
+ */
+function tronHiLo2Linear(hi, lo) {
+    if (hi >= 0x21 && hi <= 0x7e && lo >= 0x21 && lo <= 0x7e) return (hi - 0x21) * 94 + (lo - 0x21);
+    if (hi >= 0x80 && hi <= 0xfd && lo >= 0x21 && lo <= 0x7e) return 8836 + (hi - 0x80) * 94 + (lo - 0x21);
+    if (hi >= 0x21 && hi <= 0x7e && lo >= 0x80 && lo <= 0xfd) return 20680 + (hi - 0x21) * 126 + (lo - 0x80);
+    if (hi >= 0x80 && hi <= 0xfd && lo >= 0x80 && lo <= 0xfd) return 32524 + (hi - 0x80) * 126 + (lo - 0x80);
+    return -1;
+}
+
 /**
  * TRONコードを判定
- * TODO: 現状はTRON仕様日本文字コードの第1面 Aゾーン(JIS X 0208)のみ対応
- * @param {char} char 
- * @returns 
+ * 第1面: Aゾーン(JIS X 0208) / Bゾーン下部(JIS X 0212 補助漢字) / Cゾーン(GB 2312) / Dゾーン(KS X 1001)
+ * 第16/17面: Unicode BMP 直接対応
+ * 対応表のない領域 (GT書体面・大漢和・点字・JIS X 0213第2面等) は 〓 を出力して文字消失を防ぐ
+ * @param {char} char
+ * @returns
  */
 function charTronCode(char) {
     const charBuffer = new ArrayBuffer(2);
@@ -9653,14 +9911,43 @@ function charTronCode(char) {
 
     let text = '';
 
-    // TRONコード 面切替
+    // TRONコード 面切替 (言語指定コード)。 以降の文字に適用し、 コード自体は出力しない
     if ((char >= Number(0xfe21) && char <= Number(0xfe7e) )
     || (char >= Number(0xfe80) && char <= Number(0xfefe))) {
         tronCodeMask[textNest] = char - Number(0xfe21) + 1;
         logger.debug(`[Parser] TRON Code面: ${tronCodeMask[textNest]}`)
+        return text;
     }
 
-    // TRONコード 第1面 Aゾーン(JIS X 0208)をjsのUNICODEに変換
+    // 制御文字は面に依らず処理
+    if (char == Number(TC_NL)
+        || char == Number(TC_CR)
+        || char == Number(TC_TAB)
+        || char == Number(TC_FF)) {
+        return String.fromCharCode(char8[1]);
+    }
+
+    const men = tronCodeMask[textNest] || 1;
+    const hi = char8[0];
+    const lo = char8[1];
+
+    // 第16/17面: Unicode BMP 直接対応 (面16: U+0000〜U+ABFF、 面17: U+AC00〜U+FFFF)
+    if (men === 16 || men === 17) {
+        const pp = tronHiLo2Linear(hi, lo);
+        if (pp >= 0) {
+            const ucp = (men - 16) * 44032 + pp;
+            if (ucp <= 0xffff) return String.fromCharCode(ucp);
+        }
+        return '〓';
+    }
+
+    // 第1面以外 (GT書体面・大漢和・繁体字面等) は Unicode 対応表がないため 〓
+    if (men !== 1) {
+        return '〓';
+    }
+
+    // ===== 第1面 (システムスクリプト) =====
+    // Aゾーン (JIS X 0208) をjsのUNICODEに変換
     // TODO: JIS2UNICODEが上手く動作しないため、JISをSJISに変換後、SJI2UNICODEを実施
     if ((char >= Number(0x2121) && char <= Number(0x227e) )
     || (char >= Number(0x2420) && char <= Number(0x7e7e))) {
@@ -9687,11 +9974,24 @@ function charTronCode(char) {
 
     } else if (char >= Number(0x2320) && char <= Number(0x237f)) {
         text = String.fromCharCode(char8[1]);
-    } else if (char == Number(TC_NL)
-        || char == Number(TC_CR)
-        || char == Number(TC_TAB)
-        || char == Number(TC_FF)) {
-        text = String.fromCharCode(char8[1]);
+    } else if (hi >= 0xa1 && hi <= 0xfe && lo >= 0x21 && lo <= 0x7e) {
+        // Bゾーン下部 (A121-ED63): JIS X 0212 補助漢字 → EUC-JP (SS3 0x8F + 0xA0+区 + 0xA0+点)
+        text = decodeTronBytes([0x8f, hi, lo + 0x80], 'euc-jp');
+    } else if (hi >= 0x21 && hi <= 0x7e && lo >= 0x80 && lo <= 0xfd) {
+        // Cゾーン: GB 2312 (区点が126単位で詰めて配置) → GBK で変換
+        const p = (hi - 0x21) * 126 + (lo - 0x80);
+        const ku = Math.floor(p / 94) + 1;
+        const ten = (p % 94) + 1;
+        text = (ku <= 94) ? decodeTronBytes([0xa0 + ku, 0xa0 + ten], 'gbk') : '〓';
+    } else if (hi >= 0xb7 && hi <= 0xfd && lo >= 0x80 && lo <= 0xfd) {
+        // Dゾーン: KS X 1001 (区点が126単位で詰めて配置) → EUC-KR で変換
+        const p = (hi - 0xb7) * 126 + (lo - 0x80);
+        const ku = Math.floor(p / 94) + 1;
+        const ten = (p % 94) + 1;
+        text = (ku <= 94) ? decodeTronBytes([0xa0 + ku, 0xa0 + ten], 'euc-kr') : '〓';
+    } else if (tronHiLo2Linear(hi, lo) >= 0) {
+        // 点字・JIS X 0213第2面・未割当領域: 対応表未搭載のため 〓 (文字消失とずれを防ぐ)
+        text = '〓';
     }
     return text;
 }
@@ -9879,33 +10179,42 @@ function canvasInit(canvasId, width, height) {
     if (!canvasId) {
         canvasId = 'canvas-0';
     }
-    
+
     // Try to get canvas element, with fallback for index.html tab system
     canvas = document.getElementById(canvasId);
     logger.debug(`[Canvas] canvasInit: document.getElementById('${canvasId}'):`, !!canvas);
-    
-    
+
+
     if (canvas && canvas.getContext) {
         ctx = canvas.getContext('2d');
-        
+
         // Set global window references for compatibility
         window.canvas = canvas;
         window.ctx = ctx;
-        
+
     }
 
     // キャンバスをクリア
     if (ctx && canvas) {
         clearCanvas(ctx, canvas.width, canvas.height);
-        
-        canvas.width = canvasW;
-        canvas.height = canvasH;
-        
-        // スクロールオフセットを適用
+
+        // High-DPI 対応: バッキングストアを devicePixelRatio 倍にして物理画素レベルで描画
+        // canvasW/canvasH は論理サイズ (CSS px)、canvas.width/height は物理サイズ
+        const dpr = window.devicePixelRatio || 1;
+        window.tadCanvasDpr = dpr;
+        canvas.width = Math.ceil(canvasW * dpr);
+        canvas.height = Math.ceil(canvasH * dpr);
+        canvas.style.width = canvasW + 'px';
+        canvas.style.height = canvasH + 'px';
+
+        // DPR を base transform として適用 (以降の描画コードは論理 px で動作)
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        // スクロールオフセットを適用 (DPR base transform の上に乗せる)
         applyScrollOffset(ctx);
 
         ctx.fillStyle = 'white'; // 背景色を白に設定
-        ctx.fillRect(0, 0, ctx.canvas.clientWidth, ctx.canvas.clientHeight);
+        ctx.fillRect(0, 0, canvasW, canvasH);
     }
 
     // リンク対応（ダブルクリック）

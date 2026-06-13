@@ -245,9 +245,12 @@ class UnpackFileManager extends window.PluginBase {
                         skipTaskbar: false,
                         frame: true,
                         transparent: false,
-                        backgroundColor: "#ffffff"
+                        // 実行機能付箋 (図形編集/文章編集/表計算) の data 部のウィンドウ背景色を採用
+                        backgroundColor: file.execTbcol || "#ffffff"
                     },
-                    applist: isCalcTad ? {
+                    // 実行機能付箋レコード由来の applist があればそれを採用 (対応表一致分のみ・先頭が既定)。
+                    // 無い場合は従来の既定 applist にフォールバック
+                    applist: file.applist ? file.applist : (isCalcTad ? {
                         "basic-text-editor": { name: "基本文章編集", defaultOpen: false },
                         "basic-calc-editor": { name: "基本表計算", defaultOpen: true },
                         "virtual-object-list": { name: "仮身一覧", defaultOpen: false }
@@ -255,7 +258,7 @@ class UnpackFileManager extends window.PluginBase {
                         "basic-text-editor": { name: "基本文章編集", defaultOpen: true },
                         "basic-figure-editor": { name: "基本図形編集", defaultOpen: false },
                         "virtual-object-list": { name: "仮身一覧", defaultOpen: false }
-                    }
+                    })
                 };
 
                 // 各レコードについてファイルエントリを生成

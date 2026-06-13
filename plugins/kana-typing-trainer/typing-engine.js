@@ -97,21 +97,36 @@ class TypingEngine {
         if (!this.isPracticing || this.isCompleted) return null;
         if (this.currentCharIndex >= this.inputChars.length) return null;
 
-        // コンボ貪欲マッチ: 長い出力から試行
-        for (var len = this.maxComboOutputLength; len >= 1; len--) {
-            if (this.currentCharIndex + len > this.inputChars.length) continue;
-            var substr = this.inputChars.substring(this.currentCharIndex, this.currentCharIndex + len);
-            var combo = this.comboReverseMapping[substr];
-            if (combo) {
-                return { isCombo: true, keys: combo.keys, output: substr };
+        var char = this.inputChars[this.currentCharIndex];
+        // 半濁音 (ぱぴぷぺぽ等) はコンボパスを skip し、 単一キーパスの handakuon 合成ロジックで処理する
+        var handakuonBaseMap = { 'ぱ':'は', 'ぴ':'ひ', 'ぷ':'ふ', 'ぺ':'へ', 'ぽ':'ほ', 'パ':'ハ', 'ピ':'ヒ', 'プ':'フ', 'ペ':'ヘ', 'ポ':'ホ' };
+        var isHandakuon = !!handakuonBaseMap[char];
+
+        // コンボ貪欲マッチ: 半濁音単一文字以外で試行 (長い出力から)
+        if (!isHandakuon) {
+            for (var len = this.maxComboOutputLength; len >= 1; len--) {
+                if (this.currentCharIndex + len > this.inputChars.length) continue;
+                var substr = this.inputChars.substring(this.currentCharIndex, this.currentCharIndex + len);
+                var combo = this.comboReverseMapping[substr];
+                if (combo) {
+                    return { isCombo: true, keys: combo.keys, output: substr };
+                }
             }
         }
 
         // 単一キーフォールバック
-        var char = this.inputChars[this.currentCharIndex];
         var keyInfo = this.reverseMapping[char];
         if (keyInfo) {
             return { isCombo: false, keyCode: keyInfo.keyCode, shiftType: keyInfo.shiftType, output: char };
+        }
+
+        // 半濁音は reverseMapping に直接登録されていないので、 base 文字の keyInfo を仮で返す
+        // (processInput 内の handakuon 合成パスで完成判定される)
+        if (isHandakuon) {
+            var baseInfo = this.reverseMapping[handakuonBaseMap[char]];
+            if (baseInfo) {
+                return { isCombo: false, keyCode: baseInfo.keyCode, shiftType: baseInfo.shiftType, output: char, isHandakuon: true };
+            }
         }
 
         return null;
@@ -332,6 +347,7 @@ class TypingEngine {
 
         var expectedChar = this.inputChars[this.currentCharIndex];
 
+        // 直接一致
         if (inputChar === expectedChar) {
             this.stats.correctCount++;
             var expectedKeyInfo = this.reverseMapping[expectedChar];
@@ -339,11 +355,26 @@ class TypingEngine {
                 this.stats.shiftCount++;
             }
             this.currentCharIndex++;
+            this._pendingHandakuon = null;
             return this._checkAdvance(inputChar, keyCode);
-        } else {
-            this.stats.wrongCount++;
-            return { correct: false, char: inputChar, keyCode: keyCode, finished: false, phraseFinished: false };
         }
+        // 半濁音合成入力: base (は/ひ/ふ/へ/ほ) 入力で partial、次の '゜' で完成
+        var handakuonBase = { 'ぱ':'は', 'ぴ':'ひ', 'ぷ':'ふ', 'ぺ':'へ', 'ぽ':'ほ', 'パ':'ハ', 'ピ':'ヒ', 'プ':'フ', 'ペ':'ヘ', 'ポ':'ホ' };
+        if (handakuonBase[expectedChar] === inputChar && !this._pendingHandakuon) {
+            this._pendingHandakuon = expectedChar;
+            return { correct: null, partial: true, char: inputChar, keyCode: keyCode, finished: false, phraseFinished: false };
+        }
+        if (this._pendingHandakuon === expectedChar && inputChar === '゜') {
+            this.stats.correctCount++;
+            this.stats.shiftCount++;
+            this.currentCharIndex++;
+            this._pendingHandakuon = null;
+            return this._checkAdvance(expectedChar, keyCode);
+        }
+        // 間違い (partial 状態あれば解除)
+        this._pendingHandakuon = null;
+        this.stats.wrongCount++;
+        return { correct: false, char: inputChar, keyCode: keyCode, finished: false, phraseFinished: false };
     }
 
     /**
@@ -439,15 +470,45 @@ class TypingEngine {
             // 単一キーフォールバック
             if (!matched) {
                 var char = currentInput[charIdx];
-                var keyInfo = this.reverseMapping[char];
-                if (keyInfo) {
-                    result.push({
-                        keyCode: keyInfo.keyCode,
-                        shiftType: keyInfo.shiftType,
-                        char: char
-                    });
+                // 半濁音 (ぱぴぷぺぽ / パピプペポ) は reverseMapping に直接登録されていないため、
+                // base 文字 (は/ひ/ふ/へ/ほ) + '゜' の 2 ステップに展開してガイドする
+                var handakuonBaseMap = { 'ぱ':'は', 'ぴ':'ひ', 'ぷ':'ふ', 'ぺ':'へ', 'ぽ':'ほ', 'パ':'ハ', 'ピ':'ヒ', 'プ':'フ', 'ペ':'ヘ', 'ポ':'ホ' };
+                if (handakuonBaseMap[char]) {
+                    var isCurrentChar = (phraseIdx === this.currentPhraseIndex && charIdx === this.currentCharIndex);
+                    if (isCurrentChar && this._pendingHandakuon === char) {
+                        // 既に base 入力済み、次は '゜'
+                        var maruInfo = this.reverseMapping['゜'];
+                        if (maruInfo) {
+                            result.push({ keyCode: maruInfo.keyCode, shiftType: maruInfo.shiftType, char: '゜' });
+                        }
+                        charIdx++;
+                    } else {
+                        // base 文字を 1 ステップ目として返し、 余裕があれば '゜' も 2 ステップ目として追加
+                        var baseChar = handakuonBaseMap[char];
+                        var baseInfo = this.reverseMapping[baseChar];
+                        if (baseInfo) {
+                            result.push({ keyCode: baseInfo.keyCode, shiftType: baseInfo.shiftType, char: baseChar });
+                        }
+                        if (i + 1 < count) {
+                            var maruInfo2 = this.reverseMapping['゜'];
+                            if (maruInfo2) {
+                                result.push({ keyCode: maruInfo2.keyCode, shiftType: maruInfo2.shiftType, char: '゜' });
+                            }
+                            i++;
+                        }
+                        charIdx++;
+                    }
+                } else {
+                    var keyInfo = this.reverseMapping[char];
+                    if (keyInfo) {
+                        result.push({
+                            keyCode: keyInfo.keyCode,
+                            shiftType: keyInfo.shiftType,
+                            char: char
+                        });
+                    }
+                    charIdx++;
                 }
-                charIdx++;
             }
         }
 

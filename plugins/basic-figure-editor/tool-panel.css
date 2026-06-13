@@ -204,9 +204,42 @@ button {
     box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.5);
 }
 
+/* 中心点モード時、 アクティブツールの中央に「+」を重ね表示 */
+.tool-btn.active.center-mode {
+    position: relative;
+}
+
+.tool-btn.active.center-mode::after {
+    content: '+';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 14px;
+    font-weight: bold;
+    color: #ffffff;
+    text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 1px #000;
+    pointer-events: none;
+    line-height: 1;
+}
+
 .tool-icon {
     display: block;
     line-height: 1;
+}
+
+/* 多角形描画ツールの SVG アイコン */
+.polygon-tool-icon {
+    width: 16px;
+    height: 16px;
+    color: #000;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.polygon-tool-icon svg {
+    display: block;
 }
 
 /* パレットポップアップ */

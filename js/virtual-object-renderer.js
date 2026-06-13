@@ -23,6 +23,12 @@ const logger = getLogger('VirtualObjectRenderer');
  * VirtualObjectRenderer
  * 仮身の描画を統一的に扱うクラス
  * DOM要素とCanvas描画の両方に対応
+ *
+ * Canvas 描画 API (drawClosedVirtualObjectToCanvas / drawOpenedVirtualObjectToCanvas 等)
+ * を呼び出す側は、High-DPI 対応として ctx に対し以下の base transform を適用済みであること:
+ *   ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+ * その上で論理 px 座標を渡せば、バッキングストア解像度で物理画素レベルでくっきり描画される。
+ * フォントサイズは convertPtToPx() で pt → px (96 DPI) に変換済の値を内部で使用する。
  */
 export class VirtualObjectRenderer {
     constructor(options = {}) {
@@ -45,9 +51,11 @@ export class VirtualObjectRenderer {
     /**
      * 仮身オブジェクトから必要な色・サイズ情報を取得
      * @param {Object} virtualObject - 仮身オブジェクト
+     * @param {Object} [options] - オプション (zoomLevel など)
      * @returns {Object} スタイル情報
      */
-    getStyles(virtualObject) {
+    getStyles(virtualObject, options = {}) {
+        const zoomLevel = options.zoomLevel || 1;
         const chszPt = parseFloat(virtualObject.chsz) || this.defaultStyles.chsz;
         return {
             tbcol: virtualObject.tbcol || this.defaultStyles.tbcol,
@@ -55,8 +63,25 @@ export class VirtualObjectRenderer {
             chcol: virtualObject.chcol || this.defaultStyles.chcol,
             bgcol: virtualObject.bgcol || this.defaultStyles.bgcol,
             chsz: chszPt,  // ポイント値（後方互換性のため保持）
-            chszPx: convertPtToPx(chszPt)  // ピクセル値（整数、JIS丸め）
+            chszPx: convertPtToPx(chszPt) * zoomLevel,  // ピクセル値 × zoom (DOM 描画用)
+            zoomLevel: zoomLevel
         };
+    }
+
+    /**
+     * 閉じた仮身の natural-height (chsz から導出する canonical な高さ、logical 単位、zoom 非依存)
+     * = max(iconSize, ceil(chszPx * lineHeight)) + VOBJ_BORDER_WIDTH
+     * Parser/Serializer/bbox 計算から参照される基準値。padding は含まない。
+     * @param {number} chszPt - 文字サイズ (pt)
+     * @returns {number} natural-height (logical px)
+     */
+    getNaturalClosedVobjHeight(chszPt) {
+        const chsz = parseFloat(chszPt) || this.defaultStyles.chsz;
+        const chszPx = convertPtToPx(chsz);
+        const iconSize = Math.round(chszPx);
+        const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
+        const contentHeight = Math.max(iconSize, textHeight);
+        return contentHeight + VOBJ_BORDER_WIDTH;
     }
 
     /**
@@ -317,33 +342,42 @@ export class VirtualObjectRenderer {
      * @returns {HTMLElement} 閉じた仮身要素
      */
     createClosedBlockElement(virtualObject, options = {}) {
-        const styles = this.getStyles(virtualObject);
+        const styles = this.getStyles(virtualObject, options);
+        const zoomLevel = options.zoomLevel || 1;
         const vobj = document.createElement('div');
 
-        // 閉じた仮身の最小高さを計算
+        // 論理単位で計算してから最後にまとめて zoomLevel をかけることで、
+        // 内部サイズと外枠サイズの丸め誤差をなくす
+        const chszPxLogical = styles.chszPx / zoomLevel; // = convertPtToPx(chsz) (zoom なし)
         const lineHeight = DEFAULT_LINE_HEIGHT;
-        const textHeight = Math.ceil(styles.chszPx * lineHeight);
-        const iconSize = Math.round(styles.chszPx * 1.0);
-        const contentHeight = Math.max(iconSize, textHeight);
-        const borderWidth = VOBJ_BORDER_WIDTH; // 上下の border: 1px + 1px
-        const paddingVertical = VOBJ_PADDING_VERTICAL; // 上下の padding: 4px + 4px
-        // contentHeightを使用してtitleAreaと同じ高さになるようにする
-        const minClosedHeight = contentHeight + paddingVertical + borderWidth;
+        const textHeightLogical = Math.ceil(chszPxLogical * lineHeight);
+        const iconSizeLogical = Math.round(chszPxLogical * 1.0);
+        const contentHeightLogical = Math.max(iconSizeLogical, textHeightLogical);
+        // 閉じた仮身の最小高さは BTRON 慣習通り content + padding (border 抜き) で計算
+        const minClosedHeightLogical = contentHeightLogical + VOBJ_PADDING_VERTICAL;
+        const tadHeightLogical = (virtualObject.vobjbottom || DEFAULT_VOBJ_HEIGHT) - (virtualObject.vobjtop || 0);
+        const actualHeightLogical = Math.max(minClosedHeightLogical, tadHeightLogical);
 
-        // TADファイルから読み込まれた高さ
-        const tadHeight = (virtualObject.vobjbottom || DEFAULT_VOBJ_HEIGHT) - (virtualObject.vobjtop || 0);
-
-        // 最小高さを適用
-        const actualHeight = Math.max(minClosedHeight, tadHeight);
+        // ここで zoomLevel (= mixin から渡された effectiveScale = figScale * zoom) を一括適用
+        const textHeight = textHeightLogical * zoomLevel;
+        const iconSize = iconSizeLogical * zoomLevel;
+        const contentHeight = contentHeightLogical * zoomLevel;
+        const borderWidth = VOBJ_BORDER_WIDTH * zoomLevel;
+        const paddingVertical = VOBJ_PADDING_VERTICAL * zoomLevel;
+        const horizontalPadding = 4 * zoomLevel;
+        const gapSize = 4 * zoomLevel;
+        const actualHeight = actualHeightLogical * zoomLevel;
 
         vobj.className = 'virtual-object virtual-object-closed';
         vobj.style.position = 'absolute';
         vobj.style.left = (virtualObject.vobjleft || 0) + 'px';
         vobj.style.top = (virtualObject.vobjtop || 0) + 'px';
-        vobj.style.width = (virtualObject.width || 100) + 'px';
+        vobj.style.width = ((virtualObject.width || 100) * zoomLevel) + 'px';
         vobj.style.height = actualHeight + 'px';
         vobj.style.boxSizing = 'border-box';
         vobj.style.cursor = 'pointer';
+        // zoom 適用済みであることを記録 (mixin の zoom 変化検知用)
+        vobj.dataset.zoomAtRender = String(zoomLevel);
 
         // 表示設定
         const showPict = virtualObject.pictdisp !== 'false';
@@ -356,9 +390,13 @@ export class VirtualObjectRenderer {
         // 全ての表示属性がオフかどうかを判定
         const showTitleArea = showPict || showName || showRole || showType || showUpdate;
 
-        // タイトル領域の高さを計算（border-box なので border も含める）
-        // iconSize, contentHeightは上で計算済み
-        const titleHeight = contentHeight + paddingVertical + borderWidth; // content + padding + border
+        // タイトル領域の高さは vobj 全体と同じ (= actualHeight)
+        // 旧コード: contentHeight + paddingVertical + borderWidth = 33 だが、
+        // vobj.style.height (= actualHeight = max(content+padding, tadHeight) = 31) に揃える
+        const titleHeight = actualHeight;
+        // border 1 辺分 (zoom 反映)
+        const borderSide = borderWidth / 2; // VOBJ_BORDER_WIDTH=2 なので 1px 相当 × zoom
+        const verticalPadHalf = paddingVertical / 2; // VOBJ_PADDING_VERTICAL=8 なので 4px 相当 × zoom
 
         // タイトル領域
         const titleArea = document.createElement('div');
@@ -370,21 +408,21 @@ export class VirtualObjectRenderer {
         titleArea.style.boxSizing = 'border-box'; // border を height に含める
         titleArea.style.backgroundColor = styles.tbcol;
 
-        // 仮身枠の表示/非表示
+        // 仮身枠の表示/非表示 (border 幅は zoom 反映)
         if (showFrame) {
-            titleArea.style.borderLeft = `1px solid ${styles.frcol}`;
-            titleArea.style.borderTop = `1px solid ${styles.frcol}`;
-            titleArea.style.borderRight = `1px solid ${styles.frcol}`;
-            titleArea.style.borderBottom = `1px solid ${styles.frcol}`; // 下側の枠線を追加
+            titleArea.style.borderLeft = `${borderSide}px solid ${styles.frcol}`;
+            titleArea.style.borderTop = `${borderSide}px solid ${styles.frcol}`;
+            titleArea.style.borderRight = `${borderSide}px solid ${styles.frcol}`;
+            titleArea.style.borderBottom = `${borderSide}px solid ${styles.frcol}`;
         }
 
         titleArea.style.display = showTitleArea ? 'flex' : 'none';
         titleArea.style.alignItems = 'center';
-        titleArea.style.paddingTop = '4px';
-        titleArea.style.paddingBottom = '4px';
-        titleArea.style.paddingLeft = '4px';
-        titleArea.style.paddingRight = '4px';
-        titleArea.style.gap = '4px';
+        titleArea.style.paddingTop = verticalPadHalf + 'px';
+        titleArea.style.paddingBottom = verticalPadHalf + 'px';
+        titleArea.style.paddingLeft = horizontalPadding + 'px';
+        titleArea.style.paddingRight = horizontalPadding + 'px';
+        titleArea.style.gap = gapSize + 'px';
         titleArea.style.overflow = 'visible'; // アイコンとテキストが切れないように
         titleArea.style.zIndex = '1'; // mainAreaの上に表示
 
@@ -506,8 +544,8 @@ export class VirtualObjectRenderer {
         // 閉じた仮身ではmainAreaにborderを設定しない
         // （titleAreaのborderBottomで十分）
         if (showFrame && !showTitleArea) {
-            // titleAreaが表示されない場合のみmainAreaにborderを設定
-            mainArea.style.border = `1px solid ${styles.frcol}`;
+            // titleAreaが表示されない場合のみmainAreaにborderを設定 (zoom 反映)
+            mainArea.style.border = `${borderSide}px solid ${styles.frcol}`;
         }
 
         vobj.appendChild(mainArea);
@@ -525,7 +563,8 @@ export class VirtualObjectRenderer {
      * @returns {HTMLElement} 開いた仮身要素
      */
     createOpenedBlockElement(virtualObject, options = {}) {
-        const styles = this.getStyles(virtualObject);
+        const styles = this.getStyles(virtualObject, options);
+        const zoomLevel = options.zoomLevel || 1;
         const vobj = document.createElement('div');
 
         vobj.className = 'virtual-object virtual-object-opened';
@@ -536,10 +575,13 @@ export class VirtualObjectRenderer {
         vobj.style.position = 'absolute';
         vobj.style.left = (virtualObject.vobjleft || 0) + 'px';
         vobj.style.top = (virtualObject.vobjtop || 0) + 'px';
-        vobj.style.width = (virtualObject.width || 200) + 'px';
-        vobj.style.height = ((virtualObject.vobjbottom || 150) - (virtualObject.vobjtop || 0)) + 'px';
+        // 開いた仮身のサイズも zoom 反映 (mixin が override する場合は上書きされる)
+        vobj.style.width = ((virtualObject.width || 200) * zoomLevel) + 'px';
+        vobj.style.height = (((virtualObject.vobjbottom || 150) - (virtualObject.vobjtop || 0)) * zoomLevel) + 'px';
         vobj.style.boxSizing = 'border-box';
         vobj.style.cursor = 'pointer';
+        // zoom 適用済みであることを記録 (mixin の zoom 変化検知用)
+        vobj.dataset.zoomAtRender = String(zoomLevel);
 
         // 表示設定を取得
         const showFrame = virtualObject.framedisp !== 'false';
@@ -568,19 +610,23 @@ export class VirtualObjectRenderer {
         // 全ての表示属性がオフかどうかを判定
         const showTitleBar = showPict || showName || showRole || showType || showUpdate;
 
-        // 外枠（showFrameがtrueの時のみ）
+        // 外枠 (zoom 反映)
+        const borderSideOpen = (VOBJ_BORDER_WIDTH / 2) * zoomLevel; // 1px × zoom
         if (showFrame) {
-            vobj.style.border = `1px solid ${styles.frcol}`;
+            vobj.style.border = `${borderSideOpen}px solid ${styles.frcol}`;
         }
 
-        // タイトルバーの高さを計算
+        // タイトルバーの高さを計算 (zoom 反映)
         const lineHeight = DEFAULT_LINE_HEIGHT;
         const textHeight = Math.ceil(styles.chszPx * lineHeight);
         const iconSize = Math.round(styles.chszPx * 1.0);
         const contentHeight = Math.max(iconSize, textHeight);
-        const paddingVertical = VOBJ_PADDING_VERTICAL; // 上下の padding: 4px + 4px
-        const borderWidth = 1; // titleBar の borderBottom のみ
-        const titleBarHeight = contentHeight + paddingVertical + borderWidth;
+        const paddingVerticalOpen = VOBJ_PADDING_VERTICAL * zoomLevel;  // 開いた仮身は padding 維持
+        const titleBarBorderBottom = borderSideOpen; // 1px × zoom
+        const titleBarHeight = contentHeight + paddingVerticalOpen + titleBarBorderBottom;
+        const titleBarPadH = 8 * zoomLevel;
+        const titleBarPadV = 4 * zoomLevel;
+        const titleBarGap = 4 * zoomLevel;
         let contentTop = 0;
 
         if (showTitleBar) {
@@ -592,17 +638,17 @@ export class VirtualObjectRenderer {
             titleBar.style.right = '0';
             titleBar.style.height = titleBarHeight + 'px';
             titleBar.style.backgroundColor = styles.tbcol;
-            // タイトルバー下部境界線（showFrameがtrueの時のみ）
+            // タイトルバー下部境界線 (zoom 反映)
             if (showFrame) {
-                titleBar.style.borderBottom = `1px solid ${styles.frcol}`;
+                titleBar.style.borderBottom = `${titleBarBorderBottom}px solid ${styles.frcol}`;
             }
             titleBar.style.display = 'flex';
             titleBar.style.alignItems = 'center';
-            titleBar.style.paddingTop = '4px';
-            titleBar.style.paddingBottom = '4px';
-            titleBar.style.paddingLeft = '8px';
-            titleBar.style.paddingRight = '8px';
-            titleBar.style.gap = '4px';
+            titleBar.style.paddingTop = titleBarPadV + 'px';
+            titleBar.style.paddingBottom = titleBarPadV + 'px';
+            titleBar.style.paddingLeft = titleBarPadH + 'px';
+            titleBar.style.paddingRight = titleBarPadH + 'px';
+            titleBar.style.gap = titleBarGap + 'px';
             titleBar.style.boxSizing = 'border-box';
             titleBar.style.overflow = 'hidden';
             titleBar.style.whiteSpace = 'nowrap';
@@ -1004,22 +1050,18 @@ export class VirtualObjectRenderer {
         }
 
         // 座標ベースの判定（TADファイルから読み込んだ場合）
-        if (!virtualObject.vobjbottom || !virtualObject.vobjtop) {
+        // 注意: vobjtop=0 は最上位の仮身として有効な値なので、falsy 判定ではなく undefined/null 判定を行う
+        if (virtualObject.vobjbottom == null || virtualObject.vobjtop == null) {
             return false;
         }
 
         const vobjHeight = virtualObject.vobjbottom - virtualObject.vobjtop;
         const chsz = parseFloat(virtualObject.chsz) || DEFAULT_FONT_SIZE;
 
-        // 閉じた仮身の最小高さを計算（chszはポイント値なのでピクセルに変換）
-        const chszPx = convertPtToPx(chsz);
-        const lineHeight = DEFAULT_LINE_HEIGHT;
-        const textHeight = Math.ceil(chszPx * lineHeight);
-        const minClosedHeight = textHeight + VOBJ_PADDING_VERTICAL;
-
-        // 閉じた仮身の高さより10px以上大きければ開いた仮身と判定
-        // （数ピクセルの誤差で表示が切り替わるのを防ぐ）
-        return vobjHeight > minClosedHeight + 10;
+        // 開いた仮身の最小高さ (minClosedHeight + VOBJ_MIN_OPEN_HEIGHT_OFFSET) 以上なら開いた仮身と判定
+        // 偶発的に少しだけ大きくしてしまった (minClosedHeight + 10 程度) は閉じた仮身扱いとする
+        const minOpenHeight = this.getMinOpenHeight(chsz);
+        return vobjHeight >= minOpenHeight;
     }
 
     /**
@@ -1040,13 +1082,13 @@ export class VirtualObjectRenderer {
 
     /**
      * 開いた仮身の最小高さを計算（リサイズ用閾値）
+     * 仮身枠 (タイトルバー = 閉じた仮身の高さ) + コンテンツエリア最小 (VOBJ_MIN_OPEN_HEIGHT_OFFSET)
+     * 仮身枠の直下に枠線が来てしまう状態を防ぐため
      * @param {number} chsz - 文字サイズ（ポイント）
      * @returns {number} 最小高さ（ピクセル）
      */
     getMinOpenHeight(chsz = DEFAULT_FONT_SIZE) {
-        const chszPx = convertPtToPx(parseFloat(chsz) || DEFAULT_FONT_SIZE);
-        const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
-        return textHeight + VOBJ_MIN_OPEN_HEIGHT_OFFSET; // タイトルバー(+8) + 区切り線(+2) + コンテンツ最小(+20)
+        return this.getMinClosedHeight(chsz) + VOBJ_MIN_OPEN_HEIGHT_OFFSET;
     }
 
     /**

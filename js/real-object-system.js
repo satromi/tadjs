@@ -19,7 +19,31 @@ const logger = getLogger('RealObjectSystem');
  * 実身仮身システム - ファイル直接アクセス版
  * IndexedDBを使わず、ファイルシステムから直接読み書き
  */
+const _listImageRegexCache = new Map();
+const _listMediaRegexCache = new Map();
+const _REGEX_CACHE_MAX = 500;
+
 export class RealObjectSystem {
+    static _getListImageRegex(escapedRealId, recordNo) {
+        const key = `${escapedRealId}\x00${recordNo}`;
+        const cached = _listImageRegexCache.get(key);
+        if (cached) return cached;
+        if (_listImageRegexCache.size >= _REGEX_CACHE_MAX) _listImageRegexCache.clear();
+        const re = new RegExp(`^${escapedRealId}_${recordNo}_(\\d+)\\.png$`);
+        _listImageRegexCache.set(key, re);
+        return re;
+    }
+
+    static _getListMediaRegex(escapedRealId, recordNo) {
+        const key = `${escapedRealId}\x00${recordNo}`;
+        const cached = _listMediaRegexCache.get(key);
+        if (cached) return cached;
+        if (_listMediaRegexCache.size >= _REGEX_CACHE_MAX) _listMediaRegexCache.clear();
+        const re = new RegExp(`^${escapedRealId}_${recordNo}_(\\d+)\\.([a-zA-Z0-9]+)$`);
+        _listMediaRegexCache.set(key, re);
+        return re;
+    }
+
     constructor(dataFolder = null) {
         logger.info('初期化（ファイル直接アクセスモード）');
 
@@ -598,7 +622,13 @@ export class RealObjectSystem {
             await this.fs.promises.unlink(jsonPath);
             logger.debug(`メタデータ削除: ${jsonPath}`);
         } catch (e) {
-            if (e.code !== 'ENOENT') throw e;
+            if (e.code === 'ENOENT') {
+                // 既に削除済み
+            } else if (e.code === 'EPERM' || e.code === 'EBUSY') {
+                logger.warn(`メタデータ削除を保留 (使用中など): ${jsonPath}`, e);
+            } else {
+                throw e;
+            }
         }
 
         // レコード削除（すべてのレコードファイルを探して削除）
@@ -612,6 +642,11 @@ export class RealObjectSystem {
                 recordNo++;
             } catch (e) {
                 if (e.code === 'ENOENT') break;
+                if (e.code === 'EPERM' || e.code === 'EBUSY') {
+                    logger.warn(`レコード削除を保留 (使用中など): ${xtadPath}`, e);
+                    recordNo++;
+                    continue;
+                }
                 throw e;
             }
         }
@@ -622,7 +657,13 @@ export class RealObjectSystem {
             await this.fs.promises.unlink(icoPath);
             logger.debug(`アイコン削除: ${icoPath}`);
         } catch (e) {
-            if (e.code !== 'ENOENT') throw e;
+            if (e.code === 'ENOENT') {
+                // 既に削除済み
+            } else if (e.code === 'EPERM' || e.code === 'EBUSY') {
+                logger.warn(`アイコン削除を保留 (使用中など): ${icoPath}`, e);
+            } else {
+                throw e;
+            }
         }
 
         // 関連リソースファイル削除（realId_*.*やrealId.* パターン）
@@ -645,7 +686,15 @@ export class RealObjectSystem {
                     deletePromises.push(
                         this.fs.promises.unlink(filePath)
                             .then(() => logger.debug(`リソースファイル削除: ${filePath}`))
-                            .catch(error => logger.error(`リソースファイル削除失敗: ${file}`, error))
+                            .catch(error => {
+                                if (error && (error.code === 'ENOENT')) {
+                                    logger.debug(`リソースファイル既に削除済み: ${file}`);
+                                } else if (error && (error.code === 'EPERM' || error.code === 'EBUSY')) {
+                                    logger.warn(`リソースファイル削除を保留 (使用中など): ${file}`, error);
+                                } else {
+                                    logger.error(`リソースファイル削除失敗: ${file}`, error);
+                                }
+                            })
                     );
                 }
             }
@@ -904,7 +953,17 @@ export class RealObjectSystem {
                 }
 
                 const jsonContent = await this.fs.promises.readFile(jsonPath, 'utf-8');
-                const metadata = JSON.parse(jsonContent);
+                if (!jsonContent || jsonContent.trim().length === 0) {
+                    logger.warn(`参照先 JSON ファイルが空のためスキップ: ${refRealId}`);
+                    continue;
+                }
+                let metadata;
+                try {
+                    metadata = JSON.parse(jsonContent);
+                } catch (parseErr) {
+                    logger.warn(`参照先 JSON のパースに失敗したためスキップ: ${refRealId}`, parseErr);
+                    continue;
+                }
                 const currentRefCount = metadata.refCount || 0;
                 const newRefCount = Math.max(0, currentRefCount - 1);
                 metadata.refCount = newRefCount;
@@ -1596,7 +1655,7 @@ export class RealObjectSystem {
 
             // パターン: realId_recordNo_imageNo.png
             const escapedRealId = realId.replace(/[-]/g, '\\-');
-            const pattern = new RegExp(`^${escapedRealId}_${recordNo}_(\\d+)\\.png$`);
+            const pattern = RealObjectSystem._getListImageRegex(escapedRealId, recordNo);
 
             const result = [];
             for (const file of files) {
@@ -1634,7 +1693,7 @@ export class RealObjectSystem {
 
             // パターン: realId_recordNo_resourceNo.拡張子（任意）
             const escapedRealId = realId.replace(/[-]/g, '\\-');
-            const pattern = new RegExp(`^${escapedRealId}_${recordNo}_(\\d+)\\.([a-zA-Z0-9]+)$`);
+            const pattern = RealObjectSystem._getListMediaRegex(escapedRealId, recordNo);
 
             const result = [];
             for (const file of files) {

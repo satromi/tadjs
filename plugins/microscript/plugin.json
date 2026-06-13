@@ -1,0 +1,24 @@
+{
+  "id": "microscript",
+  "name": "マイクロスクリプト",
+  "version": "1.0.0",
+  "type": "base",
+  "basefile": {
+    "json": "a22ca516-a22c-7fdb-81fd-04cda3e1c8af.json",
+    "xmltad": "a22ca516-a22c-7fdb-81fd-04cda3e1c8af_0.xtad",
+    "ico": "a22ca516-a22c-7fdb-81fd-04cda3e1c8af.ico"
+  },
+  "description": "BTRON互換マイクロスクリプト実行環境",
+  "icon": "🎭",
+  "author": "satromi",
+  "main": "index.html",
+  "needsCloseConfirmation": false,
+  "window": {
+    "width": 800,
+    "height": 600,
+    "resizable": true,
+    "scrollable": true,
+    "openable": true
+  },
+  "permissions": []
+}

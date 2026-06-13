@@ -7,6 +7,18 @@ const logger = window.getLogger('BasicTextEditor');
 
 export const TextVirtualObjectMixin = (Base) => class extends Base {
     async expandVirtualObject(vo, width, height) {
+        // 既展開状態でなければ、仮身高さの正規化を実行 (PluginBase 共通メソッド)
+        // dataset 経由で chsz / 引数 height (= 展開後高さ) から判定情報を構築
+        if (!vo.classList.contains('expanded')) {
+            const chsz = parseFloat(vo.dataset.linkChsz) || DEFAULT_FONT_SIZE;
+            // 呼び出し側から渡された height (展開後サイズ) を判定に使う
+            const vobjForJudge = { chsz, vobjtop: 0, vobjbottom: height };
+            const { shouldExpand } = this.normalizeVobjHeightForExpand(vo, vobjForJudge);
+            if (!shouldExpand) {
+                logger.debug('[EDITOR] 閉じた仮身のため展開を中止:', vo.dataset.linkName);
+                return;
+            }
+        }
         // 既に展開済みの場合はサイズだけ更新
         if (vo.classList.contains('expanded')) {
             const iframe = vo.querySelector('.virtual-object-content');
@@ -267,7 +279,7 @@ export const TextVirtualObjectMixin = (Base) => class extends Base {
             iframe.style.backgroundColor = bgcol; // コンテンツ背景色にbgcolを使用
             iframe.style.boxSizing = 'border-box';
             iframe.setAttribute('scrolling', 'no'); // スクロールバー非表示
-            iframe.src = `../../plugins/${defaultOpen}/index.html`;
+            iframe.src = `../../plugins/${defaultOpen}/index.html?embedded=true`;
 
             // iframeを追加
             vo.appendChild(iframe);
@@ -290,14 +302,21 @@ export const TextVirtualObjectMixin = (Base) => class extends Base {
             };
 
         } catch (error) {
-            logger.error('[EDITOR] 開いた仮身表示エラー:', error);
-            // エラーが発生した場合は展開状態を解除
-            vo.classList.remove('expanded');
-            // 元のテキスト表示に戻す
-            const displayName = vo.dataset.linkName || '無題';
-            vo.textContent = displayName;
-            // ユーザーにエラーを通知
+            logger.error('[EDITOR] 開いた仮身表示エラー:', error, {
+                realId: vo.dataset.linkId,
+                name: vo.dataset.linkName,
+                hasLinkId: !!vo.dataset.linkId
+            });
             this.setStatus(`仮身の展開に失敗しました: ${error.message}`);
+
+            // データ保護: textContent 上書きはせず、 collapseVirtualObject で安全に通常表示へ戻す
+            // collapseVirtualObject は expanded class を前提とするので、 ここでは remove しない
+            try {
+                await this.collapseVirtualObject(vo);
+            } catch (collapseErr) {
+                logger.error('[EDITOR] collapse 失敗、 最低限の状態復元のみ:', collapseErr);
+                vo.classList.remove('expanded');
+            }
         }
     }
 
@@ -398,6 +417,11 @@ export const TextVirtualObjectMixin = (Base) => class extends Base {
 
         // 内容をクリアして再構築
         vo.innerHTML = '';
+
+        // virtual-object クラスを明示再設定 (万一の class 喪失でも仮身識別を維持)
+        if (!vo.classList.contains('virtual-object')) {
+            vo.classList.add('virtual-object');
+        }
 
         // ピクトグラム（アイコン）
         if (showPict) {

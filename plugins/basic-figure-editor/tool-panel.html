@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>道具パネル - 基本図形編集</title>
-    <link rel="stylesheet" href="tool-panel.css?v=20251109">
+    <link rel="stylesheet" href="tool-panel.css?v=20251129">
 </head>
 <body>
     <div class="tool-panel-window">
@@ -45,6 +45,11 @@
                 <span class="zoom-label">x1</span>
             </button>
 
+            <!-- 格子点設定 -->
+            <button class="palette-btn" id="gridSettings" title="格子点設定">
+                <span class="palette-icon">⊞</span>
+            </button>
+
             <!-- マウス座標 (BTRON 単位) -->
             <span class="mouse-coords-label" id="mouseCoordsLabel" title="マウス座標 (BTRON 単位)"></span>
         </div>
@@ -69,23 +74,26 @@
             <button class="tool-btn" data-tool="rect" title="長方形">
                 <span class="tool-icon">□</span>
             </button>
+            <button class="tool-btn" data-tool="polygon" title="多角形">
+                <span class="tool-icon polygon-tool-icon" aria-hidden="true">
+                    <svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+                        <polygon points="3,3 9,2 14,5 13,10 15,14 8,13 4,15 2,9"
+                                 fill="none" stroke="currentColor" stroke-width="1.2"
+                                 stroke-linejoin="miter" stroke-linecap="round" />
+                    </svg>
+                </span>
+            </button>
             <button class="tool-btn" data-tool="triangle" title="三角形">
                 <span class="tool-icon">◺</span>
             </button>
             <button class="tool-btn" data-tool="ellipse" title="楕円">
                 <span class="tool-icon">○</span>
             </button>
-            <button class="tool-btn" data-tool="polygon" title="多角形">
-                <span class="tool-icon">⬡</span>
-            </button>
             <button class="tool-btn" data-tool="text" title="文字入力">
                 <span class="tool-icon">Ａ</span>
             </button>
             <button class="tool-btn" id="fontSettings" title="フォント・書式設定">
                 <span class="tool-icon">📝</span>
-            </button>
-            <button class="palette-btn" id="gridSettings" title="格子点設定">
-                <span class="palette-icon">⊞</span>
             </button>
         </div>
 

@@ -805,9 +805,9 @@ class BaseCalendarApp extends window.PluginBase {
         return `<document>
 <docView viewleft="${position.left}" viewtop="${position.top}" viewright="${position.right}" viewbottom="${position.bottom}"/>
 <docDraw drawleft="${position.left}" drawtop="${position.top}" drawright="${position.right}" drawbottom="${position.bottom}"/>
-<docScale hunit="-72" vunit="-72"/>
+<docScale hunit="-96" vunit="-96"/>
 <text zIndex="${zIndex}"/>
-<font size="10"/>
+<font size="8"/>
 <font color="${SUNDAY_COLOR}"/>
 <text align="left"/>
 <docmemo text="holiday"/>${holidayName}
@@ -1044,19 +1044,19 @@ class BaseCalendarApp extends window.PluginBase {
 <figure>
 <figView top="0" left="0" right="${BASE_WIDTH}" bottom="${BASE_HEIGHT}"/>
 <figDraw top="0" left="0" right="${BASE_WIDTH}" bottom="${BASE_HEIGHT}"/>
-<figScale hunit="-72" vunit="-72"/>
+<figScale hunit="-96" vunit="-96"/>
 ${patternsXml}<!-- ナビゲーションバー背景 -->
 <rect round="0" lineType="0" lineWidth="1" f_pat="${getPatternId(HOVER_BG_COLOR)}" l_pat="${getPatternId(GRAY_COLOR)}" left="0" top="0" right="${BASE_WIDTH}" bottom="${NAV_HEIGHT}" zIndex="1"/>
-<!-- 年月表示テキスト -->
+<!-- 年月表示テキスト (太字) -->
 <document>
 <docView viewleft="350" viewtop="5" viewright="450" viewbottom="35"/>
 <docDraw drawleft="350" drawtop="5" drawright="450" drawbottom="35"/>
-<docScale hunit="-72" vunit="-72"/>
+<docScale hunit="-96" vunit="-96"/>
 <text zIndex="2"/>
-<font size="16"/>
+<font size="12"/>
 <font color="${DEFAULT_CHCOL}"/>
 <text align="center"/>
-${monthName}
+<bold>${monthName}</bold>
 </document>
 <!-- 曜日ヘッダー背景 -->
 <rect round="0" lineType="0" lineWidth="1" f_pat="${getPatternId(HOVER_BG_COLOR)}" l_pat="${getPatternId(GRAY_COLOR)}" left="0" top="${NAV_HEIGHT}" right="${BASE_WIDTH}" bottom="${GRID_TOP}" zIndex="3"/>
@@ -1071,9 +1071,9 @@ ${monthName}
 <document>
 <docView viewleft="${left}" viewtop="${NAV_HEIGHT}" viewright="${right}" viewbottom="${GRID_TOP}"/>
 <docDraw drawleft="${left}" drawtop="${NAV_HEIGHT}" drawright="${right}" drawbottom="${GRID_TOP}"/>
-<docScale hunit="-72" vunit="-72"/>
+<docScale hunit="-96" vunit="-96"/>
 <text zIndex="${zIndex}"/>
-<font size="12"/>
+<font size="9"/>
 <font color="${WEEKDAY_COLORS[i]}"/>
 <text align="center"/>
 ${WEEKDAYS[i]}
@@ -1148,9 +1148,9 @@ ${WEEKDAYS[i]}
                 xmlTAD += `<document>
 <docView viewleft="${textLeft}" viewtop="${textTop}" viewright="${textRight}" viewbottom="${textBottom}"/>
 <docDraw drawleft="${textLeft}" drawtop="${textTop}" drawright="${textRight}" drawbottom="${textBottom}"/>
-<docScale hunit="-72" vunit="-72"/>
+<docScale hunit="-96" vunit="-96"/>
 <text zIndex="${zIndex}"/>
-<font size="12"/>
+<font size="9"/>
 <font color="${dayColor}"/>
 <text align="left"/>
 ${dayText}
@@ -1287,19 +1287,19 @@ ${dayText}
 <figure>
 <figView top="0" left="0" right="${layout.BASE_WIDTH}" bottom="${layout.BASE_HEIGHT}"/>
 <figDraw top="0" left="0" right="${layout.BASE_WIDTH}" bottom="${layout.BASE_HEIGHT}"/>
-<figScale hunit="-72" vunit="-72"/>
+<figScale hunit="-96" vunit="-96"/>
 ${patternsXml}<!-- ナビゲーションバー背景 -->
 <rect round="0" lineType="0" lineWidth="1" f_pat="${getPatternId(HOVER_BG_COLOR)}" l_pat="${getPatternId(GRAY_COLOR)}" left="0" top="0" right="${layout.BASE_WIDTH}" bottom="${layout.NAV_HEIGHT}" zIndex="1"/>
-<!-- 年月表示テキスト -->
+<!-- 年月表示テキスト (太字) -->
 <document>
 <docView viewleft="350" viewtop="5" viewright="450" viewbottom="35"/>
 <docDraw drawleft="350" drawtop="5" drawright="450" drawbottom="35"/>
-<docScale hunit="-72" vunit="-72"/>
+<docScale hunit="-96" vunit="-96"/>
 <text zIndex="2"/>
-<font size="16"/>
+<font size="12"/>
 <font color="${DEFAULT_CHCOL}"/>
 <text align="center"/>
-${monthName}
+<bold>${monthName}</bold>
 </document>
 
 <!-- 曜日ヘッダー背景 -->
@@ -1316,9 +1316,9 @@ ${monthName}
 <document>
 <docView viewleft="${left}" viewtop="${layout.NAV_HEIGHT}" viewright="${right}" viewbottom="${layout.GRID_TOP}"/>
 <docDraw drawleft="${left}" drawtop="${layout.NAV_HEIGHT}" drawright="${right}" drawbottom="${layout.GRID_TOP}"/>
-<docScale hunit="-72" vunit="-72"/>
+<docScale hunit="-96" vunit="-96"/>
 <text zIndex="${zIndex}"/>
-<font size="12"/>
+<font size="9"/>
 <font color="${WEEKDAY_COLORS[i]}"/>
 <text align="center"/>
 ${WEEKDAYS[i]}
@@ -1391,9 +1391,9 @@ ${WEEKDAYS[i]}
                 xmlTAD += `<document>
 <docView viewleft="${textLeft}" viewtop="${textTop}" viewright="${textRight}" viewbottom="${textBottom}"/>
 <docDraw drawleft="${textLeft}" drawtop="${textTop}" drawright="${textRight}" drawbottom="${textBottom}"/>
-<docScale hunit="-72" vunit="-72"/>
+<docScale hunit="-96" vunit="-96"/>
 <text zIndex="${zIndex}"/>
-<font size="12"/>
+<font size="9"/>
 <font color="${dayColor}"/>
 <text align="left"/>
 ${dayText}
@@ -1919,7 +1919,6 @@ ${dayText}
             const index = parseInt(el.dataset.vobjIndex);
             if (this.selectedVirtualObjects.has(index)) {
                 el.classList.add('selected');
-                el.style.outline = '2px solid ${SELECTION_COLOR}';
             } else {
                 el.classList.remove('selected');
                 el.style.outline = '';
@@ -2012,7 +2011,6 @@ ${dayText}
         // 選択状態を反映
         if (this.selectedVirtualObjects.has(vobjIndex)) {
             element.classList.add('selected');
-            element.style.outline = '2px solid ${SELECTION_COLOR}';
         }
 
         // マウスハンドラを設定
@@ -2288,9 +2286,8 @@ ${dayText}
                 vobjElement.style.height = `${finalHeight}px`;
 
                 // 仮身オブジェクトのサイズを更新
-                // 注: DOM要素の高さ（finalHeight）はborderを含む（box-sizing: border-box）
-                // TADファイルのheight属性はborderを含まない値を保存する
-                const heightForSave = finalHeight - VOBJ_BORDER_WIDTH;
+                // vobj.style.height = vobjbottom-vobjtop の慣習 (renderer と統一)
+                const heightForSave = finalHeight;
                 obj.width = finalWidth;
                 obj.heightPx = heightForSave;
                 obj.vobjright = obj.vobjleft + finalWidth;
@@ -2306,9 +2303,18 @@ ${dayText}
                 // VirtualObjectRendererのユーティリティメソッドを使用
                 const chsz_resize = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
                 const minClosedHeight_resize = this.virtualObjectRenderer.getMinClosedHeight(chsz_resize);
+                const minOpenHeight_resize = this.virtualObjectRenderer.getMinOpenHeight(chsz_resize);
                 const wasOpen = hasContentArea;
-                // VirtualObjectRendererと同じ閾値を使用: height > minClosedHeight
-                const isNowOpen = finalHeight > minClosedHeight_resize;
+                // 偶発的な小さなドラッグでは閉じた仮身扱いにするため、minOpenHeight を境界に使う
+                const isNowOpen = finalHeight >= minOpenHeight_resize;
+
+                // 偶発的に閉じた仮身を中間サイズに広げてしまった場合は、判定変化が無くても閉じた仮身サイズにスナップ
+                if (!isNowOpen && finalHeight > minClosedHeight_resize) {
+                    obj.heightPx = minClosedHeight_resize;
+                    obj.vobjbottom = obj.vobjtop + minClosedHeight_resize;
+                    vobjElement.style.height = `${minClosedHeight_resize}px`;
+                    this.saveMonthToFile();
+                }
 
                 if (wasOpen !== isNowOpen) {
                     logger.debug('[BaseCalendar] 開いた仮身/閉じた仮身の判定が変わりました。再描画します。');
@@ -2330,11 +2336,9 @@ ${dayText}
                         this.saveMonthToFile();
                     }
 
-                    // 遅延して再描画
-                    this.recreateVirtualObjectTimer = setTimeout(() => {
-                        this.renderFreeVirtualObjects();
-                        this.recreateVirtualObjectTimer = null;
-                    }, 150);
+                    // 即時再描画 (150ms 遅延中の「選択枠 > 仮身枠」表示不一致を防ぐ)
+                    this.renderFreeVirtualObjects();
+                    this.recreateVirtualObjectTimer = null;
                 }
 
                 // ウィンドウのリサイズハンドルを再有効化

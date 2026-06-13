@@ -209,6 +209,7 @@ class PlaybackController {
         this.repeatMode = 'none';      // 'none' | 'all' | 'one'
         this.shuffleMode = false;
         this.lastPlayedIndex = -1;     // シャッフル時の連続再生回避用
+        this.currentTrackIndex = -1;   // 現在再生中のトラックインデックス (キャッシュ)
     }
 
     /**
@@ -364,9 +365,17 @@ class PlaybackController {
      * 現在のトラックインデックスを取得
      */
     getCurrentTrackIndex() {
+        // フィールドが有効ならキャッシュ値を返す (O(1))
+        if (this.currentTrackIndex >= 0) {
+            return this.currentTrackIndex;
+        }
+        // 初回参照時のみ線形探索
         const allMedia = this.mediaManager.getAllMedia();
         const current = this.getCurrentMedia();
-        return current ? allMedia.indexOf(current) : 0;
+        if (!current) return 0;
+        const idx = allMedia.indexOf(current);
+        if (idx >= 0) this.currentTrackIndex = idx;
+        return idx >= 0 ? idx : 0;
     }
 
     /**
@@ -390,6 +399,7 @@ class PlaybackController {
             const prevMedia = allMedia[currentIndex - 1];
             prevMedia.currentTime = 0;
             this.isPlaying = true;
+            this.currentTrackIndex = currentIndex - 1;
             prevMedia.play().catch(e => logger.warn('[PlayerApp] 再生エラー:', e.message));
         } else {
             // 1曲目なら先頭に戻る
@@ -490,6 +500,7 @@ class PlaybackController {
         targetMedia.currentTime = 0;
         this.isPlaying = true;
         this.lastPlayedIndex = index;
+        this.currentTrackIndex = index;
         targetMedia.play().catch(e => logger.warn('[PlayerApp] 再生エラー:', e.message));
     }
 
@@ -525,6 +536,10 @@ class PlayerApp extends PluginBase {
         this.realtimeData = null;
         this.alwaysOnTop = false;
         this.playlistWindowId = null;  // プレイリストウィンドウID
+
+        // formatTime キャッシュ (秒数(整数) → "hh:mm:ss")
+        this._timeCache = new Map();
+        this._TIME_CACHE_MAX = 1000;
 
         this.initialize();
     }
@@ -1224,7 +1239,9 @@ class PlayerApp extends PluginBase {
      * 再表示
      */
     async refresh() {
-        this.mediaManager.clear();
+        if (this.mediaManager) {
+            this.mediaManager.clear();
+        }
         await this.loadXtadData();
     }
 
@@ -1465,10 +1482,18 @@ class PlayerApp extends PluginBase {
         if (!isFinite(seconds) || isNaN(seconds)) {
             return '00:00:00';
         }
-        const h = Math.floor(seconds / 3600);
-        const m = Math.floor((seconds % 3600) / 60);
-        const s = Math.floor(seconds % 60);
-        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        const secInt = Math.floor(seconds);
+        const cached = this._timeCache.get(secInt);
+        if (cached !== undefined) return cached;
+
+        const h = Math.floor(secInt / 3600);
+        const m = Math.floor((secInt % 3600) / 60);
+        const s = secInt % 60;
+        const formatted = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+
+        if (this._timeCache.size >= this._TIME_CACHE_MAX) this._timeCache.clear();
+        this._timeCache.set(secInt, formatted);
+        return formatted;
     }
 
     /**
@@ -1782,6 +1807,12 @@ class PlayerApp extends PluginBase {
             this.audioElement.src = '';
             this.audioElement = null;
         }
+        // MediaElementManager が保持する全メディア要素を解放 (Audio/Video の停止・src クリア・DOM 除去)
+        if (this.mediaManager) {
+            this.mediaManager.clear();
+            this.mediaManager = null;
+        }
+        this.controller = null;
         this.parser = null;
         this.playerContainer = null;
         this.seekbarContainer = null;

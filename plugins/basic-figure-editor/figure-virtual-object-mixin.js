@@ -513,6 +513,27 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
         const virtualObject = shape.virtualObject;
         logger.debug('[FIGURE EDITOR] 開いた仮身の展開開始:', virtualObject.link_name);
 
+        // 仮身高さの正規化 (PluginBase 共通メソッド、データ側で開閉判定)
+        // shape.endY も同期して canvas 側の描画整合を保つ
+        // virtualObject の vobjtop/vobjbottom が無い場合は shape の値を使う
+        const vobjForJudge = {
+            chsz: virtualObject.chsz,
+            vobjtop: virtualObject.vobjtop !== undefined ? virtualObject.vobjtop : shape.startY,
+            vobjbottom: virtualObject.vobjbottom !== undefined ? virtualObject.vobjbottom : shape.endY
+        };
+        const { shouldExpand, finalHeight, modified } = this.normalizeVobjHeightForExpand(vobjElement, vobjForJudge);
+        if (modified) {
+            const heightLogical = finalHeight - VOBJ_BORDER_WIDTH;
+            virtualObject.heightPx = heightLogical;
+            if (shape.startY !== undefined) {
+                shape.endY = shape.startY + heightLogical;
+            }
+        }
+        if (!shouldExpand) {
+            logger.debug('[FIGURE EDITOR] 閉じた仮身のため展開を中止');
+            return null;
+        }
+
         // 展開フラグを設定（renderVirtualObjectsAsElementsによる中断を防ぐ）
         this.isExpandingVirtualObject = true;
 
@@ -732,17 +753,39 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
         });
 
         // 各仮身図形をDOM要素として作成または更新
+        // effectiveScale = figScale × zoom — renderer 内部要素も同じスケールで再生成判定する
+        const figScaleForZoom = this.getFigScalePixelFactor ? this.getFigScalePixelFactor() : { x: 1, y: 1 };
+        const currentEffectiveScale = (figScaleForZoom.y || 1) * (this.zoomLevel || 1);
         virtualObjectShapes.forEach(shape => {
-            // 既にDOM要素が存在し、親ノードにも接続されている場合は、位置とサイズのみ更新
+            // 既にDOM要素が存在し、親ノードにも接続されている場合
             if (shape.vobjElement && shape.vobjElement.parentNode) {
-                logger.debug('[FIGURE EDITOR] 既存の仮身DOM要素を再利用:', shape.virtualObject.link_name, 'vobjElement:', !!shape.vobjElement, 'parentNode:', !!shape.vobjElement.parentNode);
+                // effectiveScale が変わっている場合は内部要素 (font/icon/padding) も再計算が必要なので DOM を再生成
+                const renderedZoom = parseFloat(shape.vobjElement.dataset.zoomAtRender) || 1;
+                if (Math.abs(renderedZoom - currentEffectiveScale) > 0.001) {
+                    logger.debug('[FIGURE EDITOR] effectiveScale 変化検知 (', renderedZoom, '→', currentEffectiveScale, ') 仮身 DOM を再生成:', shape.virtualObject.link_name);
+                    if (shape.vobjElement._cleanupMouseHandlers) {
+                        shape.vobjElement._cleanupMouseHandlers();
+                    }
+                    shape.vobjElement.remove();
+                    delete shape.vobjElement;
+                    this.renderVirtualObjectElement(shape);
+                    return;
+                }
+
+                logger.debug('[FIGURE EDITOR] 既存の仮身DOM要素を再利用:', shape.virtualObject.link_name);
                 const width = shape.endX - shape.startX;
                 const height = shape.endY - shape.startY;
-                // DOM要素はbox-sizing: border-boxなので、border込みの高さを設定する
-                // shape座標のheight（endY - startY）はborderを含まないTAD保存値
-                const domHeight = height + VOBJ_BORDER_WIDTH;
+                // 閉じた仮身: DOM 高さ = shape.endY-startY (xtad の vobjbottom-vobjtop と同値、box-sizing で border 内包)
+                // 開いた仮身: 旧来 stored は border を含まない → DOM = stored + border (後方互換)
+                const isOpenedVobj = this.virtualObjectRenderer.isOpenedVirtualObject({
+                    ...shape.virtualObject,
+                    vobjtop: shape.startY,
+                    vobjbottom: shape.endY
+                });
+                const domHeight = isOpenedVobj ? height + VOBJ_BORDER_WIDTH : height;
 
-                // 位置、サイズ、z-indexが変わっている場合は更新（論理座標を物理座標に変換）
+                // 位置・サイズとも figScale + zoom で物理座標に変換 (canvas との整合)
+                // 仮身内部 (font/icon/padding) も renderer 側で同じ effectiveScale を適用
                 const updPos = this.logicalToPhysical(shape.startX, shape.startY);
                 const updSize = this.logicalToPhysical(width, domHeight);
                 const currentLeft = parseInt(shape.vobjElement.style.left) || 0;
@@ -806,9 +849,14 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
 
         // VirtualObjectRendererを使用してDOM要素を作成
         // アイコンは事前読み込み済みのiconDataを使用、フォールバックでloadIconCallbackを使用
+        // 内部要素 (文字・アイコン・padding・border) も effectiveScale = figScale × zoom で
+        // 一括スケールすることで canvas 上の他の図形・選択枠と整合する
+        const figScaleForRender = this.getFigScalePixelFactor ? this.getFigScalePixelFactor() : { x: 1, y: 1 };
+        const effectiveScale = (figScaleForRender.y || 1) * (this.zoomLevel || 1);
         const vobjElement = this.virtualObjectRenderer.createBlockElement(virtualObjectWithPos, {
             iconData: this.iconData || {},
-            loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIcon(realId) : Promise.resolve(null)
+            loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIcon(realId) : Promise.resolve(null),
+            zoomLevel: effectiveScale
         });
 
         if (!vobjElement) {
@@ -819,11 +867,13 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
         // クラスを追加
         vobjElement.classList.add('virtual-object-element');
 
-        // 位置とサイズを設定（論理座標を物理座標に変換）
-        // DOM要素はbox-sizing: border-boxなので、border込みの高さを設定する
-        // shape座標のheight（endY - startY）はborderを含まないTAD保存値
+        // 位置・サイズとも figScale + zoom で物理座標に変換 (canvas との整合)
+        // 仮身内部 (font/icon/padding) も renderer 側で同じ effectiveScale を適用
+        // 閉じた仮身: DOM 高さ = shape.endY-startY (= xtad の vobjbottom-vobjtop、box-sizing で border 内包)
+        // 開いた仮身: 旧来 stored は border を含まない → DOM = stored + border (後方互換)
         const vobjPos = this.logicalToPhysical(shape.startX, shape.startY);
-        const vobjSize = this.logicalToPhysical(width, height + VOBJ_BORDER_WIDTH);
+        const domHeight = isOpenVirtualObj ? (height + VOBJ_BORDER_WIDTH) : height;
+        const vobjSize = this.logicalToPhysical(width, domHeight);
         vobjElement.style.position = 'absolute';
         vobjElement.style.left = vobjPos.x + 'px';
         vobjElement.style.top = vobjPos.y + 'px';
@@ -1483,11 +1533,10 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
             const minWidth = 50;
 
             // VirtualObjectRendererのユーティリティメソッドを使用して最小高さを計算
-            // 注: getMinClosedHeight/getMinOpenHeightはborderなしのTAD保存値を返す
-            // プレビュー枠はDOM要素と同じborder込みの値を使う必要がある
+            // DOM rect.height = vobjbottom-vobjtop の慣習 (renderer と統一)、border 加算不要
             const chsz = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
-            const minClosedHeight = this.virtualObjectRenderer.getMinClosedHeight(chsz) + VOBJ_BORDER_WIDTH;
-            const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chsz) + VOBJ_BORDER_WIDTH;
+            const minClosedHeight = this.virtualObjectRenderer.getMinClosedHeight(chsz);
+            const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chsz);
 
             // DOMから実際のコンテンツエリアの有無で開閉状態を判定
             const hasContentArea = vobjElement.querySelector('.virtual-object-content-area') !== null ||
@@ -1580,9 +1629,21 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
                 const finalHeight = Math.round(finalLogical.y);
 
                 // shapeのサイズを更新
-                // 注: DOM要素の高さ（finalHeight）はborderを含む（box-sizing: border-box）
-                // TADファイルのheight属性はborderを含まない値を保存する
-                const heightForSave = finalHeight - VOBJ_BORDER_WIDTH;
+                // 閉じた仮身: stored = DOM 高さ (box-sizing border-box で border 内包)
+                // 開いた仮身: stored = DOM 高さ - border (旧来形式、後方互換)
+                const chsz_resize = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
+                const minClosedHeight_resize = this.virtualObjectRenderer.getMinClosedHeight(chsz_resize);
+                const minOpenHeight_resize = this.virtualObjectRenderer.getMinOpenHeight(chsz_resize);
+                // 偶発的な小さなドラッグでは閉じた仮身扱いにするため、minOpenHeight を境界に使う
+                // DOM rect.height = vobjbottom-vobjtop の慣習 (renderer と統一)
+                const isNowOpen = finalHeight >= minOpenHeight_resize;
+                let heightForSave = finalHeight;
+                let finalHeightForDom = finalHeight;
+                // 偶発的に閉じた仮身を中間サイズに広げてしまった場合は、閉じた仮身の最小サイズにスナップ
+                if (!isNowOpen && heightForSave > minClosedHeight_resize) {
+                    heightForSave = minClosedHeight_resize;
+                    finalHeightForDom = minClosedHeight_resize;
+                }
                 shape.endX = shape.startX + finalWidth;
                 shape.endY = shape.startY + heightForSave;
 
@@ -1593,12 +1654,7 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
                 logger.debug('[FIGURE EDITOR] 仮身リサイズ終了:', obj.link_name, 'newWidth:', finalWidth, 'newHeight:', finalHeight);
 
                 // 開いた仮身と閉じた仮身の判定が変わったかチェック
-                // VirtualObjectRendererのユーティリティメソッドを使用
-                const chsz_resize = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
-                const minClosedHeight_resize = this.virtualObjectRenderer.getMinClosedHeight(chsz_resize);
                 const wasOpen = hasContentArea; // DOMベースの判定を使用
-                // VirtualObjectRendererと同じ閾値を使用: height > minClosedHeight
-                const isNowOpen = finalHeight > minClosedHeight_resize;
 
                 if (wasOpen !== isNowOpen) {
                     // 判定が変わった場合は、少し待ってから仮身要素を再作成
@@ -1617,27 +1673,21 @@ export const FigureVirtualObjectMixin = (Base) => class extends Base {
                     // 再作成フラグを設定（renderVirtualObjectsAsElementsによる中断を防ぐ）
                     this.isRecreatingVirtualObject = true;
 
-                    // 遅延して再作成（150ms後）
-                    this.recreateVirtualObjectTimer = setTimeout(() => {
-                        logger.debug('[FIGURE EDITOR] 仮身を再作成します。');
-
-                        // 要素がまだDOMに存在するかチェック
-                        if (!vobjElement.parentNode) {
-                            logger.warn('[FIGURE EDITOR] 再作成対象の仮身要素がDOMから削除されています');
-                            this.recreateVirtualObjectTimer = null;
-                            this.isRecreatingVirtualObject = false;
-                            return;
-                        }
-
-                        // 仮身要素を再描画
-                        this.renderVirtualObjectElement(shape);
-
+                    // 即時再作成 (150ms 遅延中の「選択枠 > 仮身枠」表示不一致を防ぐ)
+                    if (!vobjElement.parentNode) {
+                        logger.warn('[FIGURE EDITOR] 再作成対象の仮身要素がDOMから削除されています');
                         this.recreateVirtualObjectTimer = null;
                         this.isRecreatingVirtualObject = false;
-                    }, 150);
+                    } else {
+                        logger.debug('[FIGURE EDITOR] 仮身を再作成します。');
+                        this.renderVirtualObjectElement(shape);
+                        this.recreateVirtualObjectTimer = null;
+                        this.isRecreatingVirtualObject = false;
+                    }
                 } else {
                     // 判定が変わらない場合は、DOM要素のサイズだけ更新（論理座標を物理座標に変換）
-                    const finalSize = this.logicalToPhysical(finalWidth, finalHeight);
+                    // 閉じた仮身を中間サイズで終えた場合は snap 後の最終高さを使う (選択枠と仮身枠の不一致を防ぐ)
+                    const finalSize = this.logicalToPhysical(finalWidth, finalHeightForDom);
                     vobjElement.style.width = `${finalSize.x}px`;
                     vobjElement.style.height = `${finalSize.y}px`;
                 }

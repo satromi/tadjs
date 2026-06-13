@@ -616,24 +616,18 @@ class RealObjectSearchApp extends window.PluginBase {
      * キーボードショートカット設定
      */
     setupKeyboardShortcuts() {
-        document.addEventListener('keydown', (e) => {
-            // Ctrl+L: 全画面表示
-            if (e.ctrlKey && e.key === 'l') {
-                e.preventDefault();
-                this.toggleFullscreen();
-            }
-            // Ctrl+E: ウィンドウを閉じる
-            else if (e.ctrlKey && e.key === 'e') {
-                e.preventDefault();
+        // 共通レジストリ経由でクリップボード操作 (Ctrl+C/X/V/A) を有効化
+        // PluginBase の onCopy/onCut/onPaste/onSelectAll (デフォルトは document.execCommand) で動作
+        this.enableClipboardShortcuts({ copy: true, cut: true, paste: true, selectAll: true });
+
+        // プラグイン固有ショートカット (Ctrl+L / Ctrl+E / Escape) も共通レジストリで登録
+        this.registerShortcut({ key: 'l', ctrl: true }, () => this.toggleFullscreen());
+        this.registerShortcut({ key: 'e', ctrl: true }, () => this.requestCloseWindow());
+        this.registerShortcut({ key: 'Escape', preventDefault: false }, () => {
+            if (this.isSearching) {
+                this.abortSearch();
+            } else {
                 this.requestCloseWindow();
-            }
-            // Escape: 検索中なら中断、そうでなければウィンドウを閉じる
-            else if (e.key === 'Escape') {
-                if (this.isSearching) {
-                    this.abortSearch();
-                } else {
-                    this.requestCloseWindow();
-                }
             }
         });
     }

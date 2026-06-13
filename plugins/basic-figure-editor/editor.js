@@ -48,6 +48,9 @@ class BasicFigureEditor extends
         this.currentTool = 'select'; // 現在選択中のツール
         this.shapes = []; // 描画された図形のリスト
         this.selectedShapes = []; // 選択中の図形
+        // 中心点モード対象ツールの集合
+        // 道具パネルのアクティブツールを再クリックで切替、 別ツール選択でも状態保持
+        this.centerModeTools = new Set();
         // マーカー定義（JIS X 9051-84 16ドット用字形）
         this.markerDefinitions = new Map([
             [0, { id: 0, type: 0, size: 16, fgCol: '#000000', shape: 'dot' }],
@@ -201,6 +204,8 @@ class BasicFigureEditor extends
             this.toolPanelVisible = false;
             document.body.style.overflow = 'hidden';
             document.body.classList.add('readonly-mode');
+            // 埋め込みモード用クラス: 親 (slide 等) が背景色を制御できるよう、内側を透過にする
+            document.body.classList.add('embedded-mode');
         }
 
         this.init();
@@ -302,6 +307,16 @@ class BasicFigureEditor extends
         this.messageBus.on('select-tool', (data) => {
             this.selectTool(data.tool);
             this.currentTool = data.tool;
+        });
+
+        // set-center-mode メッセージ (中心点モード切替)
+        this.messageBus.on('set-center-mode', (data) => {
+            if (!this.centerModeTools) this.centerModeTools = new Set();
+            if (data.enabled) {
+                this.centerModeTools.add(data.tool);
+            } else {
+                this.centerModeTools.delete(data.tool);
+            }
         });
 
         // update-fill-color メッセージ
@@ -490,7 +505,7 @@ class BasicFigureEditor extends
                     break;
                 }
             }
-            // 道具パネルウィンドウが閉じられた場合
+            // 道具パネルウィンドウが閉じられた場合 (toggle メニューで完全 close 時等)
             if (data.windowId === this.toolPanelWindowId) {
                 this.toolPanelWindowId = null;
                 logger.debug('[FIGURE EDITOR] [MessageBus] 道具パネルウィンドウIDをクリア');
@@ -750,7 +765,8 @@ class BasicFigureEditor extends
         // Canvasのサイズを設定
         this.resizeCanvas();
 
-        // 背景色を設定
+        // 背景色を設定 (物理サイズでクリア、transform を一旦 identity に戻す)
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
         this.ctx.fillStyle = this.bgColor;
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     }
@@ -786,25 +802,57 @@ class BasicFigureEditor extends
                 finalWidth = ((this.figView.right - this.figView.left) * scale.x) || 200;
                 finalHeight = ((this.figView.bottom - this.figView.top) * scale.y) || 200;
             } else {
-                // 通常モード: コンテンツサイズとウィンドウサイズの大きい方、最小サイズも保証
+                // 通常モード
                 const contentSize = this.calculateContentSize();
                 const windowWidth = container.clientWidth || 800;
                 const windowHeight = container.clientHeight || 600;
-                // 論理サイズ: ウィンドウサイズをzoomLevelで割って論理座標空間に変換
-                const logicalWidth = Math.max(contentSize.width, windowWidth / this.zoomLevel, 800);
-                const logicalHeight = Math.max(contentSize.height, windowHeight / this.zoomLevel, 600);
+                let logicalWidth, logicalHeight;
+                if (this.figView && this.shapes.length > 0) {
+                    // 既存図形 (xtad から読み込んだ) を表示中: figView 寸法 × figScale を採用、 800x600 最小制約を外す
+                    // これにより 596x26 のバナー等の小さな図形が巨大な canvas に小さく表示される問題を回避
+                    const scale = this.getFigScalePixelFactor();
+                    logicalWidth = Math.max((this.figView.right - this.figView.left) * scale.x, contentSize.width);
+                    logicalHeight = Math.max((this.figView.bottom - this.figView.top) * scale.y, contentSize.height);
+                } else {
+                    // 新規作成 or shape なし: 描画余地確保のため最小サイズも保証
+                    logicalWidth = Math.max(contentSize.width, windowWidth / this.zoomLevel, 800);
+                    logicalHeight = Math.max(contentSize.height, windowHeight / this.zoomLevel, 600);
+                }
                 // 物理サイズ: 論理サイズ × zoomLevel
                 finalWidth = Math.ceil(logicalWidth * this.zoomLevel);
                 finalHeight = Math.ceil(logicalHeight * this.zoomLevel);
             }
 
-            this.canvas.width = finalWidth;
-            this.canvas.height = finalHeight;
+            // High-DPI 対応: バッキングストアを devicePixelRatio 倍にすることで
+            // canvas 描画 (テキスト含む) が物理画素レベルでくっきり描画される
+            const dpr = window.devicePixelRatio || 1;
+            this.dpr = dpr;
+            this.logicalCanvasWidth = finalWidth;
+            this.logicalCanvasHeight = finalHeight;
 
-            // キャンバスのCSSサイズを描画バッファサイズと同じに設定
-            // これにより、描画可能領域と表示領域が一致します
-            this.canvas.style.width = finalWidth + 'px';
-            this.canvas.style.height = finalHeight + 'px';
+            this.canvas.width = Math.ceil(finalWidth * dpr);
+            this.canvas.height = Math.ceil(finalHeight * dpr);
+
+            // キャンバスのCSSサイズは論理サイズ (DOM 配置と整合)
+            // ただし埋め込みモード (開いた仮身プレビュー) で canvas backing が iframe より大きい場合は
+            // CSS サイズを container にアスペクト保ちつつ fit させる (backing ピクセルはブラウザが自動スケール)
+            let cssW = finalWidth, cssH = finalHeight;
+            if (this.embeddedMode && this.figView && finalWidth > 0 && finalHeight > 0) {
+                const cw = container.clientWidth;
+                const ch = container.clientHeight;
+                if (cw > 0 && ch > 0 && (cw < finalWidth || ch < finalHeight)) {
+                    const aspect = finalWidth / finalHeight;
+                    if (cw / aspect <= ch) {
+                        cssW = cw;
+                        cssH = cw / aspect;
+                    } else {
+                        cssW = ch * aspect;
+                        cssH = ch;
+                    }
+                }
+            }
+            this.canvas.style.width = cssW + 'px';
+            this.canvas.style.height = cssH + 'px';
 
             logger.debug('[FIGURE EDITOR] キャンバスサイズ更新:', finalWidth, 'x', finalHeight);
 
@@ -828,6 +876,23 @@ class BasicFigureEditor extends
                 width: 800,
                 height: 600
             };
+        }
+
+        // figView と figDraw が異なる場合 (figDraw->figView 変換あり) は
+        // 実表示領域は figView 寸法なので、 shape bounds (figDraw 座標) ではなく figView を使う
+        if (this.figView && this.figDraw) {
+            const sdW = this.figDraw.right - this.figDraw.left;
+            const sdH = this.figDraw.bottom - this.figDraw.top;
+            const svW = this.figView.right - this.figView.left;
+            const svH = this.figView.bottom - this.figView.top;
+            // figDraw == figView でない (= 座標変換が掛かる) 場合のみ figView を採用
+            if ((sdW !== svW || sdH !== svH || this.figDraw.left !== this.figView.left || this.figDraw.top !== this.figView.top) && svW > 0 && svH > 0) {
+                const scale = this.getFigScalePixelFactor();
+                return {
+                    width: svW * scale.x + MARGIN,
+                    height: svH * scale.y + MARGIN
+                };
+            }
         }
 
         // すべての図形の範囲を計算
@@ -1041,7 +1106,9 @@ class BasicFigureEditor extends
         editor.style.top = `${pos.y}px`;
         editor.style.width = `${size.x}px`;
         editor.style.height = `${size.y}px`;
-        editor.style.fontSize = `${shape.fontSize * this.zoomLevel}px`;
+        // canvas 描画と視覚一致: pt → px(96DPI) 変換 × figScale × zoom (canvas は figScale 適用、DOM は figScale 非適用なので factor を反映)
+        const figScale_inline = this.getFigScalePixelFactor();
+        editor.style.fontSize = `${window.convertPtToPx(shape.fontSize) * (figScale_inline.y || 1) * this.zoomLevel}px`;
         editor.style.fontFamily = shape.fontFamily;
         editor.style.color = shape.textColor;
         editor.style.border = '2px solid #ff8f00';
@@ -1269,6 +1336,10 @@ class BasicFigureEditor extends
 
         switch (shape.type) {
             case 'line':
+                // 接続先の現在位置に startX/Y/endX/Y を追従させる
+                // (古い xtad の不正座標を正す + 接続先移動・リサイズに自動追従)
+                this._resolveLineEndpointsFromConnections(shape);
+
                 // 両端が接続されているかチェック
                 const hasStartConnection = shape.startConnection && shape.startConnection.shapeId !== undefined;
                 const hasEndConnection = shape.endConnection && shape.endConnection.shapeId !== undefined;
@@ -1563,12 +1634,7 @@ class BasicFigureEditor extends
                         // マウス位置への線（次の頂点候補）
                         this.ctx.lineTo(shape.tempEndX, shape.tempEndY);
 
-                        // 2点以上ある場合は、開始点への戻り線もプレビュー表示
-                        if (shape.points.length >= 2) {
-                            this.ctx.lineTo(shape.points[0].x, shape.points[0].y);
-                        }
-
-                        // 線のみ描画
+                        // 線のみ描画 (始点との戻り線は描画しない: 確定前は開いた折れ線として表示)
                         this.ctx.stroke();
                     } else if (shape.points.length > 2) {
                         // 確定済みの多角形
@@ -1589,6 +1655,23 @@ class BasicFigureEditor extends
                                 this.ctx.fill();
                             }
                             this.ctx.stroke();
+                        }
+                    }
+                }
+                break;
+
+            case 'freefig':
+                // 任意図形セグメント: Y 座標 1 ドットごとに h[2k]..h[2k+1]-1 区間を fillRect
+                if (shape.h && shape.h.length >= 2 && shape.nr > 0) {
+                    for (let y = 0; y < shape.nr; y++) {
+                        const py = shape.sy + y;
+                        for (let k = 0; k + 1 < shape.h.length; k += 2) {
+                            const x0 = shape.bx + shape.h[k];
+                            const x1 = shape.bx + shape.h[k + 1];
+                            const w = x1 - x0;
+                            if (w > 0) {
+                                this.ctx.fillRect(x0, py, w, 1);
+                            }
                         }
                     }
                 }
@@ -1765,9 +1848,20 @@ class BasicFigureEditor extends
      * キャンバス再描画（即座実行版）
      */
     redrawImmediate() {
-        // キャンバスをクリア（物理サイズでクリア、scale前に実行）
-        this.ctx.fillStyle = this.bgColor;
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        // キャンバスをクリア（物理サイズでクリア、transform を identity に戻してから）
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+        if (this.embeddedMode) {
+            // 埋め込みモード: 透過にして親プラグイン (例: スライド) が下地色を制御できるようにする
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        } else {
+            this.ctx.fillStyle = this.bgColor;
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        }
+
+        // High-DPI 対応: DPR を base transform として適用
+        // これ以降の描画コードは論理 px 座標で動作 (DPR 倍はバッキングストアに反映される)
+        const dpr = this.dpr || 1;
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
         // ズームスケールを適用（埋め込みモードではzoomLevel=1固定なので影響なし）
         this.ctx.save();
@@ -1786,11 +1880,30 @@ class BasicFigureEditor extends
         // figViewの原点分だけキャンバスを移動（仕様: 図形要素は draw 座標系の絶対値で記述）
         // figViewが(left, top)始まりの場合、図形座標を(0, 0)基準で描画するためにオフセット
         // BTRON仕様の任意起点 figView (例: left=11, top=16) を canvas (0,0) へ正規化する
-        const needsViewportTranslate = this.figView &&
-            (this.figView.left !== 0 || this.figView.top !== 0);
-        if (needsViewportTranslate) {
+        // figDraw -> figView 座標変換 (BTRON 仕様: shape は draw 座標系で記述)
+        // figDraw がある場合は scale + offset で view に変換、 なければ既存の view オフセットのみ
+        let needsViewportTranslate = false;
+        if (this.figDraw && this.figView) {
+            const sd = this.figDraw;
+            const sv = this.figView;
+            const sdW = sd.right - sd.left;
+            const sdH = sd.bottom - sd.top;
+            const svW = sv.right - sv.left;
+            const svH = sv.bottom - sv.top;
+            const scaleX = (sdW > 0 && svW > 0) ? (svW / sdW) : 1;
+            const scaleY = (sdH > 0 && svH > 0) ? (svH / sdH) : 1;
+            const dx = sv.left - sd.left * scaleX;
+            const dy = sv.top - sd.top * scaleY;
             this.ctx.save();
-            this.ctx.translate(-this.figView.left, -this.figView.top);
+            this.ctx.transform(scaleX, 0, 0, scaleY, dx, dy);
+            needsViewportTranslate = true;
+        } else {
+            needsViewportTranslate = this.figView &&
+                (this.figView.left !== 0 || this.figView.top !== 0);
+            if (needsViewportTranslate) {
+                this.ctx.save();
+                this.ctx.translate(-this.figView.left, -this.figView.top);
+            }
         }
 
         // 格子点を描画（最後部）
@@ -1813,34 +1926,18 @@ class BasicFigureEditor extends
             this.drawSelectionHighlight(shape);
         });
 
-        // 埋め込みモード: ビューポート移動を復元
-        if (needsViewportTranslate) {
-            this.ctx.restore();
-        }
-        if (needsScale) {
-            this.ctx.restore();
-        }
-
-        // 選択中の図形にコネクタは表示しない（ユーザー要望により無効化）
-        // this.selectedShapes.forEach(shape => {
-        //     // 四角形、円、多角形、仮身にコネクタを表示
-        //     if (shape.type === 'rect' || shape.type === 'roundRect' ||
-        //         shape.type === 'ellipse' || shape.type === 'polygon' || shape.type === 'vobj') {
-        //         this.drawConnectors(shape);
-        //     }
-        //     // 直線の端点にコネクタを表示
-        //     else if (shape.type === 'line') {
-        //         this.drawLineEndpointConnectors(shape);
-        //     }
-        // });
+        // ★ コネクタ・プレビュー描画も transform stack 内で実行する (figScale + viewport translate 有効)
+        // 過去は ctx.restore() の後に描画していたため、figScale ≠ 1 や figView ≠ (0,0) の
+        // ファイルでコネクタが論理座標のまま描画され画面上の正しい位置に出なかった
 
         // 直線描画中：マウス位置近くの図形のコネクタを表示
         if (this.currentTool === 'line' && this.isDrawing && this.currentShape) {
-            // 終点位置（マウス位置）の近くの図形を探す
-            const nearbyShapes = this.findNearbyShapes(this.currentShape.endX, this.currentShape.endY);
-            nearbyShapes.forEach(item => {
-                this.drawConnectors(item.shape);
-            });
+            // 終点位置（マウス位置）の近くの図形
+            const nearbyEnd = this.findNearbyShapes(this.currentShape.endX, this.currentShape.endY);
+            nearbyEnd.forEach(item => this.drawConnectors(item.shape));
+            // 始点側の近くの図形 (描画開始位置周辺もフィードバックとして表示)
+            const nearbyStart = this.findNearbyShapes(this.currentShape.startX, this.currentShape.startY);
+            nearbyStart.forEach(item => this.drawConnectors(item.shape));
         }
 
         // 直線ツール選択中（まだ描画していない）：マウス位置近くの図形のコネクタを表示
@@ -1886,6 +1983,14 @@ class BasicFigureEditor extends
             this.drawShape(this.currentShape);
         }
 
+        // 埋め込みモード: ビューポート移動を復元
+        if (needsViewportTranslate) {
+            this.ctx.restore();
+        }
+        if (needsScale) {
+            this.ctx.restore();
+        }
+
         // ズームスケールを復元
         this.ctx.restore();
 
@@ -1898,9 +2003,14 @@ class BasicFigureEditor extends
      * 仮身のDOM要素は再作成せず、キャンバス上の図形と選択枠のみを再描画
      */
     redrawForSelectionBlink() {
-        // キャンバスをクリア（物理サイズでクリア、scale前に実行）
+        // キャンバスをクリア（物理サイズでクリア、transform を identity に戻してから）
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
         this.ctx.fillStyle = this.bgColor;
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // High-DPI 対応: DPR を base transform として適用
+        const dpr = this.dpr || 1;
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
         // ズームスケールを適用
         this.ctx.save();
@@ -1916,11 +2026,30 @@ class BasicFigureEditor extends
         }
 
         // figView の原点オフセットを適用 — redrawImmediate と整合
-        const needsViewportTranslate = this.figView &&
-            (this.figView.left !== 0 || this.figView.top !== 0);
-        if (needsViewportTranslate) {
+        // figDraw -> figView 座標変換 (BTRON 仕様: shape は draw 座標系で記述)
+        // figDraw がある場合は scale + offset で view に変換、 なければ既存の view オフセットのみ
+        let needsViewportTranslate = false;
+        if (this.figDraw && this.figView) {
+            const sd = this.figDraw;
+            const sv = this.figView;
+            const sdW = sd.right - sd.left;
+            const sdH = sd.bottom - sd.top;
+            const svW = sv.right - sv.left;
+            const svH = sv.bottom - sv.top;
+            const scaleX = (sdW > 0 && svW > 0) ? (svW / sdW) : 1;
+            const scaleY = (sdH > 0 && svH > 0) ? (svH / sdH) : 1;
+            const dx = sv.left - sd.left * scaleX;
+            const dy = sv.top - sd.top * scaleY;
             this.ctx.save();
-            this.ctx.translate(-this.figView.left, -this.figView.top);
+            this.ctx.transform(scaleX, 0, 0, scaleY, dx, dy);
+            needsViewportTranslate = true;
+        } else {
+            needsViewportTranslate = this.figView &&
+                (this.figView.left !== 0 || this.figView.top !== 0);
+            if (needsViewportTranslate) {
+                this.ctx.save();
+                this.ctx.translate(-this.figView.left, -this.figView.top);
+            }
         }
 
         // 格子点を描画（最後部）
@@ -1941,35 +2070,14 @@ class BasicFigureEditor extends
             this.drawSelectionHighlight(shape);
         });
 
-        // figView translate を復元
-        if (needsViewportTranslate) {
-            this.ctx.restore();
-        }
-        // figScale を復元
-        if (needsScale) {
-            this.ctx.restore();
-        }
-
-        // 選択中の図形にコネクタは表示しない（ユーザー要望により無効化）
-        // this.selectedShapes.forEach(shape => {
-        //     // 四角形、円、多角形、仮身にコネクタを表示
-        //     if (shape.type === 'rect' || shape.type === 'roundRect' ||
-        //         shape.type === 'ellipse' || shape.type === 'polygon' || shape.type === 'vobj') {
-        //         this.drawConnectors(shape);
-        //     }
-        //     // 直線の端点にコネクタを表示
-        //     else if (shape.type === 'line') {
-        //         this.drawLineEndpointConnectors(shape);
-        //     }
-        // });
+        // ★ コネクタ・プレビュー描画も transform stack 内で実行する (figScale + viewport translate 有効)
 
         // 直線描画中：マウス位置近くの図形のコネクタを表示
         if (this.currentTool === 'line' && this.isDrawing && this.currentShape) {
-            // 終点位置（マウス位置）の近くの図形を探す
-            const nearbyShapes = this.findNearbyShapes(this.currentShape.endX, this.currentShape.endY);
-            nearbyShapes.forEach(item => {
-                this.drawConnectors(item.shape);
-            });
+            const nearbyEnd = this.findNearbyShapes(this.currentShape.endX, this.currentShape.endY);
+            nearbyEnd.forEach(item => this.drawConnectors(item.shape));
+            const nearbyStart = this.findNearbyShapes(this.currentShape.startX, this.currentShape.startY);
+            nearbyStart.forEach(item => this.drawConnectors(item.shape));
         }
 
         // 直線ツール選択中（まだ描画していない）：マウス位置近くの図形のコネクタを表示
@@ -2015,6 +2123,15 @@ class BasicFigureEditor extends
             this.drawShape(this.currentShape);
         }
 
+        // figView translate を復元
+        if (needsViewportTranslate) {
+            this.ctx.restore();
+        }
+        // figScale を復元
+        if (needsScale) {
+            this.ctx.restore();
+        }
+
         // ズームスケールを復元
         this.ctx.restore();
 
@@ -2027,8 +2144,9 @@ class BasicFigureEditor extends
         this.ctx.fillStyle = '#666666'; // より濃い色に変更
 
         // ctx.scale()が適用済みなので論理サイズで反復
-        const logicalWidth = this.canvas.width / this.zoomLevel;
-        const logicalHeight = this.canvas.height / this.zoomLevel;
+        // canvas.width は High-DPI 対応で物理サイズなので、論理サイズは別保持の値を使う
+        const logicalWidth = (this.logicalCanvasWidth || this.canvas.width) / this.zoomLevel;
+        const logicalHeight = (this.logicalCanvasHeight || this.canvas.height) / this.zoomLevel;
 
         // 格子点を描画（1x1論理ピクセルで正確に）
         for (let x = 0; x < logicalWidth; x += interval) {
@@ -2425,15 +2543,20 @@ class BasicFigureEditor extends
             let currentLineSegments = []; // 現在の行のセグメント
             let currentLineWidth = 0;
 
+            // pt → 物理 px (96 DPI) 変換ヘルパ
+            // shape.fontSize は pt 値、ctx.font には px 指定 (canvas は figScale 変換を別途適用)
+            const ptToPx = (pt) => window.convertPtToPx(pt);
+
             const drawLine = (lineSegments, lineY) => {
                 // 行の合計幅を計算
                 let totalLineWidth = 0;
                 for (const seg of lineSegments) {
                     const style = seg.style;
+                    const fSize = ptToPx(style.fontSize);
                     let fontStyle = '';
                     if (style.italic) fontStyle += 'italic ';
                     if (style.bold) fontStyle += 'bold ';
-                    this.ctx.font = `${fontStyle}${style.fontSize}px ${style.fontFamily}`;
+                    this.ctx.font = `${fontStyle}${fSize}px ${style.fontFamily}`;
                     totalLineWidth += this.ctx.measureText(seg.text).width;
                 }
 
@@ -2449,12 +2572,13 @@ class BasicFigureEditor extends
                 for (const seg of lineSegments) {
                     const style = seg.style;
                     const text = seg.text;
+                    const fSize = ptToPx(style.fontSize);
 
                     // フォント設定
                     let fontStyle = '';
                     if (style.italic) fontStyle += 'italic ';
                     if (style.bold) fontStyle += 'bold ';
-                    this.ctx.font = `${fontStyle}${style.fontSize}px ${style.fontFamily}`;
+                    this.ctx.font = `${fontStyle}${fSize}px ${style.fontFamily}`;
                     this.ctx.fillStyle = style.color;
                     this.ctx.textBaseline = 'top';
 
@@ -2468,8 +2592,8 @@ class BasicFigureEditor extends
                         this.ctx.strokeStyle = style.color;
                         this.ctx.lineWidth = 1;
                         this.ctx.beginPath();
-                        this.ctx.moveTo(lineX, lineY + style.fontSize);
-                        this.ctx.lineTo(lineX + textWidth, lineY + style.fontSize);
+                        this.ctx.moveTo(lineX, lineY + fSize);
+                        this.ctx.lineTo(lineX + textWidth, lineY + fSize);
                         this.ctx.stroke();
                     }
 
@@ -2478,8 +2602,8 @@ class BasicFigureEditor extends
                         this.ctx.strokeStyle = style.color;
                         this.ctx.lineWidth = 1;
                         this.ctx.beginPath();
-                        this.ctx.moveTo(lineX, lineY + style.fontSize / 2);
-                        this.ctx.lineTo(lineX + textWidth, lineY + style.fontSize / 2);
+                        this.ctx.moveTo(lineX, lineY + fSize / 2);
+                        this.ctx.lineTo(lineX + textWidth, lineY + fSize / 2);
                         this.ctx.stroke();
                     }
 
@@ -2491,12 +2615,13 @@ class BasicFigureEditor extends
             for (const segment of segments) {
                 const style = segment.style;
                 const text = segment.text;
+                const fSize = ptToPx(style.fontSize);
 
                 // フォント設定
                 let fontStyle = '';
                 if (style.italic) fontStyle += 'italic ';
                 if (style.bold) fontStyle += 'bold ';
-                this.ctx.font = `${fontStyle}${style.fontSize}px ${style.fontFamily}`;
+                this.ctx.font = `${fontStyle}${fSize}px ${style.fontFamily}`;
 
                 // 改行で分割
                 const lines = text.split('\n');
@@ -2508,12 +2633,12 @@ class BasicFigureEditor extends
                         // 現在の行を描画
                         if (currentLineSegments.length > 0) {
                             drawLine(currentLineSegments, y);
-                            y += style.fontSize * DEFAULT_LINE_HEIGHT;
+                            y += fSize * DEFAULT_LINE_HEIGHT;
                             currentLineSegments = [];
                             currentLineWidth = 0;
                         } else {
                             // 空行
-                            y += style.fontSize * DEFAULT_LINE_HEIGHT;
+                            y += fSize * DEFAULT_LINE_HEIGHT;
                         }
                     }
 
@@ -2533,7 +2658,7 @@ class BasicFigureEditor extends
 
                             // 行を描画
                             drawLine(currentLineSegments, y);
-                            y += style.fontSize * DEFAULT_LINE_HEIGHT;
+                            y += fSize * DEFAULT_LINE_HEIGHT;
 
                             // 次の行を開始
                             currentLineSegments = [];
@@ -2768,6 +2893,53 @@ class BasicFigureEditor extends
             this.redraw();
             this.isModified = true;
             this.setStatus('多角形を確定しました');
+        }
+    }
+
+    finishPolyline() {
+        // ダブルクリックで直線列 (polyline) として確定
+        // 内部表現を polygon → polyline に変換し、 BTRON 折れ線セグメント (FFB0_08) として保存可能にする
+        if (this.currentShape && this.currentShape.type === 'polygon') {
+            // 折れ線として成立しない（頂点 2 未満）場合は確定せずキャンセル
+            if (!this.currentShape.points || this.currentShape.points.length < 2) {
+                this.currentShape = null;
+                this.isFirstPolygonLine = false;
+                this.redraw();
+                return;
+            }
+
+            // Undo用に状態を保存
+            this.saveStateForUndo();
+
+            // tempEndXとtempEndYを削除
+            delete this.currentShape.tempEndX;
+            delete this.currentShape.tempEndY;
+
+            // polygon → polyline 型変換
+            this.currentShape.type = 'polyline';
+            // polyline は塗り潰し・角丸を持たない
+            delete this.currentShape.fillColor;
+            delete this.currentShape.fillPatternId;
+            delete this.currentShape.fillEnabled;
+            delete this.currentShape.cornerRadius;
+            // polyline 既定属性
+            if (this.currentShape.start_arrow === undefined) this.currentShape.start_arrow = 0;
+            if (this.currentShape.end_arrow === undefined) this.currentShape.end_arrow = 0;
+            if (this.currentShape.arrow_type === undefined) this.currentShape.arrow_type = 'simple';
+            if (this.currentShape.rotation === undefined) this.currentShape.rotation = 0;
+
+            // z-indexを設定（未設定の場合のみ）
+            if (this.currentShape.zIndex === null || this.currentShape.zIndex === undefined) {
+                this.currentShape.zIndex = this.getNextZIndex();
+            }
+
+            // 折れ線を確定
+            this.shapes.push(this.currentShape);
+            this.currentShape = null;
+            this.isFirstPolygonLine = false;
+            this.redraw();
+            this.isModified = true;
+            this.setStatus('折れ線を確定しました');
         }
     }
 
@@ -3564,9 +3736,9 @@ class BasicFigureEditor extends
                 return;
             }
 
-            // 弧の場合は角度を調整
+            // 弧の場合は角度を調整 (shape.angle は度数法 = 描画/flip と同じ単位なので度数のまま加算)
             if (shape.type === 'arc' || shape.type === 'chord' || shape.type === 'elliptical_arc') {
-                shape.angle = (shape.angle || 0) + angle * Math.PI / 180;
+                shape.angle = (shape.angle || 0) + angle;
                 return;
             }
 
@@ -4555,9 +4727,9 @@ class BasicFigureEditor extends
             marginRightPx = mmToPx(this.paperSize.rightMm);
         }
 
-        // キャンバスサイズに基づいて必要なページ数を計算
-        const canvasWidth = this.canvas.width;
-        const canvasHeight = this.canvas.height;
+        // キャンバスサイズに基づいて必要なページ数を計算 (論理サイズで計算)
+        const canvasWidth = this.logicalCanvasWidth || this.canvas.width;
+        const canvasHeight = this.logicalCanvasHeight || this.canvas.height;
         const pagesX = Math.ceil(canvasWidth / paperWidthPx);
         const pagesY = Math.ceil(canvasHeight / paperHeightPx);
 

@@ -74,8 +74,17 @@ function initSlidePlugin() {
             // マウスイベントを設定
             this.setupSlideMouseHandlers();
 
-            // ウィンドウリサイズ時に拡大率を再計算
-            window.addEventListener('resize', () => this.applyScale());
+            // ウィンドウリサイズ時に拡大率を再計算 (debounce 200ms で連続イベントを集約)
+            // destroy で解除できるようハンドラをインスタンスに保持する
+            this._resizeDebounceTimer = null;
+            this._onResizeHandler = () => {
+                if (this._resizeDebounceTimer) clearTimeout(this._resizeDebounceTimer);
+                this._resizeDebounceTimer = setTimeout(() => {
+                    this._resizeDebounceTimer = null;
+                    this.applyScale();
+                }, 200);
+            };
+            window.addEventListener('resize', this._onResizeHandler);
 
             // 実時間制御TADの初期化
             this.initRealtimeMedia();
@@ -169,6 +178,12 @@ function initSlidePlugin() {
                     await this.showSlide(0);
                     // スライドを表示可能にする
                     this.showSlideWrapper();
+
+                    // 折り返し設定を反映（独自 init handler のため親クラス処理が走らない）
+                    this.applyWordWrapConfig(data.fileData?.windowConfig, {
+                        applyWidth: false,
+                        paragraphUpdateDelay: 0
+                    });
                 } else {
                     // スライド（仮身）がない場合はエラー表示
                     this.editor.innerHTML = '<p style="color: red; padding: 20px;">スライドがありません。仮身を追加してください。</p>';
@@ -198,6 +213,13 @@ function initSlidePlugin() {
                     await this.showSlide(0);
                     // スライドを表示可能にする
                     this.showSlideWrapper();
+
+                    // 折り返し設定を反映（独自 handler のため親クラス処理が走らない）
+                    const wcfg = data.fileData?.windowConfig || realData.metadata?.window;
+                    this.applyWordWrapConfig(wcfg, {
+                        applyWidth: false,
+                        paragraphUpdateDelay: 0
+                    });
                 } else {
                     this.editor.innerHTML = '<p style="color: red; padding: 20px;">スライドがありません。仮身を追加してください。</p>';
                     this.showSlideWrapper();
@@ -219,11 +241,13 @@ function initSlidePlugin() {
                     if (data.messageId === messageId && !handled) {
                         handled = true;
                         this.messageBus.off('real-object-loaded');
-                        // レスポンスは { success: true, realObject: { xmlData: ..., metadata: { name: ... } } } 形式
+                        // レスポンスは { success: true, realObject: { xmlData: ..., metadata: { name, window: {...}, ... } } } 形式
                         if (data.success && data.realObject && data.realObject.xmlData) {
                             resolve({
                                 xmlData: data.realObject.xmlData,
-                                name: data.realObject.metadata?.name || null
+                                name: data.realObject.metadata?.name || null,
+                                // JSON metadata 全体を渡す: window.backgroundColor 等の参照に使用
+                                metadata: data.realObject.metadata || null
                             });
                         } else {
                             logger.error('[BasicSlide] 実身データ読み込み失敗:', data.error);
@@ -247,6 +271,19 @@ function initSlidePlugin() {
                     resolve(null);
                 }, 10000);
             });
+        }
+
+        /**
+         * スライドの背景色を取得する。
+         * 仕様: <rect> は背景指定に使わない。背景色は JSON metadata.window.backgroundColor のみ。
+         * (xmlTAD-specification.md L63 準拠、basic-text-editor/basic-figure-editor の
+         *  右クリック → 表示 → 背景色変更 で書き込まれる場所と一致)
+         * @param {Object|null} metadata - スライドの JSON metadata
+         * @returns {string} 背景色 (#rrggbb)、未設定時は basic-text-editor デフォルトの '#fff'
+         */
+        getSlideBackgroundColor(metadata) {
+            const jsonBg = metadata && metadata.window && metadata.window.backgroundColor;
+            return jsonBg || '#fff';
         }
 
         /**
@@ -332,30 +369,68 @@ function initSlidePlugin() {
             // 実時間データを抽出
             this.currentRealtimeData = this.extractRealtimeData(xtad);
 
-            // 終了画面から戻った場合、背景色を元に戻す
+            // スライド背景色: JSON metadata.window.backgroundColor のみを公式ソースとする
+            // (<rect> は背景指定に使わない、最終フォールバックは '#fff')
+            const slideBgColor = this.getSlideBackgroundColor(data.metadata);
+
+            // 背景は JSON window.backgroundColor のみで管理する仕様だが、
+            // xtad の <rect> は元データそのまま描画する (ユーザデータを書き換えない)
+            const renderXtad = xtad;
+
+            // ※塗りつぶすべき範囲は editor-container だけではなく、
+            //   背後にある html/body/slide-wrapper/plugin-content すべて。
+            //   editor-container が viewport より小さい場合 (アスペクト比違い等) や、scale 由来の余白が
+            //   できた場合に、いずれかの背景が白だと「下に白い領域」として透けて見える。
+            // iframe 内 (slide plugin の document) の html/body 自身も slideBgColor で塗りつぶす。
+            // transform: scale 時のエッジ補間でブラウザデフォルト白とブレンドされ、周辺が薄く透けて見える現象を防ぐ。
+            // ※親 TADjs Desktop の document は触らない (iframe 内のみのため、スライド終了で iframe が破棄されれば自動的に消える)。
+            document.documentElement.style.background = slideBgColor;
+            document.body.style.background = slideBgColor;
+
             const wrapper = document.getElementById('slide-wrapper');
             const pluginContent = document.querySelector('.plugin-content');
             const editorContainer = document.querySelector('.editor-container');
 
             if (wrapper) {
-                wrapper.style.background = '#000';  // ラッパーは黒（スライド周囲）
+                wrapper.style.background = slideBgColor;
             }
             if (pluginContent) {
-                pluginContent.style.background = '';
+                pluginContent.style.background = slideBgColor;
             }
             if (editorContainer) {
-                editorContainer.style.background = '#fff';
-                editorContainer.style.boxShadow = '0 0 20px rgba(0, 0, 0, 0.5)';
+                editorContainer.style.background = slideBgColor;
+                // box-shadow は CSS の #slide-wrapper:not(.fullscreen) .editor-container ルールに任せる。
+                // inline で上書きすると、プレゼン中 (.fullscreen 付き) でも影が描画されて
+                // dark navy スライドに黒い縁取り・白いスライドに灰色の縁取りが出てしまう。
             }
 
-            // エディタの背景を白に戻す
-            this.editor.style.background = '#fff';
+            // エディタの背景もスライド背景色に揃える
+            this.editor.style.background = slideBgColor;
             this.editor.style.display = '';
             this.editor.style.justifyContent = '';
             this.editor.style.alignItems = '';
 
-            // 親クラスのrenderTADXMLを使用して完全描画
-            await this.renderTADXML(xtad);
+            // 親ウィンドウの .window-content (iframe の親要素) も slide bg で塗る。
+            // iframe element 自身は transparent (default) なので、scale エッジ補間時に
+            // .window のデフォルト灰色 (#f0f0f0) が透けて、上端・左端に薄い帯として見える。
+            // 影響は .window-content だけ (#desktop/body/html/BrowserWindow には触らない、
+            // 前回 revert で副作用が出た範囲を完全に避ける)。
+            // スライド window が閉じれば DOM ごと消えるので cleanup 不要。
+            if (this.messageBus && this.windowId) {
+                this.messageBus.send('set-slide-window-content-background', {
+                    windowId: this.windowId,
+                    bgColor: slideBgColor
+                });
+            }
+
+            // 親クラスのrenderTADXMLを使用して完全描画 (背景 rect の枠線を除去した版)
+            await this.renderTADXML(renderXtad);
+
+            // 折り返し設定を再適用 (renderTADXML で段落 DOM が再構築されるため)
+            this.applyWordWrapConfig(this.fileData?.windowConfig, {
+                applyWidth: false,
+                paragraphUpdateDelay: 0
+            });
 
             // メディア要素をセットアップ
             if (this.currentRealtimeData && this.currentRealtimeData.type === 'realtime') {
@@ -1017,6 +1092,9 @@ function initSlidePlugin() {
         }
 
         destroy() {
+            if (this._resizeDebounceTimer) { clearTimeout(this._resizeDebounceTimer); this._resizeDebounceTimer = null; }
+            if (this._onResizeHandler) { window.removeEventListener('resize', this._onResizeHandler); this._onResizeHandler = null; }
+            if (this.mediaManager) { this.mediaManager.clear(); this.mediaManager = null; }
             super.destroy();
         }
     }

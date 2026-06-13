@@ -24,13 +24,15 @@ class BasicTextEditor extends
         this.tadData = null;
         // isFullscreenはPluginBaseで初期化・管理される
         this.wrapMode = true;
-        this.viewMode = 'formatted'; // 'formatted' or 'xml'
+        this.viewMode = 'formatted'; // 'formatted' | 'detailed' | 'xml' (「原稿モード」は xml 直接表示)
         // this.realId は基底クラスで定義済み
         this.isModified = false; // 編集状態フラグ
         this.originalContent = ''; // 保存時の内容
         this.updateHeightTimer = null; // スクロールバー更新のデバウンスタイマー
         this.mutationObserver = null; // MutationObserverインスタンス
         this.suppressMutationObserverCount = 0; // MutationObserver一時停止カウンタ（ネスト対応）
+        this.decorationManager = null; // 詳細モード装飾オーバーレイマネージャ
+        this._overlayElement = null;   // オーバーレイ div への参照 (renderTADXML 後の再アタッチ用)
         this.selectedImage = null; // 選択中の画像要素
         this.selectedFigureSegment = null; // 選択中の図形セグメント要素
         this.figureSegmentClipboard = null; // ローカル図形セグメントクリップボード
@@ -166,7 +168,7 @@ class BasicTextEditor extends
      */
     setupMessageBusHandlers() {
         // init メッセージ
-        this.messageBus.on('init', (data) => {
+        this.messageBus.on('init', async (data) => {
             // 共通初期化処理（windowId設定、realId設定、背景色復元）
             this.handleInitData(data);
 
@@ -188,7 +190,20 @@ class BasicTextEditor extends
                 }
             }
 
-            this.loadFile(data.fileData);
+            // 折り返し設定を loadFile 前に確定 (text-tad-parser.js が this.wrapMode を参照するため)
+            // wrapMode=true の場合、 paperWidth より windowConfig.width を優先 (applyWidth: true)
+            this.applyWordWrapConfig(data.fileData?.windowConfig, {
+                applyWidth: true,
+                paragraphUpdateDelay: 200
+            });
+
+            // 表示モード (viewMode) を永続化された値から復元
+            const savedViewMode = data.fileData?.windowConfig?.viewMode;
+            if (savedViewMode === 'detailed' || savedViewMode === 'xml' || savedViewMode === 'formatted') {
+                this.viewMode = savedViewMode;
+            }
+
+            await this.loadFile(data.fileData);
 
             // スクロール位置を復元（DOM更新完了を待つ）
             if (data.fileData && data.fileData.windowConfig && data.fileData.windowConfig.scrollPos) {
@@ -201,28 +216,6 @@ class BasicTextEditor extends
             setTimeout(() => {
                 this.editor.focus();
             }, 200);
-
-            // 折り返し設定を復元（未定義の場合はtrue）
-            if (data.fileData && data.fileData.windowConfig) {
-                const wordWrap = data.fileData.windowConfig.wordWrap !== undefined
-                    ? data.fileData.windowConfig.wordWrap
-                    : true;
-                this.wrapMode = wordWrap;
-                if (this.wrapMode) {
-                    this.editor.style.whiteSpace = 'pre-wrap';
-                    this.editor.style.wordWrap = 'break-word';
-                } else {
-                    this.editor.style.whiteSpace = 'pre';
-                    this.editor.style.wordWrap = 'normal';
-                }
-                // 段落要素のインラインスタイルも更新（DOM更新完了を待つ）
-                setTimeout(() => {
-                    const paragraphs = this.editor.querySelectorAll('p');
-                    paragraphs.forEach(p => {
-                        p.style.whiteSpace = this.wrapMode ? 'pre-wrap' : 'pre';
-                    });
-                }, 200);
-            }
         });
 
         // load-virtual-object メッセージ（開いた仮身表示用）
@@ -263,43 +256,28 @@ class BasicTextEditor extends
                     this.realId = this.extractRealId(virtualObj.link_id);
                 }
 
+                // 管理用セグメントJSONのwindowから取得（複数のパスに対応）
+                // realObject.metadata.window (旧形式) / realObject.window (新形式: 実身JSONルート直下) / realObject.records[0].window のいずれか
+                const windowConfig = realObject.metadata?.window
+                    || realObject.window
+                    || realObject.records?.[0]?.window
+                    || null;
+
+                // 折り返し設定と viewMode を loadFile 前に確定 (text-tad-parser が wrapMode を参照するため、 loadFile 内で viewMode に応じた切替が行われるため)
+                this.applyWordWrapConfig(windowConfig, {
+                    applyWidth: true,
+                    paragraphUpdateDelay: 100
+                });
+                const savedViewMode = windowConfig?.viewMode;
+                if (savedViewMode === 'detailed' || savedViewMode === 'xml' || savedViewMode === 'formatted') {
+                    this.viewMode = savedViewMode;
+                }
+
                 // データを読み込む（完了を待つ）
                 await this.loadFile({
                     realId: this.realId,
                     xmlData: realObject.xtad || realObject.records?.[0]?.xtad || realObject.xmlData
                 });
-
-                // 折り返し設定を適用（管理用セグメントJSONのwindowから取得）
-                const windowConfig = realObject.metadata?.window;
-                if (windowConfig) {
-                    const wordWrap = windowConfig.wordWrap !== undefined
-                        ? windowConfig.wordWrap
-                        : true;
-                    this.wrapMode = wordWrap;
-
-                    // wordWrap=trueの場合、エディタ幅を元のウインドウサイズに固定
-                    // これにより折り返し位置が元のウインドウ表示と一致する
-                    if (this.wrapMode && windowConfig.width) {
-                        this.editor.style.width = windowConfig.width + 'px';
-                        this.editor.style.minWidth = windowConfig.width + 'px';
-                        this.editor.style.maxWidth = windowConfig.width + 'px';
-                    }
-
-                    if (this.wrapMode) {
-                        this.editor.style.whiteSpace = 'pre-wrap';
-                        this.editor.style.wordWrap = 'break-word';
-                    } else {
-                        this.editor.style.whiteSpace = 'pre';
-                        this.editor.style.wordWrap = 'normal';
-                    }
-                    // 段落要素のインラインスタイルも更新（DOM更新完了を待つ）
-                    setTimeout(() => {
-                        const paragraphs = this.editor.querySelectorAll('p');
-                        paragraphs.forEach(p => {
-                            p.style.whiteSpace = this.wrapMode ? 'pre-wrap' : 'pre';
-                        });
-                    }, 100);
-                }
 
                 // スクロール位置を復元（DOM更新完了を待つ）
                 // data.scrollPos（仮身ごとの設定）を優先、フォールバックとしてwindowConfig.scrollPos
@@ -344,16 +322,25 @@ class BasicTextEditor extends
                 let found = false;
                 for (const vo of vobjElements) {
                     if (vo.dataset.linkVobjid === data.vobjid) {
-                        // DOM上のdata属性を更新
+                        // DOM上のdata属性を更新 (シリアライザはこれらを <link> タグの属性として出力する)
                         if (data.scrollx !== undefined) vo.dataset.linkScrollx = data.scrollx.toString();
                         if (data.scrolly !== undefined) vo.dataset.linkScrolly = data.scrolly.toString();
                         if (data.zoomratio !== undefined) vo.dataset.linkZoomratio = data.zoomratio.toString();
+                        if (data.viewMode !== undefined) vo.dataset.linkViewmode = data.viewMode;
+                        if (data.wordWrap !== undefined) vo.dataset.linkWordwrap = data.wordWrap.toString();
                         found = true;
                         break;
                     }
                 }
                 if (found) {
-                    // DOMからxtadを再生成して保存
+                    // セーフティネット: 仮身データ破壊 (linkId 欠落) を検知した場合は自動保存を抑制
+                    const damagedVobjs = this.editor.querySelectorAll('.virtual-object:not([data-link-id])').length;
+                    if (damagedVobjs > 0) {
+                        logger.error(`[EDITOR] update-vobj-scroll: linkId 欠落の仮身 ${damagedVobjs} 個を検知、 自動保存を抑制`);
+                        this.isModified = true;
+                        return;
+                    }
+                    // DOMからxtadを再生成して保存 (notifyXmlDataChanged 内でも link 数チェックあり)
                     const xmlData = await this.convertEditorToXML();
                     if (xmlData) {
                         this.tadData = xmlData;
@@ -512,6 +499,40 @@ class BasicTextEditor extends
             }
         });
 
+        // 改ページ要素 (.page-break / .conditional-page-break) の Backspace/Delete 削除
+        this.editor.addEventListener('keydown', (e) => {
+            if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+            const sel = window.getSelection();
+            if (sel.rangeCount === 0) return;
+            const range = sel.getRangeAt(0);
+            if (!range.collapsed) return;
+
+            const container = range.startContainer;
+            const offset = range.startOffset;
+            let target = null;
+
+            if (e.key === 'Backspace') {
+                if (container.nodeType === Node.TEXT_NODE && offset === 0) {
+                    target = container.previousSibling;
+                } else if (container.nodeType === Node.ELEMENT_NODE && offset > 0) {
+                    target = container.childNodes[offset - 1];
+                }
+            } else if (e.key === 'Delete') {
+                if (container.nodeType === Node.TEXT_NODE && offset === container.textContent.length) {
+                    target = container.nextSibling;
+                } else if (container.nodeType === Node.ELEMENT_NODE && offset < container.childNodes.length) {
+                    target = container.childNodes[offset];
+                }
+            }
+
+            if (target && target.nodeType === Node.ELEMENT_NODE && target.classList &&
+                (target.classList.contains('page-break') || target.classList.contains('conditional-page-break'))) {
+                target.remove();
+                e.preventDefault();
+                this.isModified = true;
+            }
+        });
+
         // DOMの変更も監視（delete、backspaceなど）
         this.mutationObserver = new MutationObserver((mutations) => {
             // 一時停止カウンタが0より大きい場合はスキップ（ネスト対応）
@@ -521,7 +542,21 @@ class BasicTextEditor extends
 
             // 削除された画像を検出して削除候補を収集
             const filesToDelete = new Set();
+            // セーフティネット: 想定外経路で素の <p> が追加された場合、 直前段落から CSS を継承
+            // (個別経路は inheritParagraphStyle で対応済み、 これは漏れた経路への保険)
             mutations.forEach(mutation => {
+                if (mutation.addedNodes) {
+                    mutation.addedNodes.forEach(node => {
+                        if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'P'
+                            && !node.getAttribute('style') && !node.getAttribute('data-tab-format')) {
+                            // 素の <p> (style 未設定 + data-tab-format 未設定) のみ対象
+                            const prev = node.previousElementSibling;
+                            if (prev && prev.tagName === 'P' && this.inheritParagraphStyle) {
+                                this.inheritParagraphStyle(prev, node);
+                            }
+                        }
+                    });
+                }
                 if (mutation.removedNodes) {
                     mutation.removedNodes.forEach(node => {
                         // 削除されたノードがimg要素の場合
@@ -628,6 +663,50 @@ class BasicTextEditor extends
                 this.createResizeHandle(this.selectedImage);
             }
         });
+
+        // 詳細モード装飾オーバーレイの初期化
+        this._initDecorationOverlay();
+    }
+
+    _initDecorationOverlay() {
+        if (!window.DecorationManager || !window.ParagraphMarkRenderer || !window.BrMarkRenderer) {
+            return;
+        }
+        const overlay = document.createElement('div');
+        overlay.className = 'decoration-overlay';
+        overlay.setAttribute('contenteditable', 'false');
+        this.editor.appendChild(overlay);
+        this._overlayElement = overlay;
+        this.decorationManager = new window.DecorationManager(this.editor, overlay);
+        this.decorationManager.registerRenderer(new window.ParagraphMarkRenderer());
+        this.decorationManager.registerRenderer(new window.BrMarkRenderer());
+        if (window.IndentMarkRenderer) {
+            this.decorationManager.registerRenderer(new window.IndentMarkRenderer());
+        }
+        if (this.viewMode === 'detailed') {
+            this.decorationManager.enable();
+        }
+    }
+
+    _refreshDecorationOverlay() {
+        if (!this.decorationManager || !this._overlayElement) return;
+        if (this._overlayElement.parentNode !== this.editor) {
+            this.editor.appendChild(this._overlayElement);
+        }
+        // viewMode は呼出元 (viewDetailedMode 等) が renderTADXML の後で更新するため、
+        // DOM の classList で判定する (renderTADXML 内のフックから呼ばれても正しく動く)
+        const isDetailMode = this.editor.classList.contains('detail-mode');
+        if (isDetailMode) {
+            if (!this.decorationManager.enabled) {
+                this.decorationManager.enable();
+            } else {
+                this.decorationManager.rebuild();
+            }
+        } else {
+            if (this.decorationManager.enabled) {
+                this.decorationManager.disable();
+            }
+        }
     }
 
     /**
@@ -1417,6 +1496,9 @@ class BasicTextEditor extends
             // カーソル位置がない場合は新しい段落を作成して末尾に追加
             const p = document.createElement('p');
             p.appendChild(vobjElement);
+            // 既存末尾段落から CSS を継承 (タブ書式・字下げ・行揃え等を維持)
+            const lastP = this.editor.querySelector('p:last-of-type');
+            if (lastP) this.inheritParagraphStyle(lastP, p);
             this.editor.appendChild(p);
         }
 
@@ -1866,6 +1948,36 @@ class BasicTextEditor extends
         }
     }
 
+    /**
+     * 新規段落 (destP) に親段落 (srcP) の inline style と data-tab-format 属性を継承する
+     * BTRON 仕様: タブ書式付箋・字下げ付箋・行揃え・行間隔・禁則指定は「次の付箋まで継続適用」
+     * → 編集中に新規 <p> を作る場合 (Enter / paste / 仮身挿入 / タブ書式メニュー等) は親段落の CSS を確実に継承する
+     * 継承対象:
+     *   - 字下げ系: padding-left, text-indent
+     *   - タブ書式系: tab-size, MozTabSize, margin-left/right, break-after/inside, margin-top/bottom (pargap)
+     *   - 表示系: text-align, line-height, font-size
+     *   - 禁則系: line-break, word-break
+     *   - data-tab-format JSON (CSS 計算 + ルーラー整合性)
+     */
+    inheritParagraphStyle(srcP, destP) {
+        if (!srcP || !destP || !srcP.style) return;
+        const props = [
+            'paddingLeft', 'textIndent',
+            'tabSize', 'MozTabSize',
+            'marginLeft', 'marginRight',
+            'marginTop', 'marginBottom',
+            'lineHeight', 'fontSize', 'fontFamily', 'color',
+            'textAlign',
+            'lineBreak', 'wordBreak',
+            'breakAfter', 'breakInside',
+        ];
+        for (const prop of props) {
+            if (srcP.style[prop]) destP.style[prop] = srcP.style[prop];
+        }
+        const tabFormatJson = srcP.getAttribute && srcP.getAttribute('data-tab-format');
+        if (tabFormatJson) destP.setAttribute('data-tab-format', tabFormatJson);
+    }
+
     handleKeyboardShortcuts(e) {
         // Tab: 行頭移動指定付箋を挿入
         if (e.key === 'Tab' && !e.ctrlKey && !e.shiftKey) {
@@ -1955,15 +2067,12 @@ class BasicTextEditor extends
 
                     // 新しい段落を作成
                     const newP = document.createElement('p');
-                    newP.innerHTML = '<br>';
+                    // 補助 br (詳細モード装飾オーバーレイで装飾対象外)
+                    newP.innerHTML = '<br data-filler="1">';
 
-                    // インデントスタイルをcurrentPからコピー（padding-left, text-indent）
-                    if (currentP.style.paddingLeft) {
-                        newP.style.paddingLeft = currentP.style.paddingLeft;
-                    }
-                    if (currentP.style.textIndent) {
-                        newP.style.textIndent = currentP.style.textIndent;
-                    }
+                    // 段落 CSS を currentP から新規段落へ継承 (共通ヘルパー経由)
+                    // BTRON 仕様: タブ書式付箋・字下げ付箋・行揃え・禁則指定は「次の付箋まで継続適用」
+                    this.inheritParagraphStyle(currentP, newP);
 
                     // スタイル引き継ぎ用のspanを保持
                     let styleSpan = null;
@@ -2053,7 +2162,8 @@ class BasicTextEditor extends
                                 currentP.style.fontSize = `${fontSizePt}pt`;
                             }
                         } else {
-                            currentP.innerHTML = '<br>';
+                            // 補助 br (詳細モード装飾オーバーレイで装飾対象外)
+                            currentP.innerHTML = '<br data-filler="1">';
                         }
                     }
 
@@ -2068,8 +2178,13 @@ class BasicTextEditor extends
                         // 空だがスタイル引き継ぎがある場合は引き継いだサイズを使用
                         newParagraphFontSize = parseFloat(caretStyle.fontSize) || DEFAULT_FONT_SIZE;
                     }
-                    const lineHeight = this.calculateLineHeight(newParagraphFontSize);
-                    newP.style.lineHeight = `${lineHeight}px`;
+                    // line-height は currentP からコピー (浮動小数点誤差で <text line-height/> が毎回変動するのを防ぐ)
+                    if (currentP.style.lineHeight) {
+                        newP.style.lineHeight = currentP.style.lineHeight;
+                    } else {
+                        const lineHeight = this.calculateLineHeight(newParagraphFontSize);
+                        newP.style.lineHeight = `${lineHeight}px`;
+                    }
 
                     // 現在の段落の後に新しい段落を挿入（最下段対応）
                     if (currentP.nextSibling) {
@@ -2101,13 +2216,19 @@ class BasicTextEditor extends
                     // 段落要素が見つからない場合はデフォルト処理
                     const p = document.createElement('p');
 
+                    // 直前の段落 (editor 末尾の <p>) から CSS を継承
+                    // (タブ書式・字下げ・行揃え・禁則指定を維持)
+                    const refP = this.editor.querySelector('p:last-of-type');
+                    if (refP) this.inheritParagraphStyle(refP, p);
+
                     // スタイル引き継ぎ用のspan
                     let styleSpanAlt = null;
                     if (needsInherit) {
                         styleSpanAlt = this.createStyleInheritSpan(caretStyle);
                         p.appendChild(styleSpanAlt);
                     } else {
-                        p.innerHTML = '<br>';
+                        // 補助 br (詳細モード装飾オーバーレイで装飾対象外)
+                        p.innerHTML = '<br data-filler="1">';
                     }
 
                     // line-height設定（スタイル引き継ぎがある場合はそのサイズを使用）
@@ -2162,6 +2283,8 @@ class BasicTextEditor extends
             if (selection.rangeCount > 0) {
                 const range = selection.getRangeAt(0);
                 const br = document.createElement('br');
+                // 詳細モード装飾: ユーザー意図の改行であることをマーキング (空段落補助 br との区別用)
+                br.setAttribute('data-user-br', '1');
                 range.deleteContents();
                 range.insertNode(br);
 
@@ -2352,6 +2475,7 @@ class BasicTextEditor extends
                     }
                 }
             }
+
             // それ以外の場合はブラウザのデフォルト動作に任せる
         }
 
@@ -2362,6 +2486,60 @@ class BasicTextEditor extends
                 const range = selection.getRangeAt(0);
                 const node = range.startContainer;
                 const offset = range.startOffset;
+
+                // カーソルが ZWSP テキストノードの先頭 (offset 0) にある場合
+                // = Shift+Enter で挿入した改行行の先頭 → ZWSP + 次の br を 1 セットで削除
+                // (これがないと 1 回目の Delete で ZWSP 1 文字しか消えず、 視覚的に変化なしに見える)
+                if (node.nodeType === Node.TEXT_NODE && offset === 0 &&
+                    node.textContent.charAt(0) === '​') {
+                    const nextSibling = node.nextSibling;
+                    if (nextSibling && nextSibling.nodeName === 'BR') {
+                        e.preventDefault();
+                        this.suppressMutationObserverCount++;
+
+                        // 削除前に「削除後のカーソル位置」 となるノードを取得
+                        // 連続 Delete で同じ位置から削除できるようにするため、 ZWSP の前のノード (br1 など) を覚えておく
+                        const prevSibling = node.previousSibling;
+                        // 削除した br の元の次のノード = 削除後に同じ「行頭」 になる場所
+                        const afterBr = nextSibling.nextSibling;
+
+                        // 次の br を削除
+                        nextSibling.parentNode.removeChild(nextSibling);
+                        // ZWSP の 1 文字を削除
+                        node.textContent = node.textContent.substring(1);
+                        if (node.textContent.length === 0) {
+                            node.parentNode.removeChild(node);
+                        }
+
+                        // カーソル位置を明示設定: 次の ZWSP の先頭 (= 連続 Delete で次の改行を消せる位置)
+                        const newRange = document.createRange();
+                        if (afterBr && afterBr.parentNode &&
+                            afterBr.nodeType === Node.TEXT_NODE &&
+                            afterBr.textContent.charAt(0) === '​') {
+                            // 次が ZWSP テキストノード → その先頭にカーソル (次の Delete でセット削除可能)
+                            newRange.setStart(afterBr, 0);
+                        } else if (prevSibling && prevSibling.parentNode) {
+                            // フォールバック: 前のノードの直後
+                            newRange.setStartAfter(prevSibling);
+                        } else if (afterBr && afterBr.parentNode) {
+                            newRange.setStartBefore(afterBr);
+                        } else {
+                            // 最終フォールバック: 削除元の親の先頭
+                            const parent = nextSibling.parentNode;
+                            if (parent) newRange.setStart(parent, 0);
+                        }
+                        newRange.collapse(true);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+
+                        setTimeout(() => {
+                            this.suppressMutationObserverCount--;
+                            this.updateContentHeight();
+                        }, 0);
+
+                        return;
+                    }
+                }
 
                 // カーソルがテキストノードの末尾にある場合
                 if (node.nodeType === Node.TEXT_NODE && offset === node.textContent.length) {
@@ -2635,7 +2813,7 @@ class BasicTextEditor extends
         // 注: 通常Ctrl+Iは斜体だが、BTRONでは字下げに使用
         if (e.ctrlKey && !e.shiftKey && e.key === 'i') {
             e.preventDefault();
-            this.applyIndent();
+            this.insertIndentAnchor();
             return;
         }
 
@@ -2689,6 +2867,17 @@ class BasicTextEditor extends
 
                 // XMLを解釈してリッチテキストとして表示
                 await this.renderTADXML(fileData.xmlData);
+
+                // 永続化された表示モードを反映
+                if (this.viewMode === 'detailed') {
+                    await this.viewDetailedMode();
+                } else if (this.viewMode === 'xml') {
+                    await this.viewXMLMode();
+                } else {
+                    // formatted: editor のクラスを設定 (mode 初期表示用)
+                    this.editor.classList.remove('detail-mode', 'xml-mode');
+                    this.editor.classList.add('formatted-mode');
+                }
 
                 this.setStatus(`読み込み完了: ${fileData.fileName} (${fileData.xmlData.length}文字)`);
 
@@ -3387,25 +3576,81 @@ class BasicTextEditor extends
             shouldExpand: height > minRequiredHeight
         });
 
-        // 実際の高さが必要最小高さより大きい場合は自動展開
+        // 実際の高さが必要最小高さより大きい場合は自動展開対象
         if (height > minRequiredHeight && width > 0 && height > 0) {
-            logger.debug('[EDITOR] 仮身を自動展開します:', vo.dataset.linkName || vo.textContent);
-            // 次のイベントループで展開（DOMが完全に準備されてから）
-            setTimeout(() => {
-                this.expandVirtualObject(vo, width, height).catch(err => {
-                    logger.error('[EDITOR] 自動展開エラー:', err);
-                });
-            }, 100);
+            logger.debug('[EDITOR] 仮身を自動展開対象として登録:', vo.dataset.linkName || vo.textContent);
+            // IntersectionObserver で画面内に入った時に展開 (F: 画面外展開の遅延)
+            // 画面内 (+ マージン 200px) に入った瞬間に expandVirtualObject を実行
+            this._scheduleAutoExpand(vo, width, height);
+        }
+    }
+
+    /**
+     * 仮身を IntersectionObserver で監視し、 viewport に入った時に展開する
+     * (F: 画面外仮身の展開を遅延、 体感速度向上)
+     * @param {HTMLElement} vo - 仮身要素
+     * @param {number} width - 展開後の幅
+     * @param {number} height - 展開後の高さ
+     */
+    _scheduleAutoExpand(vo, width, height) {
+        // 既に展開済みの仮身は再度監視・展開しない
+        // (checkAllVirtualObjectsForAutoExpand が複数回呼ばれた時のリセット防止)
+        if (vo.classList.contains('expanded')) return;
+        // 既に同じ vo が監視中なら重複登録しない
+        if (this._autoExpandPending && this._autoExpandPending.has(vo)) return;
+        if (!this._autoExpandObserver) {
+            // 初回のみ IntersectionObserver を作成
+            // rootMargin で画面外 200px までは「画面内」 と扱い、 スクロールに余裕を持たせる
+            this._autoExpandObserver = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) continue;
+                    const target = entry.target;
+                    const info = this._autoExpandPending && this._autoExpandPending.get(target);
+                    if (!info) continue;
+                    this._autoExpandPending.delete(target);
+                    this._autoExpandObserver.unobserve(target);
+                    // expand は async だが await しない (並列展開、 A: setTimeout 撤去)
+                    this.expandVirtualObject(target, info.width, info.height).catch(err => {
+                        logger.error('[EDITOR] 自動展開エラー:', err);
+                    });
+                }
+            }, {
+                root: this.editor,
+                rootMargin: '200px 0px 200px 0px',
+                threshold: 0
+            });
+            this._autoExpandPending = new Map();
+        }
+        // 既に登録済みでも、 サイズ変更があり得るので最新値で上書き
+        this._autoExpandPending.set(vo, { width, height });
+        this._autoExpandObserver.observe(vo);
+    }
+
+    /**
+     * IntersectionObserver の状態をリセット (renderTADXML 再呼び出し時等に呼ぶ)
+     */
+    _resetAutoExpandObserver() {
+        if (this._autoExpandObserver) {
+            this._autoExpandObserver.disconnect();
+            this._autoExpandObserver = null;
+        }
+        if (this._autoExpandPending) {
+            this._autoExpandPending.clear();
+            this._autoExpandPending = null;
         }
     }
 
     /**
      * すべての仮身に対して自動展開チェックを実行
+     * (A: 並列化、 F: 画面内のみ展開 = 画面外は IntersectionObserver 監視)
      */
     checkAllVirtualObjectsForAutoExpand() {
         logger.debug('[EDITOR] すべての仮身の自動展開チェックを開始');
-        const virtualObjects = this.editor.querySelectorAll('.virtual-object');
-        logger.debug('[EDITOR] 検出された仮身数:', virtualObjects.length);
+        // 再呼出時は IO 状態をリセット (再描画/モード切替対応)
+        // ただし対象は **未展開の仮身のみ** にして、 既に展開済みの仮身を再展開しない
+        this._resetAutoExpandObserver();
+        const virtualObjects = this.editor.querySelectorAll('.virtual-object:not(.expanded)');
+        logger.debug('[EDITOR] 検出された未展開仮身数:', virtualObjects.length);
 
         virtualObjects.forEach((vo, index) => {
             logger.debug(`[EDITOR] 仮身[${index}]をチェック:`, vo.dataset.linkName || vo.textContent);
@@ -3609,14 +3854,15 @@ class BasicTextEditor extends
             {
                 label: '表示',
                 submenu: [
-                    { label: '原稿（xml直接表示）モード', action: 'view-xml' },
-                    { label: '清書モード', action: 'view-formatted' },
+                    { label: (this.viewMode === 'xml' ? '✓ ' : '   ') + '原稿（xml直接表示）モード', action: 'view-xml' },
+                    { label: (this.viewMode === 'detailed' ? '✓ ' : '   ') + '詳細モード', action: 'view-detailed' },
+                    { label: (this.viewMode === 'formatted' ? '✓ ' : '   ') + '清書モード', action: 'view-formatted' },
                     { separator: true },
                     { label: '全画面表示オンオフ', action: 'toggle-fullscreen', shortcut: 'Ctrl+L' },
                     { label: '再表示', action: 'refresh' },
                     { label: '背景色変更', action: 'change-bg-color' },
                     { separator: true },
-                    { label: 'ウインドウ幅で折り返しオンオフ', action: 'toggle-wrap' }
+                    { label: (this.wrapMode ? '✓ ' : '   ') + 'ウインドウ幅で折り返し', action: 'toggle-wrap' }
                 ]
             },
             {
@@ -3779,6 +4025,9 @@ class BasicTextEditor extends
             // 表示
             case 'view-xml':
                 this.viewXMLMode();
+                break;
+            case 'view-detailed':
+                this.viewDetailedMode();
                 break;
             case 'view-formatted':
                 this.viewFormattedMode();
@@ -3955,8 +4204,7 @@ class BasicTextEditor extends
                 this.setStatus('下付きを適用しました');
                 break;
             case 'style-indent':
-                this.insertTextTab();
-                this.setStatus('字下げを挿入しました');
+                this.insertIndentAnchor();
                 break;
             case 'style-clear':
                 this.clearDecorationOnly();
@@ -4024,7 +4272,7 @@ class BasicTextEditor extends
                 this.applyNewTabFormat();
                 break;
             case 'format-indent':
-                this.applyIndent();
+                this.insertIndentAnchor();
                 break;
             case 'align-left':
                 document.execCommand('justifyLeft');
@@ -4109,6 +4357,10 @@ class BasicTextEditor extends
      * XML直接表示モード
      */
     async viewXMLMode() {
+        // 詳細モード由来の装飾要素 (タブ書式帯状 UI) を削除して元の HTML 構造に戻す
+        if (this.viewMode === 'detailed') {
+            this.cleanupDetailModeArtifacts();
+        }
         // XMLモードでない場合（清書モードまたは初期状態）、エディタの内容をXMLに変換
         if (this.viewMode !== 'xml') {
             this.tadData = await this.convertEditorToXML();
@@ -4119,7 +4371,11 @@ class BasicTextEditor extends
                 this.escapeHtml(this.tadData) +
                 '</pre>';
             this.viewMode = 'xml';
+            this.editor.classList.remove('formatted-mode', 'detail-mode');
+            this.editor.classList.add('xml-mode');
+            this.updateWindowConfig({ viewMode: this.viewMode, wordWrap: this.wrapMode });
             this.setStatus('原稿（XML直接表示）モード');
+            this._refreshDecorationOverlay();
         }
     }
 
@@ -4128,7 +4384,13 @@ class BasicTextEditor extends
      */
     async viewFormattedMode() {
         logger.debug('[EDITOR] viewFormattedMode開始, 現在のモード:', this.viewMode);
-        
+
+        // 詳細モード由来の装飾要素 (タブ書式帯状 UI) を削除して元の HTML 構造に戻す
+        // これを convertEditorToXML 前に行うことで「タブ書式」テキストが XML に取り込まれるのを防ぐ
+        if (this.viewMode === 'detailed') {
+            this.cleanupDetailModeArtifacts();
+        }
+
         // XMLモードの場合、エディタの内容をXMLに変換してtadDataを更新
         if (this.viewMode === 'xml') {
             // XMLモード時はエディタにXMLテキストが表示されているので、それをtadDataに保存
@@ -4153,13 +4415,484 @@ class BasicTextEditor extends
 
         if (this.tadData) {
             logger.debug('[EDITOR] renderTADXML呼び出し, tadData長さ:', this.tadData.length);
-            await this.renderTADXML(this.tadData);
+            // formatted-mode を先に付与
+            this.editor.classList.remove('detail-mode', 'xml-mode');
+            this.editor.classList.add('formatted-mode');
+            await this.renderTADXML(this.tadData, { mode: 'formatted' });
             this.viewMode = 'formatted';
+            this.updateWindowConfig({ viewMode: this.viewMode, wordWrap: this.wrapMode });
             this.setStatus('清書モード');
         } else {
             logger.error('[EDITOR] tadDataが空です');
             this.editor.innerHTML = '<p>XMLデータがありません</p>';
         }
+    }
+
+    /**
+     * 詳細モード
+     * 清書モードの表示に指定付箋の旗マーク・制御記号を重ねて表示する。
+     * 内部 XML 構造は不変、 ラウンドトリップ可能。
+     */
+    async viewDetailedMode() {
+        // XML モードからの遷移時は <pre> から XML を抽出
+        if (this.viewMode === 'xml') {
+            const preElement = this.editor.querySelector('pre');
+            if (preElement) {
+                this.tadData = preElement.textContent;
+            } else {
+                logger.error('[EDITOR] pre要素が見つかりません');
+            }
+        } else {
+            // 清書 / 詳細 → 詳細 (refresh) の場合は XML 再生成
+            this.tadData = await this.convertEditorToXML();
+        }
+
+        if (this.tadData) {
+            // detail-mode クラスを renderTADXML より先に付与する
+            // text-tad-parser.js が editor.classList を見て詳細モード用 HTML 出力を分岐するため
+            this.editor.classList.remove('formatted-mode', 'xml-mode');
+            this.editor.classList.add('detail-mode');
+            await this.renderTADXML(this.tadData, { mode: 'detailed' });
+            this.viewMode = 'detailed';
+            this.attachDetailFusenClickHandlers();
+            this.attachDetailTabFormatDragHandlers();
+            this.updateWindowConfig({ viewMode: this.viewMode, wordWrap: this.wrapMode });
+            this.setStatus('詳細モード');
+        } else {
+            this.editor.innerHTML = '<p>XMLデータがありません</p>';
+        }
+    }
+
+    /**
+     * 詳細モード由来の装飾要素 (タブ書式帯状 UI 等) を削除する。
+     * 清書モード / 原稿モードへ遷移する際に、 convertEditorToXML より前に呼び出して、
+     * 詳細モード時にのみ挿入した装飾テキストが XML に取り込まれないようにする。
+     */
+    cleanupDetailModeArtifacts() {
+        if (!this.editor) return;
+        // タブ書式の帯状 UI 要素を削除 (これらは詳細モード時にのみ挿入される視覚要素で、 内部 XML には対応しない)
+        // タブ書式ルーラー: マーカーがドラッグで動かされていれば、 段落直前に <tab-format ...> タグを再挿入して値を保持
+        const tabFormatBars = this.editor.querySelectorAll('.detail-tab-format');
+        tabFormatBars.forEach(el => {
+            this._reconstructTabFormatTag(el);
+            el.remove();
+        });
+        // そろえ指定付箋の旗マークを削除する前に、 親段落の style.textAlign が無ければ data-align で補う
+        // これにより <text align> タグがシリアライズ時 (段落 style.textAlign 経由) で消えないようにする
+        const alignFusens = this.editor.querySelectorAll('.detail-align');
+        alignFusens.forEach(el => {
+            const dataAlign = el.dataset.align;
+            const para = el.closest('p, div');
+            if (para && dataAlign && (!para.style || !para.style.textAlign)) {
+                para.style.textAlign = dataAlign;
+            }
+            el.remove();
+        });
+    }
+
+    /**
+     * 詳細モードのルーラー要素を、 シリアライズ可能な隠し span に置換する。
+     * これにより清書/原稿モードへ遷移した後の convertEditorToXML が
+     * 編集後の最新値で <tab-format ... /> タグを復元できる。
+     * (text-xml-serializer.js は .hidden-tab-format[data-tab-attrs] を見て XML タグを出力する)
+     */
+    _reconstructTabFormatTag(rulerEl) {
+        if (!rulerEl) return;
+        const raw = rulerEl.dataset.tabAttrs || '';
+        if (!raw) return;
+        const hidden = document.createElement('span');
+        hidden.className = 'hidden-tab-format';
+        hidden.dataset.tabAttrs = raw;
+        hidden.style.display = 'none';
+        if (rulerEl.parentNode) {
+            rulerEl.parentNode.insertBefore(hidden, rulerEl);
+        }
+    }
+
+    /**
+     * 詳細モード時、 タブ書式ルーラーの各マーカーをドラッグで動かせるようにする。
+     * - 文頭位置 (F) / 行頭位置 (L) / 行末位置 (J) / タブ位置 (▼) はドラッグで横移動
+     * - 基準位置 (絶/相) はクリックで切替
+     * ドラッグ完了時、 ルーラーの data-tab-attrs を再計算し isModified を立てる
+     */
+    attachDetailTabFormatDragHandlers() {
+        if (!this.editor) return;
+        const rulers = this.editor.querySelectorAll('.detail-tab-format');
+        rulers.forEach(ruler => {
+            if (ruler.dataset.dragHandlersAttached === 'true') return;
+            ruler.dataset.dragHandlersAttached = 'true';
+            // 単位は文書共通固定 (14pt × 1.333) → 段落フォントに依存しない
+            const unitPx = window.CHAR_UNIT_PX;
+            // 初期表示時にルーラーの値 (data-x) で段落 CSS を強制再計算
+            // タブ書式付箋を持つ段落から後続継承段落へ tab-size / margin / line-height 等を伝播する
+            // (text-indent は `<indent/>` ありの段落で保護されているので字下げは壊れない)
+            this._updateTabFormatAttrs(ruler);
+            const markers = ruler.querySelectorAll('.detail-tab-marker');
+            markers.forEach(marker => {
+                marker.addEventListener('mousedown', (e) => this._onTabMarkerDragStart(e, ruler, marker, unitPx));
+            });
+            const origin = ruler.querySelector('.detail-tab-origin');
+            if (origin) {
+                origin.addEventListener('click', (e) => {
+                    if (this.viewMode !== 'detailed') return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const cur = parseInt(origin.dataset.origin, 10) || 0;
+                    const next = cur === 0 ? 1 : 0;
+                    origin.dataset.origin = String(next);
+                    origin.textContent = next === 0 ? '|' : '>';
+                    origin.title = next === 0 ? '基準位置: 絶対 (用紙左端)' : '基準位置: 相対 (直前の行頭)';
+                    this._updateTabFormatAttrs(ruler);
+                    this.isModified = true;
+                });
+            }
+            // ルーラーバーのマーカー以外をクリック → 段落間隔ポップアップ
+            const bar = ruler.querySelector('.detail-tab-format-bar');
+            if (bar) {
+                bar.addEventListener('click', (e) => {
+                    if (this.viewMode !== 'detailed') return;
+                    // マーカーや原点記号のクリックは無視 (それぞれのハンドラで処理)
+                    if (e.target.closest('.detail-tab-marker') || e.target.closest('.detail-tab-origin')) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this._showParagraphGapDialog(ruler, e);
+                });
+            }
+        });
+    }
+
+    /**
+     * 段落間隔 (pargap) 変更ポップアップ
+     * ルーラーの近接位置に小さなパネルを表示し、 リストから選択するとそのまま反映
+     */
+    _showParagraphGapDialog(ruler, clickEvent) {
+        // 既存ポップアップを閉じる
+        this._closeParagraphGapPopup();
+
+        const currentPargap = String(ruler.dataset.tabPargap || '0.75');
+        const options = [
+            { value: '0.125', label: '1/8 行あき' },
+            { value: '0.25',  label: '1/4 行あき' },
+            { value: '0.375', label: '3/8 行あき' },
+            { value: '0.5',   label: '1/2 行あき' },
+            { value: '0.625', label: '5/8 行あき' },
+            { value: '0.75',  label: '3/4 行あき (標準)' },
+            { value: '0.875', label: '7/8 行あき' },
+            { value: '1.0',   label: '1 行あき' },
+            { value: '1.25',  label: '1.25 行あき' },
+            { value: '1.5',   label: '1.5 行あき' },
+            { value: '1.75',  label: '1.75 行あき' },
+            { value: '2.0',   label: '2 行あき' }
+        ];
+        const normalizedCurrent = options.find(o => parseFloat(o.value) === parseFloat(currentPargap))?.value || '0.75';
+
+        // ポップアップ DOM 作成 (絶対配置で ruler の真下に表示)
+        const popup = document.createElement('div');
+        popup.className = 'detail-tab-pargap-popup';
+        popup.contentEditable = 'false';
+        const rulerRect = ruler.getBoundingClientRect();
+        const editorRect = this.editor.getBoundingClientRect();
+        // クリック位置の X、 ruler の下に Y
+        const clickX = clickEvent ? clickEvent.clientX : (rulerRect.left + 40);
+        const left = clickX - editorRect.left + this.editor.scrollLeft;
+        const top = rulerRect.bottom - editorRect.top + this.editor.scrollTop + 4;
+        popup.style.position = 'absolute';
+        popup.style.left = left + 'px';
+        popup.style.top = top + 'px';
+        popup.style.zIndex = '10000';
+
+        // タイトル + リスト項目
+        let html = '<div class="detail-tab-pargap-popup-title">段落間隔</div>';
+        for (const opt of options) {
+            const selected = opt.value === normalizedCurrent ? ' selected' : '';
+            html += `<button type="button" class="detail-tab-pargap-popup-item${selected}" data-pargap-value="${opt.value}">${opt.label}</button>`;
+        }
+        popup.innerHTML = html;
+
+        // 項目クリックハンドラ
+        popup.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        });
+        popup.addEventListener('click', (e) => {
+            const item = e.target.closest('.detail-tab-pargap-popup-item');
+            if (!item) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const selected = item.dataset.pargapValue;
+            ruler.dataset.tabPargap = selected;
+            this._updateTabFormatAttrs(ruler);
+            this.isModified = true;
+            this._closeParagraphGapPopup();
+        });
+
+        this.editor.appendChild(popup);
+        this._paragraphGapPopup = popup;
+
+        // 外部クリックで閉じる
+        setTimeout(() => {
+            this._paragraphGapPopupOutsideHandler = (ev) => {
+                if (popup.contains(ev.target)) return;
+                this._closeParagraphGapPopup();
+            };
+            document.addEventListener('mousedown', this._paragraphGapPopupOutsideHandler);
+        }, 0);
+    }
+
+    _closeParagraphGapPopup() {
+        if (this._paragraphGapPopup) {
+            this._paragraphGapPopup.remove();
+            this._paragraphGapPopup = null;
+        }
+        if (this._paragraphGapPopupOutsideHandler) {
+            document.removeEventListener('mousedown', this._paragraphGapPopupOutsideHandler);
+            this._paragraphGapPopupOutsideHandler = null;
+        }
+    }
+
+    _onTabMarkerDragStart(e, ruler, marker, unitPx) {
+        if (this.viewMode !== 'detailed') return;
+        e.preventDefault();
+        e.stopPropagation();
+        marker.classList.add('detail-tab-marker-dragging');
+
+        const isLHead = marker.classList.contains('detail-tab-marker-lhead');
+        const isLEnd = marker.classList.contains('detail-tab-marker-lend');
+        const startMouseX = e.clientX;
+        const startDataX = parseFloat(marker.dataset.x) || 0;
+
+        const onMove = (ev) => {
+            const dx = ev.clientX - startMouseX;
+            // J マーカー: マウスが右へ → 右マージン縮小 → data-x (right) 減少 → ルーラ拡大
+            // L/F/タブ: マウスが右へ → data-x 増加
+            let newDataX = isLEnd ? (startDataX - dx / unitPx) : (startDataX + dx / unitPx);
+            newDataX = Math.max(0, Math.round(newDataX));
+            marker.dataset.x = String(newDataX);
+            // L マーカーは var(--ml-px) のみで配置 (CSS variable 連動)、 J マーカーは var(--mr-px)
+            // F マーカーとタブマーカーは段落 content 内の offset を ml に加算した位置に表示
+            if (!isLHead && !isLEnd) {
+                marker.style.left = 'calc(var(--ml-px, 0px) + ' + (newDataX * unitPx) + 'px)';
+            }
+            // 段落 CSS と data-tab-attrs を即時更新 (ルーラ幅も自動変化)
+            this._updateTabFormatAttrs(ruler);
+        };
+        const onUp = (ev) => {
+            marker.classList.remove('detail-tab-marker-dragging');
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            this.isModified = true;
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    }
+
+    /**
+     * ルーラー内の現在のマーカー位置から data-tab-attrs を再構築する。
+     * 同時に段落本体の CSS (margin-left/right/text-indent/tab-size) も即時更新して
+     * ユーザーの編集が描画に反映されるようにする。
+     */
+    _updateTabFormatAttrs(ruler) {
+        if (!ruler) return;
+        const fhead = ruler.querySelector('.detail-tab-marker-fhead');
+        const lhead = ruler.querySelector('.detail-tab-marker-lhead');
+        const lend = ruler.querySelector('.detail-tab-marker-lend');
+        const tabs = ruler.querySelectorAll('.detail-tab-marker-tab');
+        const origin = ruler.querySelector('.detail-tab-origin');
+
+        // ruler 内 data-x は文字幅単位、 XML 出力は hunit 単位 (BTRON 仕様)
+        // ここで文字幅 → hunit 変換して data-tab-attrs に格納する
+        const indent = parseFloat(fhead && fhead.dataset.x) || 0;  // 文字幅
+        const left = parseFloat(lhead && lhead.dataset.x) || 0;    // 文字幅
+        const right = parseFloat(lend && lend.dataset.x) || 0;     // 文字幅
+        const R = origin ? (parseInt(origin.dataset.origin, 10) || 0) : 0;
+
+        const tabVals = [];  // 文字幅 (符号付き: 負値 = decimal align)
+        tabs.forEach(t => {
+            const x = parseFloat(t.dataset.x) || 0;
+            const da = t.classList.contains('detail-tab-marker-tab-decimal');
+            tabVals.push(da ? -x : x);
+        });
+
+        // ドラッグでは変更されない P / height / pargap は ruler の data-* に保持された初期値を引き継ぐ
+        const tabP = ruler.dataset.tabP !== undefined ? ruler.dataset.tabP : '0';
+        const tabHeight = ruler.dataset.tabHeight !== undefined ? ruler.dataset.tabHeight : '0';
+        const tabPargap = ruler.dataset.tabPargap !== undefined ? ruler.dataset.tabPargap : '0.75';
+
+        // ↓ マーカーが見つからない (DOM 構築途中など) 場合は既存の dataset.tabAttrs を破壊しない
+        // これにより詳細→清書→詳細 ラウンドトリップで tabs 値が誤って空になるのを防止
+        if (tabVals.length === 0 && tabs.length === 0 && ruler.dataset.tabAttrs) {
+            // 既存値を尊重 — マーカー集合が取れていない異常状態では何もしない
+            return;
+        }
+
+        // 文字幅 → hunit 変換 (BTRON xtad 出力用)
+        const indentHunit = this._charWidthToHunit(indent);
+        const leftHunit = this._charWidthToHunit(left);
+        const rightHunit = this._charWidthToHunit(right);
+        const tabsHunit = tabVals.map(v => {
+            const sign = v < 0 ? -1 : 1;
+            return sign * this._charWidthToHunit(Math.abs(v));
+        });
+
+        const newAttrs = 'R="' + R + '" P="' + tabP + '" height="' + tabHeight + '" pargap="' + tabPargap + '" left="' + leftHunit + '" right="' + rightHunit + '" indent="' + indentHunit + '" ntabs="' + tabVals.length + '" tabs="' + tabsHunit.join(',') + '"';
+        ruler.dataset.tabAttrs = newAttrs;
+        // 段落の data-tab-format JSON も同期更新する (シリアライザ L107-124 の差分判定 = カスケード継承段落への
+        // 余分な <tab-format> 出力防止のため、 ruler 値と段落 JSON を常に一致させる必要がある)
+        // 注意: parser 由来の data-tab-format は {R, P, height, pargap, left, right, indent, ntabs, tabs (絶対値), tabsDecimalAlign} の構造で、
+        //       同じ形式で書き戻さないと parser 由来の継承段落 (前後) と JSON 文字列が一致せず、 差分判定で重複出力される
+        const _para = ruler.closest('p, div');
+        // parser の data-tab-format JSON は hunit ベース (parser の _parseTabFormatAttrs と整合)
+        const tabFormatJson = {
+            R: R,
+            P: parseInt(tabP) || 0,
+            height: tabHeight,
+            pargap: tabPargap,
+            left: leftHunit,
+            right: rightHunit,
+            indent: indentHunit,
+            ntabs: tabVals.length,
+            tabs: tabsHunit.map(v => Math.abs(v)),
+            tabsDecimalAlign: tabsHunit.map(v => v < 0)
+        };
+        const tabFormatJsonStr = JSON.stringify(tabFormatJson);
+        if (_para) {
+            // v2: シリアライザは ruler/hidden span を SSOT とするため、 段落 data-tab-format JSON は CSS 計算用としてのみ保持
+            // (data-tab-format-explicit フラグは v2 で撤回)
+            _para.setAttribute('data-tab-format', tabFormatJsonStr);
+        }
+
+        // ルーラの CSS variable を更新 (ルーラ幅・各マーカー位置が連動)
+        // ruler 内は文字幅単位なので CHAR_UNIT_PX で px 換算 (フォントサイズ非依存)
+        ruler.style.setProperty('--ml-px', (left * window.CHAR_UNIT_PX) + 'px');
+        ruler.style.setProperty('--mr-px', (right * window.CHAR_UNIT_PX) + 'px');
+        ruler.style.setProperty('--indent-px', (indent * window.CHAR_UNIT_PX) + 'px');
+
+        // 段落本体の CSS を即時更新
+        // BTRON 仕様: タブ書式の効果は「次のタブ書式付箋が現れるまで」継続するため、
+        // ルーラーがある段落を含め、 後続の段落のうち次のルーラー(または隠し span)を持たないものへ
+        // 同じ CSS を適用する
+        const paragraph = ruler.closest('p, div');
+        if (paragraph) {
+            // 段落 CSS は hunit ベースで計算 (parser の text-tad-parser.js Line 1186 と整合)
+            // BTRON 仕様: left/right/indent/tabs[i] は hunit 単位、 px 変換は hunitToPx = DPI / |docScale.hunit|
+            const hunitToPx = Math.abs(window.DPI / ((this.docScale && this.docScale.hunit) || -120));
+            // pargap を段落の margin-top/bottom に反映 (フォントサイズ × pargap)
+            const pargapValueNum = parseFloat(tabPargap);
+            const applyCss = (p) => {
+                p.style.marginLeft = (leftHunit * hunitToPx) + 'px';
+                p.style.marginRight = (rightHunit * hunitToPx) + 'px';
+                // <indent/> anchor がある段落は text-indent を上書きしない
+                // (パーサが anchor 前のテキスト幅で text-indent: -padding-left を設定済み、 上書きで字下げが消えるのを防止)
+                if (!p.querySelector('.indent-anchor')) {
+                    p.style.textIndent = (indentHunit * hunitToPx) + 'px';
+                }
+                if (tabsHunit.length > 0) {
+                    const tabIntervalPx = Math.abs(tabsHunit[0]) * hunitToPx;
+                    if (tabIntervalPx > 0) {
+                        p.style.tabSize = tabIntervalPx + 'px';
+                        p.style.MozTabSize = tabIntervalPx + 'px';
+                    }
+                }
+                // pargap → 段落間隔 (margin-top/bottom) を即時更新
+                if (!isNaN(pargapValueNum)) {
+                    // 段落内の最大フォントサイズを取得 (pt 単位、 default 14pt)
+                    let fontSizePt = 14;
+                    const fontEls = p.querySelectorAll('font[size]');
+                    fontEls.forEach(f => {
+                        const s = parseFloat(f.getAttribute('size'));
+                        if (!isNaN(s) && s > fontSizePt) fontSizePt = s;
+                    });
+                    const fontSizePx = fontSizePt * 1.333;
+                    const pargapPx = pargapValueNum * fontSizePx;
+                    p.style.marginTop = pargapPx + 'px';
+                    p.style.marginBottom = pargapPx + 'px';
+                }
+            };
+            applyCss(paragraph);
+            // 後続の段落へ継承効果を反映
+            // v2: 打ち切り条件は元実装に戻す ─「ruler/隠し span を持つ段落」 のみで break
+            // (シリアライザは ruler 由来のみ出力するため、 explicit フラグ判定は不要)
+            // BTRON 後勝ち継承の境界 = 次の ruler を持つ段落 (= 次の <tab-format> 実在段落)
+            let next = paragraph.nextElementSibling;
+            while (next) {
+                if (next.querySelector && next.querySelector('.detail-tab-format, .hidden-tab-format')) break;
+                if (next.tagName === 'P' || next.tagName === 'DIV') {
+                    applyCss(next);
+                    // 継承段落の data-tab-format JSON も同期 (CSS 計算と整合させるため。 シリアライザは見ない)
+                    next.setAttribute('data-tab-format', tabFormatJsonStr);
+                }
+                next = next.nextElementSibling;
+            }
+        }
+    }
+
+    /**
+     * 詳細モード時、 旗マーク (指定付箋) をクリックすると属性内容をポップアップで表示する
+     */
+    attachDetailFusenClickHandlers() {
+        if (!this.editor) return;
+        const fusens = this.editor.querySelectorAll('.docmemo, .page-number, .docoverlay, .fixed-space, .detail-tab-format, .detail-align, span[style*="letter-spacing"]');
+        fusens.forEach(el => {
+            if (el.dataset.detailHandlerAttached === 'true') return;
+            el.dataset.detailHandlerAttached = 'true';
+            // タブ書式ルーラーは内部のマーカー操作 (シングルクリック=ドラッグ開始) と
+            // 属性ポップアップ表示を区別するため、 ダブルクリックでポップアップを出す
+            const triggerEvent = el.classList.contains('detail-tab-format') ? 'dblclick' : 'click';
+            el.addEventListener(triggerEvent, async (e) => {
+                if (this.viewMode !== 'detailed') return;
+                e.preventDefault();
+                e.stopPropagation();
+                this.editor.querySelectorAll('.detail-selected').forEach(s => s.classList.remove('detail-selected'));
+                el.classList.add('detail-selected');
+                let info = '';
+                if (el.classList.contains('docmemo')) {
+                    info = '文章メモ\n内容: ' + (el.dataset.memo || '(なし)');
+                } else if (el.classList.contains('page-number')) {
+                    info = 'ページ番号\nstep: ' + (el.dataset.step || '') + '\nnum: ' + (el.dataset.num || '');
+                } else if (el.classList.contains('docoverlay')) {
+                    const attrs = Array.from(el.attributes)
+                        .filter(a => a.name.startsWith('data-') && a.name !== 'data-detail-handler-attached')
+                        .map(a => a.name.substring(5) + ': ' + a.value).join('\n');
+                    info = '用紙オーバーレイ\n' + (attrs || '(属性なし)');
+                } else if (el.classList.contains('fixed-space')) {
+                    info = '固定幅空白\n幅: ' + (el.dataset.width || '(指定なし)');
+                } else if (el.classList.contains('detail-tab-format')) {
+                    // タブ書式指定付箋
+                    const raw = el.dataset.tabAttrs || '';
+                    const decoded = raw.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+                    info = 'タブ書式指定付箋\n' + (decoded || '(属性なし)');
+                } else if (el.classList.contains('detail-align')) {
+                    // そろえ指定付箋
+                    const alignVal = el.dataset.align || '';
+                    const alignLabels = {
+                        'left': '行頭そろえ (左そろえ)',
+                        'center': '中央そろえ',
+                        'right': '行末そろえ (右そろえ)',
+                        'justify': '両端そろえ'
+                    };
+                    info = 'そろえ指定付箋\n' + (alignLabels[alignVal] || alignVal || '(未指定)');
+                } else if (el.tagName === 'SPAN' && el.style && el.style.letterSpacing) {
+                    // 文字間隔指定付箋
+                    // CSS style 属性 (letter-spacing) で直接保存
+                    const value = el.style.letterSpacing;
+                    const labels = {
+                        '0em': '文字間隔なし',
+                        '0.0625em': '1/16字あき',
+                        '0.125em': '1/8字あき',
+                        '0.25em': '1/4字あき',
+                        '0.375em': '3/8字あき',
+                        '0.5em': '1/2字あき',
+                        '0.75em': '3/4字あき'
+                    };
+                    info = '文字間隔指定付箋\n値: ' + (labels[value] || value);
+                }
+                try {
+                    await this.showMessageDialog(info, [{ label: 'OK', value: 'ok' }], 0);
+                } catch (err) {
+                    logger.error('[EDITOR] 旗マークポップアップエラー:', err);
+                }
+            });
+        });
     }
 
     // toggleFullscreen()はPluginBaseで共通化（window-maximize-toggledでisFullscreenが同期される）
@@ -4247,124 +4980,60 @@ class BasicTextEditor extends
     }
 
     /**
-     * 字下げを適用（行頭移動指定付箋）
-     * カーソル位置を基準に、段落全体にインデントを設定
+     * 字下げ anchor をカーソル位置に挿入 (行頭移動指定付箋)
+     * BTRON <indent/> 仕様: タグの位置までの描画幅が 2 行目以降の左端位置になる
+     * - DOM 上はゼロ幅・編集不可の span (.indent-anchor) として保持
+     * - シリアライザが anchor → <indent/> として復元
+     * - パーサが anchor 前のテキスト/タブ/タブ書式の描画幅を実測して padding-left/text-indent 設定
+     * - 詳細モードでは IndentMarkRenderer が anchor の位置にマークを表示
      */
-    applyIndent() {
+    insertIndentAnchor() {
         const selection = window.getSelection();
         if (selection.rangeCount === 0) return;
 
         const range = selection.getRangeAt(0);
 
-        // カーソル位置のノードから段落要素を取得
+        // BTRON 仕様: 段落内に <indent/> は 1 個のみ
+        // カーソル位置の段落を特定して既存 anchor を全削除してから新規挿入する
         let paragraph = range.startContainer;
-        while (paragraph && paragraph.nodeName !== 'P') {
+        if (paragraph.nodeType === Node.TEXT_NODE) {
             paragraph = paragraph.parentNode;
         }
-
-        if (!paragraph || paragraph.nodeName !== 'P') {
-            logger.warn('[EDITOR] 段落要素が見つかりません');
-            return;
+        while (paragraph && paragraph.nodeName !== 'P' && paragraph !== this.editor) {
+            paragraph = paragraph.parentNode;
+        }
+        if (paragraph && paragraph.nodeName === 'P') {
+            const existingAnchors = paragraph.querySelectorAll('.indent-anchor');
+            existingAnchors.forEach(el => el.remove());
         }
 
-        // 段落の先頭からカーソル位置までの実際のピクセル幅を測定
-        const indentPx = this.measureIndentWidth(paragraph, range.startContainer, range.startOffset);
+        // deleteContents の前に selection をエディタの現在位置で更新
+        // (anchor 削除で range が無効化される場合の対策)
+        const currentRange = selection.rangeCount > 0 ? selection.getRangeAt(0) : range;
+        currentRange.deleteContents();
 
-        if (indentPx === 0) {
-            logger.debug('[EDITOR] カーソルが段落の先頭にあるため、字下げを適用しません');
-            return;
-        }
+        const anchor = document.createElement('span');
+        anchor.className = 'indent-anchor';
+        anchor.setAttribute('contenteditable', 'false');
 
-        // 段落にインデントスタイルを設定
-        paragraph.style.paddingLeft = `${indentPx}px`;
-        paragraph.style.textIndent = `-${indentPx}px`;
+        currentRange.insertNode(anchor);
 
-        // 変更フラグ
+        currentRange.setStartAfter(anchor);
+        currentRange.setEndAfter(anchor);
+        selection.removeAllRanges();
+        selection.addRange(currentRange);
+
         this.isModified = true;
+        const inputEvent = new Event('input', { bubbles: true, cancelable: true });
+        this.editor.dispatchEvent(inputEvent);
 
-        logger.debug(`[EDITOR] 字下げ適用: ${indentPx}px`);
-        this.setStatus(`字下げしました (${Math.round(indentPx)}px)`);
-    }
-
-    /**
-     * 段落の先頭からカーソル位置までの実際のインデント幅を測定
-     * DOMに実際に描画されている位置を使用し、フォントサイズを問わず正確に測定
-     */
-    measureIndentWidth(paragraph, targetNode, targetOffset) {
-        // 段落の先頭からカーソル位置までのRangeを作成（空チェック用）
-        const checkRange = document.createRange();
-        checkRange.setStart(paragraph, 0);
-        checkRange.setEnd(targetNode, targetOffset);
-
-        // テキストを取得して空チェック
-        const text = checkRange.toString();
-        if (text.length === 0) {
-            return 0;
+        // 挿入直後に字下げ効果を表示へ反映 (anchor 実位置に padding-left を収束させる)
+        if (this._realignIndentAnchors) {
+            this._realignIndentAnchors();
         }
 
-        // カーソル位置に一時的なマーカー要素を挿入
-        const tempMarker = document.createElement('span');
-        tempMarker.style.display = 'inline';
-        tempMarker.style.width = '0';
-        tempMarker.style.height = '0';
-
-        // Rangeを折り畳んでカーソル位置に設定
-        const insertRange = document.createRange();
-        insertRange.setStart(targetNode, targetOffset);
-        insertRange.setEnd(targetNode, targetOffset);
-        insertRange.insertNode(tempMarker);
-
-        // DOM上の実際の位置を取得
-        const markerRect = tempMarker.getBoundingClientRect();
-        const paragraphRect = paragraph.getBoundingClientRect();
-
-        // インデント幅を計算（段落左端からマーカー位置まで）
-        const indentPx = markerRect.left - paragraphRect.left;
-
-        // マーカーを削除
-        tempMarker.remove();
-
-        return Math.max(0, indentPx);
-    }
-
-    /**
-     * タブ1文字の幅を測定（エディタの基準フォントで）
-     */
-    measureTabWidth() {
-        const measureElement = document.createElement('span');
-        measureElement.style.fontFamily = window.getComputedStyle(this.editor).fontFamily;
-        measureElement.style.fontSize = `${DEFAULT_FONT_SIZE}pt`;
-        measureElement.style.tabSize = '4';
-        measureElement.style.MozTabSize = '4';
-        measureElement.style.whiteSpace = 'pre';
-        measureElement.style.position = 'absolute';
-        measureElement.style.visibility = 'hidden';
-        measureElement.textContent = '\t';
-
-        this.editor.appendChild(measureElement);
-        const width = measureElement.getBoundingClientRect().width;
-        this.editor.removeChild(measureElement);
-
-        return width;
-    }
-
-    /**
-     * テキストの幅を測定（エディタの基準フォントで）
-     */
-    measureTextWidth(text) {
-        const measureElement = document.createElement('span');
-        measureElement.style.fontFamily = window.getComputedStyle(this.editor).fontFamily;
-        measureElement.style.fontSize = `${DEFAULT_FONT_SIZE}pt`;
-        measureElement.style.whiteSpace = 'pre';
-        measureElement.style.position = 'absolute';
-        measureElement.style.visibility = 'hidden';
-        measureElement.textContent = text;
-
-        this.editor.appendChild(measureElement);
-        const width = measureElement.getBoundingClientRect().width;
-        this.editor.removeChild(measureElement);
-
-        return width;
+        this.setStatus('字下げを挿入しました');
+        logger.debug('[EDITOR] 字下げ anchor を挿入 (既存削除後)');
     }
 
     /**
@@ -4373,6 +5042,8 @@ class BasicTextEditor extends
     refresh() {
         if (this.viewMode === 'xml') {
             this.viewXMLMode();
+        } else if (this.viewMode === 'detailed') {
+            this.viewDetailedMode();
         } else {
             this.viewFormattedMode();
         }
@@ -4405,28 +5076,132 @@ class BasicTextEditor extends
      * 折り返し切り替え
      */
     toggleWrap() {
-        this.wrapMode = !this.wrapMode;
+        const newWrap = !this.wrapMode;
+        this.applyWordWrapConfig({ wordWrap: newWrap }, { applyWidth: false, paragraphUpdateDelay: 0 });
+        const statusMsg = this.wrapMode ? 'ウインドウ幅で折り返し: ON' : 'ウインドウ幅で折り返し: OFF';
+        this.setStatus(statusMsg);
+        this.updateWindowConfig({ wordWrap: this.wrapMode, viewMode: this.viewMode });
+        // wrapMode 切替時、 editor 幅 (用紙幅 or ウィンドウ幅) が変わるためタブ書式ルーラとマーカー位置を再計算する
+        // 詳細モード/原稿モードは renderTADXML 経路で editor.style.width も用紙幅に再設定される (parser L916)
+        if (this.viewMode === 'detailed' || this.viewMode === 'formatted') {
+            this.refresh();
+        }
+        setTimeout(() => this.updateContentHeight(), window.UI_UPDATE_DELAY_MS);
+    }
+
+    /**
+     * windowConfig.wordWrap に基づき editor の折り返し設定を適用する共通メソッド。
+     * editor の whiteSpace / wordWrap / (条件付きで width) を更新し、
+     * 既存段落要素のインラインスタイルも同期する。
+     * @param {Object} windowConfig - JSON metadata の window 設定 (wordWrap, width 等)
+     * @param {Object} [options]
+     * @param {boolean} [options.applyWidth=false] - true のとき wordWrap=true かつ paperWidth なしの場合に editor.style.width を windowConfig.width に設定
+     * @param {number} [options.paragraphUpdateDelay=0] - 段落要素のインラインスタイル更新までの delay ms (0=即時)
+     * @returns {boolean} 適用後の wrapMode
+     */
+    applyWordWrapConfig(windowConfig, options = {}) {
+        if (!windowConfig) return this.wrapMode;
+        const applyWidth = options.applyWidth === true;
+        const paragraphUpdateDelay = typeof options.paragraphUpdateDelay === 'number' ? options.paragraphUpdateDelay : 0;
+
+        const wordWrap = windowConfig.wordWrap !== undefined ? windowConfig.wordWrap : true;
+        this.wrapMode = wordWrap;
+
+        // ウインドウ幅で折り返し ON の場合、 paperWidth より windowConfig.width を優先
+        // (tab-format の left/right による段落 margin は段落単位で別途適用される)
+        if (this.wrapMode) {
+            if (applyWidth && windowConfig.width) {
+                // windowConfig.width が明示されていればそれを設定
+                const wpx = windowConfig.width + 'px';
+                this.editor.style.width = wpx;
+                this.editor.style.minWidth = wpx;
+                this.editor.style.maxWidth = wpx;
+            } else {
+                // wrapMode=true で width 未指定の場合 (toggleWrap で ON にしたケース等)、
+                // 過去に paper-based で設定された editor.style.width をクリアして
+                // 親要素 (.editor-container) いっぱい広がるようにする
+                if (this.editor.style.width || this.editor.style.maxWidth || this.editor.style.minWidth) {
+                    this.editor.style.width = '';
+                    this.editor.style.minWidth = '';
+                    this.editor.style.maxWidth = '';
+                }
+            }
+        }
+        // wrapMode=false の場合は paper-based 折り返しが parser L890 で適用される
+
         if (this.wrapMode) {
             this.editor.style.whiteSpace = 'pre-wrap';
             this.editor.style.wordWrap = 'break-word';
-            this.setStatus('ウインドウ幅で折り返し: ON');
         } else {
             this.editor.style.whiteSpace = 'pre';
             this.editor.style.wordWrap = 'normal';
-            this.setStatus('ウインドウ幅で折り返し: OFF');
         }
 
-        // 段落要素のインラインスタイルも更新
-        const paragraphs = this.editor.querySelectorAll('p');
-        paragraphs.forEach(p => {
-            p.style.whiteSpace = this.wrapMode ? 'pre-wrap' : 'pre';
-        });
+        const updateParagraphs = () => {
+            const paragraphs = this.editor.querySelectorAll('p');
+            paragraphs.forEach(p => {
+                p.style.whiteSpace = this.wrapMode ? 'pre-wrap' : 'pre';
+            });
+        };
+        if (paragraphUpdateDelay > 0) {
+            setTimeout(updateParagraphs, paragraphUpdateDelay);
+        } else {
+            updateParagraphs();
+        }
 
-        // 折り返し設定を保存
-        this.updateWindowConfig({ wordWrap: this.wrapMode });
+        // 用紙幅折り返しを即時反映 (wrapMode=false + paperWidth + paperMargin がある場合のみ)
+        this._applyPaperWidthToEditor();
 
-        // 折り返しモード変更後に高さを更新
-        setTimeout(() => this.updateContentHeight(), window.UI_UPDATE_DELAY_MS);
+        return this.wrapMode;
+    }
+
+    /**
+     * 用紙幅 (paperWidth − paperMargin 左右余白) を editor.style.width に適用する共通メソッド。
+     * BTRON 仕様準拠: 「ウインドウ幅で折り返し OFF + paperMargin あり」 で本文レイアウト領域マージンに合わせて
+     * editor 幅を絞り込み、 用紙幅で折り返しさせる。
+     * wrapMode=true (ウインドウ幅で折り返し) の場合は editor.style.width をクリアして親要素いっぱい広げる。
+     * XML モード (this.viewMode === 'xml') では editor 幅を変更しない (原稿モードは直接 XML 編集のため)。
+     *
+     * 呼出元:
+     * - toggleWrap() / applyWordWrapConfig() (即時反映)
+     * - renderTADXML (parser 経由、 初回描画時) ← Phase γ で重複ロジック削除済、 ここから呼出
+     */
+    _applyPaperWidthToEditor() {
+        if (!this.editor) return;
+        // XML モードは編集対象が <pre> なので editor 幅を変更しない
+        if (this.viewMode === 'xml') return;
+
+        // wrapMode=true (ウインドウ幅で折り返し) の場合、 paper-based の width を解除して親要素に追従させる
+        if (this.wrapMode === true) {
+            if (this.editor.style.width || this.editor.style.maxWidth || this.editor.style.minWidth) {
+                this.editor.style.width = '';
+                this.editor.style.minWidth = '';
+                this.editor.style.maxWidth = '';
+            }
+            return;
+        }
+
+        // wrapMode=false + paperWidth + paperMargin + docScale がある場合のみ用紙幅で折り返し
+        if (!this.paperWidth || !this.paperMargin || !this.docScale) return;
+
+        const binding = this.paperSize ? (this.paperSize.binding || 0) : 0;
+        const imposition = this.paperSize ? (this.paperSize.imposition || 0) : 0;
+        const effLeft = typeof this.paperMargin.getEffectiveLeft === 'function'
+            ? this.paperMargin.getEffectiveLeft(binding, imposition, 1)
+            : (this.paperMargin.left || 0);
+        const effRight = typeof this.paperMargin.getEffectiveRight === 'function'
+            ? this.paperMargin.getEffectiveRight(binding, imposition, 1)
+            : (this.paperMargin.right || 0);
+        const cu = this.paperWidth - effLeft - effRight;
+        if (cu <= 0) return;
+
+        const h = Number(this.docScale.hunit) || 0;
+        const f = h === 0 ? 1 : (h < 0 ? 96 / Math.abs(h) : h);
+        const cpx = Math.ceil(cu * f);
+        const cpxStr = cpx + 'px';
+        this.editor.style.width = cpxStr;
+        this.editor.style.minWidth = cpxStr;
+        this.editor.style.maxWidth = cpxStr;
     }
 
     /**
@@ -4548,6 +5323,13 @@ class BasicTextEditor extends
         if (parent === this.editor) {
             // 新しい<p>要素を作成して仮身を包む
             const p = document.createElement('p');
+            // 直前または直後の段落から CSS を継承 (タブ書式・字下げ・行揃え等を維持)
+            const refP = (element.previousElementSibling && element.previousElementSibling.tagName === 'P')
+                ? element.previousElementSibling
+                : (element.nextElementSibling && element.nextElementSibling.tagName === 'P')
+                    ? element.nextElementSibling
+                    : null;
+            if (refP) this.inheritParagraphStyle(refP, p);
             parent.insertBefore(p, element);
             p.appendChild(element);
         }
@@ -5716,9 +6498,10 @@ class BasicTextEditor extends
         const computedStyle = window.getComputedStyle(startNode);
         const color = computedStyle.color;
 
-        // 黒色（rgb(0, 0, 0)）以外の場合のみ返す
+        // 黒色（rgb(0, 0, 0)）以外の場合のみ hex 形式で返す
+        // (カラーピッカーが hex 形式 #RRGGBB を要求するため)
         if (color && color !== 'rgb(0, 0, 0)') {
-            return color;
+            return this.rgbToHex(color);
         }
         return null;
     }
@@ -6413,7 +7196,7 @@ class BasicTextEditor extends
      * カスタム文字色
      */
     async customColor() {
-        const color = await this.showInputDialog('文字色を入力してください（例: #ff0000, #000000）', DEFAULT_CHCOL, 20, { colorPicker: true });
+        const color = await this.showInputDialog('文字色を入力してください（例: #ff0000, #000000）', this.rgbToHex(document.queryCommandValue('foreColor')) || DEFAULT_CHCOL, 20, { colorPicker: true });
         if (color) {
             this.applyFontColor(color);
             this.setStatus(`文字色: ${color}`);
@@ -6430,14 +7213,31 @@ class BasicTextEditor extends
         if (this.paperFrameVisible) {
             pageBreak.classList.add('page-break-visible');
         }
-        pageBreak.textContent = '--- 改ページ ---';
+        // テキストは設定しない (詳細モードでは CSS の P 囲み記号のみ表示)
 
         const selection = window.getSelection();
-        if (selection.rangeCount > 0) {
-            const range = selection.getRangeAt(0);
-            range.insertNode(pageBreak);
-            this.setStatus('改ページを挿入しました');
+        if (selection.rangeCount === 0) return;
+
+        const range = selection.getRangeAt(0);
+
+        // カーソル位置の親段落 (p 要素) を探す
+        let pNode = range.startContainer;
+        if (pNode.nodeType === Node.TEXT_NODE) pNode = pNode.parentNode;
+        while (pNode && pNode !== this.editor && pNode.nodeName !== 'P') {
+            pNode = pNode.parentNode;
         }
+
+        if (pNode && pNode.nodeName === 'P' && pNode.parentNode === this.editor) {
+            // 段落内にカーソルがある場合は段落の直後 (= editor 直下) に改ページを配置
+            // シリアライザは editor 直下の .page-break のみ <pagebreak/> として出力するため
+            this.editor.insertBefore(pageBreak, pNode.nextSibling);
+        } else {
+            // 段落外なら通常通り挿入位置に
+            range.insertNode(pageBreak);
+        }
+
+        this.setStatus('改ページを挿入しました');
+        this.isModified = true;
     }
 
     /**
@@ -7699,8 +8499,10 @@ class BasicTextEditor extends
         if (!text) return;
         const normalized = normalizePasteText(text);
 
-        // カーソル位置の段落からline-heightスタイルを取得して新段落に引き継ぐ
+        // カーソル位置の段落から全 CSS / data-tab-format を新段落に継承
+        // (タブ書式・字下げ・行揃え・禁則指定・行間隔をペースト後も維持するため)
         let paragraphStyle = '';
+        let tabFormatJsonAttr = '';
         const selection = window.getSelection();
         if (selection.rangeCount > 0) {
             let currentP = selection.getRangeAt(0).startContainer;
@@ -7708,28 +8510,29 @@ class BasicTextEditor extends
                 currentP = currentP.parentElement;
             }
             if (currentP && currentP.nodeName === 'P') {
-                if (currentP.style.lineHeight) {
-                    paragraphStyle += `line-height: ${currentP.style.lineHeight};`;
-                }
-                if (currentP.style.fontSize) {
-                    paragraphStyle += `font-size: ${currentP.style.fontSize};`;
-                }
+                // 一時段落に共通ヘルパー経由で継承させ、 結果を文字列化して挿入用 HTML に埋め込む
+                const tempP = document.createElement('p');
+                this.inheritParagraphStyle(currentP, tempP);
+                paragraphStyle = (tempP.getAttribute('style') || '').replace(/"/g, '&quot;');
+                const tf = tempP.getAttribute('data-tab-format');
+                if (tf) tabFormatJsonAttr = ` data-tab-format='${tf.replace(/'/g, '&#39;')}'`;
             }
         }
 
         // \n\nで段落分割、各段落内の\nを<br>に変換
+        // ペースト由来の改行はユーザー意図 → data-user-br でマーキング (詳細モードで ↵ 表示)
         const paragraphs = normalized.split('\n\n');
         const htmlParts = paragraphs.map(para => {
-            return para.split('\n').map(line => escapeHtml(line)).join('<br>');
+            return para.split('\n').map(line => escapeHtml(line)).join('<br data-user-br="1">');
         });
 
         if (htmlParts.length === 1) {
             // 単一段落（改段落なし）: <br>のみで結合
             document.execCommand('insertHTML', false, htmlParts[0]);
         } else {
-            // 複数段落: </p><p>で段落を区切る
+            // 複数段落: </p><p>で段落を区切る (style と data-tab-format を引き継ぐ)
             const styleAttr = paragraphStyle ? ` style="${paragraphStyle}"` : '';
-            const html = htmlParts.join(`</p><p${styleAttr}>`);
+            const html = htmlParts.join(`</p><p${styleAttr}${tabFormatJsonAttr}>`);
             document.execCommand('insertHTML', false, html);
         }
     }
@@ -8352,9 +9155,12 @@ class BasicTextEditor extends
             this.paperSize.lengthMm = window.pointsToMm(this.paperHeight);
         }
 
-        // 用紙サイズ選択肢を生成
+        // 用紙サイズ選択肢を生成 (BTRON GUI に近づけて 「用紙: 縦」 「用紙: 横」 の両方向を列挙)
         const paperOptions = this.getPaperSizeOptions();
         const currentSizeName = this.paperSize.getSizeName() || 'CUSTOM';
+        // 現在の用紙が縦向き (width <= length) か横向きかを判定
+        const curIsPortrait = this.paperSize.widthMm <= this.paperSize.lengthMm;
+        const currentOrientedKey = (currentSizeName === 'CUSTOM') ? 'CUSTOM' : `${currentSizeName}_${curIsPortrait ? 'P' : 'L'}`;
 
         let paperOptionsHtml = '';
         let lastGroup = '';
@@ -8367,19 +9173,32 @@ class BasicTextEditor extends
                 }
                 lastGroup = group;
             }
-            const selected = opt.key === currentSizeName ? 'selected' : '';
-            paperOptionsHtml += `<option value="${opt.key}" ${selected}>${opt.label}</option>`;
+            // 縦/横の両バリエーションを追加
+            const baseW = Math.min(opt.widthMm, opt.lengthMm);   // 短辺
+            const baseL = Math.max(opt.widthMm, opt.lengthMm);   // 長辺
+            const portraitKey = `${opt.key}_P`;
+            const landscapeKey = `${opt.key}_L`;
+            const selectedP = portraitKey === currentOrientedKey ? 'selected' : '';
+            const selectedL = landscapeKey === currentOrientedKey ? 'selected' : '';
+            paperOptionsHtml += `<option value="${portraitKey}" data-w="${baseW}" data-l="${baseL}" ${selectedP}>${opt.label}: 縦</option>`;
+            paperOptionsHtml += `<option value="${landscapeKey}" data-w="${baseL}" data-l="${baseW}" ${selectedL}>${opt.label}: 横</option>`;
         });
         paperOptionsHtml += '<option disabled>──────────</option>';
-        paperOptionsHtml += `<option value="CUSTOM" ${currentSizeName === 'CUSTOM' ? 'selected' : ''}>カスタム</option>`;
+        paperOptionsHtml += `<option value="CUSTOM" ${currentOrientedKey === 'CUSTOM' ? 'selected' : ''}>カスタム</option>`;
 
         // 現在の値（0.01mm精度で丸めて誤差蓄積を軽減）
         const curWidth = Math.round(this.paperSize.widthMm * 100) / 100;
         const curHeight = Math.round(this.paperSize.lengthMm * 100) / 100;
-        const curTopMm = Math.round(this.paperSize.topMm * 100) / 100;
-        const curBottomMm = Math.round(this.paperSize.bottomMm * 100) / 100;
-        const curLeftMm = Math.round(this.paperSize.leftMm * 100) / 100;
-        const curRightMm = Math.round(this.paperSize.rightMm * 100) / 100;
+        // BTRON GUI 仕様準拠: 「余白」 は本文レイアウト領域マージン = paperMargin (docmargin) から読む
+        // (paper 自身の top/left/right/bottom はオーバーレイ領域マージンで、 別途ヘッダ/フッタ画面で管理)
+        const marginTopPt = this.paperMargin ? this.paperMargin.top : 0;
+        const marginBottomPt = this.paperMargin ? this.paperMargin.bottom : 0;
+        const marginLeftPt = this.paperMargin ? this.paperMargin.left : 0;
+        const marginRightPt = this.paperMargin ? this.paperMargin.right : 0;
+        const curTopMm = Math.round(window.pointsToMm(marginTopPt) * 100) / 100;
+        const curBottomMm = Math.round(window.pointsToMm(marginBottomPt) * 100) / 100;
+        const curLeftMm = Math.round(window.pointsToMm(marginLeftPt) * 100) / 100;
+        const curRightMm = Math.round(window.pointsToMm(marginRightPt) * 100) / 100;
         const curImposition = this.paperSize.imposition;
 
         const dialogHtml = `
@@ -8425,10 +9244,30 @@ class BasicTextEditor extends
                 }
                 .paper-setup-dialog .form-select {
                     width: 200px;
+                    height: 100px;
                     padding: 2px 4px;
                     border: 1px inset #c0c0c0;
                     font-size: 11px;
+                    background: #ffffff;
                 }
+                .paper-setup-dialog .paper-row-with-list {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 8px;
+                    margin-bottom: 4px;
+                }
+                .paper-setup-dialog .paper-dimensions {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    padding-top: 2px;
+                }
+                .paper-setup-dialog .paper-dim-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                }
+                .paper-setup-dialog .paper-dim-row label { width: 28px; text-align: right; }
                 .paper-setup-dialog .form-unit {
                     margin-left: 4px;
                     color: #666;
@@ -8456,19 +9295,23 @@ class BasicTextEditor extends
                 }
             </style>
             <div class="paper-setup-dialog">
-                <div class="form-row">
-                    <span class="form-label">用紙:</span>
-                    <select id="paperSizeSelect" class="form-select">
+                <div class="paper-row-with-list">
+                    <span class="form-label" style="padding-top:2px;">用紙:</span>
+                    <select id="paperSizeSelect" class="form-select" size="6">
                         ${paperOptionsHtml}
                     </select>
-                </div>
-                <div class="form-row">
-                    <span class="form-label">横:</span>
-                    <input type="number" id="paperWidth" class="form-input" value="${curWidth}" min="10" max="2000" step="0.1">
-                    <span class="form-unit">mm</span>
-                    <span style="margin-left: 12px;" class="form-label">縦:</span>
-                    <input type="number" id="paperHeight" class="form-input" value="${curHeight}" min="10" max="2000" step="0.1">
-                    <span class="form-unit">mm</span>
+                    <div class="paper-dimensions">
+                        <div class="paper-dim-row">
+                            <label>縦:</label>
+                            <input type="number" id="paperHeight" class="form-input" value="${curHeight}" min="10" max="2000" step="0.1">
+                            <span class="form-unit">mm</span>
+                        </div>
+                        <div class="paper-dim-row">
+                            <label>横:</label>
+                            <input type="number" id="paperWidth" class="form-input" value="${curWidth}" min="10" max="2000" step="0.1">
+                            <span class="form-unit">mm</span>
+                        </div>
+                    </div>
                 </div>
                 <div class="form-row">
                     <span class="form-label">余白:</span>
@@ -8512,14 +9355,13 @@ class BasicTextEditor extends
                     const paperSelect = document.getElementById('paperSizeSelect');
                     const widthInput = document.getElementById('paperWidth');
                     const heightInput = document.getElementById('paperHeight');
-                    const sizes = ${JSON.stringify(Object.fromEntries(paperOptions.map(o => [o.key, {w: o.widthMm, h: o.lengthMm}])))};
 
-                    // 用紙サイズ選択時に寸法を更新
+                    // 用紙サイズ選択時、 選択された option の data-w / data-l から寸法を反映 (縦/横バリエーション対応)
                     paperSelect.addEventListener('change', function() {
-                        const selected = this.value;
-                        if (sizes[selected]) {
-                            widthInput.value = sizes[selected].w;
-                            heightInput.value = sizes[selected].h;
+                        const opt = this.options[this.selectedIndex];
+                        if (opt && opt.dataset && opt.dataset.w && opt.dataset.l) {
+                            widthInput.value = opt.dataset.w;
+                            heightInput.value = opt.dataset.l;
                         }
                     });
 
@@ -8535,28 +9377,52 @@ class BasicTextEditor extends
         `;
 
         const result = await this.showCustomDialog({
-            title: '用紙設定',
+            title: 'レイアウト用紙設定',
             dialogHtml: dialogHtml,
             buttons: [
                 { label: '取消', value: 'cancel' },
+                { label: 'ヘッダ/フッタ', value: 'headerFooter' },
                 { label: '標準設定', value: 'default' },
                 { label: '設定', value: 'ok' }
             ],
-            defaultButton: 2,
-            width: 400
+            defaultButton: 3,
+            width: 480
         });
 
         if (!result) {
             return false;
         }
 
+        // 「ヘッダ/フッタ」 ボタン押下時はサブダイアログに遷移し、 戻り次第用紙設定ダイアログを再表示 (BTRON GUI 同等の挙動)
+        if (result.button === 'headerFooter') {
+            await this.showHeaderFooterSetup();
+            // 再帰呼出で用紙設定ダイアログを再表示 (現在の paperSize/paperMargin 値で開く)
+            return await this.showPageSetup();
+        }
+
+        // カーソル位置の段落を判定 (BTRON 仕様準拠の挿入位置決定用)
+        const cursorParagraph = this._getCursorParagraph();
+        const allParagraphs = this.editor ? this.editor.querySelectorAll('p') : [];
+        const isFirstParagraph = !cursorParagraph || allParagraphs.length === 0 || cursorParagraph === allParagraphs[0];
+
         if (result.button === 'default') {
-            // 標準設定（A4）にリセット
+            // 標準設定（A4 + BTRON 標準余白）にリセット
+            // 標準設定は常に文書全体の設定として扱う (= 文章開始セグメント直後の <paper>/<docmargin> を書き換え)
             this.paperSize.resetToDefault();
             this.paperWidth = this.paperSize.width;
             this.paperHeight = this.paperSize.length;
+            // BTRON GUI 仕様準拠: paperMargin (docmargin) も標準値にリセット (BTRON 標準: 上 20mm / 下 20mm / 左 20mm / 右 10mm)
+            if (!this.paperMargin) {
+                this.paperMargin = new window.PaperMargin();
+            }
+            this.paperMargin.top = window.mmToPoints(20);
+            this.paperMargin.bottom = window.mmToPoints(20);
+            this.paperMargin.left = window.mmToPoints(20);
+            this.paperMargin.right = window.mmToPoints(10);
             this.isModified = true;
             this.setStatus('用紙設定を標準（A4）にリセットしました');
+            // 即時反映
+            this._applyPaperWidthAndRefresh();
             return true;
         } else if (result.button === 'ok') {
             // 設定を適用
@@ -8570,25 +9436,213 @@ class BasicTextEditor extends
             const marginRight = parseFloat(formData.marginRight) || 0;
             const imposition = parseInt(formData.imposition) || 0;
 
-            // PaperSizeに設定
-            this.paperSize.widthMm = width;
-            this.paperSize.lengthMm = height;
-            this.paperSize.topMm = marginTop;
-            this.paperSize.bottomMm = marginBottom;
-            this.paperSize.leftMm = marginLeft;
-            this.paperSize.rightMm = marginRight;
-            this.paperSize.imposition = imposition;
-
-            // ポイント単位でも更新
-            this.paperWidth = this.paperSize.width;
-            this.paperHeight = this.paperSize.length;
+            // BTRON 仕様準拠の挿入位置決定:
+            //   isFirstParagraph=true (カーソルが 1 段落目 or 文章開始セグメント直後): 文書冒頭の <paper>/<docmargin> を書き換え
+            //   isFirstParagraph=false (中間段落): カーソル段落の直前に hidden-paper-change span を挿入し、 シリアライザで改ページ + <paper> + <docmargin> を出力
+            if (isFirstParagraph) {
+                // 文書全体の用紙設定を更新 (= 文章開始セグメント直後の <paper>/<docmargin> を書き換え)
+                this.paperSize.widthMm = width;
+                this.paperSize.lengthMm = height;
+                this.paperSize.imposition = imposition;
+                if (!this.paperMargin) {
+                    this.paperMargin = new window.PaperMargin();
+                }
+                this.paperMargin.top = window.mmToPoints(marginTop);
+                this.paperMargin.bottom = window.mmToPoints(marginBottom);
+                this.paperMargin.left = window.mmToPoints(marginLeft);
+                this.paperMargin.right = window.mmToPoints(marginRight);
+                // ポイント単位でも更新
+                this.paperWidth = this.paperSize.width;
+                this.paperHeight = this.paperSize.length;
+            } else {
+                // 中間段落: カーソル段落の直前に hidden-paper-change span を挿入
+                // シリアライザはこの span を見て、 段落の前に改ページ + <paper> + <docmargin> を出力する (BTRON 仕様 p.81 「用紙指定変更は改ページの直後を推奨」)
+                const newPaperWidthPt = window.mmToPoints(width);
+                const newPaperLengthPt = window.mmToPoints(height);
+                const newMarginTopPt = window.mmToPoints(marginTop);
+                const newMarginBottomPt = window.mmToPoints(marginBottom);
+                const newMarginLeftPt = window.mmToPoints(marginLeft);
+                const newMarginRightPt = window.mmToPoints(marginRight);
+                // 同じ段落の直前に既存の hidden-paper-change があれば置換 (重複挿入防止)
+                const prev = cursorParagraph.previousElementSibling;
+                let hidden;
+                if (prev && prev.classList && prev.classList.contains('hidden-paper-change')) {
+                    hidden = prev;
+                } else {
+                    hidden = document.createElement('span');
+                    hidden.className = 'hidden-paper-change';
+                    hidden.style.display = 'none';
+                    cursorParagraph.parentNode.insertBefore(hidden, cursorParagraph);
+                }
+                hidden.dataset.paperAttrs = `length="${newPaperLengthPt}" width="${newPaperWidthPt}" imposition="${imposition}"`;
+                hidden.dataset.docmarginAttrs = `top="${newMarginTopPt}" bottom="${newMarginBottomPt}" left="${newMarginLeftPt}" right="${newMarginRightPt}"`;
+            }
 
             this.isModified = true;
-            this.setStatus(`用紙設定を ${width}×${height}mm に更新しました`);
+            this.setStatus(`用紙設定を ${width}×${height}mm に更新しました${isFirstParagraph ? '' : ' (中間段落挿入)'}`);
+            // 即時反映
+            this._applyPaperWidthAndRefresh();
             return true;
         }
 
         return false;
+    }
+
+    /**
+     * カーソル位置の段落 (<p>) を返す。 範囲選択時は startContainer の段落を返す。 段落が見つからない場合は null。
+     */
+    _getCursorParagraph() {
+        if (!this.editor) return null;
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) return null;
+        let node = selection.getRangeAt(0).startContainer;
+        // editor 内のノードでなければ無効
+        if (!this.editor.contains(node)) return null;
+        while (node && node !== this.editor && node.nodeName !== 'P') {
+            node = node.parentNode;
+        }
+        return (node && node.nodeName === 'P') ? node : null;
+    }
+
+    /**
+     * 用紙設定変更後の即時反映ヘルパー: editor 幅再計算 + 詳細/清書モード時の段落 CSS 再描画。
+     */
+    _applyPaperWidthAndRefresh() {
+        // editor.style.width を新しい paperWidth - paperMargin に即時更新 (toggleWrap と同様)
+        if (typeof this._applyPaperWidthToEditor === 'function') {
+            this._applyPaperWidthToEditor();
+        }
+        // 詳細モード/清書モードでは tab-format ルーラや段落 margin の再計算のため refresh
+        if (this.viewMode === 'detailed' || this.viewMode === 'formatted') {
+            if (typeof this.refresh === 'function') {
+                this.refresh();
+            }
+        }
+        // 高さ更新
+        if (typeof this.updateContentHeight === 'function') {
+            setTimeout(() => this.updateContentHeight(), window.UI_UPDATE_DELAY_MS || 0);
+        }
+    }
+
+    /**
+     * ヘッダ/フッタ設定ダイアログ (BTRON GUI のヘッダ/フッタ画面を再現)
+     * showPageSetup から「ヘッダ/フッタ」 ボタンで遷移する。
+     * - ヘッダ: 左端/中央/右端 のテキスト + 高さ (mm)
+     * - フッタ: 左端/中央/右端 のテキスト + 高さ (mm) + 開始ページ番号
+     * 値は this.paperHeaderFooter に保持される (xtad への保存は将来対応: 用紙オーバーレイ付箋 2.0.3 + ページ番号付箋 2.0.6)
+     * @returns {boolean} 設定された場合 true、 キャンセル時 false
+     */
+    async showHeaderFooterSetup() {
+        // 既存値読込 (lazy init)
+        if (!this.paperHeaderFooter) {
+            this.paperHeaderFooter = {
+                headerLeft: '', headerCenter: '', headerRight: '', headerHeightMm: 0,
+                footerLeft: '', footerCenter: '', footerRight: '', footerHeightMm: 0,
+                pageStartNum: 1
+            };
+        }
+        const hf = this.paperHeaderFooter;
+        const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        const dialogHtml = `
+            <style>
+                #dialog-input-field { display: none !important; }
+                #input-dialog-message:has(.header-footer-dialog) { margin-bottom: 2px; padding: 2px; }
+                #input-dialog:has(.header-footer-dialog) { padding: 4px; }
+                #input-dialog:has(.header-footer-dialog) .dialog-buttons { padding: 2px; margin-top: 0px; }
+                .header-footer-dialog { font-family: sans-serif; font-size: 11px; padding: 4px; min-width: 380px; }
+                .header-footer-dialog .hf-section {
+                    border: 1px solid #808080;
+                    padding: 6px 8px;
+                    margin-bottom: 6px;
+                    background: #dedede;
+                    display: grid;
+                    grid-template-columns: auto 1fr;
+                    column-gap: 6px;
+                    row-gap: 3px;
+                    align-items: center;
+                }
+                .header-footer-dialog .hf-section-label {
+                    grid-column: 1;
+                    grid-row: span 4;
+                    writing-mode: vertical-rl;
+                    text-orientation: upright;
+                    font-weight: bold;
+                    width: 18px;
+                    text-align: center;
+                    letter-spacing: 4px;
+                }
+                .header-footer-dialog .hf-row { display: flex; align-items: center; gap: 4px; }
+                .header-footer-dialog .hf-row label { width: 48px; }
+                .header-footer-dialog .hf-row input[type="text"] {
+                    flex: 1;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    font-size: 11px;
+                    background: #ffffff;
+                }
+                .header-footer-dialog .hf-row input[type="number"] {
+                    width: 60px;
+                    padding: 2px 4px;
+                    border: 1px inset #c0c0c0;
+                    font-size: 11px;
+                    background: #ffffff;
+                    text-align: right;
+                }
+                .header-footer-dialog .hf-row .unit { margin-left: 2px; color: #444; }
+                .header-footer-dialog .hf-footer-meta { display: flex; align-items: center; gap: 8px; }
+            </style>
+            <div class="header-footer-dialog">
+                <div class="hf-section">
+                    <div class="hf-section-label">ヘッダ</div>
+                    <div class="hf-row"><label>左端:</label><input type="text" name="headerLeft" value="${esc(hf.headerLeft)}"></div>
+                    <div class="hf-row"><label>中央:</label><input type="text" name="headerCenter" value="${esc(hf.headerCenter)}"></div>
+                    <div class="hf-row"><label>右端:</label><input type="text" name="headerRight" value="${esc(hf.headerRight)}"></div>
+                    <div class="hf-row"><label>高さ:</label><input type="number" name="headerHeight" value="${Number(hf.headerHeightMm) || 0}" min="0" max="100" step="1"><span class="unit">mm</span></div>
+                </div>
+                <div class="hf-section">
+                    <div class="hf-section-label">フッタ</div>
+                    <div class="hf-row"><label>左端:</label><input type="text" name="footerLeft" value="${esc(hf.footerLeft)}"></div>
+                    <div class="hf-row"><label>中央:</label><input type="text" name="footerCenter" value="${esc(hf.footerCenter)}"></div>
+                    <div class="hf-row"><label>右端:</label><input type="text" name="footerRight" value="${esc(hf.footerRight)}"></div>
+                    <div class="hf-row hf-footer-meta">
+                        <label>高さ:</label><input type="number" name="footerHeight" value="${Number(hf.footerHeightMm) || 0}" min="0" max="100" step="1"><span class="unit">mm</span>
+                        <label style="margin-left:12px;width:auto;">開始ページ番号:</label><input type="number" name="pageStartNum" value="${Number(hf.pageStartNum) || 1}" min="1" step="1" style="width:50px;">
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const result = await this.showCustomDialog({
+            title: 'ヘッダ/フッタ',
+            dialogHtml: dialogHtml,
+            buttons: [
+                { label: '取消', value: 'cancel' },
+                { label: '設定', value: 'ok' }
+            ],
+            defaultButton: 1,
+            width: 420
+        });
+
+        if (!result || result.button !== 'ok') {
+            return false;
+        }
+
+        const formData = result.formData || {};
+        this.paperHeaderFooter = {
+            headerLeft: formData.headerLeft || '',
+            headerCenter: formData.headerCenter || '',
+            headerRight: formData.headerRight || '',
+            headerHeightMm: parseFloat(formData.headerHeight) || 0,
+            footerLeft: formData.footerLeft || '',
+            footerCenter: formData.footerCenter || '',
+            footerRight: formData.footerRight || '',
+            footerHeightMm: parseFloat(formData.footerHeight) || 0,
+            pageStartNum: parseInt(formData.pageStartNum) || 1
+        };
+        this.isModified = true;
+        this.setStatus('ヘッダ/フッタを更新しました');
+        return true;
     }
 
     // loadDataFileFromParent() および loadVirtualObjectMetadata() は

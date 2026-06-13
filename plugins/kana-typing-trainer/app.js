@@ -638,13 +638,15 @@ class KanaTypingTrainer extends PluginBase {
     // ========================================
 
     _setupResize() {
-        let resizeTimer = null;
-        window.addEventListener('resize', () => {
-            if (resizeTimer) clearTimeout(resizeTimer);
-            resizeTimer = setTimeout(() => {
+        // destroy で解除できるようハンドラ・タイマーをインスタンスに保持する
+        this._resizeTimer = null;
+        this._onResizeHandler = () => {
+            if (this._resizeTimer) clearTimeout(this._resizeTimer);
+            this._resizeTimer = setTimeout(() => {
                 this.keyboardRenderer.onResize();
             }, 100);
-        });
+        };
+        window.addEventListener('resize', this._onResizeHandler);
     }
 
     // ========================================
@@ -879,7 +881,7 @@ class KanaTypingTrainer extends PluginBase {
                 "KeyN": {"normal":"す","leftShift":"わ","rightShift":"ず"},
                 "KeyM": {"normal":"つ","leftShift":"ぃ","rightShift":"づ"},
                 "Comma": {"normal":"、","leftShift":"ぁ","rightShift":"，"},
-                "Period": {"normal":"。","leftShift":"゜","rightShift":"．"},
+                "Period": {"normal":"。","leftShift":"．","rightShift":"゜"},
                 "Slash": {"normal":"っ","leftShift":"ぅ","rightShift":"ゎ"}
             },
             handAssignment: {
@@ -900,6 +902,8 @@ class KanaTypingTrainer extends PluginBase {
     }
 
     destroy() {
+        if (this._resizeTimer) { clearTimeout(this._resizeTimer); this._resizeTimer = null; }
+        if (this._onResizeHandler) { window.removeEventListener('resize', this._onResizeHandler); this._onResizeHandler = null; }
         super.destroy();
     }
 

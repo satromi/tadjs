@@ -47,6 +47,11 @@
         import { VirtualObjectRenderer } from '../../js/virtual-object-renderer.js';
         window.VirtualObjectRenderer = VirtualObjectRenderer;
     </script>
+    <!-- パターン色解決関数をグローバル変数として読み込み -->
+    <script type="module">
+        import { resolvePatternColor } from '../../js/pattern-utils.js';
+        window.resolvePatternColor = resolvePatternColor;
+    </script>
     <!-- 共通ユーティリティと定数をグローバル変数として読み込み -->
     <script type="module">
         import {

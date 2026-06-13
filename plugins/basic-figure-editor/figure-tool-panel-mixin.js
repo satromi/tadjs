@@ -81,11 +81,16 @@ export const FigureToolPanelMixin = (Base) => class extends Base {
             // 道具パネルが開いている場合は閉じる
             logger.debug('[FIGURE EDITOR] 道具パネルウィンドウを閉じます:', this.toolPanelWindowId);
             if (this.messageBus) {
+                // skipCloseConfirmation: 道具パネルはユーザデータを持たないので保存確認スキップ
+                // (これがないと closeWindow の requestCloseConfirmation が 20秒タイムアウトする)
                 this.messageBus.send('close-window', {
-                    windowId: this.toolPanelWindowId
+                    windowId: this.toolPanelWindowId,
+                    skipCloseConfirmation: true
                 });
             }
-            this.toolPanelWindowId = null;
+            // toolPanelWindowId は window-closed ハンドラで実際に閉じられた後に null 化される
+            // (ここで即 null にすると、close-window 処理完了前に再 toggle された場合に
+            //  新規パネルが追加生成されてしまう race condition があるため)
             this.toolPanelVisible = false;
             this.setStatus('道具パネルを閉じました');
 
@@ -262,5 +267,60 @@ export const FigureToolPanelMixin = (Base) => class extends Base {
         if (panelType === 'material') {
             logger.debug('[FIGURE EDITOR] 画材パネルが閉じられました:', windowId);
         }
+    }
+
+    /**
+     * ウィンドウ非アクティブ時: 道具パネルを非表示にし、表示状態を保存
+     *
+     * 起動シーケンスでは仮身一覧等から自動的に activate-window が連鎖発火し
+     * DEACT->ACT がごく短時間で続くケースがある。
+     * その場合は visible=false 送信を遅延し、ACT 受信時にキャンセルして
+     * 視覚的なちらつき・表示状態の意図しない切替を防ぐ。
+     */
+    onWindowDeactivated() {
+        if (super.onWindowDeactivated) super.onWindowDeactivated();
+        this._savedToolPanelVisible = this.toolPanelVisible;
+        if (this.toolPanelWindowId && this.messageBus) {
+            if (this._visibilityHideTimer) clearTimeout(this._visibilityHideTimer);
+            const targetWindowId = this.toolPanelWindowId;
+            const bus = this.messageBus;
+            this._visibilityHideTimer = setTimeout(() => {
+                bus.send('set-window-visibility', {
+                    windowId: targetWindowId,
+                    visible: false
+                });
+                this._visibilityHideTimer = null;
+            }, 150);
+        }
+    }
+
+    /**
+     * ウィンドウアクティブ時: 道具パネルを保存された状態に復元
+     * 既存 window が存在すれば visibility を戻す、なければ新規 open
+     * DEACT 直後の遅延タイマーが残っていればキャンセル (連鎖発火対策)
+     */
+    onWindowActivated() {
+        if (super.onWindowActivated) super.onWindowActivated();
+
+        // DEACT で予約した hide タイマーをキャンセル (短時間内の自動 DEACT/ACT 連鎖対策)
+        if (this._visibilityHideTimer) {
+            clearTimeout(this._visibilityHideTimer);
+            this._visibilityHideTimer = null;
+            // hide が発火していないため、状態は visible のまま → visibility=true 送信不要
+            this._savedToolPanelVisible = undefined;
+            return;
+        }
+
+        if (this._savedToolPanelVisible === true) {
+            if (this.toolPanelWindowId && this.messageBus) {
+                this.messageBus.send('set-window-visibility', {
+                    windowId: this.toolPanelWindowId,
+                    visible: true
+                });
+            } else {
+                this.openToolPanelWindow();
+            }
+        }
+        this._savedToolPanelVisible = undefined;
     }
 };

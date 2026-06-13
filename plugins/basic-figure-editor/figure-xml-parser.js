@@ -56,14 +56,18 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
         this.log('XML解析:', xmlData);
 
         try {
-            // XMLパース前に不正なタグを修正
-            const fixedXmlData = this.fixMalformedXml(xmlData);
-
+            // まず元の XML をそのまま解析 (valid な XML を fixMalformedXml で誤って破壊しないため)
             const parser = new DOMParser();
-            const xmlDoc = parser.parseFromString(fixedXmlData, 'text/xml');
+            let xmlDoc = parser.parseFromString(xmlData, 'text/xml');
+            let parserError = xmlDoc.querySelector('parsererror');
 
-            // パースエラーチェック
-            const parserError = xmlDoc.querySelector('parsererror');
+            // 元の XML がパースエラーの場合のみ fixMalformedXml を適用
+            if (parserError) {
+                const fixedXmlData = this.fixMalformedXml(xmlData);
+                xmlDoc = parser.parseFromString(fixedXmlData, 'text/xml');
+                parserError = xmlDoc.querySelector('parsererror');
+            }
+
             if (parserError) {
                 logger.error('[FIGURE EDITOR] XML解析エラー:', parserError.textContent);
                 this.shapes = [];
@@ -121,6 +125,19 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             // 図形要素を解析
             this.shapes = [];
 
+            // 未解釈メタタグ (figoverlay, figpagenumber, figmemo) をラウンドトリップ保存用に保持
+            // BTRON 仕様 3.5.3/3.5.4/3.5.6/3.14 準拠、 編集側で表示せず保存時に復元する
+            this.preservedFigureMeta = [];
+            const metaElems = Array.from(figureElem.children).filter(c => {
+                const tn = c.tagName.toLowerCase();
+                return tn === 'figoverlay' || tn === 'figpagenumber' || tn === 'figmemo';
+            });
+            for (const me of metaElems) {
+                const attrs = {};
+                for (const a of me.attributes) attrs[a.name] = a.value;
+                this.preservedFigureMeta.push({ tag: me.tagName, attrs: attrs });
+            }
+
             // figScaleデフォルト初期化（UNITS型: -96 = canvas 96 DPI と等価）
             this.figScale = { hunit: -96, vunit: -96 };
 
@@ -156,6 +173,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
             // 座標変換状態を保持
             let pendingTransform = null;
+            let pendingFigmodifier = null;
 
             // figure要素の子要素を順番に処理（text+documentの組み合わせを認識するため）
             const children = Array.from(figureElem.children);
@@ -172,6 +190,12 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
                         vangle: parseFloat(elem.getAttribute('vangle')) || 0
                     };
                     continue;  // 次の要素へ
+                }
+
+                // figmodifier 要素を検出 (BTRON 仕様 3.4.0、 直後の図形要素に矢印を付加)
+                if (tagName === 'figmodifier') {
+                    pendingFigmodifier = elem.getAttribute('arrow') || '';
+                    continue;
                 }
 
                 // figView/figDraw/figScale要素は上で処理済みなのでスキップ
@@ -206,6 +230,8 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
                     shape = this.parseCurveElement(elem);
                 } else if (tagName === 'polygon') {
                     shape = this.parsePolygonElement(elem);
+                } else if (tagName === 'freefig') {
+                    shape = this.parseFreefigElement(elem);
                 } else if (tagName === 'link') {
                     shape = this.parseLinkElement(elem);
                 } else if (tagName === 'arc') {
@@ -245,10 +271,21 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
                     this.parseSinglePatternElement(elem);
                 }
 
-                // 座標変換を適用
+                // 座標変換を適用 (描画用座標を更新し、 ラウンドトリップ保存用に元の値を shape.savedTransform に保持)
                 if (shape && pendingTransform) {
+                    shape.savedTransform = { ...pendingTransform };
                     this.applyTransformToShape(shape, pendingTransform);
                     pendingTransform = null;  // リセット
+                }
+                // figmodifier (矢印) をラウンドトリップ用に shape に紐付け
+                // BTRON 3.4.0: 直後セグメントが「開いた図形」 (line/polyline/elliptical_arc/開曲線) のみ有効
+                if (shape && pendingFigmodifier !== null) {
+                    if (this._isOpenFigureForArrow(shape)) {
+                        shape.figmodifier = pendingFigmodifier;
+                    } else {
+                        logger.warn('[FIGURE EDITOR] figmodifier (矢印) は閉じた図形には適用できません (BTRON 3.4.0): shape.type=' + shape.type);
+                    }
+                    pendingFigmodifier = null;
                 }
 
                 if (shape) {
@@ -377,6 +414,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             else if (tagName === 'spline') shape = this.parseSplineElement(elem);
             else if (tagName === 'curve') shape = this.parseCurveElement(elem);
             else if (tagName === 'polygon') shape = this.parsePolygonElement(elem);
+            else if (tagName === 'freefig') shape = this.parseFreefigElement(elem);
             else if (tagName === 'link') shape = this.parseLinkElement(elem);
             else if (tagName === 'arc') shape = this.parseArcElement(elem);
             else if (tagName === 'chord') shape = this.parseChordElement(elem);
@@ -563,16 +601,20 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
         const lineTypeAttr = elem.getAttribute('lineType');
         const lineWidthAttr = elem.getAttribute('lineWidth');
         if (lineTypeAttr !== null && lineWidthAttr !== null) {
+            // 注意: lineWidth="0" は意図的に「枠線なし」を意味するため falsy 判定を使わない
+            // (`parseInt("0") || 1` は 1 になるバグの修正)
+            const parsedWidth = parseInt(lineWidthAttr);
             return {
                 lineType: parseInt(lineTypeAttr) || 0,
-                lineWidth: parseInt(lineWidthAttr) || 1
+                lineWidth: Number.isFinite(parsedWidth) ? parsedWidth : 1
             };
         }
         const l_atr = parseInt(elem.getAttribute('l_atr')) || 1;
         const parsed = this.parseLineAttribute(l_atr);
+        // parsed.lineWidth が 0 の場合も尊重する
         return {
             lineType: parsed.lineType,
-            lineWidth: parsed.lineWidth || 1
+            lineWidth: Number.isFinite(parsed.lineWidth) ? parsed.lineWidth : 1
         };
     }
 
@@ -635,6 +677,22 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
         return zIndex !== null ? parseInt(zIndex) : null;
     }
 
+    /**
+     * BTRON 3.4.0「矢印は開いた図形のみに適用可」 制約のための判定
+     * 開: line / polyline / pencil / brush / elliptical_arc / curve(closed=false)
+     * 閉: rect / roundRect / ellipse / arc / chord / polygon / triangle / curve(closed=true)
+     * 適用外: vobj / image / pixelmap / document / freefig / marker / group / nested-figure
+     * @param {Object} shape
+     * @returns {boolean} 矢印が適用可能なら true
+     */
+    _isOpenFigureForArrow(shape) {
+        if (!shape || !shape.type) return false;
+        const openTypes = new Set(['line', 'polyline', 'pencil', 'brush', 'elliptical_arc']);
+        if (openTypes.has(shape.type)) return true;
+        if (shape.type === 'curve' && !shape.closed) return true;
+        return false;
+    }
+
     parseLineElement(elem) {
         // tad.js形式: <line l_atr="..." points="x1,y1 x2,y2">
         const pointsStr = elem.getAttribute('points');
@@ -661,6 +719,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         const lineShape = {
             type: 'line',
+            mode: parseInt(elem.getAttribute('mode') || '0', 10),
             startX, startY, endX, endY,
             strokeColor,
             fillColor: 'transparent',
@@ -709,7 +768,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             };
 
             if (hasFontSize) {
-                // 新形式：属性から取得
+                // 新形式：属性から取得 (値は pt 単位として扱う)
                 fontSize = parseInt(elem.getAttribute('fontSize')) || 16;
                 fontFamily = elem.getAttribute('fontFamily') || 'sans-serif';
                 textColor = elem.getAttribute('textColor') || DEFAULT_FRCOL;
@@ -727,7 +786,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
                     .trim();
             } else if (documentElem) {
                 // 標準形式：document内にtext要素とfont要素がある
-                // font要素からフォント情報を取得
+                // font要素からフォント情報を取得 (size は pt 単位として扱う)
                 const fontElems = documentElem.querySelectorAll('font');
                 fontElems.forEach(fontElem => {
                     if (fontElem.hasAttribute('size')) {
@@ -788,25 +847,34 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
         }
 
         // 通常の長方形
-        // cornerRadius を解決:
+        // cornerRadius / cornerRadiusH / cornerRadiusV を解決:
         //   1) cornerRadius 属性があれば使用 (新形式・editor 内部保存形式)
-        //   2) figRH/figRV 属性があれば平均を使用 (BTRON 仕様: 角丸め半径、unpack.js が round=1 の rect で出力)
+        //   2) figRH/figRV 属性があれば個別に保持 (BTRON 3.0.1: rh/rv は角丸め直径、 半径換算で /2)
+        //      → cornerRadiusH = figRH/2、 cornerRadiusV = figRV/2 を個別保持し、 cornerRadius は両者の平均
         //   3) round=1 でフォールバックの 5
         //   4) round=0 なら 0
         let cornerRadius;
+        let cornerRadiusH;
+        let cornerRadiusV;
         if (elem.hasAttribute('cornerRadius')) {
             cornerRadius = parseFloat(elem.getAttribute('cornerRadius'));
+            cornerRadiusH = cornerRadius;
+            cornerRadiusV = cornerRadius;
         } else if (elem.hasAttribute('figRH') || elem.hasAttribute('figRV')) {
             const figRH = parseFloat(elem.getAttribute('figRH')) || 0;
             const figRV = parseFloat(elem.getAttribute('figRV')) || 0;
-            // BTRON 仕様: figRH/figRV は角丸め直径。半径換算で /2
-            cornerRadius = (figRH + figRV) / 4;
+            cornerRadiusH = figRH / 2;
+            cornerRadiusV = figRV / 2;
+            cornerRadius = (cornerRadiusH + cornerRadiusV) / 2;
         } else {
             cornerRadius = round > 0 ? 5 : 0;
+            cornerRadiusH = cornerRadius;
+            cornerRadiusV = cornerRadius;
         }
 
         return {
             type: round > 0 ? 'roundRect' : 'rect',
+            mode: parseInt(elem.getAttribute('mode') || '0', 10),
             startX: left,
             startY: top,
             endX: right,
@@ -819,6 +887,8 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             fillEnabled: fillEnabled,
             fillPatternId: fillPatternId,
             cornerRadius: cornerRadius,
+            cornerRadiusH: cornerRadiusH,
+            cornerRadiusV: cornerRadiusV,
             angle: angle,
             rotation: rotation,
             zIndex: this._parseZIndex(elem)
@@ -838,6 +908,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         return {
             type: 'ellipse',
+            mode: parseInt(elem.getAttribute('mode') || '0', 10),
             frame: frame,
             // 編集系コードの startX/Y/endX/Y 互換のため frame の四隅をエイリアスとして保持
             startX: frame.left,
@@ -974,7 +1045,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
                         // viewleft等がある場合は位置情報のみなのでスキップ
                         return;
                     } else if (tagName === 'font') {
-                        // フォント設定
+                        // フォント設定 (size は pt 単位として扱う)
                         if (node.hasAttribute('size')) {
                             fontSize = parseInt(node.getAttribute('size')) || 16;
                         }
@@ -1066,6 +1137,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         return {
             type: 'polyline',
+            mode: parseInt(elem.getAttribute('mode') || '0', 10),
             points: points,
             strokeColor: strokeColor,
             fillColor: 'transparent',
@@ -1142,6 +1214,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         return {
             type: 'curve',
+            mode: parseInt(elem.getAttribute('mode') || '0', 10),
             path: points,
             closed: curveClosed,
             curveType: curveType,
@@ -1191,6 +1264,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         return {
             type: 'polygon',
+            mode: parseInt(elem.getAttribute('mode') || '0', 10),
             points: points,
             strokeColor: strokeColor,
             fillColor: fillColor,
@@ -1201,6 +1275,29 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
             fillPatternId: fillPatternId,
             cornerRadius: cornerRadius,
             rotation: polygonRotation,
+            zIndex: this._parseZIndex(elem)
+        };
+    }
+
+    parseFreefigElement(elem) {
+        // 任意図形セグメント: <freefig mode="0" f_pat="0" sy="..." nr="..." bx="..." nh="..." h="10,50,15,55" />
+        const mode = parseInt(elem.getAttribute('mode') || '0', 10);
+        const f_pat = parseInt(elem.getAttribute('f_pat') || '0', 10);
+        const sy = parseFloat(elem.getAttribute('sy')) || 0;
+        const nr = parseFloat(elem.getAttribute('nr')) || 0;
+        const bx = parseFloat(elem.getAttribute('bx')) || 0;
+        const nh = parseInt(elem.getAttribute('nh') || '0', 10);
+        const hStr = elem.getAttribute('h') || '';
+        const hArr = hStr ? hStr.split(',').map(v => parseFloat(v.trim()) || 0) : [];
+        return {
+            type: 'freefig',
+            mode: mode,
+            f_pat: f_pat,
+            sy: sy,
+            nr: nr,
+            bx: bx,
+            nh: nh,
+            h: hArr,
             zIndex: this._parseZIndex(elem)
         };
     }
@@ -1217,7 +1314,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
         const chszPx = window.convertPtToPx(chsz);
         const lineHeight = DEFAULT_LINE_HEIGHT;
         const textHeight = Math.ceil(chszPx * lineHeight);
-        const originalHeight = textHeight + VOBJ_PADDING_VERTICAL; // 閉じた仮身の高さ
+        const originalHeight = textHeight + VOBJ_PADDING_VERTICAL; // 閉じた仮身の高さ (= content + padding、border 抜き)
 
         // z-index属性を取得
         const zIndex = elem.getAttribute('zIndex');
@@ -1830,6 +1927,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         return {
             type: 'arc',
+            mode: parseInt(elem.getAttribute('mode') || '0', 10),
             frame: frame,
             startX: startX,
             startY: startY,
@@ -1865,6 +1963,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         return {
             type: 'chord',
+            mode: parseInt(elem.getAttribute('mode') || '0', 10),
             frame: frame,
             startX: startX,
             startY: startY,
@@ -1900,6 +1999,7 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
 
         return {
             type: 'elliptical_arc',
+            mode: parseInt(elem.getAttribute('mode') || '0', 10),
             frame: frame,
             startX: startX,
             startY: startY,

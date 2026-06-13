@@ -103,11 +103,48 @@ export const FigureConnectorMixin = (Base) => class extends Base {
     }
 
     /**
+     * shape.startConnection / endConnection が有効なら、現在のコネクタ位置を再計算して
+     * shape.startX/startY/endX/endY を最新値に上書きする (in-place)。
+     * これにより:
+     *   - 過去に誤った位置で保存された xtad の線も、開いた瞬間に正しい位置に追従
+     *   - 接続先の vobj/shape が移動・リサイズされても線が常に追従
+     */
+    _resolveLineEndpointsFromConnections(shape) {
+        if (!shape || shape.type !== 'line') return;
+        if (!Array.isArray(this.shapes) || typeof this.getConnectorPoints !== 'function') return;
+
+        if (shape.startConnection && shape.startConnection.shapeId !== undefined) {
+            const target = this.shapes[shape.startConnection.shapeId];
+            if (target) {
+                const pts = this.getConnectorPoints(target);
+                const conn = pts && pts.find(p => p.index === shape.startConnection.connectorIndex);
+                if (conn) {
+                    shape.startX = conn.x;
+                    shape.startY = conn.y;
+                }
+            }
+        }
+        if (shape.endConnection && shape.endConnection.shapeId !== undefined) {
+            const target = this.shapes[shape.endConnection.shapeId];
+            if (target) {
+                const pts = this.getConnectorPoints(target);
+                const conn = pts && pts.find(p => p.index === shape.endConnection.connectorIndex);
+                if (conn) {
+                    shape.endX = conn.x;
+                    shape.endY = conn.y;
+                }
+            }
+        }
+    }
+
+    /**
      * 接続形状（カギ線・曲線）で線を描画
      * @param {Object} shape - 線図形オブジェクト
      * @returns {Object} {startAngle, endAngle} - 始点と終点の角度（ラジアン）
      */
     drawConnectedLine(shape) {
+        // 接続先の現在位置に追従させる (Bug 1 修正: 旧座標で保存された線も最新コネクタへ)
+        this._resolveLineEndpointsFromConnections(shape);
         const startX = shape.startX;
         const startY = shape.startY;
         const endX = shape.endX;
@@ -215,14 +252,24 @@ export const FigureConnectorMixin = (Base) => class extends Base {
 
             case 'vobj':
                 // 仮身: 四角形と同様に4辺の中点 + 4つの角 = 8点
-                const vobjWidth = shape.endX - shape.startX;
-                const vobjHeight = shape.endY - shape.startY;
+                // 閉じた仮身: DOM 高さ = shape.endY-startY (= xtad 値、box-sizing で border 内包)
+                //   → vobjBottom = shape.endY (border 加算なし)
+                // 開いた仮身: 旧来 stored は border 抜き → DOM = stored + border (後方互換)
+                //   → vobjBottom = shape.endY + VOBJ_BORDER_WIDTH
+                const _vobjBorder = (typeof VOBJ_BORDER_WIDTH !== 'undefined') ? VOBJ_BORDER_WIDTH
+                    : (typeof window !== 'undefined' && window.VOBJ_BORDER_WIDTH !== undefined ? window.VOBJ_BORDER_WIDTH : 2);
+                const _isOpenedVobjConnector = this.virtualObjectRenderer
+                    && this.virtualObjectRenderer.isOpenedVirtualObject({
+                        ...(shape.virtualObject || {}),
+                        vobjtop: shape.startY,
+                        vobjbottom: shape.endY
+                    });
                 const vobjLeft = shape.startX;
                 const vobjRight = shape.endX;
                 const vobjTop = shape.startY;
-                const vobjBottom = shape.endY;
-                const vobjCenterX = shape.startX + vobjWidth / 2;
-                const vobjCenterY = shape.startY + vobjHeight / 2;
+                const vobjBottom = shape.endY + (_isOpenedVobjConnector ? _vobjBorder : 0);
+                const vobjCenterX = (vobjLeft + vobjRight) / 2;
+                const vobjCenterY = (vobjTop + vobjBottom) / 2;
 
                 points.push(
                     { x: vobjCenterX, y: vobjTop, index: 0 },      // 上辺中点
@@ -236,14 +283,25 @@ export const FigureConnectorMixin = (Base) => class extends Base {
                 );
                 break;
 
-            case 'ellipse':
+            case 'ellipse': {
                 // 円: 8方向（0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°）
-                const ellWidth = shape.endX - shape.startX;
-                const ellHeight = shape.endY - shape.startY;
-                const ellCenterX = shape.startX + ellWidth / 2;
-                const ellCenterY = shape.startY + ellHeight / 2;
-                const radiusX = Math.abs(ellWidth / 2);
-                const radiusY = Math.abs(ellHeight / 2);
+                // BTRON 仕様準拠で deriveEllipseParams と同じ式を使う:
+                //   shape.frame があれば cx = (left+right)/2 - 1 (Phase A 修正後)
+                //   無ければ旧形式 (startX/endX) で従来通り
+                let ellCenterX, ellCenterY, radiusX, radiusY;
+                if (shape.frame) {
+                    ellCenterX = (shape.frame.left + shape.frame.right) / 2 - 1;
+                    ellCenterY = (shape.frame.top + shape.frame.bottom) / 2 - 1;
+                    radiusX = Math.abs((shape.frame.right - shape.frame.left) / 2);
+                    radiusY = Math.abs((shape.frame.bottom - shape.frame.top) / 2);
+                } else {
+                    const ellWidth = shape.endX - shape.startX;
+                    const ellHeight = shape.endY - shape.startY;
+                    ellCenterX = shape.startX + ellWidth / 2;
+                    ellCenterY = shape.startY + ellHeight / 2;
+                    radiusX = Math.abs(ellWidth / 2);
+                    radiusY = Math.abs(ellHeight / 2);
+                }
 
                 const angles = [0, 45, 90, 135, 180, 225, 270, 315];
                 angles.forEach((angle, index) => {
@@ -255,6 +313,7 @@ export const FigureConnectorMixin = (Base) => class extends Base {
                     });
                 });
                 break;
+            }
 
             case 'triangle':
                 // 三角形: 3頂点 + 3辺の中点 = 6点
@@ -325,19 +384,38 @@ export const FigureConnectorMixin = (Base) => class extends Base {
      * 図形のコネクタを描画
      * @param {Object} shape - 図形オブジェクト
      */
+    /**
+     * 現在の transform stack 配下での視覚半径補正係数を計算
+     * コネクタ描画は figScale × zoom 適用後の transform 内で呼ばれるため、
+     * 円が拡縮されないよう半径を 1/(figScale × zoom) で割り戻す。
+     * @returns {{ radius: number, lineWidth: number }}
+     */
+    _connectorVisualMetrics() {
+        const scale = (typeof this.getFigScalePixelFactor === 'function')
+            ? this.getFigScalePixelFactor()
+            : { x: 1, y: 1 };
+        const z = this.zoomLevel || 1;
+        const inv = 1 / Math.max(0.0001, Math.min(scale.x * z, scale.y * z));
+        return {
+            radius: this.connectorRadius * inv,
+            lineWidth: 1 * inv
+        };
+    }
+
     drawConnectors(shape) {
         const points = this.getConnectorPoints(shape);
         if (points.length === 0) return;
 
+        const { radius, lineWidth } = this._connectorVisualMetrics();
         this.ctx.save();
 
         points.forEach(point => {
             this.ctx.beginPath();
-            this.ctx.arc(point.x, point.y, this.connectorRadius, 0, 2 * Math.PI);
+            this.ctx.arc(point.x, point.y, radius, 0, 2 * Math.PI);
             this.ctx.fillStyle = '#ffffff';
             this.ctx.fill();
             this.ctx.strokeStyle = '#000000';
-            this.ctx.lineWidth = 1;
+            this.ctx.lineWidth = lineWidth;
             this.ctx.stroke();
         });
 
@@ -351,6 +429,7 @@ export const FigureConnectorMixin = (Base) => class extends Base {
     drawLineEndpointConnectors(line) {
         if (line.type !== 'line') return;
 
+        const { radius, lineWidth } = this._connectorVisualMetrics();
         this.ctx.save();
 
         // 接続状態を確認
@@ -359,22 +438,20 @@ export const FigureConnectorMixin = (Base) => class extends Base {
 
         // 始点のコネクタ
         this.ctx.beginPath();
-        this.ctx.arc(line.startX, line.startY, this.connectorRadius, 0, 2 * Math.PI);
-        // 接続されている場合は青で塗りつぶし、そうでなければ白
+        this.ctx.arc(line.startX, line.startY, radius, 0, 2 * Math.PI);
         this.ctx.fillStyle = hasStartConnection ? '#0000ff' : '#ffffff';
         this.ctx.fill();
-        this.ctx.strokeStyle = '#0000ff'; // 青色の枠線
-        this.ctx.lineWidth = 1;
+        this.ctx.strokeStyle = '#0000ff';
+        this.ctx.lineWidth = lineWidth;
         this.ctx.stroke();
 
         // 終点のコネクタ
         this.ctx.beginPath();
-        this.ctx.arc(line.endX, line.endY, this.connectorRadius, 0, 2 * Math.PI);
-        // 接続されている場合は青で塗りつぶし、そうでなければ白
+        this.ctx.arc(line.endX, line.endY, radius, 0, 2 * Math.PI);
         this.ctx.fillStyle = hasEndConnection ? '#0000ff' : '#ffffff';
         this.ctx.fill();
-        this.ctx.strokeStyle = '#0000ff'; // 青色の枠線
-        this.ctx.lineWidth = 1;
+        this.ctx.strokeStyle = '#0000ff';
+        this.ctx.lineWidth = lineWidth;
         this.ctx.stroke();
 
         this.ctx.restore();

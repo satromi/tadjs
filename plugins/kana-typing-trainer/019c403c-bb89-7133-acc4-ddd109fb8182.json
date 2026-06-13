@@ -19,16 +19,17 @@
     "minWidth": 600,
     "minHeight": 400,
     "resizable": true,
-    "scrollable": false,
+    "scrollable": true,
     "maximize": false,
     "maximizable": true,
     "minimizable": true,
     "closable": true,
     "alwaysOnTop": false,
+    "wordWrap": true,
     "skipTaskbar": false,
     "frame": true,
     "transparent": false,
-    "backgroundColor": "#dedede"
+    "backgroundColor": "#ffffff"
   },
   "applist": {
     "kana-typing-trainer": {

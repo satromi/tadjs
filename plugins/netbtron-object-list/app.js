@@ -4051,8 +4051,9 @@ class NetBtronViewer extends window.PluginBase {
             const minWidth = 50;
 
             const chsz = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
-            const minClosedHeight = this.virtualObjectRenderer.getMinClosedHeight(chsz) + VOBJ_BORDER_WIDTH;
-            const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chsz) + VOBJ_BORDER_WIDTH;
+            // DOM rect.height = vobjbottom-vobjtop の慣習 (renderer と統一)、border 加算不要
+            const minClosedHeight = this.virtualObjectRenderer.getMinClosedHeight(chsz);
+            const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chsz);
             const hasContentArea = vobjElement.querySelector('.virtual-object-content-area') !== null;
             const minHeight = minClosedHeight;
 
@@ -4096,7 +4097,8 @@ class NetBtronViewer extends window.PluginBase {
                 vobjElement.style.width = `${finalWidth}px`;
                 vobjElement.style.height = `${finalHeight}px`;
 
-                const heightForSave = finalHeight - VOBJ_BORDER_WIDTH;
+                // vobj.style.height = vobjbottom-vobjtop の慣習 (renderer と統一)
+                const heightForSave = finalHeight;
                 obj.width = finalWidth;
                 obj.heightPx = heightForSave;
                 obj.vobjright = obj.vobjleft + finalWidth;
@@ -4106,8 +4108,18 @@ class NetBtronViewer extends window.PluginBase {
 
                 const chsz_resize = parseFloat(obj.chsz) || DEFAULT_FONT_SIZE;
                 const minClosedHeight_resize = this.virtualObjectRenderer.getMinClosedHeight(chsz_resize);
+                const minOpenHeight_resize = this.virtualObjectRenderer.getMinOpenHeight(chsz_resize);
                 const wasOpen = hasContentArea;
-                const isNowOpen = finalHeight > minClosedHeight_resize + VOBJ_BORDER_WIDTH;
+                // 偶発的な小さなドラッグでは閉じた仮身扱いにするため、minOpenHeight を境界に使う
+                const isNowOpen = finalHeight >= minOpenHeight_resize;
+
+                // 偶発的に閉じた仮身を中間サイズに広げてしまった場合は、判定変化が無くても閉じた仮身サイズにスナップ
+                if (!isNowOpen && finalHeight > minClosedHeight_resize) {
+                    obj.heightPx = minClosedHeight_resize;
+                    obj.vobjbottom = obj.vobjtop + minClosedHeight_resize;
+                    vobjElement.style.height = `${minClosedHeight_resize}px`;
+                    this.updateVirtualObjectInXml(obj);
+                }
 
                 if (wasOpen !== isNowOpen) {
                     if (isNowOpen) {
@@ -4125,7 +4137,8 @@ class NetBtronViewer extends window.PluginBase {
                     let existingVobjIndex = parseInt(elementToReplace.getAttribute('data-vobj-index'));
                     if (isNaN(existingVobjIndex)) existingVobjIndex = this.virtualObjects.indexOf(obj);
 
-                    this.recreateVirtualObjectTimer = setTimeout(() => {
+                    // 即時再構築 (150ms 遅延中の「選択枠 > 仮身枠」表示不一致を防ぐ)
+                    const recreate = () => {
                         if (!elementToReplace.parentNode) { this.recreateVirtualObjectTimer = null; return; }
                         const originalZIndex = elementToReplace.style.zIndex;
                         const newElement = this.createVirtualObjectElement(obj, existingVobjIndex);
@@ -4137,7 +4150,8 @@ class NetBtronViewer extends window.PluginBase {
                             }).catch(err => { logger.error('[NetBtronViewer] 展開エラー:', err); });
                         }
                         this.recreateVirtualObjectTimer = null;
-                    }, 150);
+                    };
+                    recreate();
                 }
 
                 this.updateCanvasSize();
@@ -7178,10 +7192,8 @@ class NetBtronViewer extends window.PluginBase {
                 vobj.vobjbottom = vobj.vobjtop + newHeight;
                 logger.debug('[NetBtronViewer] 閉じた仮身の高さを調整:', vobjHeight, '->', newHeight, `(${newChsz}pt = ${newChszPx}px)`);
             } else {
-                const lineHeight = DEFAULT_LINE_HEIGHT;
-                const newChszPx = window.convertPtToPx(newChsz);
-                const textHeight = Math.ceil(newChszPx * lineHeight);
-                const newMinOpenHeight = textHeight + VOBJ_MIN_OPEN_HEIGHT_OFFSET;
+                // 開いた仮身: 最小高さ = 閉じた仮身 (タイトルバー) + コンテンツ最小エリア
+                const newMinOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(newChsz);
                 const heightRatio = newChsz / oldChsz;
                 const adjustedHeight = Math.max(newMinOpenHeight, Math.round(vobjHeight * heightRatio));
                 vobj.vobjbottom = vobj.vobjtop + adjustedHeight;

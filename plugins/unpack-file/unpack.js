@@ -179,6 +179,7 @@ let drawLineColor = '#000000';
 let drawLineWidth = 1;
 let drawFillColor = '#FFFFFF';
 let colorMap = [];
+let tronCodeMen = 1;  // TRONコードの現在の面 (言語指定コード 0xFE21〜 で切替)
 
 // 線種定義（デフォルト値）
 let linePatternDefinitions = {
@@ -303,6 +304,7 @@ let tadRecordDataArray = [];
 // リンクレコード対応
 let linkRecordList = []; // リンクレコードリスト
 let execFuncRecordList = []; // 実行機能付箋レコードリスト
+let fileColorMaps = {}; // 実身ごとのカラーマップ定義 (実行機能付箋の cmap 番号解決に使用)
 let linkNo = 0;
 
 
@@ -931,6 +933,27 @@ function getBottomUBinUH(UH) {
     return bottomUB;
 }
 
+// BTRON システム標準カラーマップ (16色)。
+// COLOR モード0 (カラーマップ指定) で文書内にカラーマップ定義セグメントがない場合に使用する
+const BTRON_STANDARD_COLORMAP = [
+    '#ffffff', // 0: 白
+    '#00009f', // 1: 青
+    '#00ef00', // 2: 緑
+    '#00efef', // 3: シアン
+    '#ff0000', // 4: 赤
+    '#ef00ff', // 5: マゼンタ
+    '#dfdf00', // 6: 黄
+    '#7f7f9f', // 7: 灰
+    '#dfdfdf', // 8: 明灰
+    '#7f9fff', // 9: 明青
+    '#bfffaf', // 10: 明緑
+    '#cfffff', // 11: 明シアン
+    '#ff6f6f', // 12: 明赤
+    '#ef8fff', // 13: 明マゼンタ
+    '#efff9f', // 14: 明黄
+    '#000000'  // 15: 黒
+];
+
 /**
  * カラーを取得
  * @param {*} raw 32bit値
@@ -949,16 +972,26 @@ function parseColor(raw, offset = 0) {
     }
 
     if (modeBits === 0) {
-        // 28bitカラー（下位28bitがカラー値）
-        const color28 = raw & 0x0FFFFFFF;
-        const r = (color28 >>> 16) & 0xFF;
-        const g = (color28 >>> 8) & 0xFF;
-        const b = color28 & 0xFF;
-        logger.debug(`parseColor: transparent=${transparentMode}, modeBits=${modeBits}, rgb28=${color28}`);
+        // カラーマップ指定: 下位ビットはカラーマップ番号 (RGB 値ではない)。
+        // 文書内のカラーマップ定義 → システム標準カラーマップ の順で実際の色に解決する
+        const index = raw & 0x0FFFFFFF;
+        let hex;
+        if (typeof colorMap !== 'undefined' && colorMap[index] && colorMap[index].color) {
+            hex = colorMap[index].color;
+        } else if (index < BTRON_STANDARD_COLORMAP.length) {
+            hex = BTRON_STANDARD_COLORMAP[index];
+        } else {
+            logger.debug(`parseColor: カラーマップ番号 ${index} が未定義のため黒にフォールバック`);
+            hex = '#000000';
+        }
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        logger.debug(`parseColor: transparent=${transparentMode}, modeBits=${modeBits}, cmapIndex=${index} -> ${hex}`);
         return {
             transparent: transparentMode,
-            mode: modeBits, // 28bitカラー
-            color: `#${color28.toString(16).padStart(6, '0')}`,
+            mode: modeBits, // カラーマップ指定
+            color: hex,
             r, g, b
         };
     }
@@ -1270,71 +1303,136 @@ function pass1() {
  * @param {number} fileIndex ファイルインデックス
  */
 function parseExecFuncRecord(recordData, fileIndex) {
-    // EXECFUNCRECORD構造を解析
-    const execFuncRecord = new EXECFUNCRECORD();
-    const execView = new DataView(recordData.buffer);
-    
-    // EXECFUNCRECORDの各フィールドを読み込み
-    // view (RECT) - offset 0x00
-    let recordOffset = 0;
-    execFuncRecord.view.left = execView.getUint16(recordOffset, true); recordOffset += 2;
-    execFuncRecord.view.top = execView.getUint16(recordOffset, true); recordOffset += 2;
-    execFuncRecord.view.right = execView.getUint16(recordOffset, true); recordOffset += 2;
-    execFuncRecord.view.bottom = execView.getUint16(recordOffset, true); recordOffset += 2;
+    // 実行機能付箋レコードは「実行機能付箋 (可変長 0xA0+dlen)」 のリスト。 全エントリを解析する
+    const execView = new DataView(recordData.buffer, recordData.byteOffset, recordData.byteLength);
 
-    // chsz (UH) - offset 0x08
-    execFuncRecord.chsz = execView.getUint16(recordOffset, true); recordOffset += 2;
-
-    // frcol, chcol, tbcol (COLOR - UH[2] each)
-    execFuncRecord.frcol = uh2uw([execView.getUint16(recordOffset + 2, true), execView.getUint16(recordOffset, true)])[0]; recordOffset += 4;
-    execFuncRecord.chcol = uh2uw([execView.getUint16(recordOffset + 2, true), execView.getUint16(recordOffset, true)])[0]; recordOffset += 4;
-    execFuncRecord.tbcol = uh2uw([execView.getUint16(recordOffset + 2, true), execView.getUint16(recordOffset, true)])[0]; recordOffset += 4;
-    
-    // pict (UH) - offset 0x16
-    execFuncRecord.pict = execView.getUint16(recordOffset, true); recordOffset += 2;
-    
-    // appl (UH[3]) - offset 0x18
-    execFuncRecord.appl[0] = execView.getUint16(recordOffset, true); recordOffset += 2;
-    execFuncRecord.appl[1] = execView.getUint16(recordOffset, true); recordOffset += 2;
-    execFuncRecord.appl[2] = execView.getUint16(recordOffset, true); recordOffset += 2;
-    
-    // name (TC[32]) - offset 0x1E
-    for (let k = 0; k < 16; k++) {
-        execFuncRecord.name[k] = execView.getUint16(recordOffset, true);
-        recordOffset += 2;
-    }
-    
-    // type (TC[32]) - offset 0x5E
-    for (let k = 0; k < 16; k++) {
-        execFuncRecord.type[k] = execView.getUint16(recordOffset, true);
-        recordOffset += 2;
-    }
-    
-    // dlen (UH) - offset 0x9E
-    execFuncRecord.dlen = execView.getUint16(recordOffset, true); recordOffset += 2;
-
-    // data (UB[]) - offset 0xA0, length = dlen
-    if (execFuncRecord.dlen > 0 && recordData.length >= recordOffset + 0x10) {
-        
-        // dlen > 0x10以上だったら、dataの0x04からviewを読み取ってwindow_viewにセット
-        if (execFuncRecord.dlen >= 0x10) {
-            // 無精してrecordOffsetの0x64から読み取る
-            recordOffset+= 4; // dataの0x04相当
-            
-            execFuncRecord.window_view.left = execView.getUint16(recordOffset, true); recordOffset += 2;
-            execFuncRecord.window_view.top = execView.getUint16(recordOffset, true); recordOffset += 2;
-            execFuncRecord.window_view.right = execView.getUint16(recordOffset, true); recordOffset += 2;
-            execFuncRecord.window_view.bottom = execView.getUint16(recordOffset, true);
-        }
-    }
-    
-    logger.debug(`EXECFUNCRECORD: dlen=${execFuncRecord.dlen}, window_view=${JSON.stringify(execFuncRecord.window_view)}`);
-    
-    // ファイルごとにexecFuncRecordListを管理
     if (!execFuncRecordList[fileIndex]) {
         execFuncRecordList[fileIndex] = [];
     }
-    execFuncRecordList[fileIndex].push(execFuncRecord);
+
+    // 実データ検証済みレイアウト: view(8) chsz(2) frcol/chcol/tbcol(12) pict(2) appl(6)
+    // name TC[16](32) type TC[16](32) dlen(2) data(dlen) = 基本 0x60 バイト + dlen
+    let entryOffset = 0;
+    while (entryOffset + 0x60 <= recordData.length) {
+        const execFuncRecord = new EXECFUNCRECORD();
+        let recordOffset = entryOffset;
+
+        // view (RECT) - offset 0x00
+        execFuncRecord.view.left = execView.getUint16(recordOffset, true); recordOffset += 2;
+        execFuncRecord.view.top = execView.getUint16(recordOffset, true); recordOffset += 2;
+        execFuncRecord.view.right = execView.getUint16(recordOffset, true); recordOffset += 2;
+        execFuncRecord.view.bottom = execView.getUint16(recordOffset, true); recordOffset += 2;
+
+        // chsz (UH) - offset 0x08
+        execFuncRecord.chsz = execView.getUint16(recordOffset, true); recordOffset += 2;
+
+        // frcol, chcol, tbcol (COLOR - UH[2] each)
+        execFuncRecord.frcol = uh2uw([execView.getUint16(recordOffset + 2, true), execView.getUint16(recordOffset, true)])[0]; recordOffset += 4;
+        execFuncRecord.chcol = uh2uw([execView.getUint16(recordOffset + 2, true), execView.getUint16(recordOffset, true)])[0]; recordOffset += 4;
+        execFuncRecord.tbcol = uh2uw([execView.getUint16(recordOffset + 2, true), execView.getUint16(recordOffset, true)])[0]; recordOffset += 4;
+
+        // pict (UH) - offset 0x16
+        execFuncRecord.pict = execView.getUint16(recordOffset, true); recordOffset += 2;
+
+        // appl (UH[3]) - offset 0x18: アプリケーションID
+        execFuncRecord.appl[0] = execView.getUint16(recordOffset, true); recordOffset += 2;
+        execFuncRecord.appl[1] = execView.getUint16(recordOffset, true); recordOffset += 2;
+        execFuncRecord.appl[2] = execView.getUint16(recordOffset, true); recordOffset += 2;
+
+        // name (TC[16]) - offset 0x1E
+        for (let k = 0; k < 16; k++) {
+            execFuncRecord.name[k] = execView.getUint16(recordOffset, true);
+            recordOffset += 2;
+        }
+
+        // type (TC[16]) - offset 0x3E
+        for (let k = 0; k < 16; k++) {
+            execFuncRecord.type[k] = execView.getUint16(recordOffset, true);
+            recordOffset += 2;
+        }
+
+        // dlen (UH) - offset 0x5E
+        execFuncRecord.dlen = execView.getUint16(recordOffset, true); recordOffset += 2;
+
+        // data (UB[]) - offset 0x60, length = dlen
+        if (execFuncRecord.dlen >= 0x10 && recordOffset + execFuncRecord.dlen <= recordData.length) {
+            // data の 0x04 から window_view (RECT) を読み取る
+            let dataOffset = recordOffset + 4;
+            execFuncRecord.window_view.left = execView.getUint16(dataOffset, true); dataOffset += 2;
+            execFuncRecord.window_view.top = execView.getUint16(dataOffset, true); dataOffset += 2;
+            execFuncRecord.window_view.right = execView.getUint16(dataOffset, true); dataOffset += 2;
+            execFuncRecord.window_view.bottom = execView.getUint16(dataOffset, true);
+        }
+
+        // data 部のウィンドウ背景色 COLOR (位置はアプリごとに異なる。 対象アプリ以外は null)
+        execFuncRecord.windowBgcolRaw = null;
+        const applKey = execFuncRecord.appl.map(v => (v >>> 0).toString(16).padStart(4, '0')).join('.');
+        const mapEntry = EXEC_FUSEN_PLUGIN_MAP[applKey];
+        const bgcolOffset = mapEntry ? EXEC_FUSEN_BGCOL_OFFSET[mapEntry.pluginId] : undefined;
+        if (bgcolOffset != null && execFuncRecord.dlen >= bgcolOffset + 4 &&
+            recordOffset + bgcolOffset + 4 <= recordData.length) {
+            execFuncRecord.windowBgcolRaw = uh2uw([
+                execView.getUint16(recordOffset + bgcolOffset + 2, true),
+                execView.getUint16(recordOffset + bgcolOffset, true)
+            ])[0];
+        }
+
+        logger.debug(`EXECFUNCRECORD[${execFuncRecordList[fileIndex].length}]: appl=${execFuncRecord.appl.map(v => IntToHex(v, 4).replace('0x', '')).join('.')}, dlen=${execFuncRecord.dlen}`);
+
+        execFuncRecordList[fileIndex].push(execFuncRecord);
+
+        // 次のエントリへ (dlen は偶数境界に揃える)
+        let advance = 0x60 + execFuncRecord.dlen;
+        if (advance % 2 === 1) advance++;
+        entryOffset += advance;
+    }
+}
+
+/**
+ * 実行機能付箋のアプリケーションID → TADjs プラグイン対応表
+ */
+const EXEC_FUSEN_PLUGIN_MAP = {
+    '8000.0001.8000': { name: '仮身一覧', pluginId: 'virtual-object-list' },
+    '8000.0002.8000': { name: '基本図形編集', pluginId: 'basic-figure-editor' },
+    '8000.0003.8000': { name: '基本文章編集', pluginId: 'basic-text-editor' },
+    '8000.0009.8000': { name: '基本表計算', pluginId: 'basic-calc-editor' },
+    '8000.000b.8000': { name: 'マイクロスクリプト', pluginId: 'microscript' },
+    '8000.c003.8000': { name: '書庫解凍', pluginId: 'unpack-file' }
+};
+
+/**
+ * 実行機能付箋 data 部 (アプリ固有データ) 内のウィンドウ背景色 COLOR のオフセット。
+ * 実データ検証: 図形編集 (dlen=46) は 0x1E、 文章編集 (dlen=32) は 0x16。
+ * 表計算はサンプル未確認のため文章編集と同位置と仮定。
+ * 対象外のアプリ (マイクロスクリプト等) は実身の背景色ソースとしない
+ */
+const EXEC_FUSEN_BGCOL_OFFSET = {
+    'basic-figure-editor': 0x1E,
+    'basic-text-editor': 0x16,
+    'basic-calc-editor': 0x16
+};
+
+/**
+ * 実行機能付箋レコードから実身の applist を生成する。
+ * 対応表に一致するアプリ ID だけを登録し、 リスト先頭 (既定の実行機能付箋) を defaultOpen にする。
+ * 一致が 1 件もない場合は null (呼び出し側で既定 applist にフォールバック)
+ * @param {Array} records - execFuncRecordList[fileIndex]
+ * @returns {Object|null}
+ */
+function buildApplistFromExecFusen(records) {
+    if (!records || records.length === 0) return null;
+    const applist = {};
+    let isFirst = true;
+    for (const rec of records) {
+        const key = rec.appl.map(v => (v >>> 0).toString(16).padStart(4, '0')).join('.');
+        const entry = EXEC_FUSEN_PLUGIN_MAP[key];
+        if (!entry) continue;
+        if (!applist[entry.pluginId]) {
+            applist[entry.pluginId] = { name: entry.name, defaultOpen: isFirst };
+            isFirst = false;
+        }
+    }
+    return Object.keys(applist).length > 0 ? applist : null;
 }
 
 /**
@@ -1562,6 +1660,19 @@ function pass2(lHead) {
             isInDocSegment = false;
             currentIndentLevel = 0;
             logger.debug(`[UnpackJS] TADレコード ${i} のXMLバッファをクリア (tadFileIndex: ${tadFileIndex}, xmlSlot: ${record.xmlSlotIndex})`);
+            isTadStarted = false;
+            isXmlTad = false;
+            isXmlFig = false;
+            isParagraphOpen = false;
+            startTadSegment = false;
+            if (isXmlDumpEnabled()) {
+                const recName = (typeof lHead !== 'undefined' && lHead[lheadIndex] && lHead[lheadIndex].name) || '';
+                // 実身名に < > & " が含まれると XML が壊れるため属性値をエスケープ
+                const recNameEsc = recName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                const fnAttr = recName ? ' filename="' + recNameEsc + '"' : '';
+                xmlBuffer.push('<tad version="0121"' + fnAttr + ' encoding="UTF-8">\r\n');
+                isTadStarted = true;
+            }
 
             // 現在のファイルインデックスを設定してからtadDataArrayを呼び出す
             currentFileIndex = tadFileIndex;
@@ -1574,6 +1685,10 @@ function pass2(lHead) {
             currentXmlSlotIndex = record.xmlSlotIndex;
 
             tadDataArray(record.data, false, nfiles, currentFileIndex, false);
+            // この実身のカラーマップ定義を保存 (実行機能付箋のウィンドウ背景色の cmap 番号解決に使用)
+            if (typeof colorMap !== 'undefined' && colorMap.length > 0) {
+                fileColorMaps[lheadIndex] = colorMap.slice();
+            }
             logger.debug(`Completed tadDataArray processing for tadFileIndex ${tadFileIndex}, xmlSlot ${record.xmlSlotIndex}`);
         } else {
             logger.debug(`Warning: No tadFileIndex mapping found for lHead[${lheadIndex}] during processing`);
@@ -1663,6 +1778,25 @@ function processExtractedFiles(lHead) {
                 }
             }
 
+            // 実行機能付箋レコード由来の applist (対応表に一致するものだけ。 無ければ null)
+            const execApplist = buildApplistFromExecFusen(execFuncRecordList[index]);
+
+            // 図形編集/文章編集/表計算の実行機能付箋があれば、 その data 部のウィンドウ背景色を
+            // 実身のウィンドウ背景色として採用する (リスト順で先勝ち)。
+            // カラーマップ番号はこの実身自身のカラーマップ定義で解決する
+            let execTbcol = null;
+            const execRecords = execFuncRecordList[index];
+            if (execRecords && execRecords.length > 0) {
+                const savedColorMap = colorMap;
+                colorMap = fileColorMaps[index] || [];
+                for (const rec of execRecords) {
+                    if (rec.windowBgcolRaw == null) continue;
+                    const bgcol = parseColor(rec.windowBgcolRaw);
+                    if (bgcol.color) { execTbcol = bgcol.color; break; }
+                }
+                colorMap = savedColorMap;
+            }
+
             // 実身情報を保存
             archiveFiles.push({
                 fileId: uuid,
@@ -1671,7 +1805,9 @@ function processExtractedFiles(lHead) {
                 recordIndex: index,
                 nrec: nrec,
                 recordXmls: recordXmls, // レコードごとのXML配列
-                calcRecordTypes: calcRecordTypes // 基本表計算形式TADのレコードタイプ配列
+                calcRecordTypes: calcRecordTypes, // 基本表計算形式TADのレコードタイプ配列
+                applist: execApplist, // 実行機能付箋レコード由来の applist (null = 既定を使用)
+                execTbcol: execTbcol // 実行機能付箋の tbcol (null = 既定の背景色を使用)
             });
 
             logger.info(`[UnpackJS] 実身追加: ${lhead.name} (UUID: ${uuid}, nrec: ${nrec}, レコード数: ${recordXmls.length})`);
@@ -1739,9 +1875,13 @@ function tadVer(tadSeg) {
             }
         }
 
-        const filenameAttr = filename ? ` filename="${filename}"` : '';
-        xmlBuffer.push(`<tad version="${tadVer}"${filenameAttr} encoding="UTF-8">\r\n`);
-        isTadStarted = true;
+        if (!isTadStarted) {
+            // 実身名に < > & " が含まれると XML が壊れるため属性値をエスケープ
+            const filenameEsc = filename ? String(filename).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') : '';
+            const filenameAttr = filename ? ` filename="${filenameEsc}"` : '';
+            xmlBuffer.push(`<tad version="${tadVer}"${filenameAttr} encoding="UTF-8">\r\n`);
+            isTadStarted = true;
+        }
     }
 
 }
@@ -2000,34 +2140,36 @@ function tsSizeOfColumnSetFusen(segLen, tadSeg) {
         return;
     }
     
-    const CCCC = getLastUBinUH(tadSeg[0]);
-    // 下位4ビットのコラム数を取得
-    const column = Number(CCCC & 0x0F); // 0x0F = 00001111
+    const ATTR = getLastUBinUH(tadSeg[0]);
+    // ATTR = Kxxx CCCC: bit7=K (均等化指定), bit3-0=CCCC (コラム数)
+    const K = (ATTR >> 7) & 0x01;
+    const column = Number(ATTR & 0x0F);
 
     const colsp = Number(tadSeg[1]); // コラム感のマージンを座標系単位で指定
 
     if (segLen > Number(0x0004)) {
-        // TopUBは予約とのこと
-        // const DIWWKKKK = getTopUBinUH(tadSeg[2]);
+        const topUB = getTopUBinUH(tadSeg[2]);
+        const lastUB = getLastUBinUH(tadSeg[2]);
+        const lastDIWW = (lastUB >> 4) & 0x0F;
+        const lastDensity = (lastDIWW >> 3) & 0x01;
+        const lastLine = (lastDIWW >> 2) & 0x01;
+        const lastWidth = lastDIWW & 0x03;
+        const lastType = Number(lastUB & 0x0F);
+        const topDIWW = (topUB >> 4) & 0x0F;
+        const topDensity = (topDIWW >> 3) & 0x01;
+        const topLine = (topDIWW >> 2) & 0x01;
+        const topWidth = topDIWW & 0x03;
+        const topType = Number(topUB & 0x0F);
 
-        const DIWWKKKK = getLastUBinUH(tadSeg[2]);
-        // 上位4ビットのコラム間隔指定を取得
-        const lastColline = (DIWWKKKK >> 4) & 0x0F; // DIWW（上位4ビット）
-        // lastColline のビット配置: [D][I][W][W] = bits 3,2,1,0
-        const lastDensity = (lastColline >> 3) & 0x01;  // bit 3 = D: 0:100%、1:50%
-        const lastLine = (lastColline >> 2) & 0x01;     // bit 2 = I: 0:1本、1:2本
-        const lastWidth = lastColline & 0x03;           // bits 1-0 = WW: 0:なし、1:細線、2:中線、3:太線
-        const lastType = Number(DIWWKKKK & 0x0F); // 0:実線、1:破線、2:点線、3:一点鎖線、4:二点鎖線、5:長鎖線, 6:波線、7:予約、8:未定義
-
-        logger.debug(`Column set: column=${column}, colsp=${colsp}, lastLine=${lastLine}, lastDensity=${lastDensity}, lastWidth=${lastWidth}, lastType=${lastType}`);
+        logger.debug(`Column set: column=${column}, K=${K}, colsp=${colsp}, lastDIWW=${lastDIWW}, lastType=${lastType}, topDIWW=${topDIWW}, topType=${topType}`);
 
         if (isXmlDumpEnabled()) {
-            xmlBuffer.push(`<column column="${column}" colsp="${colsp}" colline="${lastColline}" linenum="${lastLine}" lineDensity="${lastDensity}" lineWidth="${lastWidth}" lineType="${lastType}" />\r\n`);
+            xmlBuffer.push(`<column column="${column}" balance="${K}" colsp="${colsp}" colline="${lastDIWW}" linenum="${lastLine}" lineDensity="${lastDensity}" lineWidth="${lastWidth}" lineType="${lastType}" colline2="${topDIWW}" linenum2="${topLine}" lineDensity2="${topDensity}" lineWidth2="${topWidth}" lineType2="${topType}" />\r\n`);
         }
     } else {
-        logger.debug(`Column set: column=${column}, colsp=${colsp}`);
+        logger.debug(`Column set: column=${column}, K=${K}, colsp=${colsp}`);
         if (isXmlDumpEnabled()) {
-            xmlBuffer.push(`<column column="${column}" colsp="${colsp}" />\r\n`);
+            xmlBuffer.push(`<column column="${column}" balance="${K}" colsp="${colsp}" />\r\n`);
         }
     }
 }
@@ -2038,6 +2180,40 @@ function tsSizeOfColumnSetFusen(segLen, tadSeg) {
  * @param {0x0000[]} tadSeg 
  * @returns 
  */
+function tsPageNumberFusen(segLen, tadSeg) {
+    if (segLen < 4) return;
+    if (startByImageSegment) return;
+    const r = getLastUBinUH(tadSeg[0]);
+    const step = r > 127 ? r - 256 : r;
+    const num = Number(tadSeg[1]);
+    if (isXmlDumpEnabled()) xmlBuffer.push('<page-number step="' + step + '" num="' + num + '" />\r\n');
+}
+
+function tsFrameOpenFusen(segLen, tadSeg) {
+    if (segLen < Number(0x000A)) return;
+    if (startByImageSegment) return;
+
+    const ATTR = getLastUBinUH(tadSeg[0]);
+    const A = (ATTR >> 7) & 0x01;
+    const P = (ATTR >> 6) & 0x01;
+    const K = (ATTR >> 5) & 0x01;
+    const H = (ATTR >> 2) & 0x03;
+    const V = (ATTR >> 0) & 0x03;
+
+    const areaTop = Number(uh2h(tadSeg[1]));
+    const areaLeft = Number(uh2h(tadSeg[2]));
+    const areaBottomRaw = Number(uh2h(tadSeg[3]));
+    const areaRightRaw = Number(uh2h(tadSeg[4]));
+    const areaBottom = areaBottomRaw - 1;
+    const areaRight = areaRightRaw - 1;
+
+    logger.debug(`枠あけ: ATTR=0x${ATTR.toString(16).padStart(2,'0')} A=${A} P=${P} K=${K} H=${H} V=${V} area=(t:${areaTop}, l:${areaLeft}, b:${areaBottom}, r:${areaRight})`);
+
+    if (isXmlDumpEnabled()) {
+        xmlBuffer.push(`<frame-open abs="${A}" halign="${H}" valign="${V}" page="${P}" wrap="${K}" top="${areaTop}" left="${areaLeft}" bottom="${areaBottom}" right="${areaRight}" />\r\n`);
+    }
+}
+
 function tsPageBreakConditionFusen(segLen, tadSeg) {
     if (segLen < Number(0x0004)) {
         return;
@@ -2330,18 +2506,24 @@ function tadPageSetFusen(segLen, tadSeg) {
         tsDocSizeOfPaperOverlaySetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x05)) {
         logger.debug("枠あけ指定付箋");
-        // TODO: 未実装
+        tsFrameOpenFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x06)) {
         logger.debug("ページ番号指定付箋");
-        // TODO: 未実装
+        tsPageNumberFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x07)) {
         logger.debug("条件改ページ指定付箋");
         tsPageBreakConditionFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x08)) {
         logger.debug("充填行指定付箋");
-        // TODO: 未実装
+        tsFillLineSetFusen(segLen, tadSeg);
     }
 }
+
+function tsFillLineSetFusen(segLen, tadSeg) {
+    if (startByImageSegment) return;
+    if (isXmlDumpEnabled()) xmlBuffer.push('<fill-line />\r\n');
+}
+
 
 /**
  * 行間隔指定付箋を処理
@@ -2429,11 +2611,9 @@ function tsRulerLineDirectionSetFusen(segLen, tadSeg) {
     const textDirection = Number(getLastUBinUH(tadSeg[0]));
     logger.debug("文字方向 : " + textDirection);
 
-    // XML出力
+    // XML出力 (BTRON 仕様 2.1.4: txdir 0=左横書き, 1=右横書き, 2=縦書き, 3-255=予約)
     if (isXmlDumpEnabled()) {
-        // HTML5のp要素のdir属性として出力
-        const dirValue = textDirection === 0 ? '0' : '1'; // 0:横書き(ltr), 1:縦書き(rtl)
-        xmlBuffer.push(`<text direction="${dirValue}"/>`);
+        xmlBuffer.push(`<text direction="${textDirection}"/>`);
     }
 }
 
@@ -2453,7 +2633,7 @@ function formatScale(scaleValue) {
         return `${a / b}`;
     } else {
         const n = scaleValue & 0x7FFF;
-        return `${n}`;
+        return `abs:${n}`;
     }
 }
 
@@ -2502,6 +2682,41 @@ function tsRulerTabFormatSetFusen(segLen, tadSeg) {
     }
 }
 
+function tsRulerFieldFormatSetFusen(segLen, tadSeg) {
+    if (segLen < Number(0x000A)) return;
+    const ATTR = getLastUBinUH(tadSeg[0]);
+    const R = (ATTR >>> 7) & 0b1;
+    const P = ATTR & 0b11;
+    const heightRaw = tadSeg[1];
+    const pargapRaw = tadSeg[2];
+    const line = Number(tadSeg[3]);
+    const nfld = uh2h(tadSeg[4]);
+    const fields = [];
+    if (nfld > 0) {
+        for (let i = 0; i < nfld; i++) {
+            const base = 5 + i * 5;
+            if (base + 4 >= tadSeg.length) break;
+            fields.push({
+                fld: uh2h(tadSeg[base]),
+                left: uh2h(tadSeg[base + 1]),
+                right: uh2h(tadSeg[base + 2]),
+                margin: uh2h(tadSeg[base + 3]),
+                f_attr: Number(tadSeg[base + 4])
+            });
+        }
+    }
+    if (isXmlDumpEnabled()) {
+        const heightStr = formatScale(heightRaw);
+        const pargapStr = formatScale(pargapRaw);
+        let xml = `<field-format R="${R}" P="${P}" height="${heightStr}" pargap="${pargapStr}" line="${line}" nfld="${nfld}">`;
+        for (const f of fields) {
+            xml += `<field fld="${f.fld}" left="${f.left}" right="${f.right}" margin="${f.margin}" f_attr="${f.f_attr}" />`;
+        }
+        xml += '</field-format>';
+        xmlBuffer.push(xml);
+    }
+}
+
 /**
  * 行頭移動指定付箋を処理
  * @param {int} segLen 
@@ -2543,7 +2758,7 @@ function tadRulerSetFusen(segLen, tadSeg) {
         tsRulerTabFormatSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x03)) {
         logger.debug("フィールド書式指定付箋");
-        // TODO: 未実装
+        tsRulerFieldFormatSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x04)) {
         logger.debug("文字方向指定付箋");
         tsRulerLineDirectionSetFusen(segLen, tadSeg);
@@ -2822,6 +3037,19 @@ function tsFontSizeSetFusen(segLen,tadSeg) {
     }
 }
 
+function tsFontScaleSetFusen(segLen, tadSeg) {
+    if (segLen < Number(0x0006)) return;
+    let ha = (tadSeg[1] >>> 8) & 0xFF;
+    let hb = (tadSeg[1] >>> 0) & 0xFF;
+    if (hb === 0) { ha = 1; hb = 1; }
+    let wa = (tadSeg[2] >>> 8) & 0xFF;
+    let wb = (tadSeg[2] >>> 0) & 0xFF;
+    if (wb === 0) { wa = 1; wb = 1; }
+    if (isXmlDumpEnabled()) {
+        xmlBuffer.push(`<font hRatio="${ha}/${hb}" wRatio="${wa}/${wb}"/>`);
+    }
+}
+
 function tsFontSpacingSetFusen(segLen, tadSeg) {
     if (segLen < Number(0x0002)) {
         return;
@@ -2908,6 +3136,7 @@ function tadFontSetFusen(segLen, tadSeg) {
         tsFontSizeSetFusen(segLen,tadSeg);
     } else if (UB_SubID === Number(0x03)) {
         logger.debug("文字拡大／縮小指定付箋");
+        tsFontScaleSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x04)) {
         logger.debug("文字間隔指定付箋");
         tsFontSpacingSetFusen(segLen, tadSeg);
@@ -2922,20 +3151,70 @@ function tadFontSetFusen(segLen, tadSeg) {
     }
 }
 
+function tsCharLayoutStartFusen(segLen, tadSeg) {
+    if (segLen < Number(0x0004)) return;
+    if (startByImageSegment) return;
+    const kind = getLastUBinUH(tadSeg[0]);
+    const widthRaw = Number(tadSeg[1]);
+    let widthStr;
+    if ((widthRaw >>> 15) & 0x01) {
+        widthStr = 'abs:' + (widthRaw & 0x7FFF);
+    } else {
+        const a = (widthRaw >>> 8) & 0x7F;
+        const b = widthRaw & 0xFF;
+        widthStr = b === 0 ? '1/1' : a + '/' + b;
+    }
+    if (isXmlDumpEnabled()) {
+        xmlBuffer.push('<char-layout kind="' + kind + '" width="' + widthStr + '">');
+    }
+}
+
+function tsCharLayoutEndFusen(segLen, tadSeg) {
+    if (startByImageSegment) return;
+    if (isXmlDumpEnabled()) xmlBuffer.push('</char-layout>');
+}
+function tsBoutenStartFusen(segLen, tadSeg, side) {
+    if (startByImageSegment) return;
+    const attr = getLastUBinUH(tadSeg[0]);
+    const kind = attr & 0x0F;
+    if (isXmlDumpEnabled()) {
+        xmlBuffer.push('<bouten side="' + side + '" kind="' + kind + '">');
+    }
+}
+
+function tsBoutenEndFusen(segLen, tadSeg) {
+    if (startByImageSegment) return;
+    if (isXmlDumpEnabled()) xmlBuffer.push('</bouten>');
+}
+
+function tsFillCharSetFusen(segLen, tadSeg) {
+    if (segLen < Number(0x0002)) return;
+    if (startByImageSegment) return;
+    let fillStr = '';
+    for (let i = 1; i < segLen / 2; i++) {
+        const ch = charTronCode(tadSeg[i]);
+        if (ch) fillStr += ch;
+    }
+    if (isXmlDumpEnabled()) {
+        const escaped = fillStr.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        xmlBuffer.push(`<fill-char str="${escaped}" />\r\n`);
+    }
+}
+
 /**
  * 特殊文字指定付箋を処理
- * @param {*} segLen 
- * @param {*} tadSeg 
+ * @param {*} segLen
+ * @param {*} tadSeg
  */
 function tadSpecialCharFusen(segLen, tadSeg) {
     const UB_SubID = getTopUBinUH(tadSeg[0]);
 
         if (UB_SubID === Number(0x00)) {
         logger.debug("固定幅空白指定付箋");
-        // TODO
+        tsFixedWidthSpaceFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x01)) {
         logger.debug("充填文字指定付箋");
-        // TODO
+        tsFillCharSetFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x02)) {
         logger.debug("文字罫線指定付箋");
         // サポートしない
@@ -3189,7 +3468,11 @@ function tsFixedWidthSpaceFusen(segLen, tadSeg) {
     const widthData = tadSeg[1];  // SCALE型の幅データ
 
     if (isXmlDumpEnabled()) {
-        xmlBuffer.push(`<fixedSpace width="${Number(widthData).toString(16).padStart(4, '0')}"/>`);
+        const wRaw = Number(widthData);
+        let wStr;
+        if ((wRaw >>> 15) & 0x01) { wStr = 'abs:' + (wRaw & 0x7FFF); }
+        else { const a = (wRaw >>> 8) & 0x7F; const b = wRaw & 0xFF; wStr = (b === 0 ? '1/1' : a + '/' + b); }
+        xmlBuffer.push('<fixed-space width="' + wStr + '" />');
     }
 }
 
@@ -3323,10 +3606,10 @@ function tadTextAlignFusen(segLen, tadSeg) {
         // TODO
     } else if (UB_SubID === Number(0x02)) {
         logger.debug("文字割付け開始指定付箋");
-        // TODO
+        tsCharLayoutStartFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x03)) {
         logger.debug("文字割付け終了指定付箋");
-        // TODO
+        tsCharLayoutEndFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x04)) {
         logger.debug("添え字開始指定付箋");
         tadSubscriptStart(segLen, tadSeg);
@@ -3391,16 +3674,16 @@ function tadTextStyleFusen(segLen, tadSeg) {
         tadTextStyleLineEnd(segLen, tadSeg, UB_SubID);
     } else if (UB_SubID === Number(0x08)) {
         logger.debug("上（右）傍点開始");
-        // TODO
+        tsBoutenStartFusen(segLen, tadSeg, 'upper');
     } else if (UB_SubID === Number(0x09)) {
         logger.debug("上（右）傍点終了");
-        // TODO
+        tsBoutenEndFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x0A)) {
         logger.debug("下（左）傍点開始");
-        // TODO
+        tsBoutenStartFusen(segLen, tadSeg, 'lower');
     } else if (UB_SubID === Number(0x0B)) {
         logger.debug("下（左）傍点終了");
-        // TODO
+        tsBoutenEndFusen(segLen, tadSeg);
     } else if (UB_SubID === Number(0x0C)) {
         logger.debug("反転開始");
         tadTextStyleLineStart(segLen, tadSeg, UB_SubID);
@@ -3646,7 +3929,16 @@ function tsImageSegment(segLen, tadSeg) {
     // BTRON エンコーダによっては base_off[0]=0x40 (テーブル先頭) と書かれることがあり、
     // この場合 base_off テーブルのバイトをピクセルデータとして読んでしまうため +4 ずれが発生する。
     const baseOffTableEnd = 0x40 + imageSeg.planes * 4;
-    imageSeg.base_off = imageSeg.base_off.map(off => off < baseOffTableEnd ? baseOffTableEnd : off);
+    imageSeg.base_off = imageSeg.base_off.map(off => {
+        if (imageSeg.planes === 1) {
+            // 1-plane: table 内ならクランプ (自己参照を回避)
+            return off < baseOffTableEnd ? baseOffTableEnd : off;
+        } else {
+            // Multi-plane: 最後の table entry 位置 (= tableEnd - 4) との overlap は許容
+            const lastEntry = baseOffTableEnd - 4;
+            return off < lastEntry ? baseOffTableEnd : off;
+        }
+    });
     logger.debug(`base_off (corrected)=[${imageSeg.base_off.map(o => '0x' + o.toString(16)).join(', ')}], tableEnd=0x${baseOffTableEnd.toString(16)}`);
 
     // ★ カラーマップ方式 (P=1) の場合、cmap[] を読み取り
@@ -3654,27 +3946,68 @@ function tsImageSegment(segLen, tadSeg) {
     if (imageSeg.colorInfo.palette === 1) {
         const cmapBytes = imageSeg.cinfo[0]; // バイト数
         const cmapOffset = ((imageSeg.cinfo[2] & 0xFFFF) << 16) | (imageSeg.cinfo[3] & 0xFFFF);
-        if (cmapBytes > 0 && cmapOffset > 0 && cmapOffset + cmapBytes <= segData.length) {
+        // 診断データを localStorage に書き出し (palette image 毎に追記、最大5件)
+        try {
+            if (typeof localStorage !== 'undefined') {
+                const existing = JSON.parse(localStorage.getItem('cmap-diag') || '[]');
+                if (existing.length < 5) {
+                    const diag = {
+                        cinfo: [imageSeg.cinfo[0], imageSeg.cinfo[1], imageSeg.cinfo[2], imageSeg.cinfo[3]],
+                        cmapBytes: cmapBytes,
+                        currentOffset: cmapOffset,
+                        altOffsets: {
+                            LE32_3_2: ((imageSeg.cinfo[3] & 0xFFFF) << 16) | (imageSeg.cinfo[2] & 0xFFFF),
+                            cinfo1: imageSeg.cinfo[1],
+                            LE32_2_1: ((imageSeg.cinfo[2] & 0xFFFF) << 16) | (imageSeg.cinfo[1] & 0xFFFF)
+                        },
+                        segDataLen: segData.length,
+                        planes: imageSeg.planes,
+                        pixbits: '0x' + imageSeg.pixbits.toString(16),
+                        rowbytes: imageSeg.rowbytes,
+                        base_off: imageSeg.base_off.map(o => '0x' + o.toString(16)),
+                        bounds: imageSeg.bounds,
+                        colorInfo: imageSeg.colorInfo,
+                        extlen: imageSeg.extlen,
+                        extend: '0x' + imageSeg.extend.toString(16),
+                        mask: '0x' + imageSeg.mask.toString(16),
+                        globalColorMapLen: (typeof colorMap !== 'undefined' && colorMap.length) || 0,
+                        segDataFirst256Hex: Array.from(segData.slice(0, 256)).map(b => b.toString(16).padStart(2,'0')).join(' '),
+                        segDataLast256Hex: Array.from(segData.slice(Math.max(0, segData.length - 256))).map(b => b.toString(16).padStart(2,'0')).join(' ')
+                    };
+                    existing.push(diag);
+                    localStorage.setItem('cmap-diag', JSON.stringify(existing));
+                    console.warn(`[CMAP-DIAG] entry #${existing.length} saved. Run: copy(localStorage.getItem('cmap-diag'))`);
+                }
+            }
+        } catch (e) { /* ignore */ }
+        // BTRON エンコーダの一部 (16色画像等) は cinfo[3] が cmap 直前の数バイトを指す不具合があるため
+        // cmap がセグメント末尾近くにあるケースのみ末尾に snap させる (一般的な BTRON wallpaper)
+        let alignedCmapOffset = cmapOffset;
+        const endBasedOffset = segData.length - cmapBytes;
+        if (cmapOffset > 0 && endBasedOffset > cmapOffset && (endBasedOffset - cmapOffset) <= 8) {
+            alignedCmapOffset = endBasedOffset;
+        }
+        if (cmapBytes > 0 && alignedCmapOffset > 0 && alignedCmapOffset + cmapBytes <= segData.length) {
             const colorCount = Math.floor(cmapBytes / 4); // COLOR=4バイト
             const cmap = [];
             for (let i = 0; i < colorCount; i++) {
-                const c = readSegColor(segData, cmapOffset + i * 4);
+                const c = readSegColor(segData, alignedCmapOffset + i * 4);
                 cmap.push(c || { r: 0, g: 0, b: 0, transparent: false });
             }
             imageSeg.cmap = cmap;
-            logger.debug(`★ カラーマップ読み取り: ${colorCount}色 (offset=0x${cmapOffset.toString(16)}, bytes=${cmapBytes})`);
-            // サンプル: 最初の8色をログ出力
-            const sample = cmap.slice(0, 8).map(c => `(${c.r},${c.g},${c.b})`).join(' ');
-            logger.debug(`cmap[0..7]: ${sample}`);
+            console.log(`[CMAP-DIAG] cmap loaded from imageSeg: ${colorCount}色`, cmap.map(c => `(${c.r},${c.g},${c.b})`).join(' '));
         } else {
-            logger.warn(`カラーマップ方式だがcmap読み取り不可: cmapBytes=${cmapBytes}, cmapOffset=0x${cmapOffset.toString(16)}, segLen=${segData.length}`);
+            console.warn(`[CMAP-DIAG] cmap from imageSeg unreadable: cmapBytes=${cmapBytes}, cmapOffset=0x${cmapOffset.toString(16)}, segLen=0x${segData.length.toString(16)} - falling back to global colorMap`);
+            console.log(`[CMAP-DIAG] global colorMap state:`, (typeof colorMap !== 'undefined' && colorMap.length > 0) ? colorMap.slice(0, 16).map(c => `(${c.r},${c.g},${c.b})`).join(' ') : 'EMPTY');
         }
     }
 
     // ★ 拡張情報の解析 (ext_id=0: 背景色)
+    // imageSeg.extend は data 部先頭 (= segData[4]) からのオフセット (BTRON仕様)
+    // segData は Esc から始まるため +4 して絶対位置に変換
     imageSeg.bgColor = null;
     if (imageSeg.extlen > 0 && imageSeg.extend > 0) {
-        let off = imageSeg.extend;
+        let off = imageSeg.extend + 4;
         const endOff = off + imageSeg.extlen;
         while (off + 4 <= endOff && off + 4 <= segData.length) {
             const extId = readSegUH(segData, off);
@@ -3683,8 +4016,8 @@ function tsImageSegment(segLen, tadSeg) {
             const realId = extId & 0x7FFF;
 
             if (realId === 0) {
-                // 背景色指定
-                const bgOffset = isOffsetForm ? readSegUW(segData, off + 4) : (off + 4);
+                // 背景色指定 (オフセット形式の UW も data 基準 → +4 補正)
+                const bgOffset = isOffsetForm ? (readSegUW(segData, off + 4) + 4) : (off + 4);
                 imageSeg.bgColor = readSegColor(segData, bgOffset);
                 logger.debug(`★ 拡張情報: 背景色 = ${imageSeg.bgColor ? `(${imageSeg.bgColor.r},${imageSeg.bgColor.g},${imageSeg.bgColor.b})` : 'null'}`);
             }
@@ -3815,7 +4148,9 @@ function getMaskValue(imageSeg, srcX, srcY) {
 
     const width = imageSeg.bounds.right - imageSeg.bounds.left;
     const maskRowbytes = calcMaskOptimalRowbytes(width);
-    const byteIdx = imageSeg.mask + srcY * maskRowbytes + Math.floor(srcX / 8);
+    // imageSeg.mask は data 部先頭 (= segData[4]) からのオフセット (BTRON仕様)
+    // segData は Esc から始まるため +4 して絶対位置に変換
+    const byteIdx = imageSeg.mask + 4 + srcY * maskRowbytes + Math.floor(srcX / 8);
     if (byteIdx >= segData.length) return 1;
     return (segData[byteIdx] >>> (7 - (srcX % 8))) & 1;
 }
@@ -3853,16 +4188,10 @@ function getPixelColorSpecCompliant(imageSeg, srcX, srcY) {
         const v = (colorInfo.invert === 0) ? (255 - luminance) : luminance;
         r = g = b = v;
     } else if (colorInfo.mode === 1) {
-        // ★ 直接RGB方式（P=0）
-        const rRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[0]), imageSeg.cinfo[0] & 0xFF);
-        const gRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[1]), imageSeg.cinfo[1] & 0xFF);
-        const bRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[2]), imageSeg.cinfo[2] & 0xFF);
-        if (colorInfo.invert === 0) {
-            // I=0: 値0=白(255), 最大値=黒(0)
-            r = 255 - rRaw; g = 255 - gRaw; b = 255 - bRaw;
-        } else {
-            r = rRaw; g = gRaw; b = bRaw;
-        }
+        // 直接RGB方式: 画素値そのまま色値 (invert 反転は mode=0 白黒専用)
+        r = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[0]), imageSeg.cinfo[0] & 0xFF);
+        g = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[1]), imageSeg.cinfo[1] & 0xFF);
+        b = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[2]), imageSeg.cinfo[2] & 0xFF);
     } else if (colorInfo.mode === 2) {
         // ★ 直接CMY/CMYK方式
         const cRaw = expandChannelTo8bit(extractChannelValue(pixelValue, imageSeg.cinfo[0]), imageSeg.cinfo[0] & 0xFF);
@@ -3949,16 +4278,15 @@ function generatePngImage(imageSeg) {
             const data = imageData.data;
 
             // ビットマップデータをImageDataに変換（マスクをアルファに反映）
+            // BTRON仕様 1.5: ビット0=透明、ビット1=不透明
             const hasMask = imageSeg.mask && imageSeg.mask > 0;
             for (let y = 0; y < height; y++) {
                 for (let x = 0; x < width; x++) {
                     const destIndex = (y * width + x) * 4;
-
                     const [r, g, b] = getPixelColor(imageSeg, x, y);
-                    data[destIndex] = r;         // R
-                    data[destIndex + 1] = g;     // G
-                    data[destIndex + 2] = b;     // B
-                    // マスク値: 1=不透明, 0=透明
+                    data[destIndex] = r;
+                    data[destIndex + 1] = g;
+                    data[destIndex + 2] = b;
                     if (hasMask) {
                         data[destIndex + 3] = (getMaskValue(imageSeg, x, y) === 0) ? 0 : 255;
                     } else {
@@ -4006,16 +4334,16 @@ function generatePngImage(imageSeg) {
  * @param {*} tadSeg 
  */
 function textLigatureFusen(segLen, tadSeg) {
-
+    if (isXmlDumpEnabled()) xmlBuffer.push('<combchar>');
 }
 
 /**
  * 結合終了指定付箋を処理
- * @param {*} segLen 
- * @param {*} tadSeg 
+ * @param {*} segLen
+ * @param {*} tadSeg
  */
 function textLigatureFusenEnd(segLen, tadSeg) {
-
+    if (isXmlDumpEnabled()) xmlBuffer.push('</combchar>');
 }
 
 /**
@@ -4544,6 +4872,32 @@ function tsFigDraw(segLen, tadSeg) {
         tsFigCurveDraw(segLen, tadSeg);
     } else if (UB_SubID === Number(0x0A)) {
         tsFigMarkerDraw(segLen, tadSeg);
+    } else if (UB_SubID === Number(0x0B)) {
+        logger.debug("任意図形セグメント");
+        tsFigFreefigDraw(segLen, tadSeg);
+    }
+}
+
+function emitFreefigXml(mode, f_pat, sy, nr, bx, nh, hArr) {
+    const hStr = hArr.join(',');
+    xmlBuffer.push(`<freefig mode="${mode}" f_pat="${f_pat}" sy="${sy}" nr="${nr}" bx="${bx}" nh="${nh}" h="${hStr}" zIndex="${figureZIndexCounter}" />\r\n`);
+}
+
+function tsFigFreefigDraw(segLen, tadSeg) {
+    if (segLen < Number(0x000E)) return;
+    const mode = getLastUBinUH(tadSeg[0]);
+    const f_pat = Number(tadSeg[1]);
+    const sy = Number(tadSeg[2]);
+    const nr = Number(tadSeg[3]);
+    const bx = Number(uh2h(tadSeg[4]));
+    const nh = Number(tadSeg[5]);
+    const hArr = [];
+    for (let i = 0; i < nh; i++) {
+        if (6 + i < tadSeg.length) hArr.push(Number(tadSeg[6 + i]));
+    }
+    if (isXmlDumpEnabled()) {
+        figureZIndexCounter++;
+        emitFreefigXml(mode, f_pat, sy, nr, bx, nh, hArr);
     }
 }
 
@@ -4714,6 +5068,7 @@ function tsColorMapDefine(segLen, tadSeg) {
         nentNo += 2;
         colorMap[i] = color;
     }
+    console.log(`[CMAP-DIAG] tsColorMapDefine called: ${nent} colors set in global colorMap. First 16:`, colorMap.slice(0, 16).map(c => `(${c.r},${c.g},${c.b})`).join(' '));
 }
 
 /**
@@ -5072,6 +5427,14 @@ function tsFigureMarginSetFusen(segLen, tadSeg) {
  * @param {*} tadSeg 
  * @returns 
  */
+function tsFigPageNumberFusen(segLen, tadSeg) {
+    if (segLen < 4) return;
+    const r = getLastUBinUH(tadSeg[0]);
+    const step = r > 127 ? r - 256 : r;
+    const num = Number(tadSeg[1]);
+    if (isXmlDumpEnabled()) xmlBuffer.push('<figpagenumber step="' + step + '" num="' + num + '" />\r\n');
+}
+
 function tsFigurePageFusen(segLen, tadSeg) {
     const UB_SubID = getTopUBinUH(tadSeg[0]);
 
@@ -5092,7 +5455,8 @@ function tsFigurePageFusen(segLen, tadSeg) {
     } else if (UB_SubID === Number(0x05)) {
         logger.debug("未定義");
     } else if (UB_SubID === Number(0x06)) {
-        logger.debug("ページ番号指定付箋");
+        logger.debug("図形ページ番号指定付箋");
+        tsFigPageNumberFusen(segLen, tadSeg);
     }
 }
 
@@ -5180,10 +5544,11 @@ function tsFigureArrowsModifier(segLen, tadSeg) {
 
     logger.debug(`図形要素修飾セグメント: arrow=0x${arrow.toString(16)}, startArrow=${startArrow}, endArrow=${endArrow}`);
 
-    // XMLダンプ機能が有効な場合、図形修飾タグを出力
-    // if (isXmlDumpEnabled()) {
-    //     xmlBuffer.push(`<figmodifier arrow="0x${arrow.toString(16)}" start="${startArrow}" end="${endArrow}" />\r\n`);
-    // }
+    // XMLダンプ機能が有効な場合、図形修飾タグを出力 (BTRON 仕様 3.4.0、 直後の図形要素に矢印を付加)
+    if (isXmlDumpEnabled()) {
+        const arrowAttr = (startArrow ? 'S' : '') + (endArrow ? 'E' : '');
+        xmlBuffer.push('<figmodifier arrow="' + arrowAttr + '" />\r\n');
+    }
 }
 
 /**
@@ -5903,6 +6268,32 @@ function tadPerse(segID, segLen, tadSeg, nowPos) {
  * @param {char} char 
  * @returns 
  */
+// TRONコード変換用 TextDecoder キャッシュ (補助漢字: euc-jp / GB: gbk / KS: euc-kr)
+const _tronTextDecoders = {};
+function decodeTronBytes(bytes, encoding) {
+    try {
+        if (!_tronTextDecoders[encoding]) _tronTextDecoders[encoding] = new TextDecoder(encoding);
+        const s = _tronTextDecoders[encoding].decode(new Uint8Array(bytes));
+        // デコーダで未定義のコードポイント (U+FFFD) は 〓 に正規化
+        return s.replace(/�/g, '〓');
+    } catch (e) {
+        return '〓';
+    }
+}
+
+/**
+ * TRONコードの hi/lo オクテットをゾーン線形番号 (0..48399) に変換
+ * Aゾーン: hi 21-7E, lo 21-7E / Bゾーン: hi 80-FD, lo 21-7E
+ * Cゾーン: hi 21-7E, lo 80-FD / Dゾーン: hi 80-FD, lo 80-FD
+ */
+function tronHiLo2Linear(hi, lo) {
+    if (hi >= 0x21 && hi <= 0x7e && lo >= 0x21 && lo <= 0x7e) return (hi - 0x21) * 94 + (lo - 0x21);
+    if (hi >= 0x80 && hi <= 0xfd && lo >= 0x21 && lo <= 0x7e) return 8836 + (hi - 0x80) * 94 + (lo - 0x21);
+    if (hi >= 0x21 && hi <= 0x7e && lo >= 0x80 && lo <= 0xfd) return 20680 + (hi - 0x21) * 126 + (lo - 0x80);
+    if (hi >= 0x80 && hi <= 0xfd && lo >= 0x80 && lo <= 0xfd) return 32524 + (hi - 0x80) * 126 + (lo - 0x80);
+    return -1;
+}
+
 function charTronCode(char) {
     const charBuffer = new ArrayBuffer(2);
     const dv = new DataView(charBuffer);
@@ -5914,17 +6305,46 @@ function charTronCode(char) {
 
     let text = '';
 
-    // TRONコード 面切替
+    // TRONコード 面切替 (言語指定コード)。 以降の文字に適用し、 コード自体は出力しない
     if ((char >= Number(0xfe21) && char <= Number(0xfe7e) )
     || (char >= Number(0xfe80) && char <= Number(0xfefe))) {
-        const tronCodeMask = char - Number(0xfe21) + 1;
+        tronCodeMen = char - Number(0xfe21) + 1;
         if (isXmlDumpEnabled()) {
-            xmlBuffer.push(`<tcode mask="${tronCodeMask}" />\r\n`);
+            xmlBuffer.push(`<tcode mask="${tronCodeMen}" />\r\n`);
         }
-        logger.debug("TRON Code面 :" + tronCodeMask)
+        logger.debug("TRON Code面 :" + tronCodeMen)
+        return text;
     }
 
-    // TRONコード 第1面 Aゾーン(JIS X 0208)をjsのUNICODEに変換
+    // 制御文字は面に依らず処理
+    if (char == Number(TC_NL)
+        || char == Number(TC_CR)
+        || char == Number(TC_TAB)
+        || char == Number(TC_FF)) {
+        return String.fromCharCode(char8[1]);
+    }
+
+    const men = tronCodeMen || 1;
+    const hi = char8[0];
+    const lo = char8[1];
+
+    // 第16/17面: Unicode BMP 直接対応 (面16: U+0000〜U+ABFF、 面17: U+AC00〜U+FFFF)
+    if (men === 16 || men === 17) {
+        const pp = tronHiLo2Linear(hi, lo);
+        if (pp >= 0) {
+            const ucp = (men - 16) * 44032 + pp;
+            if (ucp <= 0xffff) return String.fromCharCode(ucp);
+        }
+        return '〓';
+    }
+
+    // 第1面以外 (GT書体面・大漢和・繁体字面等) は Unicode 対応表がないため 〓
+    if (men !== 1) {
+        return '〓';
+    }
+
+    // ===== 第1面 (システムスクリプト) =====
+    // Aゾーン (JIS X 0208) をjsのUNICODEに変換
     // TODO: JIS2UNICODEが上手く動作しないため、JISをSJISに変換後、SJI2UNICODEを実施
     if ((char >= Number(0x2121) && char <= Number(0x227e) )
     || (char >= Number(0x2420) && char <= Number(0x7e7e))) {
@@ -5951,11 +6371,24 @@ function charTronCode(char) {
 
     } else if (char >= Number(0x2320) && char <= Number(0x237f)) {
         text = String.fromCharCode(char8[1]);
-    } else if (char == Number(TC_NL)
-        || char == Number(TC_CR)
-        || char == Number(TC_TAB)
-        || char == Number(TC_FF)) {
-        text = String.fromCharCode(char8[1]);
+    } else if (hi >= 0xa1 && hi <= 0xfe && lo >= 0x21 && lo <= 0x7e) {
+        // Bゾーン下部 (A121-ED63): JIS X 0212 補助漢字 → EUC-JP (SS3 0x8F + 0xA0+区 + 0xA0+点)
+        text = decodeTronBytes([0x8f, hi, lo + 0x80], 'euc-jp');
+    } else if (hi >= 0x21 && hi <= 0x7e && lo >= 0x80 && lo <= 0xfd) {
+        // Cゾーン: GB 2312 (区点が126単位で詰めて配置) → GBK で変換
+        const p = (hi - 0x21) * 126 + (lo - 0x80);
+        const ku = Math.floor(p / 94) + 1;
+        const ten = (p % 94) + 1;
+        text = (ku <= 94) ? decodeTronBytes([0xa0 + ku, 0xa0 + ten], 'gbk') : '〓';
+    } else if (hi >= 0xb7 && hi <= 0xfd && lo >= 0x80 && lo <= 0xfd) {
+        // Dゾーン: KS X 1001 (区点が126単位で詰めて配置) → EUC-KR で変換
+        const p = (hi - 0xb7) * 126 + (lo - 0x80);
+        const ku = Math.floor(p / 94) + 1;
+        const ten = (p % 94) + 1;
+        text = (ku <= 94) ? decodeTronBytes([0xa0 + ku, 0xa0 + ten], 'euc-kr') : '〓';
+    } else if (tronHiLo2Linear(hi, lo) >= 0) {
+        // 点字・JIS X 0213第2面・未割当領域: 対応表未搭載のため 〓 (文字消失とずれを防ぐ)
+        text = '〓';
     }
     return text;
 }
@@ -5970,6 +6403,8 @@ function tadRawArray(raw){
     if (typeof window !== 'undefined') {
         window.currentRawData = raw;
     }
+    // TRONコードの面はレコード処理開始時に第1面 (システムスクリプト) に戻す
+    tronCodeMen = 1;
 
     let rawBuffer = raw.buffer;
     let data_view = new DataView( rawBuffer );
@@ -6038,6 +6473,12 @@ function tadRawArray(raw){
                 i += 2;
             }
 
+            // セグメント長がバッファ残量を超える場合は破損データ。
+            // getUint16 が RangeError を投げて解凍全体が停止するのを防ぐため、 ここで解析を打ち切る
+            if (i + segLen > data_view.byteLength) {
+                logger.warn('[UnpackJS] セグメント長がバッファ超過のため解析を打ち切り: segLen=' + segLen + ', 残り=' + (data_view.byteLength - i));
+                break;
+            }
 
             for(let offsetLen=0;offsetLen<segLen;offsetLen=offsetLen+2) {
                 const offsetRaw = data_view.getUint16(i + offsetLen,true);

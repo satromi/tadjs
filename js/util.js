@@ -18,8 +18,10 @@ export const DIALOG_TIMEOUT_MS = 10000; // 10秒
 /**
  * 一般的な操作のタイムアウト時間（ミリ秒）
  * clipboard-data, real-object-loaded, load-data-file-response等に適用
+ * 注: 多数の仮身を持つドキュメント (背景画面集 等) で 30+ の expandVirtualObject が同時実行されると
+ * リクエストキューが詰まり 5 秒では timeout するため 15 秒に拡大
  */
-export const DEFAULT_TIMEOUT_MS = 5000; // 5秒
+export const DEFAULT_TIMEOUT_MS = 15000; // 15秒
 
 /**
  * 長い操作のタイムアウト時間（ミリ秒）
@@ -184,10 +186,11 @@ export const VOBJ_DROP_OFFSET_X = 20;
 export const VOBJ_DROP_OFFSET_Y = 30;
 
 /**
- * 開いた仮身の最小高さオフセット（ピクセル）
- * タイトルバー(+8) + 区切り線(+2) + コンテンツ最小(+20) = 30
+ * 開いた仮身のコンテンツエリア最小高さ（ピクセル）
+ * 開いた仮身の最小サイズ = 仮身枠 (タイトルバー = 閉じた仮身の高さ) + この値
+ * 仮身枠の直下に枠線が来てしまう状態を防ぐためのコンテンツ確保領域
  */
-export const VOBJ_MIN_OPEN_HEIGHT_OFFSET = 30;
+export const VOBJ_MIN_OPEN_HEIGHT_OFFSET = 20;
 
 /**
  * 閉じた仮身のデフォルト高さ（ピクセル）
@@ -196,9 +199,26 @@ export const VOBJ_MIN_OPEN_HEIGHT_OFFSET = 30;
 export const DEFAULT_VOBJ_HEIGHT = 31;
 
 /**
- * デフォルトフォントサイズ（ピクセル）
+ * デフォルトフォントサイズ (ポイント、 BTRON 標準)
  */
 export const DEFAULT_FONT_SIZE = 14;
+
+/**
+ * ポイント → ピクセル変換係数 (CSS 標準: 1 inch = 72 pt = 96 px → 96 / 72 = 4 / 3)
+ */
+export const PT_TO_PX_RATIO = 4 / 3;
+
+/**
+ * ピクセル / インチ (CSS 標準 DPI)
+ */
+export const DPI = 96;
+
+/**
+ * 1 文字幅 (ピクセル) = デフォルトフォントサイズ × PT_TO_PX_RATIO
+ * BTRON タブ書式の ruler 表示で「線 1 本 = 1 文字幅」 として使用
+ * 段落フォントサイズに依存せず文書共通の固定値 (Word 風)
+ */
+export const CHAR_UNIT_PX = DEFAULT_FONT_SIZE * PT_TO_PX_RATIO;
 
 /**
  * デフォルトフォントファミリー（仮身名表示用）
@@ -383,10 +403,18 @@ function jisRound(value) {
  * @param {number} pt - ポイント値
  * @returns {number} ピクセル値（整数、JIS丸め）
  */
+const _ptToPxCache = new Map();
+const _PT_TO_PX_CACHE_MAX = 256;
+
 export function convertPtToPx(pt) {
+    const cached = _ptToPxCache.get(pt);
+    if (cached !== undefined) return cached;
     // 96 DPI での標準変換: 1pt = 1.333px
     // JIS Z 8401準拠の最近接偶数への丸めで整数値に変換
-    return jisRound(pt * 1.333);
+    const result = jisRound(pt * 1.333);
+    if (_ptToPxCache.size >= _PT_TO_PX_CACHE_MAX) _ptToPxCache.clear();
+    _ptToPxCache.set(pt, result);
+    return result;
 }
 
 /**
@@ -511,4 +539,59 @@ export function unescapeXml(text) {
 export function normalizePasteText(text) {
     if (typeof text !== 'string') return '';
     return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+/**
+ * canvas 要素上のマウス座標を取得 (CSS px、getBoundingClientRect ベース)
+ * canvas の論理サイズで処理する場合に使用。DPR 補正は行わない。
+ *
+ * @param {MouseEvent|PointerEvent} event - マウスイベント
+ * @param {HTMLCanvasElement} canvas - canvas 要素
+ * @returns {{x: number, y: number}} canvas 左上原点の座標 (CSS px)
+ */
+export function getCanvasMouseCoordinates(event, canvas) {
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top
+    };
+}
+
+/**
+ * 一般 DOM 要素上のマウス座標を取得 (scroll 加算オプション付き)
+ * スクロール可能なコンテナ内のマウス位置を取得する場合に使用。
+ *
+ * @param {MouseEvent|PointerEvent} event - マウスイベント
+ * @param {HTMLElement} element - 対象要素
+ * @param {{includeScroll?: boolean}} [options] - includeScroll: true で要素の scrollLeft/Top を加算
+ * @returns {{x: number, y: number}} 要素左上原点の座標 (CSS px)
+ */
+export function getElementMouseCoordinates(event, element, options = {}) {
+    const rect = element.getBoundingClientRect();
+    let x = event.clientX - rect.left;
+    let y = event.clientY - rect.top;
+    if (options.includeScroll) {
+        x += element.scrollLeft;
+        y += element.scrollTop;
+    }
+    return { x, y };
+}
+
+/**
+ * canvas のバッキングストア座標 (物理ピクセル) を取得
+ * High-DPI 環境で canvas.width / canvas.height ベースの座標が必要な場合に使用。
+ *
+ * @param {MouseEvent|PointerEvent} event - マウスイベント
+ * @param {HTMLCanvasElement} canvas - canvas 要素
+ * @param {number} [dpr] - devicePixelRatio (省略時は window.devicePixelRatio || 1)
+ * @returns {{x: number, y: number}} canvas バッキングストア座標 (物理 px)
+ */
+export function getCanvasBackingStoreCoordinates(event, canvas, dpr) {
+    const factor = dpr || window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: (event.clientX - rect.left) * factor,
+        y: (event.clientY - rect.top) * factor
+    };
 }

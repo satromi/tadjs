@@ -1,7 +1,7 @@
 <tad version="1.0" encoding="UTF-8" filename="仕様紹介">
 <realtime autoplay="true">
     <figure>
-        <figView top="0" left="0" right="1920" bottom="1080"/>
+<figView top="0" left="0" right="1920" bottom="1080"/>
         <figDraw top="0" left="0" right="1920" bottom="1080"/>
         <figScale hunit="-72" vunit="-72"/>
         <patterns>
@@ -9,10 +9,7 @@
         <pattern id="129" width="1" height="1" ncol="1" fgcolors="#6080FF" bgcolor="#ffffff"/>
         </patterns>
 
-        <!-- 背景矩形 -->
-        <rect lineType="0" lineWidth="0" l_pat="0" f_pat="128"
-              left="0" top="0" right="1920" bottom="1080"
-              zIndex="0"/>
+        <!-- 背景色は JSON metadata window.backgroundColor で指定 (<rect> は背景に使わない) -->
 
         <!-- ページタイトル -->
         <document>
@@ -20,7 +17,7 @@
             <docDraw drawleft="100" drawtop="50" drawright="1820" drawbottom="130"/>
             <docScale hunit="-72" vunit="-72"/>
             <text id="pageTitle" lang="0" bpat="0" zIndex="90"/>
-            <font size="48"/>
+            <font size="36"/>
             <font face="sans-serif"/>
             <font color="#FFFFFF"/>
             実時間制御TAD仕様紹介
@@ -32,7 +29,7 @@
             <docDraw drawleft="150" drawtop="200" drawright="1770" drawbottom="300"/>
             <docScale hunit="-72" vunit="-72"/>
             <text id="spec1" lang="0" bpat="0" zIndex="80"/>
-            <font size="24"/>
+            <font size="18"/>
             <font color="#EEEEEE"/>
             <p>realtime要素: autoplay属性で自動再生を制御</p>
         </document>
@@ -43,7 +40,7 @@
             <docDraw drawleft="150" drawtop="320" drawright="1770" drawbottom="420"/>
             <docScale hunit="-72" vunit="-72"/>
             <text id="spec2" lang="0" bpat="0" zIndex="80"/>
-            <font size="24"/>
+            <font size="18"/>
             <font color="#EEEEEE"/>
             <p>video要素: left/top/right/bottom属性で配置位置を指定</p>
         </document>
@@ -54,7 +51,7 @@
             <docDraw drawleft="150" drawtop="440" drawright="1770" drawbottom="540"/>
             <docScale hunit="-72" vunit="-72"/>
             <text id="spec3" lang="0" bpat="0" zIndex="80"/>
-            <font size="24"/>
+            <font size="18"/>
             <font color="#EEEEEE"/>
             <p>audio要素: BGMやナレーション音声を自動再生</p>
         </document>
@@ -65,7 +62,7 @@
             <docDraw drawleft="150" drawtop="560" drawright="1770" drawbottom="660"/>
             <docScale hunit="-72" vunit="-72"/>
             <text id="spec4" lang="0" bpat="0" zIndex="80"/>
-            <font size="24"/>
+            <font size="18"/>
             <font color="#EEEEEE"/>
             <p>onended属性: 再生終了時のスライド遷移アクション (slide:next等)</p>
         </document>
@@ -76,7 +73,7 @@
             <docDraw drawleft="150" drawtop="680" drawright="1770" drawbottom="780"/>
             <docScale hunit="-72" vunit="-72"/>
             <text id="spec5" lang="0" bpat="0" zIndex="80"/>
-            <font size="24"/>
+            <font size="18"/>
             <font color="#EEEEEE"/>
             <p>realData/realGroup: タイムライン制御によるアニメーション定義</p>
         </document>

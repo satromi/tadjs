@@ -491,9 +491,8 @@ class TADjsDesktop {
                 windowId = this.parentMessageBus.getWindowIdFromSource(event.source);
             }
             if (windowId) {
-                // 明示的なwindowId指定で既にアクティブなウインドウへの要求時はiframe.focus()のみ実行
-                // （setActiveWindowは重複呼び出し防止でearly returnするため）
-                if (data.windowId && this.activeWindow === windowId) {
+                // 既にアクティブなウインドウへの要求は無視 (mousedown 連発発火等の重複対策)
+                if (this.activeWindow === windowId) {
                     const win = this.windows.get(windowId);
                     if (win) {
                         const iframe = win.element.querySelector('iframe');
@@ -525,6 +524,38 @@ class TADjsDesktop {
         // exit-presentation-mode: プレゼンテーションモード終了
         this.parentMessageBus.on('exit-presentation-mode', (data, event) => {
             this.handleExitPresentationMode(data, event);
+        });
+
+        // set-slide-window-content-background: スライドプラグイン専用。
+        // iframe element 自身および iframe の背後にある .window-content の bg を slide 背景色で塗る。
+        // 目的: iframe element 自身は CSS で background 指定なし (= transparent) のため、
+        //       transform: scale の subpixel rendering 時に .window のデフォルト灰色 (#f0f0f0)
+        //       がエッジ (特に上端・左端) で透けて薄い帯として見える。これを iframe 自身に
+        //       slide bg を塗って完全に塞ぐ。
+        // 対象は iframe + .window-content のみ (#desktop/body/html/BrowserWindow は触らない)
+        // → スライド window が閉じれば DOM ごと消えるので cleanup 不要。
+        this.parentMessageBus.on('set-slide-window-content-background', (data, event) => {
+            const windowId = data.windowId || this.parentMessageBus.getWindowIdFromSource(event.source);
+            const windowElement = document.getElementById(windowId);
+            if (!windowElement || !data.bgColor) return;
+            // .window 自身も塗る (.window.frameless では CSS で bg は reset されないため、
+            //  iframe の transform: scale エッジで .window の灰色 #f0f0f0 が透けて見える)。
+            //  元の inline bg を dataset に退避し、exit-presentation-mode で復元する。
+            if (windowElement.dataset.slideOrigBg === undefined) {
+                windowElement.dataset.slideOrigBg = windowElement.style.background || '';
+            }
+            windowElement.style.background = data.bgColor;
+            const windowContent = windowElement.querySelector('.window-content');
+            if (windowContent) windowContent.style.background = data.bgColor;
+            // iframe element 自身も塗る (subpixel rendering で透けるのを防ぐ最重要修正)
+            const iframe = windowElement.querySelector('.window-content iframe');
+            if (iframe) iframe.style.background = data.bgColor;
+            // BrowserWindow の backgroundColor も slideBgColor に動的変更
+            // (renderer 内 paint の境界で BrowserWindow bg '#FFFFFF' 白が透けて見える対策。
+            //  presentation mode 終了時に handleExitPresentationMode で '#FFFFFF' に戻す)
+            if (window.electronAPI && window.electronAPI.setWindowBackgroundColor) {
+                window.electronAPI.setWindowBackgroundColor(data.bgColor);
+            }
         });
 
         // set-scrollbar-visible: スクロールバーの表示/非表示を切り替え
@@ -561,6 +592,98 @@ class TADjsDesktop {
             logger.debug(`[TADjs] set-scrollbar-visible: ${windowId} visible=${visible}`);
         });
 
+        // resize-window: ウィンドウサイズ変更 (マイクロスクリプト WSIZE 由来)
+        this.parentMessageBus.on('resize-window', (data, event) => {
+            const windowId = data.windowId || this.parentMessageBus.getWindowIdFromSource(event.source);
+            const windowElement = document.getElementById(windowId);
+            if (!windowElement) {
+                logger.warn('[TADjs] resize-window: windowElementが見つかりません:', windowId);
+                return;
+            }
+            const w = data.width | 0;
+            const h = data.height | 0;
+            // WSIZE 0 0 / 0 1 のタイトル非表示モード (BTRON 仕様 09-04-06)
+            if (w === 0 && (h === 0 || h === 1)) {
+                windowElement.classList.add('titleless');
+                logger.debug(`[TADjs] resize-window: titleless mode windowId=${windowId} h=${h}`);
+                return;
+            }
+            // 通常: 内部寸法を w×h に変更 (タイトルバー + ボーダー込みで余裕を持たせる)
+            const titleBar = windowElement.querySelector('.window-title-bar');
+            const titleH = titleBar ? titleBar.offsetHeight : 24;
+            windowElement.style.width = w + 'px';
+            windowElement.style.height = (h + titleH) + 'px';
+            logger.debug(`[TADjs] resize-window: ${windowId} w=${w} h=${h}`);
+        });
+
+        // move-window: ウィンドウ位置変更 (マイクロスクリプト WMOVE 由来)
+        this.parentMessageBus.on('move-window', (data, event) => {
+            const windowId = data.windowId || this.parentMessageBus.getWindowIdFromSource(event.source);
+            const windowElement = document.getElementById(windowId);
+            if (!windowElement) {
+                logger.warn('[TADjs] move-window: windowElementが見つかりません:', windowId);
+                return;
+            }
+            const x = data.x | 0;
+            const y = data.y | 0;
+            windowElement.style.left = x + 'px';
+            windowElement.style.top = y + 'px';
+            logger.debug(`[TADjs] move-window: ${windowId} x=${x} y=${y}`);
+        });
+
+        // save-window-geometry: ウィンドウ位置/サイズ保存 (マイクロスクリプト WSAVE 由来)
+        this.parentMessageBus.on('save-window-geometry', (data, event) => {
+            const windowId = data.windowId || this.parentMessageBus.getWindowIdFromSource(event.source);
+            const windowElement = document.getElementById(windowId);
+            if (!windowElement) return;
+            try {
+                const geom = {
+                    x: parseInt(windowElement.style.left) || 0,
+                    y: parseInt(windowElement.style.top) || 0,
+                    width: parseInt(windowElement.style.width) || 400,
+                    height: parseInt(windowElement.style.height) || 300
+                };
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem('win-geom-' + windowId, JSON.stringify(geom));
+                }
+                logger.debug(`[TADjs] save-window-geometry: ${windowId}`, geom);
+            } catch (e) {
+                logger.warn('[TADjs] save-window-geometry エラー:', e.message);
+            }
+        });
+
+        // toggle-fullscreen: フルウィンドウ (マイクロスクリプト FULLWIND 由来)
+        this.parentMessageBus.on('toggle-fullscreen', (data, event) => {
+            const windowId = data.windowId || this.parentMessageBus.getWindowIdFromSource(event.source);
+            if (!windowId) return;
+            // 既存の最大化トグルを流用
+            if (typeof this.toggleMaximizeWindow === 'function') {
+                this.toggleMaximizeWindow(windowId);
+            } else if (this.windowManager && typeof this.windowManager.toggleMaximizeWindow === 'function') {
+                this.windowManager.toggleMaximizeWindow(windowId);
+            }
+            logger.debug(`[TADjs] toggle-fullscreen: ${windowId}`);
+        });
+
+        // set-window-visibility: 特定 window の表示/非表示を切り替え
+        // visibility: hidden を使うことで DOM tree から消えず、Chromium の自動 focus 移動を
+        // 引き起こさない (display: none だと active 切替の連鎖発火が起きるため)
+        // 加えて pointer-events: none で hidden 中のクリック event も無効化
+        this.parentMessageBus.on('set-window-visibility', (data) => {
+            if (!data.windowId) return;
+            const windowElement = document.getElementById(data.windowId);
+            if (!windowElement) {
+                logger.warn('[TADjs] set-window-visibility: window 見つからず:', data.windowId);
+                return;
+            }
+            const beforeVis = windowElement.style.visibility;
+            windowElement.style.visibility = data.visible ? '' : 'hidden';
+            windowElement.style.pointerEvents = data.visible ? '' : 'none';
+            logger.info('[TADjs] set-window-visibility:', data.windowId,
+                        'visible=', data.visible,
+                        'visibility:', beforeVis, '->', windowElement.style.visibility);
+        });
+
         // close-window: ウィンドウを閉じる
         this.parentMessageBus.on('close-window', (data, event) => {
             let windowId = data.windowId;
@@ -571,7 +694,8 @@ class TADjsDesktop {
             }
 
             if (windowId) {
-                this.closeWindow(windowId);
+                // skipCloseConfirmation: 道具パネル等の補助ウィンドウは保存確認をスキップ
+                this.closeWindow(windowId, { skipCloseConfirmation: data.skipCloseConfirmation });
             } else {
                 logger.warn('[TADjs] close-window: windowIdが見つかりません');
             }
@@ -1220,9 +1344,9 @@ class TADjsDesktop {
             'physical-delete-real-object': { handler: 'handlePhysicalDeleteRealObject', async: true },
 
             // 単方向メッセージ型
-            'xml-data-changed': { handler: (data) => this.saveXmlDataToFile(data.fileId, data.xmlData) },
-            'update-background-color': { handler: (data) => this.updateBackgroundColor(data.fileId, data.backgroundColor) },
-            'update-fullscreen-state': { handler: (data) => this.updateFullscreenState(data.fileId, data.isFullscreen) },
+            'xml-data-changed': { handler: (data) => this.saveXmlDataToFile(data.fileId, data.xmlData), async: true },
+            'update-background-color': { handler: (data) => this.updateBackgroundColor(data.fileId, data.backgroundColor), async: true },
+            'update-fullscreen-state': { handler: (data) => this.updateFullscreenState(data.fileId, data.isFullscreen), async: true },
             'status-message': { handler: (data) => this.setStatusMessage(data.message) },
             'close-context-menu': { handler: () => this.hideContextMenu() },
             'apply-background': { handler: (data) => data.backgroundId && this.applyBackgroundToDesktop(data.backgroundId) },
@@ -2982,7 +3106,7 @@ ${url}
      * 仮身（仮想オブジェクト）を開く
      * @param {Object} link - リンク情報オブジェクト
      */
-    async openVirtualObject(linkIdOrObject, linkName = null, cloudContext = null, vobjid = null) {
+    async openVirtualObject(linkIdOrObject, linkName = null, cloudContext = null, vobjid = null, vobjState = null) {
         // linkIdとlinkNameが個別に渡された場合（仮身一覧から呼ばれた場合）
         if (typeof linkIdOrObject === 'string' && linkName !== null) {
             const linkId = linkIdOrObject;
@@ -3036,6 +3160,12 @@ ${url}
                     link_name: linkName,
                     vobjid: vobjid || null
                 };
+                if (vobjState && vobjState.viewMode !== undefined && vobjState.viewMode !== null && vobjState.viewMode !== '') {
+                    virtualObj.viewMode = vobjState.viewMode;
+                }
+                if (vobjState && vobjState.wordWrap !== undefined && vobjState.wordWrap !== null && vobjState.wordWrap !== '') {
+                    virtualObj.wordWrap = (vobjState.wordWrap === true || vobjState.wordWrap === 'true');
+                }
 
                 await this.openVirtualObjectReal(virtualObj, defaultPlugin, null, null, cloudContext);
 
@@ -3606,7 +3736,7 @@ ${url}
      * ウィンドウを閉じる
      * @param {string} windowId - 閉じるウィンドウのID
      */
-    async closeWindow(windowId) {
+    async closeWindow(windowId, options = {}) {
         if (!this.windows.has(windowId)) return;
 
         // 既にクローズ処理中の場合は何もしない（重複防止）
@@ -3633,8 +3763,10 @@ ${url}
         }
 
         // プラグインがある場合、クローズ確認を要求
+        // ただし、options.skipCloseConfirmation=true なら確認を skip
+        // (道具パネル等、ユーザデータを持たない補助ウィンドウは保存確認不要)
         const iframe = win.element.querySelector('iframe');
-        if (iframe && iframe.contentWindow) {
+        if (iframe && iframe.contentWindow && !options.skipCloseConfirmation) {
             const allowClose = await this.requestCloseConfirmation(windowId, iframe);
             if (!allowClose) {
                 logger.info('[TADjsDesktop] プラグインによりクローズがキャンセルされました');
@@ -3963,8 +4095,17 @@ ${url}
             scrollCornerDisplay: null,
             windowCornerDisplay: null,
             originalZIndex: windowElement.style.zIndex || '',
-            hadFramelessClass: windowElement.classList.contains('frameless')
+            hadFramelessClass: windowElement.classList.contains('frameless'),
+            // window 開閉 animation (windowOpen/windowClose) が中途半端な opacity < 1 を残す場合があり、
+            // letterbox 領域が全周一様に半透明に見える原因となる。
+            // presentation mode 中は inline で opacity 1 を強制し、exit で復元する。
+            originalInlineAnimation: windowElement.style.animation || '',
+            originalInlineOpacity: windowElement.style.opacity || ''
         };
+        // 開閉 animation の class を明示削除し、inline animation を停止、opacity を完全不透明に強制
+        windowElement.classList.remove('opening', 'closing');
+        windowElement.style.animation = 'none';
+        windowElement.style.opacity = '1';
 
         // スクロールバー非表示
         if (options.hideScrollbar !== false) {
@@ -4116,6 +4257,25 @@ ${url}
         }
         if (savedState && !savedState.hadFramelessClass) {
             windowElement.classList.remove('frameless');
+        }
+
+        // presentation 中に強制した inline animation と opacity を復元 (CSS 既定に戻す)
+        if (savedState) {
+            windowElement.style.animation = savedState.originalInlineAnimation || '';
+            windowElement.style.opacity = savedState.originalInlineOpacity || '';
+        }
+
+        // BrowserWindow の backgroundColor を起動時の '#FFFFFF' に復元
+        // (presentation 中に slideBgColor で setBackgroundColor したものを戻す)
+        if (window.electronAPI && window.electronAPI.setWindowBackgroundColor) {
+            window.electronAPI.setWindowBackgroundColor('#FFFFFF');
+        }
+
+        // presentation 中に塗った .window 自身の inline bg を復元。
+        // dataset 値が空文字なら inline 解除になり、CSS の var(--window-background) に戻る。
+        if (windowElement.dataset.slideOrigBg !== undefined) {
+            windowElement.style.background = windowElement.dataset.slideOrigBg;
+            delete windowElement.dataset.slideOrigBg;
         }
 
         // デスクトップのz-indexとbottom復元
@@ -4801,6 +4961,16 @@ ${url}
                 logger.warn('[TADjs] XMLデータが空のままプラグインを起動します');
             }
 
+            // 仮身ごとの viewMode/wordWrap を反映するため windowConfig を実身 JSON 値ベースで複製してから上書き
+            const mergedWindowConfig = jsonData.window ? { ...jsonData.window } : {};
+            if (virtualObj.viewMode !== undefined && virtualObj.viewMode !== null && virtualObj.viewMode !== '') {
+                mergedWindowConfig.viewMode = virtualObj.viewMode;
+            }
+            if (virtualObj.wordWrap !== undefined && virtualObj.wordWrap !== null && virtualObj.wordWrap !== '') {
+                // wordWrap は文字列 'true'/'false' の場合もあるので boolean に変換
+                mergedWindowConfig.wordWrap = (virtualObj.wordWrap === true || virtualObj.wordWrap === 'true');
+            }
+
             // プラグインに渡すデータを準備
             const fileData = {
                 realId: fullRealId,          // _0.xtad付きのフルID
@@ -4809,11 +4979,12 @@ ${url}
                 rawData: uint8Array, // XTADのバイトデータ
                 xmlData: xmlData,            // XML文字列
                 realObject: jsonData,        // 実身管理用セグメント（JSON）
-                windowConfig: jsonData.window || null, // ウィンドウ設定
+                windowConfig: mergedWindowConfig, // 実身 JSON + 仮身ごとの設定をマージ
                 name: jsonData.name || virtualObj.link_name || realId,  // 実身名
                 displayName: jsonData.name || virtualObj.link_name || realId,
                 cloudContext: cloudContext || null,  // クラウドコンテキスト（伝播用）
-                vobjid: virtualObj.vobjid || null  // 仮身固有ID（スクロール位置保存用）
+                vobjid: virtualObj.vobjid || null,  // 仮身固有ID（スクロール位置保存用）
+                bgcol: virtualObj.bgcol || null  // ウィンドウ背景色 = 仮身の背景色 (開いた仮身の init と同じ扱い)
             };
 
             // プラグインを起動
@@ -8648,7 +8819,10 @@ ${url}
         if (!cloudContext && data.sourceWindowId) {
             cloudContext = this._windowCloudContexts.get(data.sourceWindowId) || null;
         }
-        this.openVirtualObject(data.linkId, data.linkName, cloudContext, data.vobjid || null);
+        this.openVirtualObject(data.linkId, data.linkName, cloudContext, data.vobjid || null, {
+            viewMode: data.viewMode,
+            wordWrap: data.wordWrap
+        });
     }
 
     /**
@@ -9966,7 +10140,8 @@ ${url}
                     delete this.fileObjects[filename];
                     logger.info('[TADjs] ファイルキャッシュをクリア:', filename);
 
-                    // JSONファイルのupdateDateを更新
+                    // JSONファイルのupdateDateを更新 (失敗しても XTAD 本体は保存済み)
+                    let metaUpdateFailed = false;
                     const jsonFileName = `${baseFileId}.json`;
                     const jsonResult = await this.loadDataFile(this.getDataBasePath(), jsonFileName);
                     if (jsonResult.success && jsonResult.data) {
@@ -9985,13 +10160,20 @@ ${url}
                             delete this.fileObjects[jsonFileName];
                             logger.info('[TADjs] JSONファイルキャッシュをクリア:', jsonFileName);
                         } else {
+                            // XTAD 本体は保存済みだが JSON (updateDate) 更新に失敗。
+                            // 成功と誤表示せず、 ユーザに部分失敗を通知する
                             logger.warn('[TADjs] JSONファイル保存失敗:', jsonFileName);
+                            metaUpdateFailed = true;
                         }
                     } else {
                         logger.info('[TADjs] JSONファイルが見つかりません（updateDate更新スキップ）:', jsonFileName);
                     }
 
-                    this.setStatusMessage(`ファイルを保存しました: ${filename}`);
+                    if (metaUpdateFailed) {
+                        this.setStatusMessage(`ファイルを保存しました (更新日時の記録に失敗): ${filename}`);
+                    } else {
+                        this.setStatusMessage(`ファイルを保存しました: ${filename}`);
+                    }
                 } else {
                     logger.error('[TADjs] xmlTADファイル保存失敗:', filename);
                     this.setStatusMessage(`ファイル保存エラー: ${filename}`);
@@ -11059,16 +11241,21 @@ ${url}
             if (windowConfig.scrollPos) win.scrollPos = windowConfig.scrollPos;
             if (windowConfig.wordWrap !== undefined) win.wordWrap = windowConfig.wordWrap;
             if (windowConfig.zoomratio !== undefined) win.zoomratio = windowConfig.zoomratio;
+            if (windowConfig.viewMode !== undefined) win.viewMode = windowConfig.viewMode;
         }, 'ウィンドウ設定更新', windowConfig);
 
-        // vobjidがある場合、親プラグインに仮身のスクロール位置更新を通知
-        if (vobjid && windowConfig.scrollPos) {
-            this.parentMessageBus.broadcast('update-vobj-scroll', {
-                vobjid: vobjid,
-                scrollx: windowConfig.scrollPos.x || 0,
-                scrolly: windowConfig.scrollPos.y || 0,
-                zoomratio: windowConfig.zoomratio !== undefined ? windowConfig.zoomratio : undefined
-            });
+        // vobjidがある場合、親プラグインに仮身ごとの設定 (scrollPos / zoomratio / viewMode / wordWrap) 更新を通知
+        // これらは親実身の <link> タグの属性として保存され、 同じ実身を別仮身から開いた時の表示を仮身ごとに制御する
+        if (vobjid && (windowConfig.scrollPos || windowConfig.zoomratio !== undefined || windowConfig.viewMode !== undefined || windowConfig.wordWrap !== undefined)) {
+            const vobjData = { vobjid };
+            if (windowConfig.scrollPos) {
+                vobjData.scrollx = windowConfig.scrollPos.x || 0;
+                vobjData.scrolly = windowConfig.scrollPos.y || 0;
+            }
+            if (windowConfig.zoomratio !== undefined) vobjData.zoomratio = windowConfig.zoomratio;
+            if (windowConfig.viewMode !== undefined) vobjData.viewMode = windowConfig.viewMode;
+            if (windowConfig.wordWrap !== undefined) vobjData.wordWrap = windowConfig.wordWrap;
+            this.parentMessageBus.broadcast('update-vobj-scroll', vobjData);
         }
     }
 

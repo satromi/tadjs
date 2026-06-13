@@ -212,6 +212,18 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
         // 内部 shape 座標は canvas (96 DPI) ピクセル単位なので、figScale も -96 を出力
         xmlParts.push('<figScale hunit="-96" vunit="-96"/>\r\n');
 
+        // 未解釈メタタグ (figoverlay, figpagenumber, figmemo) をラウンドトリップ復元
+        // BTRON 仕様 3.5.3/3.5.4/3.5.6/3.14 準拠
+        if (this.preservedFigureMeta && Array.isArray(this.preservedFigureMeta)) {
+            for (const meta of this.preservedFigureMeta) {
+                let attrStr = '';
+                for (const [k, v] of Object.entries(meta.attrs || {})) {
+                    attrStr += ` ${k}="${String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}"`;
+                }
+                xmlParts.push(`<${meta.tag}${attrStr} />\r\n`);
+            }
+        }
+
         // マーカー定義を出力
         for (const [id, mdef] of this.markerDefinitions) {
             let xml = `<markerDefine type="${mdef.type}" id="${mdef.id}" size="${mdef.size}" fgCol="${mdef.fgCol}"`;
@@ -223,7 +235,17 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
         }
 
         for (let index = 0; index < shapes.length; index++) {
-            await this.shapeToXML(shapes[index], index, xmlParts, savePromises);
+            const _shp = shapes[index];
+            // 座標変換セグメント (BTRON 3.4.1) の復元 — 直後の図形に適用される
+            if (_shp.savedTransform) {
+                const t = _shp.savedTransform;
+                xmlParts.push(`<transform dh="${t.dh || 0}" dv="${t.dv || 0}" hangle="${t.hangle || 0}" vangle="${t.vangle || 0}" />\r\n`);
+            }
+            // 図形要素修飾セグメント (BTRON 3.4.0、 矢印付加) の復元
+            if (_shp.figmodifier) {
+                xmlParts.push(`<figmodifier arrow="${_shp.figmodifier}" />\r\n`);
+            }
+            await this.shapeToXML(_shp, index, xmlParts, savePromises);
         }
 
         xmlParts.push('</figure>\r\n');
@@ -261,6 +283,17 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
             const figScaleHunit = this.figScale?.hunit ?? -96;
             const figScaleVunit = this.figScale?.vunit ?? -96;
             xmlParts.push(`<figScale hunit="${figScaleHunit}" vunit="${figScaleVunit}"/>\r\n`);
+
+            // 未解釈メタタグ (figoverlay/figpagenumber/figmemo) をラウンドトリップ復元
+            if (this.preservedFigureMeta && Array.isArray(this.preservedFigureMeta)) {
+                for (const _meta of this.preservedFigureMeta) {
+                    let _attrStr = '';
+                    for (const [_mk, _mv] of Object.entries(_meta.attrs || {})) {
+                        _attrStr += ' ' + _mk + '="' + String(_mv).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') + '"';
+                    }
+                    xmlParts.push('<' + _meta.tag + _attrStr + ' />\r\n');
+                }
+            }
 
             // 全shapeのパターンIDを事前解決（<patterns>セクション出力前に必要なパターンを確定させる）
             const usedCustomPatternIds = new Set();
@@ -358,7 +391,15 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
 
             // 各図形を追加
             for (let index = 0; index < this.shapes.length; index++) {
-                await this.shapeToXML(this.shapes[index], index, xmlParts, savePromises);
+                const _shp = this.shapes[index];
+                if (_shp.savedTransform) {
+                    const t = _shp.savedTransform;
+                    xmlParts.push(`<transform dh="${t.dh || 0}" dv="${t.dv || 0}" hangle="${t.hangle || 0}" vangle="${t.vangle || 0}" />\r\n`);
+                }
+                if (_shp.figmodifier) {
+                    xmlParts.push(`<figmodifier arrow="${_shp.figmodifier}" />\r\n`);
+                }
+                await this.shapeToXML(_shp, index, xmlParts, savePromises);
             }
 
             xmlParts.push('</figure>\r\n');
@@ -430,6 +471,8 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
         }
         // 角度
         const angle = shape.angle || 0;
+        // 描画モード (BTRON 3.0 ATTR、 0=STORE デフォルト)
+        const mode = shape.mode || 0;
 
         switch (shape.type) {
             case 'line':
@@ -468,17 +511,22 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
 
                 // z-index属性を追加
                 const zIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
-                xmlParts.push(`<line lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="0" start_arrow="${start_arrow}" end_arrow="${end_arrow}" arrow_type="${arrow_type}" conn_pat="${conn_pat}" start_conn="${start_conn}" end_conn="${end_conn}" lineConnectionType="${lineConnectionType}" points="${linePoints}"${zIndexAttr} />\r\n`);
+                xmlParts.push(`<line mode="${mode}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="0" start_arrow="${start_arrow}" end_arrow="${end_arrow}" arrow_type="${arrow_type}" conn_pat="${conn_pat}" start_conn="${start_conn}" end_conn="${end_conn}" lineConnectionType="${lineConnectionType}" points="${linePoints}"${zIndexAttr} />\r\n`);
                 break;
 
             case 'rect':
             case 'roundRect':
-                // tad.js形式: <rect round="0/1" cornerRadius="..." l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." left="..." top="..." right="..." bottom="..." />
+                // tad.js形式: <rect round="0/1" cornerRadius="..." figRH="..." figRV="..." l_atr="..." l_pat="..." f_pat="..." angle="..." fillColor="..." strokeColor="..." left="..." top="..." right="..." bottom="..." />
+                // BTRON 3.0.1: figRH/figRV は角丸め直径 (= cornerRadius * 2)。 非対称対応のため cornerRadiusH/V を別個に出力
                 const round = shape.cornerRadius && shape.cornerRadius > 0 ? 1 : 0;
                 const cornerRadius = shape.cornerRadius || 0;
+                const cornerRadiusH = shape.cornerRadiusH !== undefined ? shape.cornerRadiusH : cornerRadius;
+                const cornerRadiusV = shape.cornerRadiusV !== undefined ? shape.cornerRadiusV : cornerRadius;
+                const figRH = cornerRadiusH * 2;
+                const figRV = cornerRadiusV * 2;
                 const rectZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
                 const rectRotation = shape.rotation || 0;
-                xmlParts.push(`<rect round="${round}" cornerRadius="${cornerRadius}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${rectRotation}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}"${rectZIndexAttr} />\r\n`);
+                xmlParts.push(`<rect mode="${mode}" round="${round}" cornerRadius="${cornerRadius}" figRH="${figRH}" figRV="${figRV}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${rectRotation}" left="${shape.startX}" top="${shape.startY}" right="${shape.endX}" bottom="${shape.endY}"${rectZIndexAttr} />\r\n`);
                 break;
 
             case 'ellipse': {
@@ -491,7 +539,7 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
                 };
                 const ellipseZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
                 const ellipseRotation = shape.rotation || 0;
-                xmlParts.push(`<ellipse lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${ellipseRotation}" frameLeft="${ellipseFrame.left}" frameTop="${ellipseFrame.top}" frameRight="${ellipseFrame.right}" frameBottom="${ellipseFrame.bottom}"${ellipseZIndexAttr} />\r\n`);
+                xmlParts.push(`<ellipse mode="${mode}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${angle}" rotation="${ellipseRotation}" frameLeft="${ellipseFrame.left}" frameTop="${ellipseFrame.top}" frameRight="${ellipseFrame.right}" frameBottom="${ellipseFrame.bottom}"${ellipseZIndexAttr} />\r\n`);
                 break;
             }
 
@@ -528,7 +576,7 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
                     const polylinePoints = shape.path.map(p => `${p.x},${p.y}`).join(' ');
                     const polylineZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
                     const pencilRotation = shape.rotation || 0;
-                    xmlParts.push(`<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" round="0" start_arrow="0" end_arrow="0" rotation="${pencilRotation}" points="${polylinePoints}"${polylineZIndexAttr} />\r\n`);
+                    xmlParts.push(`<polyline mode="${mode}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" round="0" start_arrow="0" end_arrow="0" rotation="${pencilRotation}" points="${polylinePoints}"${polylineZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -541,7 +589,7 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
                     const polylineStartArrow = shape.start_arrow || 0;
                     const polylineEndArrow = shape.end_arrow || 0;
                     const polylineArrowType = shape.arrow_type || 'simple';
-                    xmlParts.push(`<polyline lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" round="0" start_arrow="${polylineStartArrow}" end_arrow="${polylineEndArrow}" arrow_type="${polylineArrowType}" rotation="${polylineRotation}" points="${polylinePointsStr}"${polylineZIndexAttr2} />\r\n`);
+                    xmlParts.push(`<polyline mode="${mode}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" round="0" start_arrow="${polylineStartArrow}" end_arrow="${polylineEndArrow}" arrow_type="${polylineArrowType}" rotation="${polylineRotation}" points="${polylinePointsStr}"${polylineZIndexAttr2} />\r\n`);
                 }
                 break;
 
@@ -553,7 +601,7 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
                     const curveRotation = shape.rotation || 0;
                     const curveClosedAttr = shape.closed ? '1' : '0';
                     const curveTypeAttr = shape.curveType !== undefined ? shape.curveType : 0;
-                    xmlParts.push(`<curve lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" type="${curveTypeAttr}" closed="${curveClosedAttr}" start_arrow="0" end_arrow="0" rotation="${curveRotation}" points="${curvePoints}"${curveZIndexAttr} />\r\n`);
+                    xmlParts.push(`<curve mode="${mode}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" type="${curveTypeAttr}" closed="${curveClosedAttr}" start_arrow="0" end_arrow="0" rotation="${curveRotation}" points="${curvePoints}"${curveZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -564,7 +612,22 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
                     const polygonCornerRadius = shape.cornerRadius || 0;
                     const polygonZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
                     const polygonRotation = shape.rotation || 0;
-                    xmlParts.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="${polygonCornerRadius}" rotation="${polygonRotation}" points="${polygonPoints}"${polygonZIndexAttr} />\r\n`);
+                    xmlParts.push(`<polygon mode="${mode}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="${polygonCornerRadius}" rotation="${polygonRotation}" points="${polygonPoints}"${polygonZIndexAttr} />\r\n`);
+                }
+                break;
+
+            case 'freefig':
+                // 任意図形セグメント: <freefig mode="0" f_pat="..." sy="..." nr="..." bx="..." nh="..." h="..." />
+                {
+                    const ffMode = shape.mode !== undefined ? shape.mode : 0;
+                    const ffFpat = shape.f_pat !== undefined ? shape.f_pat : 0;
+                    const ffSy = shape.sy || 0;
+                    const ffNr = shape.nr || 0;
+                    const ffBx = shape.bx || 0;
+                    const ffH = (shape.h && shape.h.length) ? shape.h.join(',') : '';
+                    const ffNh = (shape.nh !== undefined) ? shape.nh : (shape.h ? shape.h.length : 0);
+                    const ffZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
+                    xmlParts.push(`<freefig mode="${ffMode}" f_pat="${ffFpat}" sy="${ffSy}" nr="${ffNr}" bx="${ffBx}" nh="${ffNh}" h="${ffH}"${ffZIndexAttr} />\r\n`);
                 }
                 break;
 
@@ -583,7 +646,7 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
 
                 const triangleZIndexAttr = shape.zIndex !== undefined && shape.zIndex !== null ? ` zIndex="${shape.zIndex}"` : '';
                 const triangleRotation = shape.rotation || 0;
-                xmlParts.push(`<polygon lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="0" rotation="${triangleRotation}" points="${triangleSavePoints}"${triangleZIndexAttr} />\r\n`);
+                xmlParts.push(`<polygon mode="${mode}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" cornerRadius="0" rotation="${triangleRotation}" points="${triangleSavePoints}"${triangleZIndexAttr} />\r\n`);
                 break;
 
             case 'arc':
@@ -620,13 +683,13 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
 
                 if (shape.type === 'arc') {
                     // 扇形 (Sub ID 03)
-                    xmlParts.push(`<arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${arcAngle}" frameLeft="${arcFrame.left}" frameTop="${arcFrame.top}" frameRight="${arcFrame.right}" frameBottom="${arcFrame.bottom}" startX="${acStartX}" startY="${acStartY}" endX="${acEndX}" endY="${acEndY}" start_arrow="${arcStartArrow}" end_arrow="${arcEndArrow}" arrow_type="${arcArrowType}"${arcZIndexAttr} />\r\n`);
+                    xmlParts.push(`<arc mode="${mode}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${arcAngle}" frameLeft="${arcFrame.left}" frameTop="${arcFrame.top}" frameRight="${arcFrame.right}" frameBottom="${arcFrame.bottom}" startX="${acStartX}" startY="${acStartY}" endX="${acEndX}" endY="${acEndY}" start_arrow="${arcStartArrow}" end_arrow="${arcEndArrow}" arrow_type="${arcArrowType}"${arcZIndexAttr} />\r\n`);
                 } else if (shape.type === 'chord') {
                     // 弓形 (Sub ID 04)
-                    xmlParts.push(`<chord lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${arcAngle}" frameLeft="${arcFrame.left}" frameTop="${arcFrame.top}" frameRight="${arcFrame.right}" frameBottom="${arcFrame.bottom}" startX="${acStartX}" startY="${acStartY}" endX="${acEndX}" endY="${acEndY}" start_arrow="${arcStartArrow}" end_arrow="${arcEndArrow}" arrow_type="${arcArrowType}"${arcZIndexAttr} />\r\n`);
+                    xmlParts.push(`<chord mode="${mode}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" f_pat="${f_pat}" angle="${arcAngle}" frameLeft="${arcFrame.left}" frameTop="${arcFrame.top}" frameRight="${arcFrame.right}" frameBottom="${arcFrame.bottom}" startX="${acStartX}" startY="${acStartY}" endX="${acEndX}" endY="${acEndY}" start_arrow="${arcStartArrow}" end_arrow="${arcEndArrow}" arrow_type="${arcArrowType}"${arcZIndexAttr} />\r\n`);
                 } else {
                     // 楕円弧 (Sub ID 07: f_pat 無し)
-                    xmlParts.push(`<elliptical_arc lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" angle="${arcAngle}" frameLeft="${arcFrame.left}" frameTop="${arcFrame.top}" frameRight="${arcFrame.right}" frameBottom="${arcFrame.bottom}" startX="${acStartX}" startY="${acStartY}" endX="${acEndX}" endY="${acEndY}" start_arrow="${arcStartArrow}" end_arrow="${arcEndArrow}" arrow_type="${arcArrowType}"${arcZIndexAttr} />\r\n`);
+                    xmlParts.push(`<elliptical_arc mode="${mode}" lineType="${lineType}" lineWidth="${lineWidth}" l_pat="${l_pat}" angle="${arcAngle}" frameLeft="${arcFrame.left}" frameTop="${arcFrame.top}" frameRight="${arcFrame.right}" frameBottom="${arcFrame.bottom}" startX="${acStartX}" startY="${acStartY}" endX="${acEndX}" endY="${acEndY}" start_arrow="${arcStartArrow}" end_arrow="${arcEndArrow}" arrow_type="${arcArrowType}"${arcZIndexAttr} />\r\n`);
                 }
                 break;
             }

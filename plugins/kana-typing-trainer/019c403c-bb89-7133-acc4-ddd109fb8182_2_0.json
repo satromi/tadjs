@@ -41,7 +41,7 @@
     "KeyN":  { "normal": "す", "leftShift": "わ", "rightShift": "ず" },
     "KeyM":  { "normal": "つ", "leftShift": "ぃ", "rightShift": "づ" },
     "Comma": { "normal": "、", "leftShift": "ぁ", "rightShift": "，" },
-    "Period":{ "normal": "。", "leftShift": "゜", "rightShift": "．" },
+    "Period":{ "normal": "。", "leftShift": "．", "rightShift": "゜" },
     "Slash": { "normal": "っ", "leftShift": "ぅ", "rightShift": "ゎ" }
   },
   "reverseMapping": {

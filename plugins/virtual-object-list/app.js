@@ -25,6 +25,10 @@ class VirtualObjectListApp extends window.PluginBase {
         this.clipboard = null; // クリップボード（仮身データ）
         this.isFullscreen = false; // 全画面表示フラグ
 
+        // calculateFigureContentBounds のキャッシュ (xmlData が変わらない限り計算結果を再利用)
+        this._figureBoundsCache = null;
+        this._figureBoundsCacheKey = null;
+
         // this.windowId は基底クラスで定義済み（親ウィンドウからinitメッセージで設定される）
 
         // 仮身ドラッグのプラグイン固有状態管理
@@ -90,6 +94,20 @@ class VirtualObjectListApp extends window.PluginBase {
         this.setupCrossWindowDropSuccessHandler();
 
         this.init();
+    }
+
+    /**
+     * calculateFigureContentBounds のキャッシュ付き呼出
+     * xmlData が変更されていなければ前回結果を再利用
+     */
+    _getCachedFigureBounds() {
+        if (this._figureBoundsCacheKey === this.xmlData && this._figureBoundsCache) {
+            return this._figureBoundsCache;
+        }
+        const bounds = window.calculateFigureContentBounds(this.xmlData);
+        this._figureBoundsCache = bounds;
+        this._figureBoundsCacheKey = this.xmlData;
+        return bounds;
     }
 
     init() {
@@ -747,7 +765,7 @@ class VirtualObjectListApp extends window.PluginBase {
             // sendWithCallback使用時は自動的にコールバックが実行される
         });
 
-        // update-vobj-scroll メッセージ（ウィンドウ閉じた時の仮身スクロール位置更新）
+        // update-vobj-scroll メッセージ（ウィンドウ閉じた時の仮身スクロール位置・表示モード更新）
         this.messageBus.on('update-vobj-scroll', (data) => {
             if (!data.vobjid) return;
             // vobjidで仮身を検索して更新
@@ -756,7 +774,13 @@ class VirtualObjectListApp extends window.PluginBase {
                 if (data.scrollx !== undefined) obj.scrollx = data.scrollx;
                 if (data.scrolly !== undefined) obj.scrolly = data.scrolly;
                 if (data.zoomratio !== undefined) obj.zoomratio = data.zoomratio;
+                if (data.viewMode !== undefined) obj.viewMode = data.viewMode;
+                if (data.wordWrap !== undefined) obj.wordWrap = (data.wordWrap === true || data.wordWrap === 'true');
                 this.updateVirtualObjectInXml(obj);
+                // xmlData が更新されたので親に保存通知
+                if (typeof this.notifyXmlDataChanged === 'function') {
+                    this.notifyXmlDataChanged();
+                }
             }
         });
 
@@ -2563,10 +2587,8 @@ class VirtualObjectListApp extends window.PluginBase {
                 logger.debug('[VirtualObjectList] 閉じた仮身の高さを調整:', vobjHeight, '->', newHeight, `(${newChsz}pt = ${newChszPx}px)`);
             } else {
                 // 開いた仮身の場合、chszに比例して高さを調整
-                const lineHeight = DEFAULT_LINE_HEIGHT;
-                const newChszPx = window.convertPtToPx(newChsz);
-                const textHeight = Math.ceil(newChszPx * lineHeight);
-                const newMinOpenHeight = textHeight + VOBJ_MIN_OPEN_HEIGHT_OFFSET;
+                // 最小高さ = 閉じた仮身 (タイトルバー) + コンテンツ最小エリア (VOBJ_MIN_OPEN_HEIGHT_OFFSET)
+                const newMinOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(newChsz);
                 const heightRatio = newChsz / oldChsz;
                 const adjustedHeight = Math.max(newMinOpenHeight, Math.round(vobjHeight * heightRatio));
                 vobj.vobjbottom = vobj.vobjtop + adjustedHeight;
@@ -3465,6 +3487,17 @@ class VirtualObjectListApp extends window.PluginBase {
                 if (virtualObj.zoomratio !== undefined) {
                     linkElement.setAttribute('zoomratio', virtualObj.zoomratio.toString());
                 }
+                // 表示モード・折り返し（値がある時のみ出力）
+                if (virtualObj.viewMode !== undefined && virtualObj.viewMode !== null && virtualObj.viewMode !== '') {
+                    linkElement.setAttribute('viewMode', String(virtualObj.viewMode));
+                } else {
+                    linkElement.removeAttribute('viewMode');
+                }
+                if (virtualObj.wordWrap !== undefined && virtualObj.wordWrap !== null && virtualObj.wordWrap !== '') {
+                    linkElement.setAttribute('wordWrap', (virtualObj.wordWrap === true || virtualObj.wordWrap === 'true').toString());
+                } else {
+                    linkElement.removeAttribute('wordWrap');
+                }
 
                 // テキスト内容は書き込まない（自己閉じタグ形式）
                 // link_nameはJSONから取得する方式に統一
@@ -3655,9 +3688,13 @@ class VirtualObjectListApp extends window.PluginBase {
     }
 
     setupWindowActivation() {
-        document.addEventListener('mousedown', () => {
+        document.addEventListener('mousedown', (e) => {
             // コンテキストメニューを閉じる（mousedownはclickより先に発火するため確実に閉じる）
             this.closeContextMenu();
+
+            // 既に active 状態なら activate-window 送信不要 / 偽 mousedown も排除
+            if (this.isWindowActive) return;
+            if (e && e.isTrusted === false) return;
 
             this.messageBus.send('activate-window');
 
@@ -3738,10 +3775,8 @@ class VirtualObjectListApp extends window.PluginBase {
             if (this.rangeSelectionState.isActive) {
                 const canvas = this.rangeSelectionState.container;
                 if (canvas) {
-                    const rect = canvas.getBoundingClientRect();
-                    // getBoundingClientRect()はスクロール位置を考慮済みなのでscroll offsetは不要
-                    const x = e.clientX - rect.left;
-                    const y = e.clientY - rect.top;
+                    // util.js 共通ヘルパで座標取得 (getBoundingClientRect ベース)
+                    const { x, y } = window.getElementMouseCoordinates(e, canvas);
                     this.updateRangeSelection(x, y);
                 }
                 return; // 範囲選択中は他の処理をスキップ
@@ -5335,7 +5370,8 @@ class VirtualObjectListApp extends window.PluginBase {
         if (obj.opened !== undefined) {
             return obj.opened === true;
         }
-        if (!obj.vobjbottom || !obj.vobjtop) {
+        // vobjtop=0 は有効な値 (最上位の仮身) なので falsy 判定ではなく undefined/null 判定
+        if (obj.vobjbottom == null || obj.vobjtop == null) {
             return false;
         }
         const vobjHeight = obj.vobjbottom - obj.vobjtop;
@@ -5485,7 +5521,7 @@ class VirtualObjectListApp extends window.PluginBase {
         listElement.innerHTML = '';
 
         // 全コンテンツ（仮身・図形要素）の境界を計算
-        const bounds = window.calculateFigureContentBounds(this.xmlData);
+        const bounds = this._getCachedFigureBounds();
         const margin = 10;  // マージンを10pxに削減
 
         // コンテンツ境界にマージンを加算
@@ -5534,9 +5570,15 @@ class VirtualObjectListApp extends window.PluginBase {
             }
         }
 
-        // z-index管理：背景化された仮身と通常の仮身を分離
-        const backgroundObjects = this.virtualObjects.filter(obj => obj.isBackground);
-        const normalObjects = this.virtualObjects.filter(obj => !obj.isBackground);
+        // z-index管理：背景化された仮身と通常の仮身を分離 (1回ループで分類)
+        const backgroundObjects = [];
+        const normalObjects = [];
+        const vobjIndexMap = new Map();
+        for (let i = 0; i < this.virtualObjects.length; i++) {
+            const obj = this.virtualObjects[i];
+            vobjIndexMap.set(obj, i);
+            (obj.isBackground ? backgroundObjects : normalObjects).push(obj);
+        }
 
         // 背景化された仮身を先にレンダリング（z-index 1-999）
         // その後、通常の仮身をレンダリング（z-index 1000以降）
@@ -5561,8 +5603,8 @@ class VirtualObjectListApp extends window.PluginBase {
                 logger.debug('[VirtualObjectList] 閉じた仮身のサイズ調整:', obj.link_name, '高さ:', titleHeight);
             }
 
-            // virtualObjects配列内での元のインデックスを取得（一意のID代わりに使用）
-            const vobjIndex = this.virtualObjects.indexOf(obj);
+            // virtualObjects配列内での元のインデックスを取得（一意のID代わりに使用、Map で O(1)）
+            const vobjIndex = vobjIndexMap.get(obj);
             const vobjElement = this.createVirtualObjectElement(obj, vobjIndex);
 
             // z-indexを設定：背景化は1～、通常は1000～
@@ -6181,6 +6223,20 @@ class VirtualObjectListApp extends window.PluginBase {
     async expandVirtualObject(vobjElement, virtualObject, options = {}) {
         logger.debug('[VirtualObjectList] 開いた仮身の展開開始:', virtualObject.link_name);
 
+        // 仮身高さの正規化 (PluginBase 共通メソッド、データ側 vobjbottom-vobjtop で開閉判定)
+        // DOM を変更した場合のみデータも同期 (正常な仮身の vobjbottom を意図せず縮めるのを防ぐ)
+        const { shouldExpand, finalHeight, modified } = this.normalizeVobjHeightForExpand(vobjElement, virtualObject);
+        if (modified) {
+            virtualObject.heightPx = finalHeight - VOBJ_BORDER_WIDTH;
+            if (virtualObject.vobjtop !== undefined) {
+                virtualObject.vobjbottom = virtualObject.vobjtop + (finalHeight - VOBJ_BORDER_WIDTH);
+            }
+        }
+        if (!shouldExpand) {
+            logger.debug('[VirtualObjectList] 閉じた仮身のため展開を中止');
+            return null;
+        }
+
         try {
             // 実身IDを取得
             const linkId = virtualObject.link_id;
@@ -6298,11 +6354,18 @@ class VirtualObjectListApp extends window.PluginBase {
         logger.debug('[VirtualObjectList] 仮身を開く:', obj.link_name, obj.link_id);
 
         // 親ウィンドウにメッセージを送信して仮身リンク先を開く
-        this.messageBus.send('open-virtual-object', {
+        const payload = {
             linkId: obj.link_id,
             linkName: obj.link_name,
             vobjid: obj.vobjid
-        });
+        };
+        if (obj.viewMode !== undefined && obj.viewMode !== null && obj.viewMode !== '') {
+            payload.viewMode = obj.viewMode;
+        }
+        if (obj.wordWrap !== undefined && obj.wordWrap !== null && obj.wordWrap !== '') {
+            payload.wordWrap = (obj.wordWrap === true || obj.wordWrap === 'true');
+        }
+        this.messageBus.send('open-virtual-object', payload);
     }
 
     /**
@@ -6809,11 +6872,12 @@ class VirtualObjectListApp extends window.PluginBase {
             const minWidth = 50;
 
             // VirtualObjectRendererのユーティリティメソッドを使用して最小高さを計算
-            // 注: getMinClosedHeight/getMinOpenHeightはborderなしのTAD保存値を返す
-            // プレビュー枠はDOM要素と同じborder込みの値を使う必要がある
+            // 注: 閉じた仮身は vobj 要素に border を持たない (titleArea のみ border を持つ) ため、
+            // vobj.style.height = vobjbottom-vobjtop = getMinClosedHeight() の値そのもの (border 加算不要)
+            // 開いた仮身は vobj に border があるが、border-box で style.height = vobjbottom-vobjtop が DOM rect height と一致するため、こちらも border 加算不要
             const chsz = Math.round(obj.chsz || DEFAULT_FONT_SIZE);
-            const minClosedHeight = this.virtualObjectRenderer.getMinClosedHeight(chsz) + VOBJ_BORDER_WIDTH;
-            const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chsz) + VOBJ_BORDER_WIDTH;
+            const minClosedHeight = this.virtualObjectRenderer.getMinClosedHeight(chsz);
+            const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chsz);
 
             // DOMから実際のコンテンツエリアの有無で開閉状態を判定
             const hasContentArea = vobjElement.querySelector('.virtual-object-content-area') !== null ||
@@ -6918,9 +6982,10 @@ class VirtualObjectListApp extends window.PluginBase {
                 const oldWidth = obj.width;
 
                 // 仮身オブジェクトのサイズを更新
-                // 注: DOM要素の高さ（finalHeight）はborderを含む（box-sizing: border-box）
-                // TADファイルのheight属性はborderを含まない値を保存する
-                const heightForSave = finalHeight - VOBJ_BORDER_WIDTH;
+                // 注: vobj.style.height = vobjbottom-vobjtop の慣習 (renderer と統一)
+                // 閉じた仮身は border 無し、開いた仮身は border-box + 1px border 込みで rect.height = style.height
+                // どちらも DOM rect.height = vobjbottom-vobjtop なので border 加減算不要
+                const heightForSave = finalHeight;
                 obj.width = finalWidth;
                 obj.heightPx = heightForSave;
                 obj.vobjright = obj.vobjleft + finalWidth;
@@ -6935,10 +7000,19 @@ class VirtualObjectListApp extends window.PluginBase {
                 // VirtualObjectRendererのユーティリティメソッドを使用
                 const chsz_resize = parseFloat(obj.chsz) || DEFAULT_FONT_SIZE;
                 const minClosedHeight_resize = this.virtualObjectRenderer.getMinClosedHeight(chsz_resize);
+                const minOpenHeight_resize = this.virtualObjectRenderer.getMinOpenHeight(chsz_resize);
                 const wasOpen = hasContentArea; // DOMベースの判定を使用
-                // DOM要素の高さ（border込み）と比較するため、閾値もborderを加える
-                // minClosedHeight_resizeはborderを含まない値（31px）、DOM要素はborder込み（33px）
-                const isNowOpen = finalHeight > minClosedHeight_resize + VOBJ_BORDER_WIDTH;
+                // 偶発的な小さなドラッグでは閉じた仮身扱いにするため、minOpenHeight を境界に使う
+                const isNowOpen = finalHeight >= minOpenHeight_resize;
+
+                // 偶発的に閉じた仮身を中間サイズに広げてしまった場合は、判定変化が無くても閉じた仮身サイズにスナップ
+                if (!isNowOpen && finalHeight > minClosedHeight_resize) {
+                    logger.debug('[VirtualObjectList] 閉じた仮身として中間サイズを minClosedHeight にスナップ:', minClosedHeight_resize);
+                    obj.heightPx = minClosedHeight_resize;
+                    obj.vobjbottom = obj.vobjtop + minClosedHeight_resize;
+                    vobjElement.style.height = `${minClosedHeight_resize}px`;
+                    this.updateVirtualObjectInXml(obj);
+                }
 
                 if (wasOpen !== isNowOpen) {
                     // 判定が変わった場合は、少し待ってから仮身要素を再作成
@@ -6973,7 +7047,8 @@ class VirtualObjectListApp extends window.PluginBase {
                         existingVobjIndex = this.virtualObjects.indexOf(obj);
                         logger.debug('[VirtualObjectList] vobjIndexを再計算:', existingVobjIndex);
                     }
-                    this.recreateVirtualObjectTimer = setTimeout(() => {
+                    // 即時再構築 (150ms 遅延中の「選択枠 > 仮身枠」表示不一致を防ぐ)
+                    const recreate = () => {
                         logger.debug('[VirtualObjectList] 仮身を再作成します。');
 
                         // 要素がまだDOMに存在するかチェック
@@ -7030,7 +7105,8 @@ class VirtualObjectListApp extends window.PluginBase {
                         }
 
                         this.recreateVirtualObjectTimer = null;
-                    }, 150);
+                    };
+                    recreate();
                 }
 
                 // キャンバスサイズを更新
@@ -7134,7 +7210,7 @@ class VirtualObjectListApp extends window.PluginBase {
         }
 
         // 全コンテンツ（仮身・図形要素）の境界を計算
-        const bounds = window.calculateFigureContentBounds(this.xmlData);
+        const bounds = this._getCachedFigureBounds();
         const margin = 10;  // マージンを10pxに削減
 
         // コンテンツ境界にマージンを加算
@@ -7172,7 +7248,7 @@ class VirtualObjectListApp extends window.PluginBase {
         }
 
         // 全コンテンツ（仮身・図形要素）の境界を計算
-        const bounds = window.calculateFigureContentBounds(this.xmlData);
+        const bounds = this._getCachedFigureBounds();
         const margin = 10;  // マージンを10pxに削減
 
         // コンテンツ境界にマージンを加算
@@ -7416,6 +7492,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // マウスホイールでのスクロールを処理
+    // 注意: e.preventDefault() を呼ぶため { passive: false } を明示
+    // (デフォルトの passive 推定では Chrome が "Added non-passive event listener" 警告を出すため)
     const pluginContent = document.querySelector('.plugin-content');
     if (pluginContent) {
         pluginContent.addEventListener('wheel', (e) => {
@@ -7431,6 +7509,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             e.preventDefault();
-        });
+        }, { passive: false });
     }
 });

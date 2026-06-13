@@ -14,8 +14,7 @@
 <pattern id="134" width="1" height="1" ncol="1" fgcolors="#40ff80" bgcolor="#ffffff"/>
 </patterns>
 
-<!-- 背景矩形 -->
-<rect lineType="0" lineWidth="0" l_pat="0" f_pat="128" left="0" top="0" right="1920" bottom="1080" zIndex="0"/>
+<!-- 背景色は JSON metadata window.backgroundColor で指定 (<rect> は背景に使わない) -->
 
 <!-- ページタイトル -->
 <document>
@@ -23,7 +22,7 @@
 <docDraw drawleft="100" drawtop="50" drawright="1820" drawbottom="130"/>
 <docScale hunit="-72" vunit="-72"/>
 <text id="pageTitle" lang="0" bpat="0" zIndex="90"/>
-<font size="48"/>
+<font size="36"/>
 <font face="sans-serif"/>
 <font color="#FFFFFF"/>
 実時間制御TADの機能概要
@@ -35,7 +34,7 @@
 <docDraw drawleft="150" drawtop="200" drawright="900" drawbottom="280"/>
 <docScale hunit="-72" vunit="-72"/>
 <text id="feature1" lang="0" bpat="0" zIndex="80"/>
-<font size="28"/>
+<font size="21"/>
 <font color="#DDDDDD"/>
 1. 動画・音声の配置と再生
 </document>
@@ -46,7 +45,7 @@
 <docDraw drawleft="150" drawtop="300" drawright="900" drawbottom="380"/>
 <docScale hunit="-72" vunit="-72"/>
 <text id="feature2" lang="0" bpat="0" zIndex="80"/>
-<font size="28"/>
+<font size="21"/>
 <font color="#DDDDDD"/>
 2. タイムライン制御によるアニメーション
 </document>
@@ -57,7 +56,7 @@
 <docDraw drawleft="150" drawtop="400" drawright="900" drawbottom="480"/>
 <docScale hunit="-72" vunit="-72"/>
 <text id="feature3" lang="0" bpat="0" zIndex="80"/>
-<font size="28"/>
+<font size="21"/>
 <font color="#DDDDDD"/>
 3. 図形・テキストの動的制御
 </document>
@@ -68,7 +67,7 @@
 <docDraw drawleft="150" drawtop="500" drawright="900" drawbottom="580"/>
 <docScale hunit="-72" vunit="-72"/>
 <text id="feature4" lang="0" bpat="0" zIndex="80"/>
-<font size="28"/>
+<font size="21"/>
 <font color="#DDDDDD"/>
 4. スライド遷移アクション
 </document>

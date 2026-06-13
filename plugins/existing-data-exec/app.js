@@ -149,6 +149,13 @@ class ExistingDataExec extends window.PluginBase {
             return;
         }
 
+        // パストラバーサル防止: パス区切り・親参照を拒否しつつ、 複合拡張子 (tar.gz 等) は許可
+        if (/[\/\\]|\.\./.test(this.extension) || !/^[a-zA-Z0-9.]{1,20}$/.test(this.extension)) {
+            logger.error('[ExistingDataExec] 不正な拡張子形式のため中止:', this.extension);
+            this.closeWindow();
+            return;
+        }
+
         logger.info('[ExistingDataExec] 拡張子:', this.extension);
 
         // 外部ファイルを開く

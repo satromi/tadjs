@@ -66,14 +66,17 @@ export class ToolPanelManager {
             alwaysOnTop: true,
             cssClass: 'tool-panel-window',
             scrollable: false,  // スクロールバー非表示
-            frame: false  // タイトルバーを非表示
+            frame: false,  // タイトルバーを非表示
+            // createWindow 内の setActiveWindow より前に toolPanelRelations を登録するため、
+            // onCreated callback で先行登録する (これがないと初回作成時の DEACT 抑制が間に合わない)
+            onCreated: (newWindowId) => {
+                this.toolPanelRelations[newWindowId] = {
+                    editorIframe: pluginIframe,
+                    toolPanelWindowId: newWindowId,
+                    createdAt: Date.now()  // ツールパネル作成直後の自動 activate-window 連鎖抑制用
+                };
+            }
         });
-
-        // 道具パネルと編集ウィンドウの関連付けを保存
-        this.toolPanelRelations[windowId] = {
-            editorIframe: pluginIframe,
-            toolPanelWindowId: windowId
-        };
 
         // 道具パネルウィンドウに初期設定を送信
         setTimeout(() => {

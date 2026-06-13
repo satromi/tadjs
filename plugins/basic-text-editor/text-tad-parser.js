@@ -368,7 +368,7 @@ export const TextTadParserMixin = (Base) => class extends Base {
         // インラインスタイルでスタイル情報を保持
         let result = '';
         let pos = 0;
-        const fontRegex = /<font\s+(size|color|face|space)="([^"]*)"\s*\/?>|<\/font>/gi;
+        const fontRegex = /<font\s+(size|color|face|space|hRatio|wRatio|style|weight|stretch|stretchscale|direction|kerning|pattern)="([^"]*)"\s*\/?>|<\/font>/gi;
         let match;
         const stack = []; // { attr, value, isSelfClosing }
 
@@ -398,7 +398,9 @@ export const TextTadParserMixin = (Base) => class extends Base {
                     }
                 }
             } else {
-                const attr = match[1].toLowerCase();
+                let attr = match[1].toLowerCase();
+                if (attr === 'hratio') attr = 'hRatio';
+                else if (attr === 'wratio') attr = 'wRatio';
                 const value = match[2];
                 const isSelfClosing = fullMatch.endsWith('/>');
 
@@ -486,6 +488,43 @@ export const TextTadParserMixin = (Base) => class extends Base {
         // <noprint>タグ -> 薄い表示（無印字を示唆）
         html = html.replace(/<noprint>(.*?)<\/noprint>/gi, '<span style="opacity: 0.3;" data-noprint="true">$1</span>');
 
+        // <combchar>タグ -> 結合文字 (改行禁止 + inline-block)
+        html = html.replace(/<combchar>([\s\S]*?)<\/combchar>/gi, '<span class="combchar" style="white-space: nowrap; display: inline-block;">$1</span>');
+
+        // <char-layout>タグ -> 文字割付け
+        html = html.replace(/<char-layout\s+kind="(\d+)"\s+width="([^"]*)"\s*>([\s\S]*?)<\/char-layout>/gi, (m, kind, widthStr, content) => this._buildCharLayoutSpan(kind, widthStr, content));
+
+        // <fill-char str="..."/>タグ -> 充塡文字 (行末余白を埋める)
+        html = html.replace(/<fill-char\s+str="([^"]*)"\s*\/>/gi, (m, str) => {
+            return `<span class="fill-char" data-fill-str="${str}" style="flex-grow:1; display:inline-block; min-width:1ch;"></span>`;
+        });
+
+        // <fixed-space width="..."/>タグ -> 固定幅空白
+        html = html.replace(/<fixed-space\s+width="([^"]*)"\s*\/>/gi, (m, w) => this._buildFixedSpaceSpan(w));
+
+        // <bouten side="..." kind="...">対象</bouten> -> 傍点 (text-emphasis)
+        html = html.replace(/<bouten\s+side="(upper|lower)"\s+kind="(\d+)"\s*>([\s\S]*?)<\/bouten>/gi, (m, side, kind, content) => this._buildBoutenSpan(side, kind, content));
+        // 旧タグ互換: <botenUpper>/<botenLower> も受け付ける
+        html = html.replace(/<botenUpper>([\s\S]*?)<\/botenUpper>/gi, (m, c) => this._buildBoutenSpan('upper', '0', c));
+        html = html.replace(/<botenLower>([\s\S]*?)<\/botenLower>/gi, (m, c) => this._buildBoutenSpan('lower', '0', c));
+
+        // <page-number step="..." num="..."/> -> ページ番号変数 span
+        html = html.replace(/<page-number\s+step="([^"]*)"\s+num="([^"]*)"\s*\/>/gi, (m, step, num) => this._buildPageNumberSpan(step, num));
+
+        // <docmemo text="..."/> -> 文章メモ span (表示は薄字、 保存時に復元)
+        html = html.replace(/<docmemo\s+text="([^"]*)"\s*\/>/gi, (m, t) => this._buildDocmemoSpan(t));
+
+        // <docoverlay ... /> -> 用紙オーバーレイ (FFA0 SubID 0x03/0x04)
+        html = html.replace(/<docoverlay\s+([^>]*?)\/>/gi, (m, attrs) => this._buildDocoverlaySpan(attrs));
+
+        // <paper-overlay-define N P>...</paper-overlay-define> -> 用紙オーバーレイ定義付箋
+        // 中身は文章 TAD データのためそのまま編集 UI には反映せず、 Base64 で hidden span に退避してラウンドトリップ保証
+        html = html.replace(/<paper-overlay-define\s+([^>]*)>([\s\S]*?)<\/paper-overlay-define>/gi,
+            (m, attrs, content) => this._buildPaperOverlayDefinePreservedSpan(attrs, content));
+
+        // <field-format ...><field .../>...</field-format> -> フィールド書式 (FFA1 SubID 0x03)
+        html = html.replace(/<field-format\s+([^>]*?)>([\s\S]*?)<\/field-format>/gi, (m, attrs, inner) => this._buildFieldFormatBlock(attrs, inner));
+
         // <ruby>タグ -> HTMLのrubyタグ
         // position="0"は行戻し側（上）、position="1"は行送り側（下）
         // position と text 属性を保持してXMLとの往復変換に対応
@@ -499,8 +538,10 @@ export const TextTadParserMixin = (Base) => class extends Base {
             }
         });
 
-        // <br/>タグを保持
-        html = html.replace(/<br\s*\/>/gi, '<br>');
+        // <br/> を HTML <br> に正規化
+        // xmlTAD で明示された <br/> は「ユーザー意図の段落内改行」 なので data-user-br マーキング
+        // (parser が空段落表示用に追加する補助 br と区別するため → 装飾オーバーレイ/シリアライザの判定で使用)
+        html = html.replace(/<br\s*\/>/gi, '<br data-user-br="1">');
 
         return html;
     }
@@ -648,6 +689,140 @@ export const TextTadParserMixin = (Base) => class extends Base {
     }
 
     /**
+     * 段落のタブ書式 CSS 文字列を構築 (margin-left/right, text-indent, pargap, page-break, tab-size)
+     * 各段落で同じロジックが必要なため共通化
+     * @param {Object} tabFormatState - 段落の有効なタブ書式 state
+     * @param {number} tadUnitToPx - hunit → px 変換係数
+     * @param {number} maxFontSize - 段落内の最大フォントサイズ (pargap 計算用)
+     * @param {string} baseStyle - 既存スタイル文字列 (margin: 0.5em 0 等を含む)
+     * @returns {string} タブ書式 CSS を追加したスタイル文字列
+     */
+    _buildTabFormatCss(tabFormatState, tadUnitToPx, maxFontSize, baseStyle) {
+        let style = baseStyle;
+        if (tabFormatState.left !== 0) {
+            style += `margin-left: ${tabFormatState.left * tadUnitToPx}px;`;
+        }
+        if (tabFormatState.right !== 0) {
+            style += `margin-right: ${tabFormatState.right * tadUnitToPx}px;`;
+        }
+        if (tabFormatState.indent !== 0) {
+            style += `text-indent: ${tabFormatState.indent * tadUnitToPx}px;`;
+        }
+        const pargapStr = tabFormatState.pargap;
+        const isPargapAbs = typeof pargapStr === 'string' && pargapStr.startsWith('abs:');
+        const pargapValue = parseFloat(isPargapAbs ? pargapStr.slice(4) : pargapStr);
+        if (!isNaN(pargapValue) && pargapStr !== '0.75') {
+            const vunitToPx = Math.abs(window.DPI / this.docScale.vunit);
+            const pargapPx = isPargapAbs ? (pargapValue * vunitToPx) : (pargapValue * maxFontSize);
+            style = style.replace('margin: 0.5em 0;', `margin: ${pargapPx}px 0;`);
+        }
+        if (tabFormatState.P === 1) {
+            style += `break-after: avoid-page;`;
+        } else if (tabFormatState.P === 2) {
+            style += `break-inside: avoid;`;
+        }
+        if (tabFormatState.tabs && tabFormatState.tabs.length > 0) {
+            const tabInterval = tabFormatState.tabs[0] * tadUnitToPx;
+            if (tabInterval > 0) {
+                style += `tab-size: ${tabInterval}px; -moz-tab-size: ${tabInterval}px;`;
+            }
+        }
+        return style;
+    }
+
+    /**
+     * 段落 paragraphContent 内の <indent/> を処理 (BTRON 仕様: 段落内 1 個のみ)
+     * 字下げ位置の anchor span に置換し、 padding-left/text-indent CSS を style に追加する
+     * Phase D: タブ書式 indent との合成式で text-indent を構築 (1 行目 = タブ書式 indent、 2 行目以降 = padding-left)
+     * @param {string} paragraphContent - パース中の段落 HTML 文字列
+     * @param {string} style - 既存スタイル文字列
+     * @param {Object} tabFormatState - 段落の有効なタブ書式 state (text-indent 合成用)
+     * @param {number} tadUnitToPx - hunit → px 変換係数
+     * @returns {Promise<{paragraphContent: string, style: string}>}
+     */
+    async _processIndentTag(paragraphContent, style, tabFormatState, tadUnitToPx) {
+        const indentMatch = /<indent\s*\/>/i.exec(paragraphContent);
+        if (!indentMatch) {
+            return { paragraphContent, style };
+        }
+        const tagPosition = indentMatch.index;
+        const beforeTag = paragraphContent.substring(0, tagPosition);
+        const afterTag = paragraphContent.substring(tagPosition + indentMatch[0].length);
+
+        const indentPx = await this.calculateTextWidthBeforeIndent(beforeTag, style);
+
+        if (indentPx > 0) {
+            // Phase D: タブ書式 indent と <indent/> の合成
+            // 1 行目開始位置 = padding-left + text-indent = (タブ書式 indent)
+            // 2 行目以降開始位置 = padding-left = (<indent/> 由来の幅)
+            // → padding-left = M、 text-indent = T - M
+            const tabIndentPx = (tabFormatState && tabFormatState.indent !== 0)
+                ? tabFormatState.indent * tadUnitToPx
+                : 0;
+            const effectiveTextIndent = tabIndentPx - indentPx;
+            style += `padding-left: ${indentPx}px; text-indent: ${effectiveTextIndent}px;`;
+        }
+
+        // 後続の <indent/> を全削除 (BTRON 仕様: 段落内 1 個のみ)
+        const cleanedAfterTag = afterTag.replace(/<indent\s*\/>/gi, '');
+        paragraphContent = beforeTag
+            + '<span class="indent-anchor" contenteditable="false"></span>'
+            + cleanedAfterTag;
+
+        return { paragraphContent, style };
+    }
+
+    /**
+     * 字下げ anchor 段落の padding-left を anchor の実表示位置に揃える
+     * CSS のタブストップはコンテンツ端 (padding の内側) を基準に計算されるため、
+     * 任意の padding-left を与えると 1 行目のタブ到達位置がずれ、 段落ごとにタブグリッドもバラバラになる。
+     * そこで「padding なしの素のレイアウト」 で anchor 位置 A を実測して padding-left = A を採用する。
+     * A は素のタブグリッド (タブ幅の整数倍) 上にあるため、 適用後もグリッド基準が変わらず
+     * 1 行目のタブ到達位置は素のレイアウトのまま不変 (= 段落間でタブ位置が揃う) で、
+     * 2 行目以降だけが A から始まる (数学的に固定点)。 タブなし段落も 1 行目が不変なので同式で成立
+     */
+    _realignIndentAnchors() {
+        if (!this.editor) return;
+        const paragraphs = this.editor.querySelectorAll('p');
+        paragraphs.forEach((p) => {
+            const anchor = p.querySelector('.indent-anchor');
+            if (!anchor) return;
+            if (anchor.getClientRects().length === 0) return; // 非表示 (測定不能)
+            // タブ書式由来の indent (1 行目開始位置) を inline style から逆算: text-indent = tabIndent - padding
+            const tabIndentPx = (parseFloat(p.style.textIndent) || 0) + (parseFloat(p.style.paddingLeft) || 0);
+            // anchor の見た目位置 (段落 padding ボックス左端基準、 ズーム補正済みレイアウト px)
+            const measure = () => {
+                const pRect = p.getBoundingClientRect();
+                const aRect = anchor.getBoundingClientRect();
+                if (pRect.width === 0 || p.offsetWidth === 0) return NaN;
+                const scale = pRect.width / p.offsetWidth; // transform scale 補正
+                return (aRect.left - pRect.left) / (scale || 1) - p.clientLeft;
+            };
+            // 1) padding なしの素のレイアウトで目標位置 A を実測
+            p.style.paddingLeft = '';
+            p.style.textIndent = tabIndentPx !== 0 ? `${tabIndentPx}px` : '';
+            let target = measure();
+            if (!isFinite(target) || target <= 0) return; // 行頭 anchor 等は字下げ効果なし (素の状態を維持)
+            // 2) padding-left = A を適用 (グリッド整合の固定点)
+            p.style.paddingLeft = `${target}px`;
+            p.style.textIndent = `${tabIndentPx - target}px`;
+            // 3) ブラウザのタブストップ実装差で anchor が動いた場合のみ追加収束 (通常は不動で 1 回目に終了)
+            for (let i = 0; i < 3; i++) {
+                const anchorX = measure();
+                if (!isFinite(anchorX) || Math.abs(anchorX - target) < 0.5) break;
+                target = anchorX;
+                if (target <= 0) {
+                    p.style.paddingLeft = '';
+                    p.style.textIndent = tabIndentPx !== 0 ? `${tabIndentPx}px` : '';
+                    break;
+                }
+                p.style.paddingLeft = `${target}px`;
+                p.style.textIndent = `${tabIndentPx - target}px`;
+            }
+        });
+    }
+
+    /**
      * tadXMLをエディタに描画（TAD XMLタグをそのまま使用）
      * @param {string} tadXML - TAD XML文字列
      * @param {object} options - { returnHtml: true でeditor.innerHTML上書きせずHTML文字列を返却 }
@@ -731,6 +906,10 @@ export const TextTadParserMixin = (Base) => class extends Base {
                 tadXML = result;
             }
 
+            const frameOpenMap = {};
+
+            tadXML = this._extractFrameOpens(tadXML, frameOpenMap);
+
             // <document>...</document>を抽出（<figure>除去済みなので安全）
             const docMatch = /<document[^>]*>([\s\S]*?)<\/document>/i.exec(tadXML);
             if (!docMatch) {
@@ -742,13 +921,22 @@ export const TextTadParserMixin = (Base) => class extends Base {
                         const tmpParser = new DOMParser();
                         const tmpDoc = tmpParser.parseFromString(`<tad>${figureXml}</tad>`, 'text/xml');
                         const figView = tmpDoc.querySelector('figView');
-                        const fWidth = figView ? (parseInt(figView.getAttribute('right')) - parseInt(figView.getAttribute('left'))) : 800;
-                        const fHeight = figView ? (parseInt(figView.getAttribute('bottom')) - parseInt(figView.getAttribute('top'))) : 600;
-                        // figView座標が小さい場合、CSS transformで表示をスケールアップ
-                        const minDisplayWidth = 600;
-                        const scale = (fWidth < minDisplayWidth) ? (minDisplayWidth / fWidth) : 1;
-                        const displayWidth = Math.round(fWidth * scale);
-                        const displayHeight = Math.round(fHeight * scale);
+                        const figScaleElem = tmpDoc.querySelector('figScale');
+                        let scaleX = 1, scaleY = 1;
+                        const CANVAS_DPI = 96;
+                        if (figScaleElem) {
+                            const hunit = parseFloat(figScaleElem.getAttribute('hunit')) || 0;
+                            const vunit = parseFloat(figScaleElem.getAttribute('vunit')) || 0;
+                            scaleX = hunit === 0 ? 1 : (hunit < 0 ? CANVAS_DPI / Math.abs(hunit) : hunit);
+                            scaleY = vunit === 0 ? 1 : (vunit < 0 ? CANVAS_DPI / Math.abs(vunit) : vunit);
+                        }
+                        const fWidthUnits = figView ? (parseInt(figView.getAttribute('right')) - parseInt(figView.getAttribute('left'))) : 800;
+                        const fHeightUnits = figView ? (parseInt(figView.getAttribute('bottom')) - parseInt(figView.getAttribute('top'))) : 600;
+                        // figScale を適用してピクセル単位に変換 (basic-figure-editor の getFigScalePixelFactor と整合)
+                        const fWidth = Math.ceil(fWidthUnits * scaleX);
+                        const fHeight = Math.ceil(fHeightUnits * scaleY);
+                        const displayWidth = fWidth;
+                        const displayHeight = fHeight;
                         const encoded = btoa(unescape(encodeURIComponent(figureXml)));
                         const sourceRealId = this.realId || '';
                         figureHtml +=
@@ -756,15 +944,13 @@ export const TextTadParserMixin = (Base) => class extends Base {
                             `data-source-real-id="${sourceRealId}" ` +
                             `style="display: block; margin: 0; width: ${displayWidth}px; height: ${displayHeight}px; overflow: hidden;">` +
                             `<iframe src="../../plugins/basic-figure-editor/index.html?embedded=true" ` +
-                            `style="width: ${fWidth}px; height: ${fHeight}px; border: none; ` +
-                            `transform: scale(${scale}); transform-origin: top left;"></iframe></div>`;
+                            `style="width: ${fWidth}px; height: ${fHeight}px; border: none;"></iframe></div>`;
                     });
                     // 図形セグメントの後に編集可能な文章セグメントを追加
                     figureHtml += '<document><p></p></document>';
                     if (!returnHtml) {
                         this.editor.innerHTML = figureHtml;
                         this.initFigureSegmentIframes();
-                        this.viewMode = 'formatted';
                     }
                     return returnHtml ? figureHtml : undefined;
                 }
@@ -805,34 +991,83 @@ export const TextTadParserMixin = (Base) => class extends Base {
             }
 
             // <paper>要素をパース（用紙設定）
+            // Phase ζ-4: 最初の <paper> のみ paperSize に書き込み (= 文書冒頭の用紙指定付箋)。
+            //   2 番目以降の <paper> は中間挿入として扱い、 elementRegex ループ内で hidden-paper-change span として復元する。
             const paperElements = xmlDoc.querySelectorAll('paper');
             if (paperElements.length > 0) {
-                paperElements.forEach(paper => {
-                    this.parsePaperElement(paper);
-                });
+                this.parsePaperElement(paperElements[0]);
                 // paperSizeからpaperWidth/paperHeightを同期
                 if (this.paperSize) {
                     this.paperWidth = this.paperSize.width;
                     this.paperHeight = this.paperSize.length;
                 }
-                logger.debug(`[EDITOR] 用紙設定をロード: ${this.paperSize ? window.pointsToMm(this.paperWidth).toFixed(0) : 210}×${this.paperSize ? window.pointsToMm(this.paperHeight).toFixed(0) : 297}mm`);
+                logger.debug(`[EDITOR] 用紙設定をロード: ${this.paperSize ? window.pointsToMm(this.paperWidth).toFixed(0) : 210}×${this.paperSize ? window.pointsToMm(this.paperHeight).toFixed(0) : 297}mm (文書冒頭の <paper>${paperElements.length > 1 ? `、 中間 ${paperElements.length - 1} 個は hidden span として復元予定` : ''})`);
             }
             // 注意: <paper>要素がない場合はpaperSizeをnullのままにする
             // （条件付き保存で<paper>/<docmargin>を出力しないため）
 
             // <docmargin>要素をパース（余白設定）
+            // 仕様: 値 0xffff (65535) は「直前のマージン指定を継承」を意味する
             const docmarginElements = xmlDoc.querySelectorAll('docmargin');
             if (docmarginElements.length > 0) {
                 const docmargin = docmarginElements[0];
                 if (!this.paperMargin) {
                     this.paperMargin = new window.PaperMargin();
                 }
-                this.paperMargin.top = parseFloat(docmargin.getAttribute('top')) || 0;
-                this.paperMargin.bottom = parseFloat(docmargin.getAttribute('bottom')) || 0;
-                this.paperMargin.left = parseFloat(docmargin.getAttribute('left')) || 0;
-                this.paperMargin.right = parseFloat(docmargin.getAttribute('right')) || 0;
+                const parseMarginAttr = (attrName, currentValue) => {
+                    const raw = docmargin.getAttribute(attrName);
+                    if (raw === null) return currentValue;
+                    const num = parseFloat(raw);
+                    if (isNaN(num)) return currentValue;
+                    return num === 65535 ? currentValue : num;
+                };
+                this.paperMargin.top = parseMarginAttr('top', this.paperMargin.top || 0);
+                this.paperMargin.bottom = parseMarginAttr('bottom', this.paperMargin.bottom || 0);
+                this.paperMargin.left = parseMarginAttr('left', this.paperMargin.left || 0);
+                this.paperMargin.right = parseMarginAttr('right', this.paperMargin.right || 0);
                 logger.debug(`[EDITOR] 余白設定をロード: top=${this.paperMargin.top}, bottom=${this.paperMargin.bottom}, left=${this.paperMargin.left}, right=${this.paperMargin.right}`);
+            } else if (this.paperSize && (this.paperSize.top || this.paperSize.bottom || this.paperSize.left || this.paperSize.right)) {
+                // BTRON GUI 仕様準拠の旧データ移行 (W-0c):
+                // <docmargin> が無く、 paper の余白属性 (top/left/right/bottom) のみがある古い xtad の場合、
+                // paper の余白属性を paperMargin (本文レイアウト領域マージン) にコピーする。
+                // (旧 UI で paper.top/left/right/bottom に本文マージンが書かれていたケースを救済)
+                this.paperMargin = new window.PaperMargin();
+                this.paperMargin.top = this.paperSize.top || 0;
+                this.paperMargin.bottom = this.paperSize.bottom || 0;
+                this.paperMargin.left = this.paperSize.left || 0;
+                this.paperMargin.right = this.paperSize.right || 0;
+                logger.debug(`[EDITOR] docmargin 無し → paper 余白属性から paperMargin を救済: top=${this.paperMargin.top}, bottom=${this.paperMargin.bottom}, left=${this.paperMargin.left}, right=${this.paperMargin.right}`);
             }
+
+            // 文字方向指定付箋 (BTRON 2.1.4 FFA1 SubID 0x04) 由来の direction を editor に適用
+            // txdir: 0=左横書き, 1=右横書き, 2=縦書き
+            if (!returnHtml && this.editor) {
+                const textDirEl = xmlDoc.querySelector('text[direction]');
+                if (textDirEl) {
+                    const txdir = parseInt(textDirEl.getAttribute('direction') || '0', 10);
+                    this.textDirection = txdir;
+                    if (txdir === 1) {
+                        this.editor.style.direction = 'rtl';
+                        this.editor.style.writingMode = '';
+                    } else if (txdir === 2) {
+                        this.editor.style.writingMode = 'vertical-rl';
+                        this.editor.style.direction = '';
+                    } else {
+                        this.editor.style.writingMode = '';
+                        this.editor.style.direction = '';
+                    }
+                }
+            }
+
+            // 用紙指定 + マージン指定に基づくエディタ折り返し幅 (BTRON GUI 仕様準拠)
+            // editor.js の _applyPaperWidthToEditor() に共通化済。 ここからは呼出のみ。
+            // 仕様準拠: paperMargin の left/right は ノド/小口 を意味し、 paperSize の binding/imposition によって反転する。
+            // wrapMode=true (ウインドウ幅で折り返し ON) の場合や XML モードでは内部で早期 return される。
+            if (!returnHtml && typeof this._applyPaperWidthToEditor === 'function') {
+                this._applyPaperWidthToEditor();
+            }
+
+            this._applyColumnSetting(xmlDoc, returnHtml);
 
             // ページ追跡を初期化（条件付き改ページ用）
             if (!returnHtml) {
@@ -848,15 +1083,83 @@ export const TextTadParserMixin = (Base) => class extends Base {
                 left: 0, right: 0, indent: 0, ntabs: 0, tabs: []
             };
 
-            // <p>タグと<pagebreak>タグを順番に処理
-            // 正規表現で<p>...</p>と<pagebreak .../>を取得
-            const elementRegex = /<p>([\s\S]*?)<\/p>|<pagebreak\s+([^>]*)\/>/gi;
+            // 行揃え状態を段落ループの外で初期化 (BTRON 2.1.1: 次の <text align> まで継承)
+            let currentTextAlign = 'left';
+
+            // 行間隔状態を段落ループの外で初期化 (BTRON 2.1.0: 次の <text line-height> まで継承)
+            let currentLineHeight = null;  // null = 未設定 (アプリケーションデフォルト)
+
+            // 行頭/行末禁則状態を段落ループの外で初期化 (BTRON 2.4.8/2.4.9: 次の同種付箋まで継承)
+            // 値は { kind: 'KL' 形式の 16 進数文字列、 ch: 禁則対象文字列 } の形
+            let currentLineHeadKinsoku = null;
+            let currentLineTailKinsoku = null;
+
+            // <p>タグと<pagebreak>タグ、 中間の <paper>/<docmargin>/<column> を順番に処理
+            // 捕獲グループ: [1]=<p> 内容, [2]=<pagebreak> 属性, [3]=<paper> 属性, [4]=<docmargin> 属性, [5]=<column> 属性
+            // <pagebreak/> (属性なし) は無条件改ページ
+            // 注意: 改ページコード 0x0c (\f) は XML 1.0 で無効なので xmlTAD では <pagebreak/> で表現する
+            const elementRegex = /<p>([\s\S]*?)<\/p>|<pagebreak\s+([^>]*)\/>|<pagebreak\s*\/>|<fill-line\s*\/>|<paper\s+([^>]*?)\/>|<docmargin\s+([^>]*?)\/>|<column\s+([^>]*?)\/>/gi;
+            const fillLineHandler = (m) => (!m[1] && !m[2] && !m[3] && !m[4] && !m[5] && !/^<pagebreak\s*\/>$/i.test(m[0])) ? this._emitFillLineSpacer() : null;
             let htmlContent = '';
             let elementMatch;
             let paragraphCount = 0;
             let lastIndex = 0;
 
+            // Phase ζ-4: 中間 <paper>/<docmargin> を hidden-paper-change span として後続段落の直前に挿入するための状態
+            let paperParsedCount = 0;       // <paper> 出現回数 (1 = 文書冒頭、 2 以降 = 中間挿入)
+            let docmarginParsedCount = 0;   // <docmargin> 出現回数 (同上)
+            let pendingPaperAttrs = null;   // 次の <p> の前に挿入する <paper> 属性
+            let pendingDocmarginAttrs = null; // 次の <p> の前に挿入する <docmargin> 属性
+
+            // Phase 2 H4: 中間 <column> を hidden-column-change span として後続段落の直前に挿入するための状態
+            // 1 番目の <column> は既存の querySelectorAll('column') 経由で editor.style.columnCount に反映される (描画)
+            // 2 番目以降は hidden span として退避し、 ラウンドトリップでの保存・再読込整合性を保つ
+            let columnParsedCount = 0;
+            let pendingColumnAttrs = null;
+
             while ((elementMatch = elementRegex.exec(docContent)) !== null) {
+                // 属性なし <pagebreak/> (= 無条件改ページ、 BTRON 0x0c 相当、 paper/docmargin 直前マーカー):
+                //   parser では無視。 シリアライザが必要時 (hidden-paper-change span 出力時) に必ず再出力するためラウンドトリップ整合性は保たれる。
+                if (elementMatch[2] === undefined && /^<pagebreak\s*\/>$/i.test(elementMatch[0])) {
+                    lastIndex = elementRegex.lastIndex;
+                    continue;
+                }
+                // <paper> 検出 (中間用紙指定付箋を hidden-paper-change span として復元)
+                if (elementMatch[3] !== undefined) {
+                    paperParsedCount++;
+                    if (paperParsedCount > 1) {
+                        // 2 番目以降の <paper> は中間挿入として保持し、 次の <p> の前に hidden-paper-change span を生成
+                        pendingPaperAttrs = elementMatch[3];
+                    }
+                    lastIndex = elementRegex.lastIndex;
+                    continue;
+                }
+                // <docmargin> 検出 (中間マージン指定付箋を hidden-paper-change span として復元)
+                if (elementMatch[4] !== undefined) {
+                    docmarginParsedCount++;
+                    if (docmarginParsedCount > 1) {
+                        pendingDocmarginAttrs = elementMatch[4];
+                    }
+                    lastIndex = elementRegex.lastIndex;
+                    continue;
+                }
+                // <column> 検出 (中間コラム指定付箋を hidden-column-change span として復元、 BTRON 2.0.2)
+                // 1 番目の <column> は既存処理 (parseColumn) で editor.style.columnCount に反映、 ここではスキップ
+                // 2 番目以降は pending として次の <p> の直前に hidden span 化する
+                if (elementMatch[5] !== undefined) {
+                    columnParsedCount++;
+                    if (columnParsedCount > 1) {
+                        pendingColumnAttrs = elementMatch[5];
+                    }
+                    lastIndex = elementRegex.lastIndex;
+                    continue;
+                }
+                const fr = fillLineHandler(elementMatch);
+                if (fr) {
+                    htmlContent += fr;
+                    lastIndex = elementRegex.lastIndex;
+                    continue;
+                }
                 // <pagebreak>要素の処理
                 if (elementMatch[2] !== undefined) {
                     // <pagebreak>要素を処理
@@ -867,7 +1170,21 @@ export const TextTadParserMixin = (Base) => class extends Base {
                     const cond = condMatch ? parseInt(condMatch[1], 10) : 0;
                     const remain = remainMatch ? parseInt(remainMatch[1], 10) : 0;
 
-                    // 条件を評価
+                    // cond=0 && remain=0 は無条件改ページ (シリアライザのデフォルト出力)
+                    // → page-break クラスで復元し、 常に表示されるようにする
+                    if (cond === 0 && remain === 0) {
+                        let pageBreakClasses = 'page-break';
+                        if (this.paperFrameVisible) {
+                            pageBreakClasses += ' page-break-visible';
+                        }
+                        this.pageTracker.currentPage++;
+                        this.pageTracker.remainingHeight = this.pageTracker.pageHeight;
+                        htmlContent += `<div class="${pageBreakClasses}"></div>`;
+                        lastIndex = elementRegex.lastIndex;
+                        continue;
+                    }
+
+                    // それ以外は条件付き改ページとして処理
                     const triggered = this.evaluatePageBreakCondition(cond, remain);
 
                     // 条件付き改ページ要素を作成
@@ -951,7 +1268,9 @@ export const TextTadParserMixin = (Base) => class extends Base {
                 }
 
                 // <tab-format/>タグを抽出（タブ書式指定付箋）
-                const tabFormatMatch = /<tab-format\s+([^>]*)\/>/i.exec(paragraphContent);
+                // 段落内に複数ある場合は BTRON 仕様 (後勝ち) で最後の <tab-format> の値を tabFormatState に反映する
+                const _tabFormatAll = [...paragraphContent.matchAll(/<tab-format\s+([^>]*)\/>/gi)];
+                const tabFormatMatch = _tabFormatAll.length > 0 ? _tabFormatAll[_tabFormatAll.length - 1] : null;
                 if (tabFormatMatch) {
                     const attrs = tabFormatMatch[1];
                     const rMatch = /R="([^"]*)"/.exec(attrs);
@@ -962,7 +1281,7 @@ export const TextTadParserMixin = (Base) => class extends Base {
                     const rightMatch = /right="([^"]*)"/.exec(attrs);
                     const tfIndentMatch = /indent="([^"]*)"/.exec(attrs);
                     const ntabsMatch = /ntabs="([^"]*)"/.exec(attrs);
-                    const tabsMatch = /tabs="([^"]*)"/.exec(attrs);
+                    const tabsMatch = /\btabs="([^"]*)"/.exec(attrs);
 
                     tabFormatState.R = rMatch ? parseInt(rMatch[1]) : 0;
                     tabFormatState.P = pMatch ? parseInt(pMatch[1]) : 0;
@@ -974,79 +1293,81 @@ export const TextTadParserMixin = (Base) => class extends Base {
                     const ntabsValue = ntabsMatch ? parseInt(ntabsMatch[1]) : 0;
                     tabFormatState.ntabs = ntabsValue;
                     if (ntabsValue > 0 && tabsMatch && tabsMatch[1]) {
-                        tabFormatState.tabs = tabsMatch[1].split(',').map(Number);
+                        const tabRaw = tabsMatch[1].split(',').map(Number);
+                        // tabs<0 は小数点揃えタブ。 絶対値を位置として使い、 decimalAlign フラグを別配列に保持
+                        tabFormatState.tabs = tabRaw.map(n => Math.abs(n));
+                        tabFormatState.tabsDecimalAlign = tabRaw.map(n => n < 0);
                     } else if (ntabsValue === 0) {
                         tabFormatState.tabs = [];
+                        tabFormatState.tabsDecimalAlign = [];
                     }
                     // ntabs < 0: 直前のタブストップを継承（tabFormatState.tabsを変更しない）
 
-                    paragraphContent = paragraphContent.replace(/<tab-format\s+[^>]*\/>/gi, '');
+                    // 詳細モード時はタブ書式指定付箋をルーラー UI で表示する (段落内に複数あれば複数描画)
+                    // 通常モード (清書 / 原稿) ではタグを削除し、 段落 CSS に吸収させる
+                    // 段落 CSS には tabFormatState (最後の <tab-format>) の値を適用する (BTRON 後勝ち継承)
+                    const isDetailedMode = this.editor && this.editor.classList && this.editor.classList.contains('detail-mode');
+                    // ruler 表示用の単位: 1 文字幅 (CHAR_UNIT_PX) で段落フォントに依存しない
+                    // (ユーザー入力 / ruler ドラッグの単位は文字幅で統一、 ファイル保存値は hunit に変換)
+                    paragraphContent = this._replaceTabFormatTagsWithRuler(paragraphContent, window.CHAR_UNIT_PX, isDetailedMode);
                 }
 
-                // タブ書式のCSS適用
-                const tadUnitToPx = Math.abs(96 / this.docScale.hunit);
-                if (tabFormatState.left !== 0) {
-                    style += `margin-left: ${tabFormatState.left * tadUnitToPx}px;`;
-                }
-                if (tabFormatState.right !== 0) {
-                    style += `margin-right: ${tabFormatState.right * tadUnitToPx}px;`;
-                }
-                if (tabFormatState.indent !== 0) {
-                    style += `text-indent: ${tabFormatState.indent * tadUnitToPx}px;`;
-                }
-                // pargap（段落間隔）: デフォルト値(0.75)以外の場合にCSS上書き
-                const pargapValue = parseFloat(tabFormatState.pargap);
-                if (!isNaN(pargapValue) && tabFormatState.pargap !== '0.75') {
-                    const pargapPx = pargapValue * maxFontSize;
-                    style = style.replace('margin: 0.5em 0;', `margin: ${pargapPx}px 0;`);
-                }
-                // カスタムタブストップ
-                if (tabFormatState.tabs.length > 0) {
-                    const tabInterval = tabFormatState.tabs[0] * tadUnitToPx;
-                    if (tabInterval > 0) {
-                        style += `tab-size: ${tabInterval}px; -moz-tab-size: ${tabInterval}px;`;
+                // タブ書式のCSS適用 (BTRON 仕様: tabs[i] / left / right / indent は docScale.hunit ベース)
+                // ruler 表示の文字幅単位とは分離 — ユーザー入力は文字幅、 ファイル保存は hunit
+                const tadUnitToPx = Math.abs(window.DPI / this.docScale.hunit);
+                style = this._buildTabFormatCss(tabFormatState, tadUnitToPx, maxFontSize, style);
+
+                // テキスト配置 (BTRON 2.1.1: 出現行から次の行揃え指定付箋まで継続)
+                // state を BTRON 後勝ち (段落内に複数あれば最後の値) で更新
+                const textAlignAllMatches = [...paragraphContent.matchAll(/<text\s+align="([^"]*)"\s*\/>/gi)];
+                if (textAlignAllMatches.length > 0) {
+                    currentTextAlign = textAlignAllMatches[textAlignAllMatches.length - 1][1];
+                    // 詳細モード時は旗マーク (detail-align span)、 通常モードはタグ削除して state に吸収
+                    const isDetailedModeAlign = this.editor && this.editor.classList && this.editor.classList.contains('detail-mode');
+                    if (isDetailedModeAlign) {
+                        paragraphContent = paragraphContent.replace(/<text\s+align="([^"]*)"\s*\/>/gi, (m, v) => {
+                            return '<span class="detail-align" data-align="' + v + '" contenteditable="false"></span>';
+                        });
+                    } else {
+                        paragraphContent = paragraphContent.replace(/<text\s+align="[^"]*"\s*\/>/gi, '');
                     }
                 }
-
-                // テキスト配置
-                const textAlignMatch = /<text\s+align="([^"]*)"\s*\/>/i.exec(paragraphContent);
-                if (textAlignMatch) {
-                    style += `text-align: ${textAlignMatch[1]};`;
-                    paragraphContent = paragraphContent.replace(/<text\s+align="[^"]*"\s*\/>/gi, '');
+                // 現在の text-align を段落 CSS に常に適用 (= BTRON 後勝ち継承の自然な表現)
+                if (currentTextAlign && currentTextAlign !== 'left' && currentTextAlign !== '0') {
+                    style += `text-align: ${currentTextAlign};`;
                 }
 
-                // <text line-height="..."/>タグを処理（行間隔の総合比率を更新）
-                const textLineHeightMatch = /<text\s+line-height="([^"]*)"[^>]*\/>/i.exec(paragraphContent);
-                if (textLineHeightMatch) {
-                    const totalRatio = parseFloat(textLineHeightMatch[1]);
+                // <text line-height="..."/> タグ (BTRON 2.1.0): 次の行間隔指定付箋まで継続
+                // BTRON 後勝ち (段落内に複数あれば最後の値) で state を更新
+                const textLineHeightAllMatches = [...paragraphContent.matchAll(/<text\s+line-height="([^"]*)"[^>]*\/>/gi)];
+                if (textLineHeightAllMatches.length > 0) {
+                    let totalRatio = parseFloat(textLineHeightAllMatches[textLineHeightAllMatches.length - 1][1]);
+                    // px 値が倍率欄に混入した異常データ (例 38.061) を浄化。 行間倍率の実用上限は約3
+                    if (!isNaN(totalRatio) && totalRatio > 10) totalRatio = 1.5;
                     if (!isNaN(totalRatio) && totalRatio > 0) {
+                        currentLineHeight = totalRatio;
                         tabFormatState.height = String(totalRatio - 1); // 総合比率→ギャップ率
                     }
                     paragraphContent = paragraphContent.replace(/<text\s+line-height="[^"]*"[^>]*\/>/gi, '');
                 }
-
-                // <indent/>タグを段落スタイルに変換（行頭移動指定付箋）
-                const indentMatch = /<indent\s*\/>/i.exec(paragraphContent);
-                if (indentMatch) {
-                    // タグの位置を取得
-                    const tagPosition = indentMatch.index;
-
-                    // タグより前のXMLコンテンツを取得
-                    const beforeTag = paragraphContent.substring(0, tagPosition);
-
-                    // 現在の段落スタイルを使って実際の文字幅を計算（DOMで実測）
-                    const indentPx = await this.calculateTextWidthBeforeIndent(
-                        beforeTag,
-                        style
-                    );
-
-                    if (indentPx > 0) {
-                        style += `padding-left: ${indentPx}px; text-indent: -${indentPx}px;`;
-                    }
-
-                    // <indent/>タグを削除
-                    paragraphContent = paragraphContent.replace(/<indent\s*\/>/gi, '');
+                // <tab-format> 経由で tabFormatState.height が 0 にリセットされていた場合は currentLineHeight から復元
+                if (currentLineHeight !== null && tabFormatState.height === '0') {
+                    tabFormatState.height = String(currentLineHeight - 1);
                 }
+
+                // 行頭禁則指定付箋 (BTRON 2.4.8): 出現行から次の同種付箋まで継続
+                const lineHeadKinsokuResult = this._processLineKinsoku(paragraphContent, 'line-head-kinsoku', currentLineHeadKinsoku);
+                paragraphContent = lineHeadKinsokuResult.content;
+                currentLineHeadKinsoku = lineHeadKinsokuResult.state;
+                // 行末禁則指定付箋 (BTRON 2.4.9)
+                const lineTailKinsokuResult = this._processLineKinsoku(paragraphContent, 'line-tail-kinsoku', currentLineTailKinsoku);
+                paragraphContent = lineTailKinsokuResult.content;
+                currentLineTailKinsoku = lineTailKinsokuResult.state;
+                // 段落 CSS に kinsoku の line-break/word-break を反映
+                style += this._buildKinsokuCss(currentLineHeadKinsoku, currentLineTailKinsoku);
+
+                // <indent/>タグを処理 (BTRON 仕様: 段落内 1 個のみ、 タブ書式 indent との合成式で text-indent を構築)
+                ({ paragraphContent, style } = await this._processIndentTag(paragraphContent, style, tabFormatState, tadUnitToPx));
 
                 // その他の<text>タグを削除（レイアウト情報）
                 paragraphContent = paragraphContent.replace(/<text[^>]*\/>/gi, '');
@@ -1061,15 +1382,45 @@ export const TextTadParserMixin = (Base) => class extends Base {
 
                 // line-heightを最大フォントサイズに基づいて設定
                 // heightはギャップ率（例: 0.75）、総合比率は 1 + height（例: 1.75）
-                // maxFontSizeはpt単位のためpx変換（×4/3）が必要
-                const heightValue = parseFloat(tabFormatState.height);
-                const lineHeight = (heightValue > 0) ? (1 + heightValue) * window.convertPtToPx(maxFontSize) : window.convertPtToPx(maxFontSize) * 1.5;
+                // SCALE型 abs: プレフィックスは絶対モード (座標系単位)
+                const heightStr = tabFormatState.height;
+                const isHeightAbs = typeof heightStr === 'string' && heightStr.startsWith('abs:');
+                const heightValue = parseFloat(isHeightAbs ? heightStr.slice(4) : heightStr);
+                const vunitToPxH = Math.abs(window.DPI / this.docScale.vunit);
+                let lineHeight;
+                if (isHeightAbs && heightValue > 0) {
+                    lineHeight = heightValue * vunitToPxH;
+                } else if (heightValue > 0) {
+                    lineHeight = (1 + heightValue) * window.convertPtToPx(maxFontSize);
+                } else {
+                    lineHeight = window.convertPtToPx(maxFontSize) * 1.5;
+                }
                 style += `line-height: ${lineHeight}px;`;
 
-                // 空の段落（XMLソースの整形による改行のみの段落）はスキップ
-                if (paragraphContent.trim()) {
+                // xmlTAD 仕様: 改段落 = <p>...</p>、 空段落 = <p></p>
+                // 空段落も「ユーザーが意図して入れた改段落」 として保持する (ブラウザ表示用に <br> を補助挿入)
+                // 補助 br は装飾オーバーレイ / シリアライザの _isParagraphFillerBr で判定され、 装飾されず XML 出力もされない
+                {
                     const tabFormatJson = JSON.stringify(tabFormatState);
-                    htmlContent += `<p style="${style}" data-tab-format='${tabFormatJson}'>${paragraphContent}</p>`;
+                    // Phase ζ-4: 中間 <paper>/<docmargin> が pending にあれば、 段落 HTML の直前に hidden-paper-change span を挿入
+                    let paperChangePrefix = '';
+                    if (pendingPaperAttrs !== null || pendingDocmarginAttrs !== null) {
+                        const safePaperAttrs = (pendingPaperAttrs || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        const safeDocmarginAttrs = (pendingDocmarginAttrs || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        paperChangePrefix = `<span class="hidden-paper-change" data-paper-attrs="${safePaperAttrs}" data-docmargin-attrs="${safeDocmarginAttrs}" style="display:none"></span>`;
+                        pendingPaperAttrs = null;
+                        pendingDocmarginAttrs = null;
+                    }
+                    // Phase 2 H4: 中間 <column> が pending にあれば hidden-column-change span を挿入 (BTRON 2.0.2)
+                    let columnChangePrefix = '';
+                    if (pendingColumnAttrs !== null) {
+                        const safeColumnAttrs = pendingColumnAttrs.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        columnChangePrefix = `<span class="hidden-column-change" data-column-attrs="${safeColumnAttrs}" style="display:none"></span>`;
+                        pendingColumnAttrs = null;
+                    }
+                    // 空段落は表示確保用に補助 br を入れる (data-filler でマーキング → 装飾/シリアライズ対象外)
+                    const innerContent = paragraphContent.trim() ? paragraphContent : '<br data-filler="1">';
+                    htmlContent += paperChangePrefix + columnChangePrefix + `<p style="${style}" data-tab-format='${tabFormatJson}'>${innerContent}</p>`;
                 }
             }
 
@@ -1131,7 +1482,9 @@ export const TextTadParserMixin = (Base) => class extends Base {
                 // 色はペアタグ方式でspan要素レベルで処理する（convertDecorationTagsToHTMLで変換）
 
                 // <tab-format/>タグを抽出（タブ書式指定付箋）
-                const tabFormatMatchR = /<tab-format\s+([^>]*)\/>/i.exec(paragraphContent);
+                // 通常経路 (L1062-1063) と同じく BTRON 後勝ち仕様で全件マッチを取得し、 最後の値を tabFormatState に反映する
+                const _tabFormatAllR = [...paragraphContent.matchAll(/<tab-format\s+([^>]*)\/>/gi)];
+                const tabFormatMatchR = _tabFormatAllR.length > 0 ? _tabFormatAllR[_tabFormatAllR.length - 1] : null;
                 if (tabFormatMatchR) {
                     const attrs = tabFormatMatchR[1];
                     const rMatch = /R="([^"]*)"/.exec(attrs);
@@ -1142,7 +1495,7 @@ export const TextTadParserMixin = (Base) => class extends Base {
                     const rightMatch = /right="([^"]*)"/.exec(attrs);
                     const tfIndentMatch = /indent="([^"]*)"/.exec(attrs);
                     const ntabsMatch = /ntabs="([^"]*)"/.exec(attrs);
-                    const tabsMatch = /tabs="([^"]*)"/.exec(attrs);
+                    const tabsMatch = /\btabs="([^"]*)"/.exec(attrs);
 
                     tabFormatState.R = rMatch ? parseInt(rMatch[1]) : 0;
                     tabFormatState.P = pMatch ? parseInt(pMatch[1]) : 0;
@@ -1154,76 +1507,71 @@ export const TextTadParserMixin = (Base) => class extends Base {
                     const ntabsValueR = ntabsMatch ? parseInt(ntabsMatch[1]) : 0;
                     tabFormatState.ntabs = ntabsValueR;
                     if (ntabsValueR > 0 && tabsMatch && tabsMatch[1]) {
-                        tabFormatState.tabs = tabsMatch[1].split(',').map(Number);
+                        const tabRawR = tabsMatch[1].split(',').map(Number);
+                        tabFormatState.tabs = tabRawR.map(n => Math.abs(n));
+                        tabFormatState.tabsDecimalAlign = tabRawR.map(n => n < 0);
                     } else if (ntabsValueR === 0) {
                         tabFormatState.tabs = [];
+                        tabFormatState.tabsDecimalAlign = [];
                     }
 
-                    paragraphContent = paragraphContent.replace(/<tab-format\s+[^>]*\/>/gi, '');
+                    // Phase 3-B: 通常経路と同じ共通関数を呼ぶ (重複コード除去)
+                    const isDetailedModeR = this.editor && this.editor.classList && this.editor.classList.contains('detail-mode');
+                    // BTRON タブ書式の単位は「文字幅」 で統一 (文書共通の固定値)
+                    const charUnitPxR = window.CHAR_UNIT_PX;
+                    paragraphContent = this._replaceTabFormatTagsWithRuler(paragraphContent, charUnitPxR, isDetailedModeR);
                 }
 
-                // タブ書式のCSS適用
-                const tadUnitToPxR = Math.abs(96 / this.docScale.hunit);
-                if (tabFormatState.left !== 0) {
-                    style += `margin-left: ${tabFormatState.left * tadUnitToPxR}px;`;
-                }
-                if (tabFormatState.right !== 0) {
-                    style += `margin-right: ${tabFormatState.right * tadUnitToPxR}px;`;
-                }
-                if (tabFormatState.indent !== 0) {
-                    style += `text-indent: ${tabFormatState.indent * tadUnitToPxR}px;`;
-                }
-                const pargapValueR = parseFloat(tabFormatState.pargap);
-                if (!isNaN(pargapValueR) && tabFormatState.pargap !== '0.75') {
-                    const pargapPxR = pargapValueR * maxFontSize;
-                    style = style.replace('margin: 0.5em 0;', `margin: ${pargapPxR}px 0;`);
-                }
-                if (tabFormatState.tabs.length > 0) {
-                    const tabIntervalR = tabFormatState.tabs[0] * tadUnitToPxR;
-                    if (tabIntervalR > 0) {
-                        style += `tab-size: ${tabIntervalR}px; -moz-tab-size: ${tabIntervalR}px;`;
-                    }
-                }
+                // タブ書式のCSS適用 (1 単位 = 1 文字幅 px、 文書共通の固定値)
+                const tadUnitToPxR = window.CHAR_UNIT_PX;
+                style = this._buildTabFormatCss(tabFormatState, tadUnitToPxR, maxFontSize, style);
 
                 // テキスト配置
                 const textAlignMatch = /<text\s+align="([^"]*)"\s*\/>/i.exec(paragraphContent);
                 if (textAlignMatch) {
                     style += `text-align: ${textAlignMatch[1]};`;
-                    paragraphContent = paragraphContent.replace(/<text\s+align="[^"]*"\s*\/>/gi, '');
+                    // 詳細モード時はそろえ指定付箋を旗マーク化
+                    const isDetailedModeAlignR = this.editor && this.editor.classList && this.editor.classList.contains('detail-mode');
+                    if (isDetailedModeAlignR) {
+                        paragraphContent = paragraphContent.replace(/<text\s+align="([^"]*)"\s*\/>/gi, (m, v) => {
+                            return '<span class="detail-align" data-align="' + v + '" contenteditable="false"></span>';
+                        });
+                    } else {
+                        paragraphContent = paragraphContent.replace(/<text\s+align="[^"]*"\s*\/>/gi, '');
+                    }
                 }
 
-                // <text line-height="..."/>タグを処理（行間隔の総合比率を更新）
-                const textLineHeightMatchR = /<text\s+line-height="([^"]*)"[^>]*\/>/i.exec(paragraphContent);
-                if (textLineHeightMatchR) {
-                    const totalRatioR = parseFloat(textLineHeightMatchR[1]);
+                // <text line-height="..."/> タグ (BTRON 2.1.0): 次の行間隔指定付箋まで継続 (残段落経路)
+                const textLineHeightAllMatchesR = [...paragraphContent.matchAll(/<text\s+line-height="([^"]*)"[^>]*\/>/gi)];
+                if (textLineHeightAllMatchesR.length > 0) {
+                    let totalRatioR = parseFloat(textLineHeightAllMatchesR[textLineHeightAllMatchesR.length - 1][1]);
+                    // px 値が倍率欄に混入した異常データ (例 38.061) を浄化。 行間倍率の実用上限は約3
+                    if (!isNaN(totalRatioR) && totalRatioR > 10) totalRatioR = 1.5;
                     if (!isNaN(totalRatioR) && totalRatioR > 0) {
+                        currentLineHeight = totalRatioR;
                         tabFormatState.height = String(totalRatioR - 1); // 総合比率→ギャップ率
                     }
                     paragraphContent = paragraphContent.replace(/<text\s+line-height="[^"]*"[^>]*\/>/gi, '');
                 }
-
-                // <indent/>タグを段落スタイルに変換（行頭移動指定付箋）
-                const indentMatch = /<indent\s*\/>/i.exec(paragraphContent);
-                if (indentMatch) {
-                    // タグの位置を取得
-                    const tagPosition = indentMatch.index;
-
-                    // タグより前のXMLコンテンツを取得
-                    const beforeTag = paragraphContent.substring(0, tagPosition);
-
-                    // 現在の段落スタイルを使って実際の文字幅を計算（DOMで実測）
-                    const indentPx = await this.calculateTextWidthBeforeIndent(
-                        beforeTag,
-                        style
-                    );
-
-                    if (indentPx > 0) {
-                        style += `padding-left: ${indentPx}px; text-indent: -${indentPx}px;`;
-                    }
-
-                    // <indent/>タグを削除
-                    paragraphContent = paragraphContent.replace(/<indent\s*\/>/gi, '');
+                // <tab-format> 経由で tabFormatState.height が 0 にリセットされていた場合は currentLineHeight から復元
+                if (currentLineHeight !== null && tabFormatState.height === '0') {
+                    tabFormatState.height = String(currentLineHeight - 1);
                 }
+
+                // 行頭禁則指定付箋 (BTRON 2.4.8): 出現行から次の同種付箋まで継続
+                const lineHeadKinsokuResult = this._processLineKinsoku(paragraphContent, 'line-head-kinsoku', currentLineHeadKinsoku);
+                paragraphContent = lineHeadKinsokuResult.content;
+                currentLineHeadKinsoku = lineHeadKinsokuResult.state;
+                // 行末禁則指定付箋 (BTRON 2.4.9)
+                const lineTailKinsokuResult = this._processLineKinsoku(paragraphContent, 'line-tail-kinsoku', currentLineTailKinsoku);
+                paragraphContent = lineTailKinsokuResult.content;
+                currentLineTailKinsoku = lineTailKinsokuResult.state;
+                // 段落 CSS に kinsoku の line-break/word-break を反映
+                style += this._buildKinsokuCss(currentLineHeadKinsoku, currentLineTailKinsoku);
+
+                // <indent/>タグを処理 (BTRON 仕様: 段落内 1 個のみ、 タブ書式 indent との合成式で text-indent を構築)
+                // 継承段落パスは tadUnitToPxR (文字幅単位) を使用
+                ({ paragraphContent, style } = await this._processIndentTag(paragraphContent, style, tabFormatState, tadUnitToPxR));
 
                 // その他の<text>タグを削除
                 paragraphContent = paragraphContent.replace(/<text[^>]*\/>/gi, '');
@@ -1237,14 +1585,35 @@ export const TextTadParserMixin = (Base) => class extends Base {
 
                 // line-heightを最大フォントサイズに基づいて設定
                 // heightはギャップ率（例: 0.75）、総合比率は 1 + height（例: 1.75）
-                const heightValueR = parseFloat(tabFormatState.height);
-                const lineHeight = (heightValueR > 0) ? (1 + heightValueR) * window.convertPtToPx(maxFontSize) : window.convertPtToPx(maxFontSize) * 1.5;
+                // SCALE型 abs: プレフィックスは絶対モード
+                const heightStrR = tabFormatState.height;
+                const isHeightAbsR = typeof heightStrR === 'string' && heightStrR.startsWith('abs:');
+                const heightValueR = parseFloat(isHeightAbsR ? heightStrR.slice(4) : heightStrR);
+                const vunitToPxHR = Math.abs(window.DPI / this.docScale.vunit);
+                let lineHeight;
+                if (isHeightAbsR && heightValueR > 0) {
+                    lineHeight = heightValueR * vunitToPxHR;
+                } else if (heightValueR > 0) {
+                    lineHeight = (1 + heightValueR) * window.convertPtToPx(maxFontSize);
+                } else {
+                    lineHeight = window.convertPtToPx(maxFontSize) * 1.5;
+                }
                 style += `line-height: ${lineHeight}px;`;
 
                 // 空の段落（XMLソースの整形による改行のみの段落）はスキップ
+                // v2: data-tab-format-explicit 属性は撤回 (通常経路と同じ理由)
                 if (paragraphContent.trim()) {
                     const tabFormatJsonR = JSON.stringify(tabFormatState);
-                    htmlContent += `<p style="${style}" data-tab-format='${tabFormatJsonR}'>${paragraphContent}</p>`;
+                    // Phase ζ-4: 残り段落でも pending paper/docmargin があれば hidden-paper-change span を挿入
+                    let paperChangePrefix = '';
+                    if (pendingPaperAttrs !== null || pendingDocmarginAttrs !== null) {
+                        const safePaperAttrs = (pendingPaperAttrs || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        const safeDocmarginAttrs = (pendingDocmarginAttrs || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        paperChangePrefix = `<span class="hidden-paper-change" data-paper-attrs="${safePaperAttrs}" data-docmargin-attrs="${safeDocmarginAttrs}" style="display:none"></span>`;
+                        pendingPaperAttrs = null;
+                        pendingDocmarginAttrs = null;
+                    }
+                    htmlContent += paperChangePrefix + `<p style="${style}" data-tab-format='${tabFormatJsonR}'>${paragraphContent}</p>`;
                 }
             }
 
@@ -1282,11 +1651,27 @@ export const TextTadParserMixin = (Base) => class extends Base {
                 }
 
                 const figView = tmpDoc.querySelector('figView');
-                const fWidth = figView ? (parseInt(figView.getAttribute('right')) - parseInt(figView.getAttribute('left'))) : 200;
-                const fHeight = figView ? (parseInt(figView.getAttribute('bottom')) - parseInt(figView.getAttribute('top'))) : 200;
+                const figScaleElem = tmpDoc.querySelector('figScale');
+                let scaleX = 1, scaleY = 1;
+                const CANVAS_DPI = 96;
+                if (figScaleElem) {
+                    const hunit = parseFloat(figScaleElem.getAttribute('hunit')) || 0;
+                    const vunit = parseFloat(figScaleElem.getAttribute('vunit')) || 0;
+                    scaleX = hunit === 0 ? 1 : (hunit < 0 ? CANVAS_DPI / Math.abs(hunit) : hunit);
+                    scaleY = vunit === 0 ? 1 : (vunit < 0 ? CANVAS_DPI / Math.abs(vunit) : vunit);
+                }
+                const fWidthUnits = figView ? (parseInt(figView.getAttribute('right')) - parseInt(figView.getAttribute('left'))) : 200;
+                const fHeightUnits = figView ? (parseInt(figView.getAttribute('bottom')) - parseInt(figView.getAttribute('top'))) : 200;
+                // figScale を適用してピクセル単位に変換
+                const fWidth = Math.ceil(fWidthUnits * scaleX);
+                const fHeight = Math.ceil(fHeightUnits * scaleY);
                 const encoded = btoa(unescape(encodeURIComponent(figureXml)));
+                const frameInfo = frameOpenMap[index];
+                const defaultStyle = `display: block; margin: 4px 0; width: ${fWidth}px; height: ${fHeight}px;`;
+                const containerStyle = frameInfo ? this._buildFrameOpenStyle(frameInfo, fWidth, fHeight) : defaultStyle;
+                const frameInfoAttr = frameInfo ? ` data-frame-info='${JSON.stringify(frameInfo)}'` : '';
                 htmlContent = htmlContent.replace(`__FIGURE_PLACEHOLDER_${index}__`,
-                    `<div class="figure-segment" contenteditable="false" data-figure-xmltad="${encoded}" style="display: inline-block; vertical-align: middle; margin: 4px; width: ${fWidth}px; height: ${fHeight}px;">` +
+                    `<div class="figure-segment" contenteditable="false" data-figure-xmltad="${encoded}"${frameInfoAttr} style="${containerStyle}">` +
                     `<iframe src="../../plugins/basic-figure-editor/index.html?embedded=true" style="width: ${fWidth}px; height: ${fHeight}px; border: none; pointer-events: none;"></iframe></div>`
                 );
             });
@@ -1315,11 +1700,47 @@ export const TextTadParserMixin = (Base) => class extends Base {
             } else {
                 logger.warn('[EDITOR] 段落要素が見つかりませんでした');
                 // 空のエディタを表示
-                this.editor.innerHTML = '<p><br></p>';
+                this.editor.innerHTML = '<p><br data-filler="1"></p>';
             }
 
-            // ビューモードを清書モードに設定
-            this.viewMode = 'formatted';
+            // タブ書式 tab-size を editor 全体に設定 (CSS 継承で全段落にカスケード反映)
+            // BTRON 仕様: タブ書式付箋は「次の付箋まで継続適用」 → 個別段落の inline style が空でも継承段落が同じタブ幅になるよう CSS 継承を活用
+            // 段落個別の inline style.tabSize は引き続き出力 (個別タブ書式付箋の段落で優先される)
+            if (tabFormatState.tabs && tabFormatState.tabs.length > 0) {
+                const finalUnitToPx = Math.abs(window.DPI / this.docScale.hunit);
+                const finalTabSize = tabFormatState.tabs[0] * finalUnitToPx;
+                if (finalTabSize > 0) {
+                    this.editor.style.tabSize = finalTabSize + 'px';
+                    this.editor.style.MozTabSize = finalTabSize + 'px';
+                }
+            } else {
+                this.editor.style.tabSize = '';
+                this.editor.style.MozTabSize = '';
+            }
+
+            // 詳細モード装飾オーバーレイの再アタッチ + 再構築
+            if (this._refreshDecorationOverlay) {
+                this._refreshDecorationOverlay();
+            }
+
+            // 字下げ anchor 段落: padding 適用後のタブストップ移動を実測で補正 (タブ含有段落の位置ずれ対策)
+            if (!returnHtml) {
+                this._realignIndentAnchors();
+            }
+
+            // セーフティ検証: XML 内 <link> 数と DOM 内 virtual-object 数を比較 (累積データ消失の早期検知)
+            if (!returnHtml) {
+                const xmlLinkCount = (tadXML.match(/<link\s/g) || []).length;
+                const domLinkCount = this.editor.querySelectorAll('.virtual-object').length;
+                const domLinksWithoutId = this.editor.querySelectorAll('.virtual-object:not([data-link-id])').length;
+                if (xmlLinkCount !== domLinkCount) {
+                    logger.error(`[EDITOR] ★警告: renderTADXML 後の link 数不一致: XML <link>=${xmlLinkCount}, DOM virtual-object=${domLinkCount} (linkId欠落=${domLinksWithoutId})`);
+                } else if (xmlLinkCount > 0) {
+                    logger.debug(`[EDITOR] renderTADXML 完了: link 数 OK (XML=${xmlLinkCount}, DOM=${domLinkCount}, linkId欠落=${domLinksWithoutId})`);
+                }
+            }
+
+            // viewMode は呼出側 (loadFile / viewDetailedMode / viewXMLMode / viewFormattedMode) が責務として制御するため、 ここでは上書きしない
         } catch (error) {
             logger.error('[EDITOR] XML描画エラー:', error);
             if (returnHtml) {
@@ -1365,8 +1786,384 @@ export const TextTadParserMixin = (Base) => class extends Base {
             const result = this.renderFigureElements(tempDoc, this.editor);
         }
 
-        // ビューモードを清書モードに設定
-        this.viewMode = 'formatted';
+        // viewMode は呼出側が責務として制御するため、 ここでは上書きしない
+    }
+
+    _emitFillLineSpacer() {
+        return '<div class="fl-spacer" style="min-height:1em;"></div>';
+    }
+
+    _buildCharLayoutSpan(kind, widthStr, content) {
+        const kindNum = parseInt(kind, 10);
+        const alignMap = ['left', 'right', 'center', 'justify', 'justify'];
+        const align = alignMap[kindNum] || 'left';
+        const alignLast = (kindNum === 3 || kindNum === 4) ? 'text-align-last: justify;' : '';
+        let widthCss = '';
+        if (widthStr.startsWith('abs:')) {
+            const n = parseFloat(widthStr.slice(4));
+            const h = Number((this.docScale && this.docScale.hunit) || 0);
+            const f = h === 0 ? 1 : (h < 0 ? 96 / Math.abs(h) : h);
+            widthCss = 'width: ' + Math.ceil(n * f) + 'px;';
+        } else {
+            const m2 = widthStr.match(/^(\d+)\/(\d+)$/);
+            if (m2) {
+                const b = parseInt(m2[2], 10);
+                const ratio = b === 0 ? 1 : parseInt(m2[1], 10) / b;
+                widthCss = 'width: ' + ratio + 'em;';
+            }
+        }
+        return '<span class="char-layout" data-kind="' + kind + '" data-width="' + widthStr + '" style="display: inline-block; text-align: ' + align + '; ' + alignLast + ' ' + widthCss + '">' + content + '</span>';
+    }
+
+    _buildFixedSpaceSpan(widthStr) {
+        let widthCss = 'width: 1em;';
+        if (widthStr.startsWith('abs:')) {
+            const n = parseFloat(widthStr.slice(4));
+            const h = Number((this.docScale && this.docScale.hunit) || 0);
+            const f = h === 0 ? 1 : (h < 0 ? 96 / Math.abs(h) : h);
+            widthCss = 'width: ' + Math.ceil(n * f) + 'px;';
+        } else {
+            const m2 = widthStr.match(/^(\d+)\/(\d+)$/);
+            if (m2) {
+                const b = parseInt(m2[2], 10);
+                const ratio = b === 0 ? 1 : parseInt(m2[1], 10) / b;
+                widthCss = 'width: ' + ratio + 'em;';
+            }
+        }
+        return '<span class="fixed-space" data-width="' + widthStr + '" style="display: inline-block; ' + widthCss + '">&#8203;</span>';
+    }
+
+    _buildBoutenSpan(side, kind, content) {
+        const kindNum = parseInt(kind, 10);
+        const styleMap = ['dot', 'sesame', 'circle', 'triangle'];
+        const emStyle = styleMap[kindNum] || 'dot';
+        const pos = side === 'lower' ? 'under' : 'over';
+        const css = 'text-emphasis-style: filled ' + emStyle + '; text-emphasis-position: ' + pos + '; -webkit-text-emphasis-style: filled ' + emStyle + '; -webkit-text-emphasis-position: ' + pos + ';';
+        return '<span class="bouten" data-bouten-side="' + side + '" data-bouten-kind="' + kind + '" style="' + css + '">' + content + '</span>';
+    }
+
+    _buildPageNumberSpan(step, num) {
+        const numStr = String(num).replace(/[<>&"']/g, '');
+        const stepStr = String(step).replace(/[<>&"']/g, '');
+        return '<span class="page-number" data-step="' + stepStr + '" data-num="' + numStr + '" style="display: inline-block;">' + numStr + '</span>';
+    }
+
+    _buildDocmemoSpan(text) {
+        return '<span class="docmemo" data-memo="' + text + '" style="color: #888; font-style: italic;" title="文章メモ">' + text + '</span>';
+    }
+
+    /**
+     * Phase 3-B: 通常段落と残り段落で重複していた <tab-format> → ルーラー HTML 置換ロジックの共通関数。
+     * v2 修正: isDetailedMode=false でもタグを「削除」 ではなく「hidden-tab-format span に変換」 する。
+     *   理由: シリアライザは v2 で ruler/hidden-tab-format span を SSOT とする設計。
+     *         清書モードで <tab-format> を削除すると、 シリアライズ時に <tab-format> 情報が失われラウンドトリップ不成立。
+     *         hidden span として DOM 上に保持することで、 「清書モードで開く → そのまま保存」 でも情報が維持される。
+     * isDetailedMode=true なら各 <tab-format> ごとに個別 state でルーラー UI を挿入する (BTRON 後勝ち継承で複数 ruler 個別化)。
+     */
+    _replaceTabFormatTagsWithRuler(paragraphContent, tadUnitToPx, isDetailedMode) {
+        if (isDetailedMode) {
+            return paragraphContent.replace(/<tab-format\s+([^>]*)\/>/gi, (m, ta) => {
+                const localState = this._parseTabFormatAttrs(ta);
+                return this._buildDetailTabFormatRuler(localState, tadUnitToPx, ta);
+            });
+        }
+        // 清書/原稿モード: <tab-format> を非表示 span として段落に保持 (ラウンドトリップ用)
+        return paragraphContent.replace(/<tab-format\s+([^>]*)\/>/gi, (m, ta) => {
+            const safeAttrs = String(ta || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return `<span class="hidden-tab-format" data-tab-attrs="${safeAttrs}" style="display:none"></span>`;
+        });
+    }
+
+    _buildDocoverlaySpan(attrs) {
+        // 用紙オーバーレイ (FFA0 SubID 0x03/0x04) - 編集表示はせず data 属性で属性を保持し保存時に復元
+        const escaped = String(attrs || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        return '<span class="doc-overlay" data-overlay-attrs="' + escaped + '" style="display:none;"></span>';
+    }
+
+    /**
+     * 用紙オーバーレイ定義付箋 (FFA0 SubID 0x03) のラウンドトリップ用 hidden span を生成
+     * 中身の文章 TAD データは Base64 でエンコードして data-content-b64 属性に退避
+     */
+    _buildPaperOverlayDefinePreservedSpan(attrs, content) {
+        // Base64 で UTF-8 安全なエンコード
+        let base64Content = '';
+        try {
+            base64Content = btoa(unescape(encodeURIComponent(content || '')));
+        } catch (e) {
+            base64Content = '';
+        }
+        const safeAttrs = String(attrs || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        return '<span class="paper-overlay-define-preserved" data-attrs="' + safeAttrs + '" data-content-b64="' + base64Content + '" style="display:none;"></span>';
+    }
+
+    /**
+     * 行頭/行末禁則指定付箋 (BTRON 2.4.8/2.4.9) を段落から抽出し、 hidden span に置き換える
+     * @param {string} paragraphContent - 段落の生 XML 内容
+     * @param {string} tagName - 'line-head-kinsoku' または 'line-tail-kinsoku'
+     * @param {Object|null} currentState - 現在の継承 state ({ kind, ch } または null)
+     * @returns {{ content: string, state: Object|null }} 更新後の段落内容と継承 state
+     */
+    _processLineKinsoku(paragraphContent, tagName, currentState) {
+        const regex = new RegExp(`<${tagName}\\s+([^>]*)/>`, 'gi');
+        const matches = [...paragraphContent.matchAll(regex)];
+        if (matches.length === 0) {
+            return { content: paragraphContent, state: currentState };
+        }
+        // BTRON 後勝ち: 段落内に複数あれば最後の値を採用
+        const lastAttrs = matches[matches.length - 1][1];
+        const kindMatch = /kind="([^"]*)"/.exec(lastAttrs);
+        const chMatch = /ch="([^"]*)"/.exec(lastAttrs);
+        const newState = {
+            kind: kindMatch ? kindMatch[1] : '0x10',
+            ch: chMatch ? chMatch[1] : ''
+        };
+        // hidden span に置き換え (ラウンドトリップ用 SSOT)
+        const className = (tagName === 'line-head-kinsoku') ? 'hidden-line-head-kinsoku' : 'hidden-line-tail-kinsoku';
+        const safeAttrs = String(lastAttrs || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const replacement = `<span class="${className}" data-attrs="${safeAttrs}" style="display:none"></span>`;
+        // 段落内のすべての <line-head-kinsoku>/<line-tail-kinsoku> を一括削除し、 段落先頭に hidden span を 1 つ挿入
+        const content = paragraphContent.replace(regex, '');
+        return { content: replacement + content, state: newState };
+    }
+
+    /**
+     * 行頭/行末禁則 state から CSS (line-break / word-break) を生成
+     * BTRON 仕様の追い出し/追い込み/ぶら下がりは構造的に困難なため簡易近似
+     */
+    _buildKinsokuCss(headState, tailState) {
+        let css = '';
+        // 行頭禁則の K (上位 4 bit) を取り出す
+        const getK = (state) => {
+            if (!state || !state.kind) return null;
+            const num = parseInt(state.kind, 16);
+            if (isNaN(num)) return null;
+            return (num >> 4) & 0xF;
+        };
+        const headK = getK(headState);
+        const tailK = getK(tailState);
+        // K=0 禁則なし、 K=1 追い出し (標準)、 K=2 追い込み (緩い)、 K=3 ぶら下がり (厳格)、 K=15 アプリ依存
+        if (headK === 0 && tailK === 0) {
+            css += 'line-break: anywhere;';
+        } else if (headK === 2 || tailK === 2) {
+            css += 'line-break: loose;';
+        } else if (headK === 1 || tailK === 1 || headK === 3 || tailK === 3) {
+            css += 'line-break: strict;word-break: keep-all;';
+        }
+        return css;
+    }
+
+    /**
+     * 詳細モード時のタブ書式指定付箋を、 ルーラー (定規) 風 UI として HTML 化する。
+     * 文頭位置 / 行頭位置 / 行末位置 / タブ位置 / 基準位置 切替 / 段落間隔 のマーカーを配置し、
+     * 数値メモリ (5, 10, 15... TAD 単位) を背景表示する。
+     * 各マーカーは絶対配置 (left: px) で配置し、 後段 editor.js でドラッグ可能化される。
+     */
+    /**
+     * <tab-format> タグの属性文字列を個別のオブジェクトにパースする
+     * 同じ段落内に複数の <tab-format> がある時、 各 ruler を「自分の」 値で描画するために使用
+     */
+    // 文字幅単位 ↔ hunit 単位 変換
+    // - 文字幅 (1 cw = CHAR_UNIT_PX): ユーザー入力 / ruler 表示の単位
+    // - hunit (1 hu = DPI / |docScale.hunit| px): BTRON xtad ファイル / CSS 計算の単位
+    _charWidthToHunit(cw) {
+        if (!cw) return 0;
+        const hunit = (this.docScale && this.docScale.hunit) || -120;
+        const hunitToPx = Math.abs(window.DPI / hunit);
+        return Math.round(cw * window.CHAR_UNIT_PX / hunitToPx);
+    }
+
+    _hunitToCharWidth(hu) {
+        if (!hu) return 0;
+        const hunit = (this.docScale && this.docScale.hunit) || -120;
+        const hunitToPx = Math.abs(window.DPI / hunit);
+        return hu * hunitToPx / window.CHAR_UNIT_PX;
+    }
+
+    _parseTabFormatAttrs(attrs) {
+        const rMatch = /R="([^"]*)"/.exec(attrs);
+        const pMatch = /P="([^"]*)"/.exec(attrs);
+        const heightMatch = /height="([^"]*)"/.exec(attrs);
+        const pargapMatch = /pargap="([^"]*)"/.exec(attrs);
+        const leftMatch = /left="([^"]*)"/.exec(attrs);
+        const rightMatch = /right="([^"]*)"/.exec(attrs);
+        const indentMatch = /indent="([^"]*)"/.exec(attrs);
+        const ntabsMatch = /ntabs="([^"]*)"/.exec(attrs);
+        // \b で単語境界を明示しないと「ntabs」 の末尾「tabs」 にも誤マッチして「tabs="1"」 を返してしまう
+        const tabsMatch = /\btabs="([^"]*)"/.exec(attrs);
+        const state = {
+            R: rMatch ? parseInt(rMatch[1]) || 0 : 0,
+            P: pMatch ? parseInt(pMatch[1]) || 0 : 0,
+            height: heightMatch ? heightMatch[1] : '0',
+            pargap: pargapMatch ? pargapMatch[1] : '0.75',
+            left: leftMatch ? parseInt(leftMatch[1]) || 0 : 0,
+            right: rightMatch ? parseInt(rightMatch[1]) || 0 : 0,
+            indent: indentMatch ? parseInt(indentMatch[1]) || 0 : 0,
+            ntabs: ntabsMatch ? parseInt(ntabsMatch[1]) || 0 : 0,
+            tabs: [],
+            tabsDecimalAlign: []
+        };
+        if (state.ntabs > 0 && tabsMatch && tabsMatch[1]) {
+            const tabRaw = tabsMatch[1].split(',').map(Number);
+            state.tabs = tabRaw.map(n => Math.abs(n));
+            state.tabsDecimalAlign = tabRaw.map(n => n < 0);
+        }
+        return state;
+    }
+
+    _buildDetailTabFormatRuler(state, tadUnitToPx, rawAttrs) {
+        const safeAttrs = String(rawAttrs || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        // state.left/right/indent/tabs は hunit 単位 (XML から直接読み込んだまま)
+        // ruler 表示は文字幅単位なので、 ここで hunit → 文字幅に変換して data-x に格納
+        // (data-tab-attrs の rawAttrs は hunit のまま保持される → ラウンドトリップ整合)
+        const indent = this._hunitToCharWidth(Number(state.indent) || 0);
+        const left = this._hunitToCharWidth(Number(state.left) || 0);
+        const right = this._hunitToCharWidth(Number(state.right) || 0);
+        const R = Number(state.R) || 0;
+        const tabsHunit = Array.isArray(state.tabs) ? state.tabs : [];
+        const tabs = tabsHunit.map(t => this._hunitToCharWidth(t));
+        const tabsDA = Array.isArray(state.tabsDecimalAlign) ? state.tabsDecimalAlign : [];
+        // ドラッグで更新されない属性 (P / height / pargap) はルーラの data-* に控えておき、
+        // _updateTabFormatAttrs が data-tab-attrs を再構築する時にこれらをマージする
+        const tabP = state.P !== undefined && state.P !== null ? state.P : 0;
+        const tabHeight = state.height !== undefined && state.height !== null ? String(state.height) : '0';
+        const tabPargap = state.pargap !== undefined && state.pargap !== null ? String(state.pargap) : '0.75';
+
+        const px = (v) => Math.round(Number(v) * tadUnitToPx);
+        const parts = [];
+
+        // ルーラーは <span> を使う ( <p> 内の block 要素は HTML パーサが段落を強制的に閉じてしまうため)
+        // span に display:block を CSS で適用しても、 HTML 構造上は段落内に残るので closest('p') が機能する
+        // CSS variable に段落の margin/indent (px) を渡してルーラ幅を container 全体まで延長し、 マーカー位置を計算
+        const mlPx = px(left);
+        const mrPx = px(right);
+        const indentPx = px(indent);
+        const rulerStyle = '--ml-px: ' + mlPx + 'px; --mr-px: ' + mrPx + 'px; --indent-px: ' + indentPx + 'px;';
+        const safeHeight = String(tabHeight).replace(/"/g, '&quot;');
+        const safePargap = String(tabPargap).replace(/"/g, '&quot;');
+        parts.push('<span class="detail-tab-format" data-tab-attrs="' + safeAttrs + '" data-tab-p="' + tabP + '" data-tab-height="' + safeHeight + '" data-tab-pargap="' + safePargap + '" data-unit-px="' + tadUnitToPx + '" style="' + rulerStyle + '" contenteditable="false">');
+        parts.push('<span class="detail-tab-format-bar">');
+
+        // 基準位置切替 (絶対 / 相対) - マニュアル風シンボル
+        const originSym = R === 0 ? '|' : '>';
+        parts.push('<span class="detail-tab-origin" data-origin="' + R + '" title="基準位置 (絶対=用紙左端 / 相対=直前の行頭)">' + originSym + '</span>');
+
+        // メモリ (背景目盛り): 細線 1 単位毎、 太線 5 単位毎
+        // 起点をマーカーと揃えるため --ml-px 分左にオフセット
+        parts.push('<span class="detail-tab-format-scale" style="--unit-px: ' + tadUnitToPx + 'px;"></span>');
+
+        // 数値ラベル: ↓ マーカーと完全に同じ unitPx (tadUnitToPx) と --ml-px で配置
+        // ↓ マーカー位置 = calc(--ml-px + 4*unitPx) → ラベル「5」 = calc(--ml-px + 5*unitPx)
+        // 差 = 1 unit = 細線 1 本ぶん。 これで「↓ = 線4本目、 5 ラベル = 線5本目」 が成立
+        const approxMaxUnit = Math.max(50, Math.ceil(left + right + (tabs.length > 0 ? Math.max(...tabs) : 0) + 50));
+        const numbersParts = ['<span class="detail-tab-format-numbers">'];
+        for (let n = 5; n <= approxMaxUnit; n += 5) {
+            const nPx = Math.round(n * tadUnitToPx);
+            numbersParts.push('<span class="detail-tab-number" style="left: calc(var(--ml-px, 0px) + ' + nPx + 'px);">' + n + '</span>');
+        }
+        numbersParts.push('</span>');
+        parts.push(numbersParts.join(''));
+
+        // SVG シンボル定義 (BTRON マニュアル準拠の見た目)
+        // 文頭位置: 左に旗竿 + 上に横棒 + 中央に右向き塗りつぶし直角三角形
+        const svgFhead = '<svg viewBox="0 0 14 18" width="14" height="18" style="display:block;pointer-events:none"><line x1="3" y1="2" x2="3" y2="16" stroke="currentColor" stroke-width="2" stroke-linecap="square"/><line x1="3" y1="2" x2="12" y2="2" stroke="currentColor" stroke-width="2" stroke-linecap="square"/><polygon points="3,7 3,13 12,10" fill="currentColor"/></svg>';
+        // 行頭位置: 左に旗竿 + 右上に塗りつぶし直角三角形 (旗が右へ展開)
+        const svgLhead = '<svg viewBox="0 0 14 18" width="14" height="18" style="display:block;pointer-events:none"><line x1="3" y1="2" x2="3" y2="16" stroke="currentColor" stroke-width="2" stroke-linecap="square"/><polygon points="3,2 3,9 12,2" fill="currentColor"/></svg>';
+        // 行末位置: 右に旗竿 + 左上に塗りつぶし直角三角形 (旗が左へ展開)
+        const svgLend = '<svg viewBox="0 0 14 18" width="14" height="18" style="display:block;pointer-events:none"><line x1="11" y1="2" x2="11" y2="16" stroke="currentColor" stroke-width="2" stroke-linecap="square"/><polygon points="11,2 11,9 2,2" fill="currentColor"/></svg>';
+
+        // ルーラは container 全体に延長されているため、 マーカーは「ルーラ左端 + ml + offset」の位置に配置する
+        // F (文頭): ml + indent
+        parts.push('<span class="detail-tab-marker detail-tab-marker-fhead" data-kind="fhead" data-x="' + indent + '" style="left: calc(var(--ml-px, 0px) + ' + indentPx + 'px);" title="文頭位置">' + svgFhead + '</span>');
+
+        // L (行頭): ml
+        parts.push('<span class="detail-tab-marker detail-tab-marker-lhead" data-kind="lhead" data-x="' + left + '" style="left: var(--ml-px, 0px);" title="行頭位置">' + svgLhead + '</span>');
+
+        // J (行末): mr (右からの距離)
+        parts.push('<span class="detail-tab-marker detail-tab-marker-lend" data-kind="lend" data-x="' + right + '" style="right: var(--mr-px, 0px); left: auto;" title="行末位置">' + svgLend + '</span>');
+
+        // タブ位置 (▼): ml + tabs[i]
+        for (let i = 0; i < tabs.length; i++) {
+            const tx = tabs[i];
+            const txPx = px(tx);
+            const da = tabsDA[i] ? ' detail-tab-marker-tab-decimal' : '';
+            parts.push('<span class="detail-tab-marker detail-tab-marker-tab' + da + '" data-kind="tab" data-idx="' + i + '" data-x="' + tx + '" style="left: calc(var(--ml-px, 0px) + ' + txPx + 'px);" title="タブ位置">' + (tabsDA[i] ? '.' : '↓') + '</span>');
+        }
+
+        parts.push('</span>');
+        parts.push('</span>');
+        return parts.join('');
+    }
+
+    _buildFieldFormatBlock(attrs, inner) {
+        // フィールド書式 (FFA1 SubID 0x03) - 表形式の簡易表示、 attrs/inner を data 属性で保持
+        const escapedAttrs = String(attrs || '').replace(/"/g, '&quot;');
+        const fields = [];
+        const reField = /<field\s+([^>]*?)\/>/gi;
+        let m;
+        while ((m = reField.exec(inner)) !== null) {
+            const fieldAttrs = String(m[1] || '').replace(/"/g, '&quot;');
+            fields.push('<span class="field" data-field-attrs="' + fieldAttrs + '" style="display: inline-block; border: 1px dotted #888; padding: 0 4px; min-width: 2em;">&nbsp;</span>');
+        }
+        return '<div class="field-format" data-format-attrs="' + escapedAttrs + '" style="display: inline-flex; gap: 0; margin: 0.2em 0; border: 1px solid #ccc;">' + fields.join('') + '</div>';
+    }
+
+    _applyColumnSetting(xmlDoc, returnHtml) {
+        if (returnHtml || !this.editor) return;
+        const cols = xmlDoc.querySelectorAll('column');
+        if (cols.length === 0) return;
+        const col = cols[0];
+        const columnCount = parseInt(col.getAttribute('column') || '0', 10);
+        if (columnCount < 2) return;
+        const colsp = parseFloat(col.getAttribute('colsp') || '0');
+        const balance = col.getAttribute('balance') || '0';
+        const h = Number((this.docScale && this.docScale.hunit) || 0);
+        const f = h === 0 ? 1 : (h < 0 ? 96 / Math.abs(h) : h);
+        const colspPx = Math.ceil(colsp * f);
+        this.editor.style.columnCount = String(columnCount);
+        this.editor.style.columnGap = `${colspPx}px`;
+        this.editor.style.columnFill = balance === '1' ? 'balance' : 'auto';
+        const lineWidth = parseInt(col.getAttribute('lineWidth') || '0', 10);
+        if (lineWidth > 0) this.editor.style.columnRule = `${lineWidth}px solid #000`;
+    }
+
+    _extractFrameOpens(xml, mapOut) {
+        const re = /<frame-open([^>]*)\/>\s*__FIGURE_PLACEHOLDER_(\d+)__/gi;
+        return xml.replace(re, (m, attrs, idxStr) => {
+            const idx = parseInt(idxStr, 10);
+            mapOut[idx] = this._parseFrameOpenAttrs(attrs);
+            return `__FIGURE_PLACEHOLDER_${idxStr}__`;
+        });
+    }
+
+    _parseFrameOpenAttrs(attrs) {
+        const result = {};
+        const names = ['abs','halign','valign','page','wrap','top','left','bottom','right'];
+        for (const name of names) {
+            const ar = attrs.match(new RegExp(name + '="(-?\\d+)"'));
+            result[name] = ar ? parseInt(ar[1], 10) : 0;
+        }
+        return result;
+    }
+
+    _buildFrameOpenStyle(frameInfo, fallbackW, fallbackH) {
+        const hu = this.docScale && this.docScale.hunit ? Number(this.docScale.hunit) : -72;
+        const vu = this.docScale && this.docScale.vunit ? Number(this.docScale.vunit) : -72;
+        const hToPx = hu === 0 ? 1 : (hu < 0 ? 96 / Math.abs(hu) : 1 / hu);
+        const vToPx = vu === 0 ? 1 : (vu < 0 ? 96 / Math.abs(vu) : 1 / vu);
+        const fw = Math.ceil((frameInfo.right - frameInfo.left + 1) * hToPx);
+        const fh = Math.ceil((frameInfo.bottom - frameInfo.top + 1) * vToPx);
+        if (frameInfo.abs === 1) {
+            const px = Math.ceil(frameInfo.left * hToPx);
+            const py = Math.ceil(frameInfo.top * vToPx);
+            return `position: absolute; left: ${px}px; top: ${py}px; width: ${fw}px; height: ${fh}px; overflow: hidden;`;
+        }
+        let floatDir = 'none', marginRule = '0.5em auto';
+        if (frameInfo.valign === 1) { floatDir = 'left'; marginRule = '0 1em 0.5em 0'; }
+        else if (frameInfo.valign === 3) { floatDir = 'right'; marginRule = '0 0 0.5em 1em'; }
+        let extra = '';
+        if (frameInfo.wrap === 1) { floatDir = 'none'; extra += ' clear: both;'; }
+        if (frameInfo.page === 1) { extra += ' break-inside: avoid; break-before: avoid-page;'; }
+        return `float: ${floatDir}; margin: ${marginRule}; width: ${fw}px; height: ${fh}px; overflow: hidden; display: block;${extra}`;
     }
 
     /**

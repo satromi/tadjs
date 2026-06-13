@@ -19,6 +19,10 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         this.visitedRealIds = new Set();  // 循環検出用
         this.startRealId = null;   // 起点の実身ID
 
+        // 高速化キャッシュ (P-F)
+        this.nodeMap = new Map();       // nodeId → node (O(1) 参照)
+        this.connectionSet = new Set(); // "from_to" → 重複チェック O(1)
+
         // 表示設定
         this.nodeWidth = 200;
         this.nodeHeight = 30;
@@ -189,6 +193,8 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         this.nodes = [];
         this.connections = [];
         this.visitedRealIds.clear();
+        this.nodeMap.clear();
+        this.connectionSet.clear();
 
         // 起点ノードの情報を取得
         const startNodeInfo = await this.getRealObjectInfo(startRealId);
@@ -215,6 +221,7 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         };
 
         this.nodes.push(startNode);
+        this.nodeMap.set(startNode.id, startNode);
         this.visitedRealIds.add(startRealId);
 
         // 起点から仮身ネットワークを走査
@@ -310,15 +317,14 @@ class VirtualObjectNetworkApp extends window.PluginBase {
                 // 既存ノードへの接続のみ追加（重複チェック付き）
                 const existingNode = this.nodes.find(n => n.realId === childRealId);
                 if (existingNode) {
-                    // 同じfrom/toの接続が既に存在するかチェック
-                    const isDuplicate = this.connections.some(
-                        c => c.from === parentNode.id && c.to === existingNode.id
-                    );
-                    if (!isDuplicate) {
+                    // 同じfrom/toの接続が既に存在するかチェック (Set で O(1))
+                    const connKey = `${parentNode.id}_${existingNode.id}`;
+                    if (!this.connectionSet.has(connKey)) {
                         this.connections.push({
                             from: parentNode.id,
                             to: existingNode.id
                         });
+                        this.connectionSet.add(connKey);
                     }
                 }
                 continue;
@@ -345,17 +351,17 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             };
 
             this.nodes.push(childNode);
+            this.nodeMap.set(childNode.id, childNode);
             parentNode.children.push(childNode);
 
-            // 接続を追加（重複チェック付き）
-            const isDuplicate = this.connections.some(
-                c => c.from === parentNode.id && c.to === childNode.id
-            );
-            if (!isDuplicate) {
+            // 接続を追加 (Set で重複チェック O(1))
+            const connKey = `${parentNode.id}_${childNode.id}`;
+            if (!this.connectionSet.has(connKey)) {
                 this.connections.push({
                     from: parentNode.id,
                     to: childNode.id
                 });
+                this.connectionSet.add(connKey);
             }
 
             // 再帰的に子ノードを走査
@@ -481,8 +487,8 @@ class VirtualObjectNetworkApp extends window.PluginBase {
      * 接続線を描画
      */
     renderConnection(svg, conn) {
-        const fromNode = this.nodes.find(n => n.id === conn.from);
-        const toNode = this.nodes.find(n => n.id === conn.to);
+        const fromNode = this.nodeMap.get(conn.from);
+        const toNode = this.nodeMap.get(conn.to);
 
         if (!fromNode || !toNode) return;
 
@@ -1262,18 +1268,67 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         bg.setAttribute('fill', 'transparent');
         svg.appendChild(bg);
 
-        // 接続線を描画（ノードより先に描画して背面に）
+        // 接続線を描画（ノードより先に描画して背面に） - DocumentFragment で reflow を集約
+        const connFrag = document.createDocumentFragment();
         for (const conn of this.connections) {
-            this.renderGraphConnection(svg, conn);
+            this.renderGraphConnection(connFrag, conn);
         }
+        svg.appendChild(connFrag);
 
         // ノードを描画
+        const nodeFrag = document.createDocumentFragment();
         for (const node of this.nodes) {
-            this.renderGraphNode(svg, node);
+            this.renderGraphNode(nodeFrag, node);
         }
+        svg.appendChild(nodeFrag);
 
         // グラフ表示のスクロール状態を通知
         this._sendGraphScrollState();
+    }
+
+    /**
+     * ノードが viewport (現在の viewBox 内) に表示されているかを判定
+     * viewBox 座標系で判定するため、 ズーム/パンの両方に対応
+     * @param {Object} node - ノード
+     * @param {number} margin - viewBox 外側の余裕マージン (viewBox 単位)
+     * @returns {boolean} viewport 内 (または margin 内) なら true
+     */
+    _isNodeInViewport(node, margin = 100) {
+        if (!node || !isFinite(node.x) || !isFinite(node.y)) return false;
+        const radius = this.getNodeRadius(node.id) || 10;
+        const vx = this.viewState.x - margin;
+        const vy = this.viewState.y - margin;
+        const vw = this.viewState.width + margin * 2;
+        const vh = this.viewState.height + margin * 2;
+        return (
+            node.x + radius >= vx &&
+            node.x - radius <= vx + vw &&
+            node.y + radius >= vy &&
+            node.y - radius <= vy + vh
+        );
+    }
+
+    /**
+     * パン/ズーム後に viewport 内に入った未展開ノードを動的に展開
+     * data-expanded="true" だが iframe 未生成のノードを対象とする
+     */
+    _updateExpansionForVisibleNodes() {
+        if (this.displayMode !== 'graph') return;
+        const graphNodes = document.querySelectorAll('.graph-node[data-expanded="true"]');
+        for (const g of graphNodes) {
+            const nodeId = g.dataset.nodeId;
+            if (this.expandedNodes.has(nodeId)) continue; // 既に展開済み
+            const node = this.nodeMap.get(nodeId);
+            if (!node) continue;
+            if (!this._isNodeInViewport(node)) continue;
+            const fo = g.querySelector('foreignObject.node-content-fo');
+            if (!fo) continue;
+            const rectWidth = parseFloat(fo.getAttribute('width')) || 0;
+            const rectHeight = parseFloat(fo.getAttribute('height')) || 0;
+            if (rectWidth > 0 && rectHeight > 0) {
+                this.expandGraphNodeContent(fo, node, rectWidth, rectHeight);
+            }
+        }
     }
 
     /**
@@ -1296,8 +1351,8 @@ class VirtualObjectNetworkApp extends window.PluginBase {
      * グラフ用接続線を描画
      */
     renderGraphConnection(svg, conn) {
-        const fromNode = this.nodes.find(n => n.id === conn.from);
-        const toNode = this.nodes.find(n => n.id === conn.to);
+        const fromNode = this.nodeMap.get(conn.from);
+        const toNode = this.nodeMap.get(conn.to);
 
         // ノードが存在しない、または位置が無効な場合はスキップ
         if (!this.isValidNodePosition(fromNode) || !this.isValidNodePosition(toNode)) {
@@ -1417,8 +1472,11 @@ class VirtualObjectNetworkApp extends window.PluginBase {
             fo.setAttribute('height', contentHeight);
             g.appendChild(fo);
 
-            // 開いた仮身表示（iframe）を生成
-            this.expandGraphNodeContent(fo, node, rectWidth, contentHeight);
+            // 開いた仮身表示（iframe）を生成 - viewport 内のノードのみ
+            // viewport 外は foreignObject だけ残し、 パン/ズームで viewport に入ったタイミングで展開
+            if (this._isNodeInViewport(node)) {
+                this.expandGraphNodeContent(fo, node, rectWidth, contentHeight);
+            }
         } else {
             // 円形ノード
             const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
@@ -2119,9 +2177,10 @@ class VirtualObjectNetworkApp extends window.PluginBase {
         svg.setAttribute('viewBox',
             `${this.viewState.x} ${this.viewState.y} ${this.viewState.width} ${this.viewState.height}`);
 
-        // グラフ表示時はスクロール状態を通知
+        // グラフ表示時はスクロール状態を通知 + viewport 内ノードの動的展開
         if (this.displayMode === 'graph') {
             this._sendGraphScrollState();
+            this._updateExpansionForVisibleNodes();
         }
     }
 

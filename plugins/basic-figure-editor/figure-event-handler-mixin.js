@@ -262,9 +262,8 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
             return;
         }
 
-        const rect = this.canvas.getBoundingClientRect();
-        // 物理座標から論理座標に変換
-        const physical = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        // 物理座標から論理座標に変換 (util.js 共通ヘルパ使用)
+        const physical = window.getCanvasMouseCoordinates(e, this.canvas);
         const logical = this.physicalToLogical(physical.x, physical.y);
         let x = logical.x;
         let y = logical.y;
@@ -577,6 +576,7 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
             };
         } else if (this.currentTool === 'polygon') {
             // 多角形描画（最初はドラッグ、その後クリックで頂点追加）
+            // 開始点付近クリックで閉路化、 Shift で水平/垂直拘束、 ダブルクリックで直線列(polyline)
             if (!this.currentShape) {
                 // 最初の頂点：ドラッグで第2頂点を決定
                 this.currentShape = {
@@ -598,14 +598,44 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
                 this.redraw();
                 this.drawShape(this.currentShape);
             } else {
+                const points = this.currentShape.points;
+
+                // 開始点近接判定: 3 頂点以上ある状態で開始点付近をクリックしたら閉路化して確定
+                if (points.length >= 3) {
+                    const start = points[0];
+                    const dxs = this.startX - start.x;
+                    const dys = this.startY - start.y;
+                    const closeThresholdPx = 8;
+                    const tolerance = closeThresholdPx / (this.zoomLevel || 1);
+                    if (Math.sqrt(dxs * dxs + dys * dys) <= tolerance) {
+                        this.finishPolygon();
+                        this.isDrawing = false;
+                        return;
+                    }
+                }
+
+                // Shift キー: 前頂点からの水平線または垂直線に拘束
+                let snapX = this.startX;
+                let snapY = this.startY;
+                if (e.shiftKey && points.length >= 1) {
+                    const lastPt = points[points.length - 1];
+                    const dx = Math.abs(snapX - lastPt.x);
+                    const dy = Math.abs(snapY - lastPt.y);
+                    if (dx >= dy) {
+                        snapY = lastPt.y;
+                    } else {
+                        snapX = lastPt.x;
+                    }
+                }
+
                 // 2つ目以降の頂点追加
                 // 重複チェック: 前の頂点と同じ位置なら追加しない（ダブルクリック対策）
-                const lastPoint = this.currentShape.points[this.currentShape.points.length - 1];
-                if (!(lastPoint && lastPoint.x === this.startX && lastPoint.y === this.startY)) {
-                    this.currentShape.points.push({ x: this.startX, y: this.startY });
+                const lastPoint = points[points.length - 1];
+                if (!(lastPoint && lastPoint.x === snapX && lastPoint.y === snapY)) {
+                    this.currentShape.points.push({ x: snapX, y: snapY });
                 }
-                this.currentShape.tempEndX = this.startX;
-                this.currentShape.tempEndY = this.startY;
+                this.currentShape.tempEndX = snapX;
+                this.currentShape.tempEndY = snapY;
                 this.redraw();
                 this.drawShape(this.currentShape);
                 // ドラッグ不要なのでisDrawingをfalseに
@@ -661,9 +691,8 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
     }
 
     handleMouseMove(e) {
-        const rect = this.canvas.getBoundingClientRect();
-        // 物理座標から論理座標に変換
-        const physical = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        // 物理座標から論理座標に変換 (util.js 共通ヘルパ使用)
+        const physical = window.getCanvasMouseCoordinates(e, this.canvas);
         const logical = this.physicalToLogical(physical.x, physical.y);
         let currentX = logical.x;
         let currentY = logical.y;
@@ -1106,15 +1135,22 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
             this.drawShape(this.currentShape);
         } else if (this.currentTool === 'polygon' && this.currentShape) {
             // 多角形描画中：次の頂点位置をプレビュー表示
-            if (this.isFirstPolygonLine) {
-                // 最初の線はドラッグ中
-                this.currentShape.tempEndX = currentX;
-                this.currentShape.tempEndY = currentY;
-            } else {
-                // 2つ目以降：マウス位置に向かってプレビューライン表示
-                this.currentShape.tempEndX = currentX;
-                this.currentShape.tempEndY = currentY;
+            // Shift キー押下時は前頂点からの水平/垂直拘束
+            let previewX = currentX;
+            let previewY = currentY;
+            const points = this.currentShape.points;
+            if (!this.isFirstPolygonLine && e.shiftKey && points && points.length >= 1) {
+                const lastPt = points[points.length - 1];
+                const dx = Math.abs(previewX - lastPt.x);
+                const dy = Math.abs(previewY - lastPt.y);
+                if (dx >= dy) {
+                    previewY = lastPt.y;
+                } else {
+                    previewX = lastPt.x;
+                }
             }
+            this.currentShape.tempEndX = previewX;
+            this.currentShape.tempEndY = previewY;
             this.redraw();
             this.drawShape(this.currentShape);
         } else if (this.currentShape) {
@@ -1142,8 +1178,12 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
                 currentY = snapped.y;
             }
 
-            // Shiftキーが押されている場合、長方形と円と三角形は縦横比1:1にする
-            if (e.shiftKey && (this.currentTool === 'rect' || this.currentTool === 'ellipse' || this.currentTool === 'triangle')) {
+            // Shift キーで縦横 1:1 拘束
+            // 長方形=正方形、 楕円=真円、 扇形/弓形/楕円弧=1/4 正円、 三角形は既存仕様維持
+            const isSquareConstrainTool = this.currentTool === 'rect' || this.currentTool === 'ellipse' ||
+                                          this.currentTool === 'triangle' || this.currentTool === 'arc' ||
+                                          this.currentTool === 'chord' || this.currentTool === 'elliptical_arc';
+            if (e.shiftKey && isSquareConstrainTool) {
                 const deltaX = currentX - this.startX;
                 const deltaY = currentY - this.startY;
 
@@ -1155,8 +1195,30 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
                 currentY = this.startY + (deltaY >= 0 ? size : -size);
             }
 
-            this.currentShape.endX = currentX;
-            this.currentShape.endY = currentY;
+            // 直線は Shift キーで水平/垂直拘束
+            if (e.shiftKey && this.currentTool === 'line') {
+                const deltaX = currentX - this.startX;
+                const deltaY = currentY - this.startY;
+                if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+                    currentY = this.startY;
+                } else {
+                    currentX = this.startX;
+                }
+            }
+
+            // 中心モード時、 マウスダウン位置を中心とし
+            // shape の外接矩形 (または直線の両端) を「中心 ± マウス位置からのオフセット」として展開する
+            if (this.centerModeTools && this.centerModeTools.has(this.currentTool)) {
+                const cx = this.startX;
+                const cy = this.startY;
+                this.currentShape.startX = 2 * cx - currentX;
+                this.currentShape.startY = 2 * cy - currentY;
+                this.currentShape.endX = currentX;
+                this.currentShape.endY = currentY;
+            } else {
+                this.currentShape.endX = currentX;
+                this.currentShape.endY = currentY;
+            }
             this.redraw();
             this.drawShape(this.currentShape);
         }
@@ -1318,6 +1380,26 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
                 delete this.currentShape.tempEndConnection;
             }
 
+            // 自由曲線は開始点と終了点が一致 (= 近接) すると
+            // 自動的に閉曲線化し、 内部を塗りつぶす
+            if (this.currentShape.type === 'curve' && this.currentShape.path && this.currentShape.path.length >= 3) {
+                const path = this.currentShape.path;
+                const first = path[0];
+                const last = path[path.length - 1];
+                const dx = first.x - last.x;
+                const dy = first.y - last.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const closeThresholdPx = 8;
+                const tolerance = closeThresholdPx / (this.zoomLevel || 1);
+                if (dist <= tolerance) {
+                    this.currentShape.closed = 1;
+                    this.currentShape.fillEnabled = true;
+                    if (!this.currentShape.fillColor || this.currentShape.fillColor === 'transparent') {
+                        this.currentShape.fillColor = this.fillColor;
+                    }
+                }
+            }
+
             // z-indexを設定（未設定の場合のみ）
             if (this.currentShape.zIndex === null || this.currentShape.zIndex === undefined) {
                 this.currentShape.zIndex = this.getNextZIndex();
@@ -1347,11 +1429,11 @@ export const FigureEventHandlerMixin = (Base) => class extends Base {
     }
 
     handleDoubleClick(e) {
-        // 多角形描画中のダブルクリック：多角形を確定
+        // 多角形描画中のダブルクリック：直線列 (polyline) として確定
         if (this.currentTool === 'polygon' && this.currentShape) {
             // 読み取り専用モードでは多角形描画自体ができないのでここには来ない
             if (this.readonly) return;
-            this.finishPolygon();
+            this.finishPolyline();
             return;
         }
 

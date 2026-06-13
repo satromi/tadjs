@@ -53,7 +53,7 @@
 <docDraw drawleft="30" drawtop="175" drawright="50" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="86"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -64,7 +64,7 @@ A
 <docDraw drawleft="50" drawtop="175" drawright="70" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="85"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -75,7 +75,7 @@ B
 <docDraw drawleft="70" drawtop="175" drawright="90" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="84"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -86,7 +86,7 @@ C
 <docDraw drawleft="90" drawtop="175" drawright="110" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="83"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -97,7 +97,7 @@ D
 <docDraw drawleft="110" drawtop="175" drawright="130" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="82"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -108,7 +108,7 @@ E
 <docDraw drawleft="130" drawtop="175" drawright="150" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="81"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -119,7 +119,7 @@ F
 <docDraw drawleft="150" drawtop="175" drawright="170" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="80"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -161,7 +161,7 @@ G
 <docDraw drawleft="18" drawtop="175" drawright="41" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="84"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -172,7 +172,7 @@ A
 <docDraw drawleft="42" drawtop="175" drawright="65" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="83"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -183,7 +183,7 @@ B
 <docDraw drawleft="65" drawtop="175" drawright="88" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="82"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -194,7 +194,7 @@ C
 <docDraw drawleft="88" drawtop="175" drawright="111" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="81"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -205,7 +205,7 @@ D
 <docDraw drawleft="112" drawtop="175" drawright="135" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="80"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -216,7 +216,7 @@ E
 <docDraw drawleft="135" drawtop="175" drawright="158" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="79"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>
@@ -227,7 +227,7 @@ F
 <docDraw drawleft="158" drawtop="175" drawright="181" drawbottom="190"/>
 <docScale hunit="-72" vunit="-72"/>
 <text lang="0" bpat="0" zIndex="78"/>
-<font size="10"/>
+<font size="8"/>
 <font face="sans-serif"/>
 <font color="#000000"/>
 <text align="center"/>

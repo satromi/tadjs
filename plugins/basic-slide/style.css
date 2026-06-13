@@ -90,6 +90,16 @@ body {
     cursor: pointer;
 }
 
+/* 図形セグメント (basic-text-editor のスタイルから継承)
+ * デフォルトでは 1px の境界線 + 4px の margin + 白背景が付与され、
+ * スライド表示時に「白い枠線」として見えてしまうため、スライド内では無効化する。
+ */
+#slide-wrapper .figure-segment {
+    margin: 0;
+    border: none;
+    background: transparent;
+}
+
 /* 背景色選択ダイアログ */
 .color-list {
     background: var(--btron-bg-content);

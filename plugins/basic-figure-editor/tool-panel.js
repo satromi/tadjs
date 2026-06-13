@@ -283,14 +283,43 @@ class ToolPanel {
     setupEventListeners() {
         // 図形描画ツールボタンのクリックイベント
         const toolButtons = document.querySelectorAll('.tool-btn[data-tool]');
+        // 中心点モード対応ツール (アクティブ状態で再度クリックすると中心モード切替)
+        const centerModeCapableTools = new Set(['line', 'rect', 'ellipse', 'arc', 'chord', 'elliptical_arc']);
+        // 中心モード状態をツール単位で保持 (ユーザー仕様: 別ツール選択でも保持)
+        if (!this.centerModeState) this.centerModeState = {};
         toolButtons.forEach(btn => {
             btn.addEventListener('click', () => {
                 const tool = btn.dataset.tool;
+                const wasActive = btn.classList.contains('active');
+
+                // 中心モード切替判定: アクティブ状態のツールを再度クリックしたとき
+                if (wasActive && centerModeCapableTools.has(tool)) {
+                    const next = !this.centerModeState[tool];
+                    this.centerModeState[tool] = next;
+                    if (next) btn.classList.add('center-mode');
+                    else btn.classList.remove('center-mode');
+                    this.sendToEditor({
+                        type: 'set-center-mode',
+                        tool: tool,
+                        enabled: next
+                    });
+                    return;
+                }
+
                 this.selectTool(tool);
 
                 // アクティブ状態を更新
-                toolButtons.forEach(b => b.classList.remove('active'));
+                toolButtons.forEach(b => {
+                    b.classList.remove('active');
+                    // 別ツールへ切り替えた際、 そのツールアイコンの「+」表示は外す
+                    // (状態は this.centerModeState に保持されているので、 再度アクティブ化したら復元する)
+                    b.classList.remove('center-mode');
+                });
                 btn.classList.add('active');
+                // 新規アクティブツールの中心モード状態を CSS に反映
+                if (centerModeCapableTools.has(tool) && this.centerModeState[tool]) {
+                    btn.classList.add('center-mode');
+                }
             });
         });
 

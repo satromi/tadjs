@@ -235,6 +235,33 @@ export class PaperSize {
         this.left = 57;
         this.right = 57;
     }
+
+    /**
+     * 実効左マージン: binding=1 (右綴じ) または imposition=1 偶数ページで left/right が反転
+     * left=ノド(綴じ側) right=小口(開き側) として絶対座標位置を算出
+     * @param {number} pageNumber 1始まりのページ番号 (省略時 1 = 奇数ページ扱い)
+     * @returns {number} 物理的な左マージン値
+     */
+    getEffectiveLeft(pageNumber = 1) {
+        const isEvenPage = (pageNumber % 2) === 0;
+        const reversedByBinding = this.binding === 1;
+        const reversedByImposition = this.imposition === 1 && isEvenPage;
+        const reversed = reversedByBinding !== reversedByImposition;
+        return reversed ? this.right : this.left;
+    }
+
+    /**
+     * 実効右マージン: getEffectiveLeft の逆
+     * @param {number} pageNumber 1始まりのページ番号
+     * @returns {number} 物理的な右マージン値
+     */
+    getEffectiveRight(pageNumber = 1) {
+        const isEvenPage = (pageNumber % 2) === 0;
+        const reversedByBinding = this.binding === 1;
+        const reversedByImposition = this.imposition === 1 && isEvenPage;
+        const reversed = reversedByBinding !== reversedByImposition;
+        return reversed ? this.left : this.right;
+    }
 }
 
 /**
@@ -259,6 +286,32 @@ export class PaperMargin {
             this.left = parseFloat(element.getAttribute('marginleft')) || 0;
             this.right = parseFloat(element.getAttribute('marginright')) || 0;
         }
+    }
+
+    /**
+     * binding/imposition を考慮した実効左マージン
+     * @param {number} binding 綴じ方向 (0:左綴じ, 1:右綴じ)
+     * @param {number} imposition 面付け (0:片面, 1:見開き)
+     * @param {number} pageNumber 1始まり
+     * @returns {number}
+     */
+    getEffectiveLeft(binding = 0, imposition = 0, pageNumber = 1) {
+        const isEvenPage = (pageNumber % 2) === 0;
+        const reversedByBinding = binding === 1;
+        const reversedByImposition = imposition === 1 && isEvenPage;
+        const reversed = reversedByBinding !== reversedByImposition;
+        return reversed ? this.right : this.left;
+    }
+
+    /**
+     * binding/imposition を考慮した実効右マージン
+     */
+    getEffectiveRight(binding = 0, imposition = 0, pageNumber = 1) {
+        const isEvenPage = (pageNumber % 2) === 0;
+        const reversedByBinding = binding === 1;
+        const reversedByImposition = imposition === 1 && isEvenPage;
+        const reversed = reversedByBinding !== reversedByImposition;
+        return reversed ? this.left : this.right;
     }
 }
 

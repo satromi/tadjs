@@ -15,6 +15,7 @@ import {
     DEFAULT_VOBJ_HEIGHT,
     VOBJ_BORDER_WIDTH,
     VOBJ_PADDING_HORIZONTAL,
+    convertPtToPx,
     escapeXml as escapeXmlUtil,
     unescapeXml as unescapeXmlUtil,
     rgbToHex as rgbToHexUtil
@@ -119,6 +120,11 @@ export class PluginBase {
 
         // コンテキストメニュー表示時のマウス位置（貼り付け位置に使用）
         this.lastContextMenuPosition = { x: 0, y: 0 };
+
+        // キーボードショートカット共通レジストリ
+        // registerShortcut() で登録 → _dispatchShortcut が document.keydown でディスパッチ
+        this._shortcutRegistry = [];           // 登録された { spec, handler } の配列
+        this._shortcutTargets = new Set();     // ディスパッチャ登録済みの target 要素
 
         // ファイルデータ（initハンドラで設定）
         this.fileData = null;
@@ -428,6 +434,169 @@ export class PluginBase {
     }
 
     /**
+     * 仮身展開前の高さ正規化 (双方向)
+     * - 閉じた仮身判定 (isOpenedVirtualObject = false) → minClosedHeight にスナップ、shouldExpand=false
+     * - 開いた仮身判定 (true) → minOpenHeight 未満なら拡張、shouldExpand=true
+     * 偶発的な小さなドラッグで中間サイズになるのを防ぐ汎用処理。
+     * 開閉判定は **データ側 (virtualObject.vobjbottom - vobjtop)** を主軸とし、データが無い場合のみ DOM 高さで判定。
+     * 戻り値の finalHeight を使って呼び出し側で virtualObject.heightPx / vobjbottom / shape.endY を同期する
+     *
+     * @param {HTMLElement} vobjElement - 仮身 DOM 要素
+     * @param {Object|number} virtualObjectOrChsz - 仮身オブジェクト (chsz/vobjtop/vobjbottom 等) または chsz 数値 (後方互換)
+     * @returns {{shouldExpand: boolean, finalHeight: number}} 展開可否と正規化後の DOM 高さ (border 込み)
+     */
+    normalizeVobjHeightForExpand(vobjElement, virtualObjectOrChsz) {
+        if (!this.virtualObjectRenderer || !vobjElement) {
+            return { shouldExpand: true, finalHeight: vobjElement ? vobjElement.offsetHeight : 0, modified: false };
+        }
+        // 引数を正規化: object か chsz 数値か
+        let chsz, vobjtop, vobjbottom;
+        if (virtualObjectOrChsz && typeof virtualObjectOrChsz === 'object') {
+            chsz = virtualObjectOrChsz.chsz;
+            vobjtop = virtualObjectOrChsz.vobjtop;
+            vobjbottom = virtualObjectOrChsz.vobjbottom;
+        } else {
+            chsz = virtualObjectOrChsz;
+        }
+        const chszNum = parseFloat(chsz) || DEFAULT_FONT_SIZE;
+        const minClosedHeight = this.virtualObjectRenderer.getMinClosedHeight(chszNum) + VOBJ_BORDER_WIDTH;
+        const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chszNum) + VOBJ_BORDER_WIDTH;
+        const domHeight = vobjElement.offsetHeight;
+        // データ側の高さ (xtad の vobjbottom-vobjtop) を判定の主軸に
+        // DOM サイズは初回ロード時に「閉じた仮身」レンダラで作成されていることがあり、開閉判定に使えない
+        const dataHeight = (typeof vobjtop === 'number' && typeof vobjbottom === 'number')
+            ? (vobjbottom - vobjtop)
+            : null;
+        const judgementHeight = (dataHeight !== null && dataHeight > 0) ? dataHeight : domHeight;
+        // 開閉判定: minOpenHeight (= minClosedHeight + VOBJ_MIN_OPEN_HEIGHT_OFFSET) 以上なら開いた仮身。
+        // 偶発的に少しだけ大きくしてしまった場合 (minClosedHeight + 10 程度) は閉じた仮身扱いとして snap back。
+        const minOpenHeightExcl = this.virtualObjectRenderer.getMinOpenHeight(chszNum);
+        const isOpen = judgementHeight >= minOpenHeightExcl;
+
+        if (!isOpen) {
+            // 閉じた仮身として正規化 (中間サイズを minClosedHeight に固定)、展開中止
+            const needsDomChange = Math.abs(domHeight - minClosedHeight) > 0.5;
+            if (needsDomChange) {
+                vobjElement.style.height = `${minClosedHeight}px`;
+            }
+            return { shouldExpand: false, finalHeight: minClosedHeight, modified: needsDomChange };
+        }
+        // 開いた仮身として最小サイズ保証 (データ側で開いた判定なら、DOM 側もそれに合わせて拡張)
+        const targetHeight = Math.max(judgementHeight, minOpenHeight);
+        const needsDomChange = domHeight < targetHeight;
+        if (needsDomChange) {
+            vobjElement.style.height = `${targetHeight}px`;
+        }
+        return { shouldExpand: true, finalHeight: targetHeight, modified: needsDomChange };
+    }
+
+    // ===== キーボードショートカット共通レジストリ =====
+
+    /**
+     * キーボードショートカットを登録
+     * 内部的に target ごとに 1 つの keydown リスナーを登録し、レジストリで spec を比較してディスパッチ
+     *
+     * @param {Object} spec - { key, ctrl?, shift?, alt?, meta?, preventDefault?, target? }
+     *   key: 'c', 's', 'Enter' 等 (event.key 比較、case-insensitive for letters)
+     *   ctrl/shift/alt/meta: 修飾キー (省略時は false 必須)
+     *   preventDefault: true で event.preventDefault() (デフォルト true)
+     *   target: イベントリスナーを登録する要素 (省略時は document)
+     * @param {Function} handler - (event) => void
+     */
+    registerShortcut(spec, handler) {
+        const normalized = {
+            key: (spec.key || '').toLowerCase(),
+            ctrl: !!spec.ctrl,
+            shift: !!spec.shift,
+            alt: !!spec.alt,
+            meta: !!spec.meta,
+            preventDefault: spec.preventDefault !== false,
+            target: spec.target || document,
+            handler
+        };
+        this._shortcutRegistry.push(normalized);
+        // target ごとに 1 度だけリスナー登録
+        if (!this._shortcutTargets.has(normalized.target)) {
+            this._shortcutTargets.add(normalized.target);
+            normalized.target.addEventListener('keydown', (e) => this._dispatchShortcut(e));
+        }
+    }
+
+    /**
+     * 登録済みショートカットを解除
+     * @param {Object} spec - registerShortcut と同じ形式 (key/ctrl/shift/alt/meta で識別)
+     */
+    unregisterShortcut(spec) {
+        const key = (spec.key || '').toLowerCase();
+        this._shortcutRegistry = this._shortcutRegistry.filter(s =>
+            !(s.key === key && s.ctrl === !!spec.ctrl && s.shift === !!spec.shift && s.alt === !!spec.alt && s.meta === !!spec.meta)
+        );
+    }
+
+    /**
+     * 内部ディスパッチャ: keydown イベントをレジストリと突合してハンドラを呼ぶ
+     * @private
+     */
+    _dispatchShortcut(event) {
+        const key = (event.key || '').toLowerCase();
+        // Ctrl と Meta は等価 (macOS/Windows 両対応)
+        const ctrlOrMeta = event.ctrlKey || event.metaKey;
+        for (const s of this._shortcutRegistry) {
+            if (s.target !== event.currentTarget) continue;
+            if (s.key !== key) continue;
+            // ctrl/meta の整合 (どちらかが押されていればマッチ)
+            const specCtrlOrMeta = s.ctrl || s.meta;
+            if (specCtrlOrMeta !== ctrlOrMeta) continue;
+            if (s.shift !== event.shiftKey) continue;
+            if (s.alt !== event.altKey) continue;
+            if (s.preventDefault) event.preventDefault();
+            try {
+                s.handler(event);
+            } catch (err) {
+                logger.error(`[${this.pluginName}] shortcut handler error:`, err);
+            }
+            return; // 最初のマッチで終了
+        }
+    }
+
+    /**
+     * クリップボードショートカット (Ctrl+C/X/V/A) を有効化
+     * onCopy / onCut / onPaste / onSelectAll フックで動作カスタマイズ可能
+     *
+     * @param {Object} [options] - { copy?, cut?, paste?, selectAll? } 各 boolean (デフォルト全 true)
+     */
+    enableClipboardShortcuts(options = {}) {
+        const opts = { copy: true, cut: true, paste: true, selectAll: true, ...options };
+        if (opts.copy) this.registerShortcut({ key: 'c', ctrl: true }, (e) => this.onCopy(e));
+        if (opts.cut) this.registerShortcut({ key: 'x', ctrl: true }, (e) => this.onCut(e));
+        if (opts.paste) this.registerShortcut({ key: 'v', ctrl: true }, (e) => this.onPaste(e));
+        if (opts.selectAll) this.registerShortcut({ key: 'a', ctrl: true }, (e) => this.onSelectAll(e));
+    }
+
+    // ===== クリップボード操作フック (オーバーライド推奨) =====
+
+    /** Ctrl+C: デフォルトは document.execCommand('copy') */
+    onCopy(event) {
+        document.execCommand('copy');
+    }
+
+    /** Ctrl+X: デフォルトは document.execCommand('cut') */
+    onCut(event) {
+        document.execCommand('cut');
+    }
+
+    /** Ctrl+V: デフォルトはブラウザ既定の paste 動作に委譲 (preventDefault しない) */
+    onPaste(event) {
+        // ブラウザの paste イベントで処理されるため、ここでは preventDefault を取り消す
+        // registerShortcut で preventDefault:false 指定するか、ここでは何もしない
+    }
+
+    /** Ctrl+A: デフォルトは document.execCommand('selectAll') */
+    onSelectAll(event) {
+        document.execCommand('selectAll');
+    }
+
+    /**
      * 開いた仮身のコンテンツ領域にプラグインを展開
      * VirtualObjectRenderer.createOpenedBlockElement()で作成された
      * コンテンツ領域にiframeを作成してプラグインをロードする
@@ -442,6 +611,21 @@ export class PluginBase {
      */
     async expandVirtualObject(vobjElement, virtualObject, options = {}) {
         logger.debug(`[${this.pluginName}] 開いた仮身の展開開始:`, virtualObject.link_name);
+
+        // 仮身高さの正規化 (偶発的な中間サイズを防ぐ。データ側で開閉判定)
+        // 注意: normalize が DOM を変更した場合のみデータ (vobjbottom) を同期する。
+        // 正常な開いた仮身では DOM もデータも既に整合しているので、書き戻して 2px 縮める副作用を避ける。
+        const { shouldExpand, finalHeight, modified } = this.normalizeVobjHeightForExpand(vobjElement, virtualObject);
+        if (modified) {
+            virtualObject.heightPx = finalHeight - VOBJ_BORDER_WIDTH;
+            if (virtualObject.vobjtop !== undefined) {
+                virtualObject.vobjbottom = virtualObject.vobjtop + (finalHeight - VOBJ_BORDER_WIDTH);
+            }
+        }
+        if (!shouldExpand) {
+            logger.debug(`[${this.pluginName}] 閉じた仮身のため展開を中止`);
+            return null;
+        }
 
         try {
             // 実身IDを抽出
@@ -504,7 +688,7 @@ export class PluginBase {
             iframe.style.pointerEvents = 'none'; // 開いた仮身内の操作を無効化（表示のみ）
 
             // プラグインをロード
-            iframe.src = `../../plugins/${defaultOpenPlugin}/index.html`;
+            iframe.src = `../../plugins/${defaultOpenPlugin}/index.html?embedded=true`;
 
             // iframeロード後にデータを送信
             iframe.addEventListener('load', () => {
@@ -1563,8 +1747,8 @@ export class PluginBase {
     parseDocumentUnits(documentElement) {
         if (!documentElement) return { hunit: -72, vunit: -72 };
 
-        // <docScale>子要素から取得（小文字で検索）
-        const docScale = documentElement.querySelector('docscale');
+        // <docScale>子要素から取得 (XMLモードのquerySelectorはcase-sensitive)
+        const docScale = documentElement.querySelector('docScale');
         if (docScale) {
             return this.parseDocScaleElement(docScale);
         }
@@ -1606,7 +1790,12 @@ export class PluginBase {
         if (this._windowActivationSetup) return;
         this._windowActivationSetup = true;
 
-        this._windowActivationHandler = () => {
+        this._windowActivationHandler = (e) => {
+            // 既に active 状態なら activate-window 送信不要
+            if (this.isWindowActive) return;
+            // ユーザの実 mousedown 由来のみ通す
+            // (プログラム的 dispatchEvent や Chromium の自動 focus 連鎖等を排除)
+            if (e && e.isTrusted === false) return;
             this.activateWindow();
         };
         document.addEventListener('mousedown', this._windowActivationHandler);
@@ -2016,11 +2205,11 @@ export class PluginBase {
                 this.vobjid = data.fileData.vobjid;
             }
 
-            // 背景色の復元
-            if (data.fileData.bgcol) {
-                this.applyBackgroundColor(data.fileData.bgcol);
-            } else if (data.fileData.windowConfig && data.fileData.windowConfig.backgroundColor) {
+            // 背景色の復元（実身の管理用セグメントJSONの backgroundColor を優先、 無ければ仮身の bgcol）
+            if (data.fileData.windowConfig && data.fileData.windowConfig.backgroundColor) {
                 this.applyBackgroundColor(data.fileData.windowConfig.backgroundColor);
+            } else if (data.fileData.bgcol) {
+                this.applyBackgroundColor(data.fileData.bgcol);
             }
         }
     }
@@ -2622,6 +2811,7 @@ export class PluginBase {
      */
     createTadStyledSpan(attr, value) {
         let styleAttr = '';
+        let dataAttr = '';
 
         if (attr === 'color') {
             styleAttr = `color: ${value};`;
@@ -2638,9 +2828,65 @@ export class PluginBase {
         } else if (attr === 'space') {
             // 文字間隔（BTRON文字間隔値 → CSS letter-spacing em単位）
             styleAttr = `letter-spacing: ${value}em;`;
+        } else if (attr === 'hRatio') {
+            // 文字高さ拡大率 (RATIO 型 A/B)。 視覚的には font-size に乗算するが、
+            // 親 SPAN/段落のサイズを参照する必要があるため data 属性として保存し、
+            // CSS は em ベースで近似 (1em = 親の文字高に対して比率適用)
+            const m = value.match(/^(\d+)\/(\d+)$/);
+            if (m) {
+                const a = parseInt(m[1], 10);
+                const b = parseInt(m[2], 10);
+                if (b !== 0) {
+                    styleAttr = `font-size: ${a / b}em;`;
+                }
+            }
+            dataAttr = ` data-h-ratio="${value}"`;
+        } else if (attr === 'wRatio') {
+            // 文字幅拡大率 (RATIO 型 A/B)。 視覚的には font-stretch で近似
+            const m = value.match(/^(\d+)\/(\d+)$/);
+            if (m) {
+                const a = parseInt(m[1], 10);
+                const b = parseInt(m[2], 10);
+                if (b !== 0) {
+                    styleAttr = `font-stretch: ${Math.round((a / b) * 100)}%;`;
+                }
+            }
+            dataAttr = ` data-w-ratio="${value}"`;
+        } else if (attr === 'style') {
+            // BTRON フォント属性指定付箋 斜体: 0=正体, 1-3=水平斜体, 5-7=垂直斜体
+            const v = parseInt(value, 10);
+            if (v >= 1 && v <= 3) styleAttr = `font-style: italic;`;
+            else if (v >= 5 && v <= 7) styleAttr = `font-style: oblique;`;
+            dataAttr = ` data-font-style="${value}"`;
+        } else if (attr === 'weight') {
+            // BTRON 太さ: 0=中字, 1=極細, 2=細字, 4=中太, 5=太字, 6=極太, 7=超太
+            const map = { '0': '400', '1': '200', '2': '300', '4': '600', '5': '700', '6': '800', '7': '900' };
+            const w = map[String(value)] || value;
+            styleAttr = `font-weight: ${w};`;
+            dataAttr = ` data-font-weight="${value}"`;
+        } else if (attr === 'stretch') {
+            // BTRON 幅: 0=通常, 1=圧縮, 2=極圧縮, 3=超圧縮, 5=幅広, 6=極幅広, 7=超幅広
+            const map = { '0': '100%', '1': '75%', '2': '62.5%', '3': '50%', '5': '125%', '6': '150%', '7': '200%' };
+            const s = map[String(value)] || '100%';
+            styleAttr = `font-stretch: ${s};`;
+            dataAttr = ` data-font-stretch="${value}"`;
+        } else if (attr === 'stretchscale') {
+            // BTRON 文字幅倍率 (固有値、 stretch と組み合わせ)
+            dataAttr = ` data-font-stretch-scale="${value}"`;
+        } else if (attr === 'direction') {
+            // BTRON 方向: 0=横書き, 1=縦書き
+            if (value === '1') styleAttr = `writing-mode: vertical-rl; text-orientation: upright;`;
+            dataAttr = ` data-font-direction="${value}"`;
+        } else if (attr === 'kerning') {
+            // BTRON カーニング: 0=なし, 1=あり
+            styleAttr = value === '1' ? `font-kerning: normal;` : `font-kerning: none;`;
+            dataAttr = ` data-font-kerning="${value}"`;
+        } else if (attr === 'pattern') {
+            // BTRON 線種 (CSS で完全再現困難) -> data 属性で保持のみ
+            dataAttr = ` data-font-pattern="${value}"`;
         }
 
-        return `<span style="${styleAttr}">`;
+        return `<span${dataAttr} style="${styleAttr}">`;
     }
 
     /**
@@ -2664,6 +2910,24 @@ export class PluginBase {
         } else if (attr === 'space' && style.letterSpacing) {
             // em単位を除去して数値を返す
             return style.letterSpacing.replace('em', '');
+        } else if (attr === 'hRatio' && node.dataset && node.dataset.hRatio) {
+            return node.dataset.hRatio;
+        } else if (attr === 'wRatio' && node.dataset && node.dataset.wRatio) {
+            return node.dataset.wRatio;
+        } else if (attr === 'style' && node.dataset && node.dataset.fontStyle) {
+            return node.dataset.fontStyle;
+        } else if (attr === 'weight' && node.dataset && node.dataset.fontWeight) {
+            return node.dataset.fontWeight;
+        } else if (attr === 'stretch' && node.dataset && node.dataset.fontStretch) {
+            return node.dataset.fontStretch;
+        } else if (attr === 'stretchscale' && node.dataset && node.dataset.fontStretchScale) {
+            return node.dataset.fontStretchScale;
+        } else if (attr === 'direction' && node.dataset && node.dataset.fontDirection) {
+            return node.dataset.fontDirection;
+        } else if (attr === 'kerning' && node.dataset && node.dataset.fontKerning) {
+            return node.dataset.fontKerning;
+        } else if (attr === 'pattern' && node.dataset && node.dataset.fontPattern) {
+            return node.dataset.fontPattern;
         }
 
         return null;
@@ -3091,6 +3355,20 @@ export class PluginBase {
         }
 
         const msgId = messageId || `open-${virtualObj.link_id || 'unknown'}-${Date.now()}`;
+
+        // 仮身の DOM 要素から viewMode/wordWrap を取得して virtualObj に含める
+        // (子プラグインを開く際に仮身ごとの表示状態を復元するため)
+        if (virtualObj.vobjid && typeof document !== 'undefined') {
+            const vobjEl = document.querySelector(`.virtual-object[data-link-vobjid="${virtualObj.vobjid}"]`);
+            if (vobjEl) {
+                if (virtualObj.viewMode === undefined && vobjEl.dataset.linkViewmode) {
+                    virtualObj.viewMode = vobjEl.dataset.linkViewmode;
+                }
+                if (virtualObj.wordWrap === undefined && vobjEl.dataset.linkWordwrap) {
+                    virtualObj.wordWrap = vobjEl.dataset.linkWordwrap;
+                }
+            }
+        }
 
         this.messageBus.send('open-virtual-object-real', {
             virtualObj: virtualObj,
@@ -3841,7 +4119,9 @@ export class PluginBase {
         const l_pat = parseInt(rectEl.getAttribute('l_pat')) || 0;
         const fillColor = (f_pat >= 1 ? resolvePatternColor(f_pat, this._figureCustomPatterns) : null) || DEFAULT_BGCOL;
         const strokeColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(rectEl.getAttribute('lineWidth')) || 1;
+        // 注意: lineWidth="0" は意図的に「枠線なし」を意味するため falsy 判定を使わない
+        const _lineWidthRectAttr = parseFloat(rectEl.getAttribute('lineWidth'));
+        const lineWidth = Number.isFinite(_lineWidthRectAttr) ? _lineWidthRectAttr : 1;
         const round = parseFloat(rectEl.getAttribute('round')) || 0;
         const zIndex = parseInt(rectEl.getAttribute('zIndex')) || 0;
 
@@ -3931,7 +4211,8 @@ export class PluginBase {
                 textAlign = pElement.getAttribute('align') || 'left';
             }
         } else {
-            // <p>要素がない場合は直接のテキストノードを取得
+            // <p>要素がない場合は直接のテキストノード、または装飾タグ (<bold>/<italic> 等) 内のテキストを取得
+            const INLINE_DECOR_TAGS = ['bold', 'italic', 'underline', 'strikethrough'];
             const childNodes = docEl.childNodes;
             for (let i = 0; i < childNodes.length; i++) {
                 const node = childNodes[i];
@@ -3940,6 +4221,16 @@ export class PluginBase {
                     if (trimmed) {
                         textContent = trimmed;
                         break;
+                    }
+                } else if (node.nodeType === Node.ELEMENT_NODE) {
+                    // <bold>等の装飾タグの中身もテキストとして取得 (フォント・テキスト設定タグはスキップ)
+                    const tagName = node.tagName.toLowerCase();
+                    if (INLINE_DECOR_TAGS.includes(tagName)) {
+                        const trimmed = node.textContent.trim();
+                        if (trimmed) {
+                            textContent = trimmed;
+                            break;
+                        }
                     }
                 }
             }
@@ -3951,7 +4242,8 @@ export class PluginBase {
         div.style.top = `${top}px`;
         div.style.width = `${right - left}px`;
         div.style.height = `${bottom - top}px`;
-        div.style.fontSize = `${fontSize}px`;
+        // fontSize は <font size="N"/> の N を pt 単位として読み込んでいるため、convertPtToPx で px に変換
+        div.style.fontSize = `${convertPtToPx(fontSize)}px`;
         div.style.color = fontColor;
         div.style.textAlign = textAlign;
         div.style.display = 'flex';
@@ -3962,6 +4254,20 @@ export class PluginBase {
         div.style.overflow = 'hidden';
         div.style.whiteSpace = 'nowrap';
         div.style.fontFamily = "'Noto Sans JP', sans-serif";
+
+        // 文字装飾 (<bold> / <italic> / <underline> / <strikethrough>) を CSS に反映
+        if (docEl.querySelector('bold')) {
+            div.style.fontWeight = 'bold';
+        }
+        if (docEl.querySelector('italic')) {
+            div.style.fontStyle = 'italic';
+        }
+        const decorations = [];
+        if (docEl.querySelector('underline')) decorations.push('underline');
+        if (docEl.querySelector('strikethrough')) decorations.push('line-through');
+        if (decorations.length > 0) {
+            div.style.textDecoration = decorations.join(' ');
+        }
 
         div.textContent = textContent;
 
@@ -3997,7 +4303,8 @@ export class PluginBase {
         // スタイル属性取得（l_patベースで色解決）
         const l_pat = parseInt(lineEl.getAttribute('l_pat')) || 0;
         const strokeColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(lineEl.getAttribute('lineWidth')) || 1;
+        const _lineWidthAttr = parseFloat(lineEl.getAttribute('lineWidth'));
+        const lineWidth = Number.isFinite(_lineWidthAttr) ? _lineWidthAttr : 1;
         const zIndex = parseInt(lineEl.getAttribute('zIndex')) || 0;
 
         // 水平線か垂直線かを判定
@@ -4057,7 +4364,8 @@ export class PluginBase {
         const l_pat = parseInt(circleEl.getAttribute('l_pat')) || 0;
         const fillColor = (f_pat >= 1 ? resolvePatternColor(f_pat, this._figureCustomPatterns) : null) || DEFAULT_BGCOL;
         const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(circleEl.getAttribute('lineWidth')) || 1;
+        const _lineWidthAttr = parseFloat(circleEl.getAttribute('lineWidth'));
+        const lineWidth = Number.isFinite(_lineWidthAttr) ? _lineWidthAttr : 1;
         const zIndex = parseInt(circleEl.getAttribute('zIndex')) || 0;
 
         const width = right - left;
@@ -4111,7 +4419,8 @@ export class PluginBase {
         const l_pat = parseInt(polygonEl.getAttribute('l_pat')) || 0;
         const fillColor = (f_pat >= 1 ? resolvePatternColor(f_pat, this._figureCustomPatterns) : null) || DEFAULT_BGCOL;
         const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(polygonEl.getAttribute('lineWidth')) || 1;
+        const _lineWidthAttr = parseFloat(polygonEl.getAttribute('lineWidth'));
+        const lineWidth = Number.isFinite(_lineWidthAttr) ? _lineWidthAttr : 1;
         const zIndex = parseInt(polygonEl.getAttribute('zIndex')) || 0;
         const pointsAttr = polygonEl.getAttribute('points') || '';
 
@@ -4183,7 +4492,8 @@ export class PluginBase {
         const l_pat = parseInt(ellipseEl.getAttribute('l_pat')) || 0;
         const fillColor = (f_pat >= 1 ? resolvePatternColor(f_pat, this._figureCustomPatterns) : null) || DEFAULT_BGCOL;
         const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(ellipseEl.getAttribute('lineWidth')) || 1;
+        const _lineWidthAttr = parseFloat(ellipseEl.getAttribute('lineWidth'));
+        const lineWidth = Number.isFinite(_lineWidthAttr) ? _lineWidthAttr : 1;
         const zIndex = parseInt(ellipseEl.getAttribute('zIndex')) || 0;
 
         const width = right - left;
@@ -4253,7 +4563,8 @@ export class PluginBase {
         const l_pat = parseInt(el.getAttribute('l_pat')) || 0;
         const fillColor = (f_pat >= 1 ? resolvePatternColor(f_pat, this._figureCustomPatterns) : null) || DEFAULT_BGCOL;
         const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(el.getAttribute('lineWidth')) || 1;
+        const _lineWidthAttr = parseFloat(el.getAttribute('lineWidth'));
+        const lineWidth = Number.isFinite(_lineWidthAttr) ? _lineWidthAttr : 1;
         const zIndex = parseInt(el.getAttribute('zIndex')) || 0;
 
         const width = right - left;
@@ -4373,7 +4684,8 @@ export class PluginBase {
 
         const l_pat = parseInt(polylineEl.getAttribute('l_pat')) || 0;
         const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(polylineEl.getAttribute('lineWidth')) || 1;
+        const _lineWidthAttr = parseFloat(polylineEl.getAttribute('lineWidth'));
+        const lineWidth = Number.isFinite(_lineWidthAttr) ? _lineWidthAttr : 1;
         const zIndex = parseInt(polylineEl.getAttribute('zIndex')) || 0;
 
         const width = right - left;
@@ -4437,7 +4749,8 @@ export class PluginBase {
 
         const l_pat = parseInt(curveEl.getAttribute('l_pat')) || 0;
         const lineColor = (l_pat >= 1 ? resolvePatternColor(l_pat, this._figureCustomPatterns) : null) || DEFAULT_FRCOL;
-        const lineWidth = parseFloat(curveEl.getAttribute('lineWidth')) || 1;
+        const _lineWidthAttr = parseFloat(curveEl.getAttribute('lineWidth'));
+        const lineWidth = Number.isFinite(_lineWidthAttr) ? _lineWidthAttr : 1;
         const zIndex = parseInt(curveEl.getAttribute('zIndex')) || 0;
 
         const width = right - left;
@@ -4533,6 +4846,9 @@ export class PluginBase {
         img.style.width = '100%';
         img.style.height = '100%';
         img.style.objectFit = 'contain';
+        // 画面外の画像は遅延ロード + デコードを非同期化 (UI スレッドブロック回避)
+        img.loading = 'lazy';
+        img.decoding = 'async';
 
         // 画像パスを解決
         if (href) {
@@ -4594,20 +4910,23 @@ export class PluginBase {
         // <patterns>セクションからカスタムパターンを解析（render系メソッドで使用）
         this._figureCustomPatterns = this._parseCustomPatternsForRender(figureEl);
 
+        // DocumentFragment を appendChild 先として渡し、 図形要素描画中の reflow を抑止
+        const renderFragment = document.createDocumentFragment();
+
         // タグ名→レンダーメソッドのディスパッチマップ
         const renderDispatch = {
-            'rect': (el) => this.renderRectElement(el, figureContainer),
-            'line': (el) => this.renderLineElement(el, figureContainer),
-            'circle': (el) => this.renderCircleElement(el, figureContainer),
-            'polygon': (el) => this.renderPolygonElement(el, figureContainer),
-            'ellipse': (el) => this.renderEllipseElement(el, figureContainer),
-            'arc': (el) => this.renderArcElement(el, figureContainer),
-            'chord': (el) => this.renderChordElement(el, figureContainer),
-            'elliptical_arc': (el) => this.renderEllipticalArcElement(el, figureContainer),
-            'polyline': (el) => this.renderPolylineElement(el, figureContainer),
-            'curve': (el) => this.renderCurveElement(el, figureContainer),
-            'image': (el) => this.renderImageElement(el, figureContainer),
-            'document': (el) => this.renderDocumentTextElement(el, figureContainer)
+            'rect': (el) => this.renderRectElement(el, renderFragment),
+            'line': (el) => this.renderLineElement(el, renderFragment),
+            'circle': (el) => this.renderCircleElement(el, renderFragment),
+            'polygon': (el) => this.renderPolygonElement(el, renderFragment),
+            'ellipse': (el) => this.renderEllipseElement(el, renderFragment),
+            'arc': (el) => this.renderArcElement(el, renderFragment),
+            'chord': (el) => this.renderChordElement(el, renderFragment),
+            'elliptical_arc': (el) => this.renderEllipticalArcElement(el, renderFragment),
+            'polyline': (el) => this.renderPolylineElement(el, renderFragment),
+            'curve': (el) => this.renderCurveElement(el, renderFragment),
+            'image': (el) => this.renderImageElement(el, renderFragment),
+            'document': (el) => this.renderDocumentTextElement(el, renderFragment)
         };
 
         let elementCount = 0;
@@ -4626,6 +4945,9 @@ export class PluginBase {
             // パターン参照を確実にクリーンアップ
             this._figureCustomPatterns = null;
         }
+
+        // fragment を figureContainer に一括追加 (reflow を 1 回に集約)
+        figureContainer.appendChild(renderFragment);
 
         if (container) {
             container.appendChild(figureContainer);
@@ -4766,6 +5088,13 @@ export class PluginBase {
                 scrollx: parseFloat(linkElement.getAttribute('scrollx')) || 0,
                 scrolly: parseFloat(linkElement.getAttribute('scrolly')) || 0,
                 zoomratio: parseFloat(linkElement.getAttribute('zoomratio')) || 1.0,
+                // 表示モード・折り返し（仮身毎に管理、開いたウインドウの状態を保持）
+                viewMode: linkElement.getAttribute('viewMode') || linkElement.getAttribute('viewmode') || undefined,
+                wordWrap: (() => {
+                    const v = linkElement.getAttribute('wordWrap') ?? linkElement.getAttribute('wordwrap');
+                    if (v === null || v === undefined || v === '') return undefined;
+                    return v === 'true' || v === true;
+                })(),
                 // 仮身固有の続柄（link要素のrelationship属性）
                 linkRelationship: this.parseLinkRelationship(linkElement)
             };
@@ -4832,6 +5161,9 @@ export class PluginBase {
             scrollx: baseData.scrollx !== undefined ? baseData.scrollx : 0,
             scrolly: baseData.scrolly !== undefined ? baseData.scrolly : 0,
             zoomratio: baseData.zoomratio !== undefined ? baseData.zoomratio : 1.0,
+            // 表示モード・折り返し（未指定なら undefined のまま、 link 属性として出力されない）
+            viewMode: baseData.viewMode !== undefined ? baseData.viewMode : undefined,
+            wordWrap: baseData.wordWrap !== undefined ? baseData.wordWrap : undefined,
             // 仮身固有の続柄（link要素のrelationship属性）
             linkRelationship: baseData.linkRelationship || []
         };
@@ -4885,6 +5217,18 @@ export class PluginBase {
         linkElement.setAttribute('scrollx', (virtualObj.scrollx || 0).toString());
         linkElement.setAttribute('scrolly', (virtualObj.scrolly || 0).toString());
         linkElement.setAttribute('zoomratio', (virtualObj.zoomratio || 1.0).toString());
+
+        // 表示モード・折り返し（値があれば設定、なければ属性自体を出さない）
+        if (virtualObj.viewMode !== undefined && virtualObj.viewMode !== null && virtualObj.viewMode !== '') {
+            linkElement.setAttribute('viewMode', String(virtualObj.viewMode));
+        } else {
+            linkElement.removeAttribute('viewMode');
+        }
+        if (virtualObj.wordWrap !== undefined && virtualObj.wordWrap !== null && virtualObj.wordWrap !== '') {
+            linkElement.setAttribute('wordWrap', (virtualObj.wordWrap === true || virtualObj.wordWrap === 'true').toString());
+        } else {
+            linkElement.removeAttribute('wordWrap');
+        }
 
         // zIndex属性（レイヤー順序、図形TAD用）
         if (virtualObj.zIndex !== undefined && virtualObj.zIndex !== null) {

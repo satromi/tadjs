@@ -29,7 +29,9 @@ export class TextStyleStateManager {
         space: DEFAULT_LETTER_SPACING,  // 文字間隔
         align: 'left',
         lineHeight: '1',         // 行の高さ
-        textDirection: '0'       // テキスト方向 (0:横書き, 1:縦書き)
+        textDirection: '0',      // テキスト方向 (0:横書き, 1:縦書き)
+        hRatio: '1/1',           // 文字高さ拡大率 (RATIO 型 A/B)
+        wRatio: '1/1'            // 文字幅拡大率 (RATIO 型 A/B)
     };
 
     constructor() {
@@ -54,6 +56,8 @@ export class TextStyleStateManager {
         this.align = d.align;
         this.lineHeight = d.lineHeight;
         this.textDirection = d.textDirection;
+        this.hRatio = d.hRatio;
+        this.wRatio = d.wRatio;
     }
 
     /**
@@ -84,6 +88,8 @@ export class TextStyleStateManager {
         if (attrs.kerning !== undefined) this.update('kerning', attrs.kerning);
         if (attrs.pattern !== undefined) this.update('pattern', attrs.pattern);
         if (attrs.space !== undefined) this.update('space', attrs.space);
+        if (attrs.hRatio !== undefined) this.update('hRatio', attrs.hRatio);
+        if (attrs.wRatio !== undefined) this.update('wRatio', attrs.wRatio);
     }
 
     /**
@@ -96,6 +102,16 @@ export class TextStyleStateManager {
         if (attrs.direction !== undefined) this.update('textDirection', attrs.direction);
     }
 
+    _parseRatio(ratioStr) {
+        if (!ratioStr || typeof ratioStr !== 'string') return 1.0;
+        const m = ratioStr.match(/^(\d+)\/(\d+)$/);
+        if (!m) return 1.0;
+        const a = parseInt(m[1], 10);
+        const b = parseInt(m[2], 10);
+        if (b === 0) return 1.0;
+        return a / b;
+    }
+
     /**
      * 現在のフォント状態をCSSスタイル文字列として取得
      * デフォルト値と異なる属性のみ出力
@@ -104,13 +120,18 @@ export class TextStyleStateManager {
     toCssStyle() {
         const d = TextStyleStateManager.DEFAULTS;
         let style = '';
-        if (this.size !== d.size) style += `font-size: ${this.size}pt;`;
+        const hScale = this._parseRatio(this.hRatio);
+        if (this.size !== d.size || hScale !== 1.0) {
+            style += `font-size: ${parseFloat(this.size) * hScale}pt;`;
+        }
         if (this.color !== d.color) style += `color: ${this.color};`;
         if (this.face) style += `font-family: ${this.face};`;
         if (this.style !== d.style) style += `font-style: ${this.style};`;
         if (this.weight !== d.weight) style += `font-weight: ${this.weight};`;
         if (this.stretch !== d.stretch) style += `font-stretch: ${this.stretch};`;
         if (this.space !== d.space) style += `letter-spacing: ${this.space}em;`;
+        const wScale = this._parseRatio(this.wRatio);
+        if (wScale !== 1.0) style += `font-stretch: ${Math.round(wScale * 100)}%;`;
         return style;
     }
 
@@ -137,7 +158,9 @@ export class TextStyleStateManager {
                this.style !== d.style ||
                this.weight !== d.weight ||
                this.stretch !== d.stretch ||
-               this.space !== d.space;
+               this.space !== d.space ||
+               this.hRatio !== d.hRatio ||
+               this.wRatio !== d.wRatio;
     }
 
     /**
@@ -159,6 +182,8 @@ export class TextStyleStateManager {
         copy.align = this.align;
         copy.lineHeight = this.lineHeight;
         copy.textDirection = this.textDirection;
+        copy.hRatio = this.hRatio;
+        copy.wRatio = this.wRatio;
         return copy;
     }
 }

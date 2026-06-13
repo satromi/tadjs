@@ -37,6 +37,10 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         this.rowHeights = new Map(); // row -> height (デフォルトはthis.cellHeight)
         this.mergedCells = new Map(); // "startCol,startRow" -> { startCol, startRow, endCol, endRow }
 
+        // セル要素のキャッシュ (P-C: applyColumnWidth/applyRowHeight の querySelectorAll 削減)
+        this._colCellsMap = new Map(); // col -> cell element[]
+        this._rowCellsMap = new Map(); // row -> cell element[]
+
         // 選択状態
         this.selectedCell = null; // { col, row } - アクティブセル
         this.selectionRange = null; // { startCol, startRow, endCol, endRow } - 選択範囲
@@ -76,6 +80,9 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         this.operationPanelVisible = true; // 初期表示ON
         this.operationPanelWindowId = null;
         this.panelpos = { x: 50, y: 50 };
+        // 非アクティブ時の visibility 制御用
+        this._savedOperationPanelVisible = undefined;
+        this._visibilityHideTimer = null;
 
         // 最後に通知したセル（重複通知防止用）
         this.lastNotifiedCell = null;
@@ -459,6 +466,23 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
     }
 
     /**
+     * セル要素を col/row マップに登録 (P-C キャッシュ)
+     */
+    _registerCellInMap(col, row, cell) {
+        let colArr = this._colCellsMap.get(col);
+        if (!colArr) { colArr = []; this._colCellsMap.set(col, colArr); }
+        colArr.push(cell);
+        let rowArr = this._rowCellsMap.get(row);
+        if (!rowArr) { rowArr = []; this._rowCellsMap.set(row, rowArr); }
+        rowArr.push(cell);
+    }
+
+    _clearCellMap() {
+        this._colCellsMap.clear();
+        this._rowCellsMap.clear();
+    }
+
+    /**
      * 列幅をDOMに適用
      */
     applyColumnWidth(col) {
@@ -469,12 +493,14 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
             colHeader.style.width = width + 'px';
             colHeader.style.minWidth = width + 'px';
         }
-        // すべての該当セル
-        const cells = document.querySelectorAll(`.cell[data-col="${col}"]`);
-        cells.forEach(cell => {
-            cell.style.width = width + 'px';
-            cell.style.minWidth = width + 'px';
-        });
+        // すべての該当セル (Map から取得して O(1))
+        const cells = this._colCellsMap.get(col);
+        if (cells) {
+            for (const cell of cells) {
+                cell.style.width = width + 'px';
+                cell.style.minWidth = width + 'px';
+            }
+        }
     }
 
     /**
@@ -492,11 +518,13 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         if (gridRow) {
             gridRow.style.height = height + 'px';
         }
-        // すべての該当セル
-        const cells = document.querySelectorAll(`.cell[data-row="${row}"]`);
-        cells.forEach(cell => {
-            cell.style.height = height + 'px';
-        });
+        // すべての該当セル (Map から取得して O(1))
+        const cells = this._rowCellsMap.get(row);
+        if (cells) {
+            for (const cell of cells) {
+                cell.style.height = height + 'px';
+            }
+        }
     }
 
     /**
@@ -506,16 +534,19 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         const headerContainer = document.getElementById('grid-header');
         const bodyContainer = document.getElementById('grid-body');
 
-        // 列ヘッダー生成
+        // 列ヘッダー生成 (DocumentFragment で reflow を 1 回に集約)
+        const headerFrag = document.createDocumentFragment();
         for (let col = 1; col <= this.defaultCols; col++) {
             const colHeader = document.createElement('div');
             colHeader.className = 'column-header';
             colHeader.textContent = this.colToLetter(col);
             colHeader.dataset.col = col;
-            headerContainer.appendChild(colHeader);
+            headerFrag.appendChild(colHeader);
         }
+        headerContainer.appendChild(headerFrag);
 
-        // 行生成
+        // 行生成 (DocumentFragment で reflow を 1 回に集約)
+        const bodyFrag = document.createDocumentFragment();
         for (let row = 1; row <= this.defaultRows; row++) {
             const gridRow = document.createElement('div');
             gridRow.className = 'grid-row';
@@ -535,10 +566,12 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                 cell.dataset.col = col;
                 cell.dataset.row = row;
                 gridRow.appendChild(cell);
+                this._registerCellInMap(col, row, cell);
             }
 
-            bodyContainer.appendChild(gridRow);
+            bodyFrag.appendChild(gridRow);
         }
+        bodyContainer.appendChild(bodyFrag);
 
         logger.info(`[CalcEditor] グリッド生成完了: ${this.defaultCols}列 x ${this.defaultRows}行`);
     }
@@ -586,6 +619,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                     cell.dataset.col = col;
                     cell.dataset.row = rowNum;
                     gridRow.appendChild(cell);
+                    this._registerCellInMap(col, rowNum, cell);
                 }
             });
 
@@ -622,6 +656,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                     cell.dataset.col = col;
                     cell.dataset.row = row;
                     gridRow.appendChild(cell);
+                    this._registerCellInMap(col, row, cell);
                 }
 
                 bodyContainer.appendChild(gridRow);
@@ -1007,6 +1042,46 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
 
                     const col = parseInt(cell.dataset.col);
                     const row = parseInt(cell.dataset.row);
+
+                    // セル内ドラッグ移動: 同一プラグイン + 同一セル + 単一仮身 + 非複製ドラッグの場合、
+                    // 仮身の vobjleft/vobjtop を更新して終了 (HTML5 ドラッグの insert/delete フローを回避)
+                    const isSameCellMove = dragData.source === 'basic-calc-editor' &&
+                        !dragData.isDuplicateDrag &&
+                        virtualObjects.length === 1 &&
+                        this.dragSourceCell &&
+                        this.dragSourceCell.col === col &&
+                        this.dragSourceCell.row === row;
+                    if (isSameCellMove) {
+                        const cellRect = cell.getBoundingClientRect();
+                        const key = this.getCellKey(col, row);
+                        const cellData = this.cells.get(key);
+                        if (cellData && cellData.virtualObject) {
+                            // ドラッグ開始時の仮身要素内オフセットを引いて、ドロップ位置に仮身を配置
+                            const offsetX = this.dragOffsetInVobj?.x ?? 0;
+                            const offsetY = this.dragOffsetInVobj?.y ?? 0;
+                            let newLeft = Math.round(e.clientX - cellRect.left - offsetX);
+                            let newTop = Math.round(e.clientY - cellRect.top - offsetY);
+                            const vo = cellData.virtualObject;
+                            const w = vo.width || 150;
+                            const h = vo.heightPx || DEFAULT_VOBJ_HEIGHT;
+                            // セル境界にクランプ
+                            newLeft = Math.max(0, Math.min(newLeft, Math.max(0, cell.clientWidth - w)));
+                            newTop = Math.max(0, Math.min(newTop, Math.max(0, cell.clientHeight - h)));
+                            vo.vobjleft = newLeft;
+                            vo.vobjtop = newTop;
+                            vo.vobjright = newLeft + w;
+                            vo.vobjbottom = newTop + h;
+                            this.isModified = true;
+                            this.renderCell(col, row);
+                            logger.info(`[CalcEditor] セル内ドラッグ移動: ${this.colToLetter(col)}${row} -> (${newLeft}, ${newTop})`);
+                        }
+                        // ドラッグ元のウィンドウに通知 (onDeleteSourceVirtualObject 側は同一ウィンドウのため no-op)
+                        if (this.messageBus) {
+                            dragData.targetWindowId = this.windowId;
+                            this.notifyCrossWindowDropSuccess(dragData, virtualObjects);
+                        }
+                        return;
+                    }
 
                     logger.info(`[CalcEditor] 仮身ドロップ: ${this.colToLetter(col)}${row}`);
 
@@ -2102,6 +2177,20 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         delete styleWithoutBorder.border;
         cellData.style = { ...cellData.style, ...styleWithoutBorder };
 
+        // セルのアラインメント (textAlign / vAlign) が変更された場合、
+        // セル内仮身は手動の絶対座標位置 (vobjleft/vobjtop) を一旦忘れて alignment モードに戻す
+        if ((styleWithoutBorder.textAlign !== undefined || styleWithoutBorder.vAlign !== undefined) &&
+            cellData.virtualObject) {
+            const vo = cellData.virtualObject;
+            if (vo.vobjleft !== undefined || vo.vobjtop !== undefined) {
+                delete vo.vobjleft;
+                delete vo.vobjtop;
+                delete vo.vobjright;
+                delete vo.vobjbottom;
+                logger.info(`[CalcEditor] アラインメント変更により仮身の絶対座標をクリア: ${this.colToLetter(col)}${row}`);
+            }
+        }
+
         this.cells.set(key, cellData);
         this.isModified = true;
 
@@ -2255,6 +2344,11 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
             // contentTypeに応じて表示を切り替え
             if (cellData.contentType === 'virtualObject' && cellData.virtualObject) {
                 // 仮身の表示
+                // 再レンダリング時に既存 iframe (開いた仮身のコンテンツ) があれば一時保存し、
+                // 新しい vobjElement の作成後にコンテンツ領域へ付け替える (再ロード回避 + 表示維持)
+                const preservedIframe = cellData.expandedElement && cellData.expandedElement.contentWindow
+                    ? cellData.expandedElement
+                    : null;
                 cell.textContent = ''; // まずクリア
 
                 if (this.virtualObjectRenderer) {
@@ -2269,38 +2363,42 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                     const cellKey = this.getCellKey(col, row);
                     let vobjElement;
 
-                    if (isOpenedVobj) {
-                        // 開いた仮身: createBlockElementを使用
-                        // vobjbottom/vobjtopを設定（createBlockElementが必要とする）
-                        // opened: true を明示的に設定（vobjtop=0がfalsyと判定されるのを回避）
-                        const virtualObjectWithPos = {
-                            ...cellData.virtualObject,
-                            opened: true,
-                            vobjtop: 0,
-                            vobjbottom: cellData.virtualObject.heightPx || 100,
-                            vobjleft: 0,
-                            vobjright: cellData.virtualObject.width || 150
-                        };
-                        vobjElement = this.virtualObjectRenderer.createBlockElement(virtualObjectWithPos, options);
-                        // position: absoluteを解除（セル内表示用）
+                    // セル内仮身の配置モード判定:
+                    // - 絶対座標モード: vobjleft/top が設定済み (新規追加またはユーザ操作後)
+                    // - alignment モード: vobjleft/top が undefined (下位互換、旧ファイル)
+                    const vo = cellData.virtualObject;
+                    const useAbsolutePosition = vo.vobjleft !== undefined && vo.vobjtop !== undefined;
+
+                    // セルを position: relative にして、絶対座標で配置される vobj の原点とする
+                    if (useAbsolutePosition) {
+                        cell.style.position = 'relative';
+                    }
+
+                    // createBlockElement を使用 (open/closed 両方)。
+                    // 絶対座標モードでは renderer が virtualObject.vobjleft/top/right/bottom に基づき absolute で配置する。
+                    // alignment モードでは vobjleft/top/right/bottom を 0,0,width,heightPx で補完して renderer に渡し、
+                    // 後で position を relative に上書きして cell の flex alignment に従わせる。
+                    const w = vo.width || 150;
+                    const h = vo.heightPx || DEFAULT_VOBJ_HEIGHT;
+                    const vobjForRender = {
+                        ...vo,
+                        vobjleft: useAbsolutePosition ? vo.vobjleft : 0,
+                        vobjtop: useAbsolutePosition ? vo.vobjtop : 0,
+                        vobjright: useAbsolutePosition ? (vo.vobjright !== undefined ? vo.vobjright : vo.vobjleft + w) : w,
+                        vobjbottom: useAbsolutePosition ? (vo.vobjbottom !== undefined ? vo.vobjbottom : vo.vobjtop + h) : h,
+                        ...(isOpenedVobj ? { opened: true } : {})
+                    };
+                    vobjElement = this.virtualObjectRenderer.createBlockElement(vobjForRender, options);
+
+                    // alignment モードでは absolute を解除して cell の flex layout に従わせる (旧挙動を保持)
+                    if (!useAbsolutePosition) {
                         vobjElement.style.position = 'relative';
                         vobjElement.style.left = '0';
                         vobjElement.style.top = '0';
-                    } else {
-                        // 閉じた仮身: createInlineElementを使用
-                        vobjElement = this.virtualObjectRenderer.createInlineElement(cellData.virtualObject, options);
                     }
 
                     // セル内の仮身専用のクラスを追加
                     vobjElement.classList.add('virtual-object-in-cell');
-
-                    // 仮身のサイズが設定されている場合は適用
-                    if (cellData.virtualObject.width) {
-                        vobjElement.style.width = `${cellData.virtualObject.width}px`;
-                    }
-                    if (cellData.virtualObject.heightPx) {
-                        vobjElement.style.height = `${cellData.virtualObject.heightPx}px`;
-                    }
 
                     // ドラッグ可能に設定
                     vobjElement.setAttribute('draggable', 'true');
@@ -2360,6 +2458,14 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                         // ドラッグ元のセル位置を記録
                         this.dragSourceCell = { col, row };
 
+                        // セル内ドラッグ移動用: 仮身要素内のマウスオフセットを記録
+                        // (ドロップ時に仮身を「クリックした位置を保ったまま」配置するため)
+                        const vobjRect = vobjElement.getBoundingClientRect();
+                        this.dragOffsetInVobj = {
+                            x: e.clientX - vobjRect.left,
+                            y: e.clientY - vobjRect.top
+                        };
+
                         logger.info('[CalcEditor] dragstart: ドラッグ開始', {
                             dragSourceCell: this.dragSourceCell,
                             dragMode: this.virtualObjectDragState.dragMode,
@@ -2397,6 +2503,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
 
                             // プラグイン固有の状態をクリア
                             this.dragSourceCell = null;
+                            this.dragOffsetInVobj = null;
                         }, 50); // 50ms遅延
                     });
 
@@ -2425,15 +2532,42 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
 
                     cell.appendChild(vobjElement);
 
-                    // 開いた仮身の場合、コンテンツを展開（まだ展開されていない場合のみ）
-                    if (isOpenedVobj && !cellData.expanded && !cellData.expandError) {
-                        cellData.expanded = true; // 先にフラグ設定（無限ループ防止）
-                        setTimeout(() => {
-                            this.expandVirtualObjectInCell(vobjElement, cellData.virtualObject, cellKey).catch(err => {
-                                logger.error('[CalcEditor] 仮身展開エラー:', err);
-                                cellData.expandError = true;
-                            });
-                        }, 0);
+                    // 開いた→閉じた仮身に状態変化した場合は、保存していた expanded フラグと iframe 参照をリセット
+                    if (!isOpenedVobj && cellData.expanded) {
+                        cellData.expanded = false;
+                        cellData.expandedElement = null;
+                    }
+
+                    // 開いた仮身の場合
+                    if (isOpenedVobj) {
+                        // 再レンダリングで保存しておいた iframe があれば、新しい vobjElement の contentArea に移動する
+                        if (preservedIframe) {
+                            const contentArea = vobjElement.querySelector('.virtual-object-content-area');
+                            if (contentArea) {
+                                contentArea.appendChild(preservedIframe);
+                                cellData.expandedElement = preservedIframe;
+                                cellData.expanded = true;
+                                logger.debug('[CalcEditor] 既存iframeを新しい仮身要素に移動:', cellKey);
+                            } else {
+                                // contentArea が見つからない場合は古い iframe を DOM から確実に切り離してメモリリークを防ぐ
+                                logger.warn('[CalcEditor] contentAreaが見つからないため再展開:', cellKey);
+                                if (preservedIframe.parentNode) {
+                                    preservedIframe.parentNode.removeChild(preservedIframe);
+                                }
+                                cellData.expanded = false;
+                                cellData.expandedElement = null;
+                            }
+                        }
+                        // 未展開なら新規展開
+                        if (!cellData.expanded && !cellData.expandError) {
+                            cellData.expanded = true; // 先にフラグ設定（無限ループ防止）
+                            setTimeout(() => {
+                                this.expandVirtualObjectInCell(vobjElement, cellData.virtualObject, cellKey).catch(err => {
+                                    logger.error('[CalcEditor] 仮身展開エラー:', err);
+                                    cellData.expandError = true;
+                                });
+                            }, 0);
+                        }
                     }
                 } else {
                     // フォールバック: VirtualObjectRendererが利用できない場合
@@ -2539,9 +2673,9 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                 if (cellData.style.fontFamily) {
                     cell.style.fontFamily = cellData.style.fontFamily;
                 }
-                // フォントサイズ
+                // フォントサイズ (cellData.style.fontSize は pt 値として扱う、BTRON 仕様準拠)
                 if (cellData.style.fontSize) {
-                    cell.style.fontSize = `${cellData.style.fontSize}px`;
+                    cell.style.fontSize = `${window.convertPtToPx(cellData.style.fontSize)}px`;
                 }
                 // テキスト配置（水平）
                 if (cellData.style.textAlign) {
@@ -2777,6 +2911,20 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
             selectedCell: this.selectedCell ? { ...this.selectedCell } : null,
             selectionRange: this.selectionRange ? { ...this.selectionRange } : null
         };
+        // 操作パネルを非表示にする (150ms 遅延、 DEACT/ACT 連鎖発火対策)
+        this._savedOperationPanelVisible = this.operationPanelVisible;
+        if (this.operationPanelWindowId && this.messageBus) {
+            if (this._visibilityHideTimer) clearTimeout(this._visibilityHideTimer);
+            const targetWindowId = this.operationPanelWindowId;
+            const bus = this.messageBus;
+            this._visibilityHideTimer = setTimeout(() => {
+                bus.send('set-window-visibility', {
+                    windowId: targetWindowId,
+                    visible: false
+                });
+                this._visibilityHideTimer = null;
+            }, 150);
+        }
     }
 
     /**
@@ -2816,6 +2964,24 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                 this.renderSelection();
             }
         });
+        // 操作パネル復元: DEACT で予約した hide タイマーを cancel、 または保存状態で visibility=true 送信
+        if (this._visibilityHideTimer) {
+            clearTimeout(this._visibilityHideTimer);
+            this._visibilityHideTimer = null;
+            this._savedOperationPanelVisible = undefined;
+            return;
+        }
+        if (this._savedOperationPanelVisible === true) {
+            if (this.operationPanelWindowId && this.messageBus) {
+                this.messageBus.send('set-window-visibility', {
+                    windowId: this.operationPanelWindowId,
+                    visible: true
+                });
+            } else {
+                this.openOperationPanel();
+            }
+        }
+        this._savedOperationPanelVisible = undefined;
     }
 
     /**
@@ -2922,7 +3088,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
             // 許可する関数をホワイトリストで定義
             const allowedFunctions = {
                 SUM: formulajs.SUM || function(...args) { return args.flat().reduce((a, b) => a + b, 0); },
-                AVERAGE: formulajs.AVERAGE || function(...args) { const arr = args.flat(); return arr.reduce((a, b) => a + b, 0) / arr.length; },
+                AVERAGE: formulajs.AVERAGE || function(...args) { const arr = args.flat(); if (arr.length === 0) return '#DIV/0!'; return arr.reduce((a, b) => a + b, 0) / arr.length; },
                 COUNT: formulajs.COUNT || function(...args) { return args.flat().length; },
                 MAX: formulajs.MAX || Math.max,
                 MIN: formulajs.MIN || Math.min,
@@ -2933,7 +3099,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                 ABS: formulajs.ABS || Math.abs,
                 SQRT: formulajs.SQRT || Math.sqrt,
                 POWER: formulajs.POWER || Math.pow,
-                MOD: formulajs.MOD || function(a, b) { return a % b; },
+                MOD: formulajs.MOD || function(a, b) { if (b === 0) return '#DIV/0!'; return a % b; },
                 PI: formulajs.PI || function() { return Math.PI; },
                 RAND: formulajs.RAND || Math.random,
                 RANDBETWEEN: formulajs.RANDBETWEEN || function(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
@@ -3174,8 +3340,11 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
      */
     closeOperationPanel() {
         if (this.operationPanelWindowId && this.messageBus) {
+            // skipCloseConfirmation: 操作パネルはユーザデータを持たないので保存確認スキップ
+            // (これがないと closeWindow の requestCloseConfirmation が 20 秒タイムアウトする)
             this.messageBus.send('close-window', {
-                windowId: this.operationPanelWindowId
+                windowId: this.operationPanelWindowId,
+                skipCloseConfirmation: true
             });
         }
         this.operationPanelVisible = false;
@@ -3398,7 +3567,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                         const targetCol = destCol + c;
                         const targetRow = destRow + r;
 
-                        if (targetCol > this.defaultCols || targetRow > this.defaultRows) continue;
+                        if (targetCol > this.currentMaxCol || targetRow > this.currentMaxRow) continue;
 
                         const key = `${targetCol},${targetRow}`;
 
@@ -3649,8 +3818,8 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                 newRow += rowOffset;
             }
 
-            // 範囲外チェック
-            if (newCol < 1 || newCol > this.defaultCols || newRow < 1 || newRow > this.defaultRows) {
+            // 範囲外チェック (グリッド拡張領域も有効な参照先とする)
+            if (newCol < 1 || newCol > this.currentMaxCol || newRow < 1 || newRow > this.currentMaxRow) {
                 return '#REF!';
             }
 
@@ -3939,6 +4108,9 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         while (bodyContainer.firstChild) {
             bodyContainer.removeChild(bodyContainer.firstChild);
         }
+
+        // セルマップもクリア (再生成で新規参照に差し替わる)
+        this._clearCellMap();
 
         // 現在のグリッドサイズをリセット
         this.currentMaxRow = this.defaultRows;
@@ -4591,7 +4763,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         // 行高・列幅のカスタムサイズを出力（デフォルトと異なるもののみ）
         // 先に行高を出力
         const customRows = [];
-        for (let row = 1; row <= this.defaultRows; row++) {
+        for (let row = 1; row <= this.currentMaxRow; row++) {
             if (this.rowHeights.has(row)) {
                 const height = this.rowHeights.get(row);
                 if (height !== this.cellHeight) {
@@ -4606,7 +4778,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
 
         // 次に列幅を出力
         const customCols = [];
-        for (let col = 1; col <= this.defaultCols; col++) {
+        for (let col = 1; col <= this.currentMaxCol; col++) {
             if (this.columnWidths.has(col)) {
                 const width = this.columnWidths.get(col);
                 if (width !== this.cellWidth) {
@@ -4871,6 +5043,12 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         if (virtualObject.width) attrs += ` width="${virtualObject.width}"`;
         if (virtualObject.heightPx) attrs += ` heightPx="${virtualObject.heightPx}"`;
 
+        // 座標属性 (セル原点からの相対座標、他プラグインの仮身と統一)
+        if (virtualObject.vobjleft !== undefined) attrs += ` vobjleft="${virtualObject.vobjleft}"`;
+        if (virtualObject.vobjtop !== undefined) attrs += ` vobjtop="${virtualObject.vobjtop}"`;
+        if (virtualObject.vobjright !== undefined) attrs += ` vobjright="${virtualObject.vobjright}"`;
+        if (virtualObject.vobjbottom !== undefined) attrs += ` vobjbottom="${virtualObject.vobjbottom}"`;
+
         // applist（プラグイン設定）
         if (virtualObject.applist) {
             attrs += ` applist="${this.escapeXml(JSON.stringify(virtualObject.applist))}"`;
@@ -5064,6 +5242,14 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
             }
 
             // 仮身オブジェクトを作成
+            const widthVal = attrMap.width ? parseFloat(attrMap.width) : undefined;
+            const heightPxVal = attrMap.heightPx ? parseFloat(attrMap.heightPx) : undefined;
+            // 座標属性 (セル原点からの相対座標)。
+            // XML に存在しない場合は undefined のまま残し、renderCell で alignment ベース配置にフォールバックする (下位互換)
+            const vobjleft = attrMap.vobjleft !== undefined ? parseFloat(attrMap.vobjleft) : undefined;
+            const vobjtop = attrMap.vobjtop !== undefined ? parseFloat(attrMap.vobjtop) : undefined;
+            const vobjright = attrMap.vobjright !== undefined ? parseFloat(attrMap.vobjright) : undefined;
+            const vobjbottom = attrMap.vobjbottom !== undefined ? parseFloat(attrMap.vobjbottom) : undefined;
             const virtualObject = {
                 link_id: attrMap.id || '',
                 link_name: attrMap.name || this.unescapeXml(innerContent) || '',
@@ -5079,8 +5265,12 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                 roledisp: attrMap.roledisp,
                 typedisp: attrMap.typedisp,
                 updatedisp: attrMap.updatedisp,
-                width: attrMap.width ? parseFloat(attrMap.width) : undefined,
-                heightPx: attrMap.heightPx ? parseFloat(attrMap.heightPx) : undefined,
+                width: widthVal,
+                heightPx: heightPxVal,
+                vobjleft,
+                vobjtop,
+                vobjright,
+                vobjbottom,
                 applist: applist,
                 // スクロール位置・表示倍率（仮身毎に管理、BTRON仕様準拠）
                 scrollx: parseFloat(attrMap.scrollx) || 0,
@@ -5833,7 +6023,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
             startRow = this.selectedCell.row;
             // 次のセルから検索開始
             startCol++;
-            if (startCol > this.defaultCols) {
+            if (startCol > this.currentMaxCol) {
                 startCol = 1;
                 startRow++;
             }
@@ -5872,9 +6062,9 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
      * @returns {boolean} 見つかったかどうか
      */
     searchFromPosition(startCol, startRow, searchText, regex, limitCol = null, limitRow = null) {
-        for (let row = startRow; row <= this.defaultRows; row++) {
+        for (let row = startRow; row <= this.currentMaxRow; row++) {
             const colStart = (row === startRow) ? startCol : 1;
-            for (let col = colStart; col <= this.defaultCols; col++) {
+            for (let col = colStart; col <= this.currentMaxCol; col++) {
                 // 制限位置に到達したら終了
                 if (limitRow !== null && limitCol !== null) {
                     if (row > limitRow || (row === limitRow && col >= limitCol)) {
@@ -6523,6 +6713,8 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
         const chsz = parseFloat(menuFontSize);
 
         // デフォルト値で仮身オブジェクトを作成
+        // vobjleft/top/right/bottom はあえて設定しない (= alignment モード):
+        // セルの textAlign/vAlign で配置を制御。ユーザがドラッグ移動すると絶対座標モードに切り替わる。
         const virtualObj = {
             vobjid: UuidV7Generator.generate(),
             link_id: realId,
@@ -6559,28 +6751,29 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
      * @returns {boolean} 開いた仮身ならtrue
      */
     isOpenedVirtualObjectInCell(virtualObject) {
-        // VirtualObjectRendererに委譲
-        if (this.virtualObjectRenderer) {
-            return this.virtualObjectRenderer.isOpenedVirtualObject(virtualObject);
-        }
-
-        // フォールバック: VirtualObjectRenderer未初期化時
         // 明示的なopenedプロパティがあればそれを優先
         if (virtualObject.opened !== undefined) {
             return virtualObject.opened === true;
         }
 
-        // heightPxベースの判定（セル内仮身用）
+        // セル内仮身は vobjbottom/vobjtop を持たず heightPx しか持たないため、
+        // renderer.isOpenedVirtualObject() に委譲せず heightPx ベースで判定する
+        // (renderer の判定は vobjbottom/vobjtop が無いと常に false を返してしまうため)
         const heightPx = virtualObject.heightPx || DEFAULT_VOBJ_HEIGHT;
         const chsz = parseFloat(virtualObject.chsz) || DEFAULT_FONT_SIZE;
 
-        // 閉じた仮身の最小高さを計算（VirtualObjectRendererと同じ閾値）
+        // VirtualObjectRenderer と同じ閾値 (minOpenHeight = minClosedHeight + VOBJ_MIN_OPEN_HEIGHT_OFFSET) を使用
+        if (this.virtualObjectRenderer) {
+            const minOpenHeight = this.virtualObjectRenderer.getMinOpenHeight(chsz);
+            return heightPx >= minOpenHeight;
+        }
+
+        // フォールバック: VirtualObjectRenderer 未初期化時
         const chszPx = window.convertPtToPx(chsz);
         const textHeight = Math.ceil(chszPx * DEFAULT_LINE_HEIGHT);
         const minClosedHeight = textHeight + VOBJ_PADDING_VERTICAL;
-
-        // VirtualObjectRendererと同じ閾値を使用: height > minClosedHeight
-        return heightPx > minClosedHeight;
+        const minOpenHeight = minClosedHeight + VOBJ_MIN_OPEN_HEIGHT_OFFSET;
+        return heightPx >= minOpenHeight;
     }
 
     /**
@@ -6608,6 +6801,20 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
      */
     async expandVirtualObjectInCell(vobjElement, virtualObject, cellKey) {
         logger.debug('[CalcEditor] 開いた仮身の展開開始:', virtualObject.link_name);
+
+        // 仮身高さの正規化 (PluginBase 共通メソッド、データ側で開閉判定)
+        // DOM を変更した場合のみデータも同期 (正常な仮身の vobjbottom を意図せず縮めるのを防ぐ)
+        const { shouldExpand, finalHeight, modified } = this.normalizeVobjHeightForExpand(vobjElement, virtualObject);
+        if (modified) {
+            virtualObject.heightPx = finalHeight - VOBJ_BORDER_WIDTH;
+            if (virtualObject.vobjtop !== undefined) {
+                virtualObject.vobjbottom = virtualObject.vobjtop + (finalHeight - VOBJ_BORDER_WIDTH);
+            }
+        }
+        if (!shouldExpand) {
+            logger.debug('[CalcEditor] 閉じた仮身のため展開を中止');
+            return null;
+        }
 
         try {
             // 実身IDを取得
@@ -6965,16 +7172,31 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                 if (cellData && cellData.virtualObject) {
                     // 開いた/閉じた状態の判定（リサイズ前）
                     const wasOpened = this.isOpenedVirtualObjectInCell(cellData.virtualObject);
+                    const vo = cellData.virtualObject;
+                    // 絶対座標モードかどうか (vobjleft/top が定義済みなら絶対座標、未定義なら alignment モード)
+                    const isAbsoluteMode = vo.vobjleft !== undefined && vo.vobjtop !== undefined;
 
                     if (isRightEdge && finalWidth !== startWidth) {
-                        cellData.virtualObject.width = finalWidth;
+                        vo.width = finalWidth;
+                        if (isAbsoluteMode) vo.vobjright = vo.vobjleft + finalWidth;
                     }
                     if (isBottomEdge && finalHeight !== startHeight) {
-                        cellData.virtualObject.heightPx = finalHeight;
+                        vo.heightPx = finalHeight;
+                        if (isAbsoluteMode) vo.vobjbottom = vo.vobjtop + finalHeight;
                     }
 
                     // 開いた/閉じた状態の判定（リサイズ後）
-                    const isNowOpened = this.isOpenedVirtualObjectInCell(cellData.virtualObject);
+                    const isNowOpened = this.isOpenedVirtualObjectInCell(vo);
+
+                    // 偶発的に閉じた仮身を中間サイズに広げてしまった場合は、閉じた仮身の最小サイズにスナップ
+                    if (!isNowOpened && this.virtualObjectRenderer) {
+                        const chsz_resize = parseFloat(vo.chsz) || DEFAULT_FONT_SIZE;
+                        const minClosedHeight_resize = this.virtualObjectRenderer.getMinClosedHeight(chsz_resize);
+                        if (vo.heightPx > minClosedHeight_resize) {
+                            vo.heightPx = minClosedHeight_resize;
+                            if (isAbsoluteMode) vo.vobjbottom = vo.vobjtop + minClosedHeight_resize;
+                        }
+                    }
 
                     // 状態が変わった場合は展開状態をリセット
                     if (wasOpened !== isNowOpened) {
@@ -7308,6 +7530,15 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
      */
     onDeleteSourceVirtualObject(data) {
         if (!this.dragSourceCell) return;
+
+        // 同一ウィンドウ内のドロップの場合、drop ハンドラ側 (L941-948) で既に
+        // ソースセルのクリーンアップが実施済み (同一セルへのドロップは保護される)。
+        // ここで再削除すると、同一セルへの move 後に挿入したばかりの仮身が消えてしまう。
+        if (data && data.sourceWindowId && data.targetWindowId &&
+            data.sourceWindowId === data.targetWindowId) {
+            logger.debug('[CalcEditor] 同一ウィンドウ内ドロップのため onDeleteSourceVirtualObject はスキップ');
+            return;
+        }
 
         const { col, row } = this.dragSourceCell;
         const key = this.getCellKey(col, row);

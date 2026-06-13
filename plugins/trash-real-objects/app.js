@@ -595,32 +595,21 @@ class TrashRealObjectsApp extends window.PluginBase {
     }
 
     setupKeyboardShortcuts() {
-        document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.key === 'l') {
-                e.preventDefault();
-                this.toggleFullscreen();
-            } else if (e.ctrlKey && e.key === 'a') {
-                // Ctrl+A: 全選択
-                e.preventDefault();
-                this.selectAllTrashObjects();
-            } else if (e.ctrlKey && e.key === 'c') {
-                e.preventDefault();
-                this.copyToClipboard();
-            } else if (e.ctrlKey && e.key === 'v') {
-                e.preventDefault();
-                this.pasteFromClipboard();
-            } else if (e.ctrlKey && e.key === 'x') {
-                e.preventDefault();
-                this.cutToClipboard();
-            } else if (e.ctrlKey && e.key === 'z') {
-                e.preventDefault();
-                this.moveFromClipboard();
-            } else if (e.key === 'Delete') {
-                e.preventDefault();
-                this.deleteRealObject();
-            }
-        });
+        // PluginBase 共通レジストリ経由でクリップボード操作 (Ctrl+C/X/V/A) を有効化
+        // onCopy/onCut/onPaste/onSelectAll はプラグイン固有メソッドにオーバーライド (下記)
+        this.enableClipboardShortcuts({ copy: true, cut: true, paste: true, selectAll: true });
+
+        // プラグイン固有ショートカット
+        this.registerShortcut({ key: 'l', ctrl: true }, () => this.toggleFullscreen());
+        this.registerShortcut({ key: 'z', ctrl: true }, () => this.moveFromClipboard());
+        this.registerShortcut({ key: 'Delete' }, () => this.deleteRealObject());
     }
+
+    // クリップボード操作フックをオーバーライド (PluginBase 共通レジストリから呼ばれる)
+    onCopy(e) { this.copyToClipboard(); }
+    onCut(e) { this.cutToClipboard(); }
+    onPaste(e) { this.pasteFromClipboard(); }
+    onSelectAll(e) { this.selectAllTrashObjects(); }
 
     destroy() {
         super.destroy();
