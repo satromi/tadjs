@@ -55,6 +55,10 @@ export const FigureXmlParserMixin = (Base) => class extends Base {
         // XMLから図形情報を抽出
         this.log('XML解析:', xmlData);
 
+        // XML 1.0 で禁止された制御文字(ESC=U+001B, FF=U+000C 等。 タブ \t・改行 \n・復帰 \r は許可)を除去。
+        // テキストノード中の不正文字は DOMParser を parsererror にするため、 パース前に除く
+        if (xmlData) xmlData = xmlData.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+
         try {
             // まず元の XML をそのまま解析 (valid な XML を fixMalformedXml で誤って破壊しないため)
             const parser = new DOMParser();

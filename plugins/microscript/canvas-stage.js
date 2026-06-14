@@ -35,6 +35,8 @@
         this._segmentSeq = 0;
         // ウィンドウ背景色 (仮身の背景色を app.js が init から引き渡す)
         this.backgroundColor = (opts && opts.backgroundColor) || '#ffffff';
+        // 作業領域 (figView) — MOVE ではみ出した図形をこの矩形でクリップする (app.js が設定)
+        this.figView = (opts && opts.figView) || null;
         // ホスト連携用コールバック (app.js が設定)
         this.notifyHost = (opts && opts.notifyHost) || null;
         this.loadRealObject = (opts && opts.loadRealObject) || null;
@@ -93,10 +95,10 @@
             self.pdx = c.x; self.pdy = c.y;
             self.pdb = 1;
             const seg = self.hitTest(c.x, c.y);
-            console.log('[MS-Stage] mousedown at (' + c.x.toFixed(0) + ',' + c.y.toFixed(0) + ') hit:', seg ? seg.name : 'none', 'pdb=', self.pdb);
+            // [MS-Stage] mousedown ログ抑制
             if (!seg) return;
             const handlers = self.pressHandlers.get(seg.name) || [];
-            console.log('[MS-Stage]   press handlers for', seg.name, ':', handlers.length);
+            // [MS-Stage] press handlers ログ抑制
             // 第2引数 (番号) は runtime 側で ACTION targets の index から決定するため、 ここでは未使用 (0 固定)
             handlers.forEach(function (h) { h(seg, 0, c.x - seg.x, c.y - seg.y); });
         });
@@ -106,7 +108,7 @@
         listen(this.canvas, 'click', function (e) {
             const c = eventCoords(e);
             const seg = self.hitTest(c.x, c.y);
-            console.log('[MS-Stage] click at (' + c.x.toFixed(0) + ',' + c.y.toFixed(0) + ') hit:', seg ? seg.name : 'none');
+            // [MS-Stage] click ログ抑制
             if (!seg) return;
             const handlers = self.clickHandlers.get(seg.name) || [];
             handlers.forEach(function (h) { h(seg, 0, c.x - seg.x, c.y - seg.y); });
@@ -126,17 +128,22 @@
             // 論理キーの文字コード対応 (改行/一字消/削除/タブ/カーソルキー等の非印字キー)
             const SPECIAL_KEYS = {
                 Enter: 0x0A, Backspace: 0x08, Delete: 0x7F, Tab: 0x09, Escape: 0x1B,
-                ArrowUp: 0x100, ArrowDown: 0x101, ArrowLeft: 0x102, ArrowRight: 0x103
+                // BTRON カーソルキーコード: 上256(0x100) 下257(0x101) 右258(0x102) 左259(0x103)
+                ArrowUp: 0x100, ArrowDown: 0x101, ArrowLeft: 0x103, ArrowRight: 0x102
             };
             let charCode = (e.key && e.key.length === 1) ? e.key.charCodeAt(0) : 0;
             if (!charCode && e.key && SPECIAL_KEYS[e.key] != null) charCode = SPECIAL_KEYS[e.key];
+            // マイクロスクリプトの $KEY は文字を TRON(全角)コードで参照する (例: 4→0x2334, z→0x237A, 空白→0x2121)。
+            // 印字可能 ASCII を TRON 全角へ変換する (カーソルキー等の 0x100 以上の特殊コードや制御コードは対象外)。
+            if (charCode === 0x20) charCode = 0x2121;
+            else if (charCode >= 0x21 && charCode <= 0x7E) charCode = 0x2300 + charCode;
             const mk = (e.shiftKey ? 0x10 : 0) | (e.ctrlKey ? 0x40 : 0) | (e.altKey ? 0x80 : 0);
             self.lastKey = charCode || kc;
             self.metaKey = mk;
             self.kstat = mk;
-            if (self._activeInput) {
-                self._handleInputKey(e, charCode, kc);
-            }
+            // 文字入力中 (_activeInput) は隠し input が IME 込みで処理するため canvas 側では文字を扱わない
+            // (通常は input にフォーカスがあり canvas の keydown は発火しないが、 二重入力の保険)
+            if (self._activeInput) return;
             self.keyHandlers.forEach(function (h) { h(self.lastKey, mk); });
         });
         this.canvas.setAttribute('tabindex', '0');
@@ -160,10 +167,83 @@
         else this.canvas.style.cursor = map[shape] || 'default';
     };
 
+    // IME (かな漢字変換) 対応のため、 canvas に重ねた透明な隠し input を入力対象にする。
+    // canvas は IME の編集対象になれず keydown だけでは確定文字列を取得できないため。
+    // 文字自体は canvas に描画するので input は透明 (color/caret transparent) にする
+    CanvasStage.prototype._ensureInputEl = function () {
+        if (this._inputEl) return this._inputEl;
+        const el = document.createElement('input');
+        el.type = 'text';
+        el.setAttribute('autocomplete', 'off');
+        el.setAttribute('autocorrect', 'off');
+        el.setAttribute('autocapitalize', 'off');
+        el.style.position = 'absolute';
+        el.style.zIndex = '1000';
+        el.style.background = 'transparent';
+        el.style.border = 'none';
+        el.style.outline = 'none';
+        el.style.color = 'transparent';
+        el.style.caretColor = 'transparent';
+        el.style.padding = '0';
+        el.style.margin = '0';
+        el.style.left = '-9999px';
+        const parent = this.canvas.parentNode || document.body;
+        try {
+            if (parent && parent.style && getComputedStyle(parent).position === 'static') {
+                parent.style.position = 'relative';
+            }
+        } catch (e) { /* getComputedStyle 不可環境は無視 */ }
+        (parent || document.body).appendChild(el);
+        const self = this;
+        // IME 確定文字列も含め、 input の value 全体を入力バッファとして同期する
+        el.addEventListener('input', function () {
+            if (!self._activeInput) return;
+            self._activeInput.buffer = el.value;
+            self._syncInputText(self._activeInput.seg, el.value);
+            self.render();
+        });
+        el.addEventListener('keydown', function (e) {
+            if (!self._activeInput) return;
+            // IME 変換確定中の Enter は入力確定 (改行) と区別する
+            if (e.isComposing) return;
+            if (e.key === 'Enter' || e.key === 'Escape') {
+                e.preventDefault();
+                self.endInput();
+                return;
+            }
+            // タブは入力中でも KEY イベントを発火 (仕様: 文字入力中でも文字キー・一字消・削除以外の
+            // キーは KEY イベント対象)。 数値ボックスのタブ移動 (KEY で次欄をアクティブ化) がこの経路で動く。
+            // ブラウザの既定フォーカス移動は抑止する
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const mk = (e.shiftKey ? 0x10 : 0) | (e.ctrlKey ? 0x40 : 0) | (e.altKey ? 0x80 : 0);
+                self.lastKey = 0x09; self.metaKey = mk; self.kstat = mk;
+                self.keyHandlers.forEach(function (h) { h(0x09, mk); });
+                return;
+            }
+            // 一字消去/カーソル移動/文字入力は input 要素が自然処理し input イベントで反映される
+        });
+        this._inputEl = el;
+        return el;
+    };
+
     CanvasStage.prototype.beginInput = function (seg, kanji, onDone, x, y) {
         // x,y: INPUT/KINPUT のカーソル初期位置 (セグメント相対、 省略可)
         this._activeInput = { seg: seg, kanji: !!kanji, onDone: onDone, buffer: seg.text || '', x: (x != null ? x : null), y: (y != null ? y : null) };
-        this.canvas.focus();
+        const el = this._ensureInputEl();
+        // KINPUT(kanji=true) は IME 有効、 INPUT(kanji=false) は IME 抑止 (ローマ字/数字直接入力)
+        el.style.imeMode = kanji ? 'active' : 'disabled';
+        el.setAttribute('inputmode', 'text');
+        // 入力欄を文字描画開始位置に重ねる (IME 変換候補ウィンドウの表示位置の目安)
+        const anchor = this._getInputTextAnchor(seg);
+        el.style.left = ((anchor && anchor.x != null ? anchor.x : seg.x)) + 'px';
+        el.style.top = ((anchor && anchor.y != null ? anchor.y : seg.y)) + 'px';
+        el.style.width = Math.max(40, (seg.w || 80)) + 'px';
+        el.style.height = ((seg.tsize || 14) + 4) + 'px';
+        el.style.font = (seg.tsize || 14) + 'px sans-serif';
+        el.value = seg.text || '';
+        el.focus();
+        try { const _caret = kanji ? 0 : el.value.length; el.setSelectionRange(_caret, _caret); } catch (e2) {} // 仕様: INPUT=末尾, KINPUT(kanji)=先頭
         this.render();
     };
 
@@ -171,9 +251,16 @@
     CanvasStage.prototype.endInput = function () {
         const ip = this._activeInput;
         if (!ip) return;
-        this._syncInputText(ip.seg, ip.buffer);
+        const finalText = this._inputEl ? this._inputEl.value : ip.buffer;
+        this._syncInputText(ip.seg, finalText);
         const done = ip.onDone;
         this._activeInput = null;
+        if (this._inputEl) {
+            this._inputEl.blur();
+            this._inputEl.value = '';
+            this._inputEl.style.left = '-9999px';
+        }
+        try { this.canvas.focus(); } catch (e) {}
         this.render();
         if (done) done();
     };
@@ -290,6 +377,20 @@
         if (this.messageEl) this.messageEl.textContent = '';
     };
 
+    // SETSEG 内容共有: _sharedFrom チェーンを末端まで辿り、 描画に使う最新 shapes を持つセグメントを返す。
+    // 例: SETSEG X1=X0 後に SETSEG X0=F2 で X0 の内容を差し替えると、 X1→X0→F2 と辿り X1 も追従する
+    CanvasStage.prototype._resolveSharedContent = function (seg) {
+        let cur = seg;
+        const visited = {};
+        while (cur && cur._sharedFrom && !visited[cur.name]) {
+            visited[cur.name] = true;
+            const next = this.segments.get(cur._sharedFrom);
+            if (!next) break;
+            cur = next;
+        }
+        return cur;
+    };
+
     CanvasStage.prototype.render = function () {
         if (this._updateEnabled === false) return;
         const ctx = this.ctx;
@@ -298,6 +399,15 @@
         ctx.fillStyle = this.backgroundColor || '#ffffff';
         ctx.fillRect(0, 0, rect.width, rect.height);
         ctx.restore();
+
+        // figView でクリップ (MOVE ではみ出した図形を作業領域内に制限。 figView 無しなら従来通り)
+        const _fv = this.figView;
+        if (_fv) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(_fv.left, _fv.top, _fv.right - _fv.left, _fv.bottom - _fv.top);
+            ctx.clip();
+        }
 
         for (let i = 0; i < this.backgroundShapes.length; i++) {
             this._drawShape(this.backgroundShapes[i], 0, 0);
@@ -311,16 +421,19 @@
             const seg = visibles[i];
             if (!seg._renderLogged) {
                 seg._renderLogged = true;
-                console.log('[MS-Stage] render seg:', seg.name, 'x=', seg.x, 'y=', seg.y, 'w=', seg.w, 'h=', seg.h, 'shapes=', seg.shapes ? seg.shapes.length : 0);
+                // [MS-Stage] render seg ログは冗長なため抑制(描画毎×全セグメントで大量化するため)
             }
-            if (!seg.shapes) continue;
-            for (let j = 0; j < seg.shapes.length; j++) {
-                this._drawShape(seg.shapes[j], seg.x, seg.y);
+            // SETSEG 内容共有: 共有元の最新 shapes を辿って描画 (X0 差し替えで X1/X2/X3 も同時追従)
+            const drawShapes = this._resolveSharedContent(seg).shapes;
+            if (!drawShapes) continue;
+            for (let j = 0; j < drawShapes.length; j++) {
+                this._drawShape(drawShapes[j], seg.x, seg.y);
             }
             if (seg.textOverride) {
                 this._drawTextOverride(seg);
             }
         }
+        if (_fv) ctx.restore();
         // INPUT カーソル: 内部 text shape の実描画位置に追従させる
         if (this._activeInput && this._activeInput.seg) {
             const seg = this._activeInput.seg;
@@ -490,7 +603,10 @@
             ctx.fillStyle = this._colorRGBA(seg.tbcol, '#ffffff');
             ctx.fillRect(seg.x, seg.y, seg.w || 0, seg.h || 0);
         }
-        ctx.fillStyle = this._colorRGBA(seg.tfcol >= 0 ? seg.tfcol : 0, '#000000');
+        // .TFCOL が明示設定されていればそれを、 未設定 (既定 -1) なら図形由来の初期文字色を使う
+        ctx.fillStyle = (typeof seg.tfcol === 'number' && seg.tfcol >= 0)
+            ? this._colorRGBA(seg.tfcol, '#000000')
+            : (seg._initTextColor || '#000000');
         // セグメント矩形でクリップし、 セグメント幅で折り返して描画する
         ctx.beginPath();
         ctx.rect(seg.x, seg.y, seg.w || 0, seg.h || 0);
@@ -683,6 +799,13 @@
         ctx.beginPath();
         ctx.rect(x, y, w, h);
         ctx.clip();
+        // runs (font の wRatio/hRatio を保持した区間) があれば横倍率を反映して描画する。
+        // 半角圧縮 (wRatio=1/2) のスペース等が全角幅化して折り返す不具合を防ぐ。
+        if (s.runs && s.runs.length) {
+            this._drawTextRuns(ctx, s.runs, x + 2, y + 2, w - 4, fontSize);
+            ctx.restore();
+            return;
+        }
         // 文字枠の幅で折り返して描画する
         const rawLines = (s.text || '').split('\n');
         const lines = [];
@@ -694,6 +817,48 @@
             ctx.fillText(lines[i], x + 2, y + 2 + i * (fontSize + 2));
         }
         ctx.restore();
+    };
+
+    // run 配列 (各文字に xScale/yScale を持つ) を、 横倍率を字送り・横スケールへ反映して描画する。
+    // maxWidth を超える、 または '\n' で改行。 fillStyle/font/clip は呼び出し側設定を流用。
+    CanvasStage.prototype._drawTextRuns = function (ctx, runs, ox, oy, maxWidth, fontSize) {
+        // 文字 cell 列を構築
+        const cells = [];
+        for (let i = 0; i < runs.length; i++) {
+            const run = runs[i];
+            const xs = (run.xScale > 0) ? run.xScale : 1;
+            const ys = (run.yScale > 0) ? run.yScale : 1;
+            for (const ch of (run.text || '')) {
+                if (ch === '\n') { cells.push({ br: true }); continue; }
+                cells.push({ ch: ch, xScale: xs, yScale: ys, adv: ctx.measureText(ch).width * xs });
+            }
+        }
+        // 折り返してライン分割
+        const lines = [[]];
+        let lineW = 0;
+        for (let i = 0; i < cells.length; i++) {
+            const cell = cells[i];
+            if (cell.br) { lines.push([]); lineW = 0; continue; }
+            if (lineW > 0 && lineW + cell.adv > maxWidth) { lines.push([]); lineW = 0; }
+            lines[lines.length - 1].push(cell);
+            lineW += cell.adv;
+        }
+        // 描画
+        const lineH = fontSize + 2;
+        for (let li = 0; li < lines.length; li++) {
+            const line = lines[li];
+            let cx = ox;
+            const ly = oy + li * lineH;
+            for (let ci = 0; ci < line.length; ci++) {
+                const cell = line[ci];
+                ctx.save();
+                ctx.translate(cx, ly);
+                ctx.scale(cell.xScale, cell.yScale);
+                ctx.fillText(cell.ch, 0, 0);
+                ctx.restore();
+                cx += cell.adv;
+            }
+        }
     };
 
     // 1 行のテキストを最大幅に収まるよう文字単位で折り返す

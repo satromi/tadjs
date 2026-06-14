@@ -1981,7 +1981,7 @@ ${dayText}
         if (this.virtualObjectRenderer) {
             // createBlockElementは位置・サイズ設定済みの要素を返す
             element = this.virtualObjectRenderer.createBlockElement(vobj, {
-                loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIcon(realId) : null,
+                loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIconWithRetry(realId) : null,
                 vobjIndex: vobjIndex
             });
         }

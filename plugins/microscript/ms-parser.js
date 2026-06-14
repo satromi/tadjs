@@ -76,8 +76,12 @@
             const body = this.macros[t.value];
             if (!body) return;
             const line = t.line;
-            const clones = body.map(function (bt) {
-                return { type: bt.type, value: bt.value, chars: bt.chars, line: line };
+            // spaced(直前の空白有無)を保持する。 これは単項/二項マイナス判別と
+            // 関数呼び出し f(x) / 空白区切り "f (x)" の判別に使われるため、 展開で失うと
+            // "swid TOGGLE"(=swid －1) のようなマクロ経由の負数リテラル引数が誤って減算/関数化する。
+            // 先頭クローンは元マクロ名トークンの spaced を継承し、 後続は body 由来の spaced を使う。
+            const clones = body.map(function (bt, k) {
+                return { type: bt.type, value: bt.value, chars: bt.chars, line: line, spaced: k === 0 ? t.spaced : bt.spaced };
             });
             this.tokens.splice.apply(this.tokens, [idx, 1].concat(clones));
         }
@@ -181,7 +185,10 @@
             this.next();
             const nameTok = this.expect('IDENT');
             const body = [];
-            while (this.peek().type !== 'NL' && this.peek().type !== 'EOF') {
+            // 本体は改段落 NL まで収集。 ';'(複文区切り) の NL は本体に含める (TEXTOUT 等の複文マクロ)
+            while (this.peek().type !== 'EOF') {
+                const pk = this.peek();
+                if (pk.type === 'NL' && pk.value !== ';') break;
                 body.push(this.next());
             }
             prog.macros[nameTok.value] = body;
@@ -278,9 +285,13 @@
             }
             if (this.peek().type === 'OP' && this.peek().value === '[') {
                 this.next();
-                const sz = this.parseExpr();
+                if (this.peek().type === 'OP' && this.peek().value === ']') {
+                    // 可変長配列引数 (例: Dist:S[]) — 呼出元の配列をそのまま参照渡しで受ける。 サイズは呼出時に決まる
+                    size = 0;
+                } else {
+                    size = this.parseExpr();
+                }
                 this.expect('OP', ']');
-                size = sz;
             }
             params.push({ name: name, varType: varType, size: size });
             if (this.peek().type === 'OP' && this.peek().value === ',') { this.next(); continue; }
@@ -366,6 +377,11 @@
             const kw = t.value.toUpperCase();
             switch (kw) {
                 case 'LOCAL': return this.parseLocal();
+                case 'DEFINE': {
+                    // 手続き本体内のローカルマクロ定義 (照明等)。 this.macros に登録し文としては無視
+                    this.parseDefine({ macros: this.macros });
+                    return null;
+                }
                 case 'COMMENT': this.skipComment(); return null;
                 case 'DEBUG': this.skipComment(); return null;
                 case 'LOG': { const node = this.parseMesg(); node.type = 'Log'; return node; }
@@ -524,7 +540,14 @@
     Parser.prototype.parseSet = function (sawSetKW) {
         if (sawSetKW) this.next();
         const target = this.parseLValue();
-        this.expect('OP', '=');
+        if (sawSetKW) {
+            // SET キーワード有り: = は省略可能 (照明等の公式サンプルが採用する空白区切り記法)。
+            // 例: SET selid ret / SET ＿v＿nvol 0
+            if (this.peek().type === 'OP' && this.peek().value === '=') this.next();
+        } else {
+            // SET 無し (式行 a=b): = 必須 (裸の式行・手続き名単独行を代入と誤認しないため)
+            this.expect('OP', '=');
+        }
         const exprs = [this.parseExpr()];
         while (this.peek().type === 'OP' && this.peek().value === ',') {
             this.next();
@@ -547,16 +570,16 @@
                     this.next();
                     isSlice = true;
                     if (!(this.peek().type === 'OP' && this.peek().value === ']')) {
-                        sliceLen = this.parseExpr();
+                        sliceLen = this.parseSubExpr();
                     }
                 } else {
-                    const first = this.parseExpr();
+                    const first = this.parseSubExpr();
                     if (this.peek().type === 'OP' && this.peek().value === ':') {
                         this.next();
                         isSlice = true;
                         sliceStart = first;
                         if (!(this.peek().type === 'OP' && this.peek().value === ']')) {
-                            sliceLen = this.parseExpr();
+                            sliceLen = this.parseSubExpr();
                         }
                     } else {
                         index = first;
@@ -575,7 +598,7 @@
             let index = null;
             if (this.peek().type === 'OP' && this.peek().value === '[') {
                 this.next();
-                index = this.parseExpr();
+                index = this.parseSubExpr();
                 this.expect('OP', ']');
             }
             return { kind: 'sysvar', name: t.value, index: index };
@@ -679,12 +702,69 @@
         return { type: 'Exit', expr: expr };
     };
 
+    // 次トークンが式の開始になり得るか (空白区切り引数/座標の継続判定に使う)
+    Parser.prototype._isExprStart = function () {
+        const t = this.peek();
+        if (t.type === 'INT' || t.type === 'FLOAT' || t.type === 'STRING' || t.type === 'SYSVAR') return true;
+        if (t.type === 'IDENT' && !isBlockBoundary(t.value)) return true;
+        if (t.type === 'OP' && (t.value === '(' || t.value === '-' || t.value === '!' || t.value === '~')) return true;
+        return false;
+    };
+
+    // 括弧なし空白区切りの引数リスト (CALL 手続き名 引数... / BTRON正式仕様)
+    Parser.prototype._parseBareArgList = function () {
+        const _am = this._argMode; this._argMode = true; // 引数リスト: 空白区切りの負数リテラルを別引数とみなす
+        const args = [];
+        let afterComma = false;
+        while (true) {
+            const t = this.peek();
+            if (t.type === 'NL' || t.type === 'EOF') break;
+            if (t.type === 'OP' && (t.value === ':' || t.value === ';')) break;
+            // ブロック境界キーワード(END/ENDIF等)は引数に取らない。 ただしリスト先頭・',' 直後は同名セグメント等として受理
+            if (t.type === 'IDENT' && isBlockBoundary(t.value) && args.length > 0 && !afterComma) break;
+            args.push(this.parseExpr());
+            afterComma = false;
+            if (this.peek().type === 'OP' && this.peek().value === ',') { this.next(); afterComma = true; continue; }
+            const nx = this.peek();
+            if (nx.type === 'IDENT' && !isBlockBoundary(nx.value)) continue;
+            if (nx.type === 'INT' || nx.type === 'FLOAT' || nx.type === 'STRING' || nx.type === 'SYSVAR') continue;
+            if (nx.type === 'OP' && (nx.value === '(' || nx.value === '-' || nx.value === '!' || nx.value === '~')) continue;
+            break;
+        }
+        this._argMode = _am;
+        return args;
+    };
+
     Parser.prototype.parseCall = function () {
         this.next();
         const name = this.expect('IDENT').value;
-        const args = this.parseOptionalArgList();
+        // 配列要素のシンボル変数 (例 CALL ＿t＿func[＿t＿active]) も手続き指定に使える
+        let nameIndex = null;
+        if (this.peek().type === 'OP' && this.peek().value === '[') {
+            this.next();
+            nameIndex = this.parseExpr();
+            this.expect('OP', ']');
+        }
+        let args;
+        if (this.peek().type === 'OP' && this.peek().value === '(') {
+            // CALL 名(a,b) の括弧引数か、 CALL 名 (式)%... の括弧式第1引数かを後続トークンで判別。
+            // 括弧を引数リストとして試し、 閉じ括弧の後が文末/区切りなら括弧引数、 続きがあれば
+            // 括弧式が第1引数なので巻き戻して空白区切りで読む (照明: CALL 名 (式)%＿t＿ntxt)
+            const savePos = this.pos;
+            const tryArgs = this.parseOptionalArgList();
+            const nx = this.peek();
+            if (nx.type === 'NL' || nx.type === 'EOF' || (nx.type === 'OP' && (nx.value === ':' || nx.value === ';'))) {
+                args = tryArgs;
+            } else {
+                this.pos = savePos;
+                args = this._parseBareArgList();
+            }
+        } else {
+            // 括弧なし空白区切り引数 (BTRON正式仕様 CALL 手続き名 引数...)
+            args = this._parseBareArgList();
+        }
         this.expectNL();
-        return { type: 'Call', name: name, args: args };
+        return { type: 'Call', name: name, nameIndex: nameIndex, args: args };
     };
 
     Parser.prototype.parseExecute = function () {
@@ -692,17 +772,24 @@
         const handlers = [];
         while (true) {
             const name = this.expect('IDENT').value;
+            // 配列要素のシンボル変数 (例 EXECUTE ＿v＿func[＿pid]) も手続き指定に使える
+            let nameIndex = null;
+            if (this.peek().type === 'OP' && this.peek().value === '[') {
+                this.next();
+                nameIndex = this.parseExpr();
+                this.expect('OP', ']');
+            }
             let args = null;
             const nxt = this.peek();
             if (nxt.type === 'OP' && nxt.value === ',') {
-                handlers.push({ name: name, args: null });
+                handlers.push({ name: name, nameIndex: nameIndex, args: null });
                 this.next();
                 continue;
             }
             if (nxt.type === 'OP' && nxt.value === '(') {
                 args = this.parseOptionalArgList();
             }
-            handlers.push({ name: name, args: args });
+            handlers.push({ name: name, nameIndex: nameIndex, args: args });
             break;
         }
         let retVar = null;
@@ -764,6 +851,7 @@
     };
 
     Parser.prototype._parseSegArgList = function () {
+        const _am = this._argMode; this._argMode = true;
         const segs = [];
         let afterComma = false;
         while (true) {
@@ -780,6 +868,7 @@
             if (nx.type === 'IDENT' && !isBlockBoundary(nx.value)) continue;
             break;
         }
+        this._argMode = _am;
         return segs;
     };
 
@@ -806,6 +895,7 @@
     };
 
     Parser.prototype.parseMove = function () {
+        const _am = this._argMode; this._argMode = true;
         this.next();
         const segs = this._parseSegArgList();
         let x = null, y = null;
@@ -821,6 +911,9 @@
                 x = this.parseExpr();
                 if (this.peek().type === 'OP' && this.peek().value === ',') {
                     this.next();
+                    y = this.parseExpr();
+                } else if (this._isExprStart() && !(this.peek().type === 'OP' && this.peek().value === '@')) {
+                    // 空白区切りの y 座標 (BTRON 公式サンプル: MOVE seg: x y @)
                     y = this.parseExpr();
                 }
                 // 基準セグメント: ',' 区切り or 空白区切り (BTRON 公式サンプルは空白区切りあり)
@@ -844,6 +937,7 @@
         // 文末が ';' の場合は遅延表示 (移動のみ反映し描画は持ち越す)
         const deferred = this.peek().type === 'NL' && this.peek().value === ';';
         this.expectNL();
+        this._argMode = _am;
         return { type: 'Move', segs: segs, x: x, y: y, baseSeg: baseSeg, dup: dup, deferred: deferred };
     };
 
@@ -863,14 +957,8 @@
 
     Parser.prototype.parseMesg = function () {
         this.next();
-        const args = [];
-        if (this.peek().type !== 'NL' && this.peek().type !== 'EOF') {
-            args.push(this.parseExpr());
-            while (this.peek().type === 'OP' && this.peek().value === ',') {
-                this.next();
-                args.push(this.parseExpr());
-            }
-        }
+        // MESG "書式" 引数... は空白区切りも ',' 区切りも許す (照明等の公式サンプルは空白区切り)
+        const args = this._parseBareArgList();
         this.expectNL();
         return { type: 'Mesg', args: args };
     };
@@ -879,15 +967,9 @@
         this.next();
         // セグメント指定は配列要素 (B[box]) やシンボル変数も受け付けるため式としてパースする
         const seg = this.parseExpr();
-        const args = [];
-        if (this.peek().type === 'OP' && this.peek().value === ',') {
-            this.next();
-            args.push(this.parseExpr());
-            while (this.peek().type === 'OP' && this.peek().value === ',') {
-                this.next();
-                args.push(this.parseExpr());
-            }
-        }
+        // 書式・引数は ',' 区切りでも空白区切りでも許す (照明等は空白区切り: TEXT seg "%02d" $ARG[7])
+        if (this.peek().type === 'OP' && this.peek().value === ',') this.next();
+        const args = this._parseBareArgList();
         this.expectNL();
         return { type: 'TextCmd', seg: seg, args: args };
     };
@@ -994,7 +1076,7 @@
         '|': 3,
         '^': 4,
         '&': 5,
-        '==': 6, '!=': 6,
+        '=': 6, '==': 6, '!=': 6,
         '<': 7, '<=': 7, '>': 7, '>=': 7,
         '+': 8, '-': 8,
         '<<': 9, '>>': 9,
@@ -1004,6 +1086,11 @@
     Parser.prototype.parseExpr = function () {
         return this.parseBinaryExpr(0);
     };
+    // 添字 [..] やグループ (..) の内側は「計算式」なので、 引数リストの単項符号化(_argMode)を一時的に無効化する
+    Parser.prototype.parseSubExpr = function () {
+        const s = this._argMode; this._argMode = false;
+        try { return this.parseExpr(); } finally { this._argMode = s; }
+    };
 
     Parser.prototype.parseBinaryExpr = function (minPrec) {
         let lhs = this.parseUnary();
@@ -1012,6 +1099,16 @@
             if (t.type !== 'OP') break;
             const prec = BIN_PRECEDENCE[t.value];
             if (prec === undefined || prec < minPrec) break;
+            // 空白区切り引数中の負数リテラル (例: "swid TOGGLE"→"swid －1", "seg dx －17") のみ、
+            // 二項減算でなく「次の引数の単項符号」とみなす。 誤検出を避けるため次の3条件すべてを満たす場合に限定:
+            //   (1) 演算子が '-' (負数のみ。 '+' は常に二項加算とする)
+            //   (2) 演算子の前に空白がある (spaced)
+            //   (3) 演算子の直後に空白なしで「数値リテラル」(INT/FLOAT)が密着している
+            // これにより通常の計算式 (a + b, a - b, a ＋b, a -b 等、 変数オペランド) は二項のまま壊さない。
+            if (this._argMode && t.value === '-' && t.spaced) {
+                const nx = this.peek(1);
+                if (nx && nx.spaced === false && (nx.type === 'INT' || nx.type === 'FLOAT')) break;
+            }
             this.next();
             const rhs = this.parseBinaryExpr(prec + 1);
             lhs = { type: 'Binary', op: t.value, left: lhs, right: rhs };
@@ -1039,20 +1136,22 @@
             let index = null;
             if (this.peek().type === 'OP' && this.peek().value === '[') {
                 this.next();
-                index = this.parseExpr();
+                index = this.parseSubExpr();
                 this.expect('OP', ']');
             }
             return { type: 'SysVar', name: t.value, index: index };
         }
         if (t.type === 'OP' && t.value === '(') {
             this.next();
-            const e = this.parseExpr();
+            const e = this.parseSubExpr();
             this.expect('OP', ')');
             return e;
         }
         if (t.type === 'IDENT') {
             this.next();
-            if (this.peek().type === 'OP' && this.peek().value === '(') {
+            // 関数呼び出しは '(' が空白を挟まず識別子に密着している場合のみ。
+            // 空白付きの "off0 （－17）" は関数呼び出しではなく、 別個の引数 (off0 と (-17)) として扱う。
+            if (this.peek().type === 'OP' && this.peek().value === '(' && !this.peek().spaced) {
                 this.next();
                 const args = [];
                 if (!(this.peek().type === 'OP' && this.peek().value === ')')) {
@@ -1075,16 +1174,16 @@
                     this.next();
                     isSlice = true;
                     if (!(this.peek().type === 'OP' && this.peek().value === ']')) {
-                        sliceLen = this.parseExpr();
+                        sliceLen = this.parseSubExpr();
                     }
                 } else {
-                    const first = this.parseExpr();
+                    const first = this.parseSubExpr();
                     if (this.peek().type === 'OP' && this.peek().value === ':') {
                         this.next();
                         isSlice = true;
                         sliceStart = first;
                         if (!(this.peek().type === 'OP' && this.peek().value === ']')) {
-                            sliceLen = this.parseExpr();
+                            sliceLen = this.parseSubExpr();
                         }
                     } else {
                         index = first;
@@ -1093,11 +1192,32 @@
                 this.expect('OP', ']');
             }
             let stateName = null;
+            let stateIndex = null, stateIsSlice = false, stateSliceStart = null, stateSliceLen = null;
             if (this.peek().type === 'OP' && this.peek().value === '.') {
                 this.next();
                 stateName = this.expect('IDENT').value;
+                // 状態名の後の添字/部分配列: 仕様書「文字セグメント.TX[要素数]」/「.TX[:]」(例 TX.TX[:])
+                if (this.peek().type === 'OP' && this.peek().value === '[') {
+                    this.next();
+                    if (this.peek().type === 'OP' && this.peek().value === ':') {
+                        this.next();
+                        stateIsSlice = true;
+                        if (!(this.peek().type === 'OP' && this.peek().value === ']')) stateSliceLen = this.parseSubExpr();
+                    } else {
+                        const sfirst = this.parseSubExpr();
+                        if (this.peek().type === 'OP' && this.peek().value === ':') {
+                            this.next();
+                            stateIsSlice = true;
+                            stateSliceStart = sfirst;
+                            if (!(this.peek().type === 'OP' && this.peek().value === ']')) stateSliceLen = this.parseSubExpr();
+                        } else {
+                            stateIndex = sfirst;
+                        }
+                    }
+                    this.expect('OP', ']');
+                }
             }
-            return { type: 'Name', name: t.value, index: index, isSlice: isSlice, sliceStart: sliceStart, sliceLen: sliceLen, stateName: stateName };
+            return { type: 'Name', name: t.value, index: index, isSlice: isSlice, sliceStart: sliceStart, sliceLen: sliceLen, stateName: stateName, stateIndex: stateIndex, stateIsSlice: stateIsSlice, stateSliceStart: stateSliceStart, stateSliceLen: stateSliceLen };
         }
         throw MSParseError('式が必要: ' + JSON.stringify(t.value), t);
     };

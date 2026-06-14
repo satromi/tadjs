@@ -3295,7 +3295,7 @@ class NetBtronViewer extends window.PluginBase {
         }
 
         const options = {
-            loadIconCallback: (realId) => this.iconManager.loadIcon(realId),
+            loadIconCallback: (realId) => this.iconManager.loadIconWithRetry(realId),
             vobjIndex: vobjIndex
         };
 

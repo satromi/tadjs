@@ -73,12 +73,16 @@
         let line = 1;
         const len = src.length;
         let lineHadToken = false;
+        // 直前に空白・タブ・改行があったか。 関数呼び出し f(x) と空白区切り引数 "f (x)" を
+        // 区別するため、 '(' が空白を挟まず識別子に密着している場合のみ関数呼び出しと解釈する。
+        let pendingSpace = true;
 
         function emit(type, value, extra) {
-            const t = { type: type, value: value, line: line };
+            const t = { type: type, value: value, line: line, spaced: pendingSpace };
             if (extra) Object.assign(t, extra);
             tokens.push(t);
             lineHadToken = true;
+            pendingSpace = false;
         }
 
         while (i < len) {
@@ -89,11 +93,12 @@
                 if (lineHadToken) emit('NL', '\n');
                 line++;
                 lineHadToken = false;
+                pendingSpace = true;
                 i++;
                 continue;
             }
 
-            if (c === ' ' || c === '\t') { i++; continue; }
+            if (c === ' ' || c === '\t') { pendingSpace = true; i++; continue; }
 
             if (c === '#') {
                 while (i < len && src[i] !== '\n') i++;
@@ -106,6 +111,7 @@
                     if (src[i] === '\n') line++;
                     i++;
                 }
+                pendingSpace = true;
                 continue;
             }
 
@@ -243,6 +249,20 @@
                 while (j < len && isIdentCont(src[j])) j++;
                 let name = src.slice(i, j);
                 // BTRON仕様 09-03-03: 名前は先頭12文字で識別 (13文字目以降は無視して同一視)
+                if (name.length > 12) name = name.slice(0, 12);
+                emit('IDENT', name);
+                i = j;
+                continue;
+            }
+
+            // '?' 始まりは数字名セグメントの参照 (例: ?01 → IDENT "?01")。
+            // '01' のような数字始まりの名前は INT と衝突するため、図形ラベル ＠?01 と
+            // 対応させる接頭辞として '?' を名前に含めて識別子化する。
+            if (c === '?') {
+                let j = i + 1;
+                while (j < len && isIdentCont(src[j])) j++;
+                if (j === i + 1) throw new MSLexError('不正なセグメント名記法', line);
+                let name = src.slice(i, j);
                 if (name.length > 12) name = name.slice(0, 12);
                 emit('IDENT', name);
                 i = j;

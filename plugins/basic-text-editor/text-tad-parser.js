@@ -828,6 +828,43 @@ export const TextTadParserMixin = (Base) => class extends Base {
      * @param {object} options - { returnHtml: true でeditor.innerHTML上書きせずHTML文字列を返却 }
      * @returns {Promise<string|undefined>} returnHtml:trueのときHTML文字列
      */
+    // 閉じタグが欠落した不正XMLを、 未閉じタグを末尾(</tad>の手前)に逆順で補って整形式にする。
+    // 文章中インライン図形の後に </p>/</document> が出力されない生成側のネスト管理漏れを表示側で救済する。
+    _balanceTags(xml) {
+        // XML 1.0 で禁止された制御文字(FF=U+000C 等。 タブ \t・改行 \n・復帰 \r は許可)を除去する。
+        // テキストノード中の不正文字は DOMParser を parsererror にするが、 閉じタグ補完では直らないためここで除く
+        xml = xml.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+        // 自己終端(空要素)タグの集合。 font/text は閉じタグを持つペアタグ(<font ...>...</font>)が正規出力のため
+        // 含めない。 含めると </font>/</text> の lastIndexOf 探索が他要素の stack を誤って切り詰める。
+        // <font .../> のような /> 終端の自己終端形式は selfTerm の endsWith('/') 判定で別途カバーする
+        const selfClose = new Set(['br', 'tab', 'paper', 'docmargin', 'docscale', 'docoverlay', 'tab-format', 'figview', 'figdraw', 'figscale', 'pattern', 'mask', 'rect', 'line', 'polygon', 'ellipse', 'link', 'docview', 'docdraw', 'image', 'frame-open']);
+        const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^>]*)>/g;
+        let m, stack = [];
+        while ((m = re.exec(xml))) {
+            const closing = m[1] === '/';
+            const tag = m[2].toLowerCase();
+            // ルート要素 tad は stack 管理外。 </tad> が stack 途中(document/p が未閉じ)で来ると
+            // lastIndexOf('tad') が stack 全体をクリアして未閉じを取りこぼすため、 tad は走査対象から除外し、
+            // 残った未閉じ(document/p)を </tad> の手前に補完する
+            if (tag === 'tad') continue;
+            const selfTerm = m[3].trim().endsWith('/') || selfClose.has(tag);
+            if (closing) {
+                const idx = stack.lastIndexOf(tag);
+                if (idx >= 0) stack.length = idx;
+            } else if (!selfTerm) {
+                stack.push(tag);
+            }
+        }
+        if (stack.length === 0) return xml;
+        let closeTags = '';
+        for (let i = stack.length - 1; i >= 0; i--) {
+            closeTags += '</' + stack[i] + '>';
+        }
+        if (!closeTags) return xml;
+        const tadEnd = xml.lastIndexOf('</tad>');
+        return (tadEnd >= 0) ? (xml.slice(0, tadEnd) + closeTags + xml.slice(tadEnd)) : (xml + closeTags);
+    }
+
     async renderTADXML(tadXML, options = {}) {
         const returnHtml = options.returnHtml === true;
 
@@ -837,6 +874,8 @@ export const TextTadParserMixin = (Base) => class extends Base {
         }
 
         try {
+            // 不正XML(閉じタグ欠落)を末尾補完して整形式にする (文章中インライン図形後の </p>/</document> 欠落等)
+            tadXML = this._balanceTags(tadXML);
             // XMLをパースしてrealtime要素を検出
             const parser = new DOMParser();
             const xmlDoc = parser.parseFromString(tadXML, 'text/xml');

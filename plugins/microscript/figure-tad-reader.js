@@ -46,7 +46,7 @@
         });
     }
 
-    function buildPatternMap(figure) {
+    function buildPatternMap(figure, bgcolorOverride) {
         _patternMap = {};
         buildMaskMap(figure);
         const pattElems = figure.querySelectorAll('pattern');
@@ -57,8 +57,13 @@
             const height = parseInt(p.getAttribute('height')) || 16;
             const ncol = parseInt(p.getAttribute('ncol')) || 0;
             const fgcolorsStr = p.getAttribute('fgcolors') || '';
-            const bgcolorStr = p.getAttribute('bgcolor') || '';
+            let bgcolorStr = p.getAttribute('bgcolor') || '';
             const masksStr = p.getAttribute('masks') || '';
+            // 棒グラフのマスクバー等、 不透明な白地パターンを背景色と同化させる (白帯対策)。
+            // bgcolor が白(#ffffff) かつ ウィンドウ背景色が白以外のときのみ置換 (白背景図形には無影響)
+            if (bgcolorOverride && /^#?ffffff$/i.test(bgcolorStr) && bgcolorOverride.toLowerCase() !== '#ffffff') {
+                bgcolorStr = bgcolorOverride;
+            }
             const fg = (fgcolorsStr.split(',')[0] || '').trim() || '#000000';
             const bg = bgcolorStr || 'transparent';
 
@@ -296,6 +301,49 @@
         };
     }
 
+    // wRatio/hRatio 等の比率指定 ("1/2", "1/1", 数値) を倍率(float)へ変換。不正/未指定は 1
+    function parseRatio(v) {
+        if (v === null || v === undefined || v === '') return 1;
+        const s = String(v).trim();
+        if (s.indexOf('/') >= 0) {
+            const parts = s.split('/');
+            const a = parseFloat(parts[0]);
+            const b = parseFloat(parts[1]);
+            if (!isNaN(a) && !isNaN(b) && b !== 0) return a / b;
+            return 1;
+        }
+        const n = parseFloat(s);
+        return (isNaN(n) || n <= 0) ? 1 : n;
+    }
+
+    // <p> 内を順走査し、 font の wRatio/hRatio を状態保持して文字 run 配列を生成する。
+    // run = { text, xScale(横倍率=wRatio), yScale(縦倍率=hRatio) }。
+    // font の size/color/face 切替は run の倍率には影響させない (wRatio/hRatio 属性が有る時のみ更新)。
+    function collectRuns(node, state, runs) {
+        node.childNodes.forEach((child) => {
+            if (child.nodeType === Node.TEXT_NODE) {
+                const txt = child.textContent;
+                // 整形用の純ASCII空白 (改行/スペース/タブのみ) は要素間のインデントなので本文扱いしない。
+                // 全角スペース(U+3000)等の本文空白は [^\t\n\r ] に該当するため保持される。
+                if (txt && /[^\t\n\r ]/.test(txt)) {
+                    runs.push({ text: txt, xScale: state.xScale, yScale: state.yScale });
+                }
+            } else if (child.nodeType === Node.ELEMENT_NODE) {
+                const tag = child.tagName.toLowerCase();
+                if (tag === 'font') {
+                    if (child.hasAttribute('wRatio')) state.xScale = parseRatio(child.getAttribute('wRatio'));
+                    if (child.hasAttribute('hRatio')) state.yScale = parseRatio(child.getAttribute('hRatio'));
+                } else if (tag === 'br') {
+                    runs.push({ text: '\n', xScale: state.xScale, yScale: state.yScale });
+                } else if (tag === 'docview' || tag === 'docdraw' || tag === 'docscale' || tag === 'text') {
+                    // メタ情報要素 (枠/スケール/段落属性) は本文ではないためスキップ
+                } else {
+                    collectRuns(child, state, runs);
+                }
+            }
+        });
+    }
+
     function parseDocument(elem) {
         const docView = elem.querySelector('docView');
         const left = docView ? num(docView, 'viewleft', num(docView, 'left', 0)) : 0;
@@ -329,10 +377,19 @@
             clone.querySelectorAll('docView,docDraw,docScale,text,font').forEach(function (el) { el.remove(); });
             return getTextContent(clone);
         });
+        // wRatio/hRatio を区間ごとに保持した run 配列を生成 (font 状態は段落間も継続)。
+        // 描画 (_drawText) が runs を優先使用し、半角圧縮等の文字幅を反映する。
+        const runs = [];
+        const runState = { xScale: 1, yScale: 1 };
+        for (let pi = 0; pi < paragraphs.length; pi++) {
+            if (pi > 0) runs.push({ text: '\n', xScale: runState.xScale, yScale: runState.yScale });
+            collectRuns(paragraphs[pi], runState, runs);
+        }
         return {
             kind: 'text',
             left: left, top: top, right: right, bottom: bottom,
             text: lines.join('\n').trim(),
+            runs: runs,
             fontSize: fontSize,
             fontFamily: fontFamily,
             textColor: textColor,
@@ -492,9 +549,66 @@
      *   links: 仮身リンク配列
      * }
      */
-    function parse(xmlData) {
-        const result = { shapes: [], groups: [], segments: [], links: [], error: null };
+    // グループから役者セグメントを再帰的に検出する。
+    // 「@名前」ラベル付きグループを役者とし、 その内部は探索を打ち切る。
+    // ラベルの無いグループは入れ子の子グループを再帰的に探す
+    // (図形全体を入れ子グループ化した舞台で役者が深くネストするケースに対応)。
+    function collectSegments(shape, result) {
+        const det = detectSegment(shape);
+        if (det.isSegment) {
+            if (det.labelIndex >= 0) {
+                shape.children.splice(det.labelIndex, 1);
+            }
+            // セグメント境界は「@名前」 ラベル文字枠を除いた可視シェイプのみで再計算する。
+            // ラベルを含めると .W/.H がラベル分膨らみ、 原点がずれて MOVE 後の描画位置もずれる。
+            let visL = Infinity, visT = Infinity, visR = -Infinity, visB = -Infinity;
+            for (let j = 0; j < shape.children.length; j++) {
+                const bb = shapeBoundingBox(shape.children[j]);
+                if (!bb) continue;
+                if (bb[0] < visL) visL = bb[0];
+                if (bb[1] < visT) visT = bb[1];
+                if (bb[2] > visR) visR = bb[2];
+                if (bb[3] > visB) visB = bb[3];
+            }
+            let labelOffX = 0, labelOffY = 0;
+            if (isFinite(visL) && isFinite(visT) && isFinite(visR) && isFinite(visB)) {
+                for (let j = 0; j < shape.children.length; j++) {
+                    translateShape(shape.children[j], -visL, -visT);
+                }
+                if (det.labelShape) translateShape(det.labelShape, -visL, -visT);
+                shape.left = shape.left + visL;
+                shape.top = shape.top + visT;
+                shape.right = shape.left + (visR - visL);
+                shape.bottom = shape.top + (visB - visT);
+                // 論理原点(ラベル込み左上)と描画原点(可視左上)の差。 SCENE/MOVE の固定オフセット補正に使う
+                labelOffX = -visL; labelOffY = -visT;
+            }
+            result.segments.push({
+                name: det.segmentName,
+                group: shape,
+                labelShape: det.labelShape,
+                baseX: shape.left,
+                baseY: shape.top,
+                labelOffsetX: labelOffX,
+                labelOffsetY: labelOffY,
+                width: Math.max(shape.right - shape.left, 1),
+                height: Math.max(shape.bottom - shape.top, 1)
+            });
+            return;
+        }
+        // ラベル無しグループ: 入れ子の子グループを再帰探索
+        for (let j = 0; j < shape.children.length; j++) {
+            const ch = shape.children[j];
+            if (ch && ch.kind === 'group') collectSegments(ch, result);
+        }
+    }
+
+    function parse(xmlData, options) {
+        const result = { shapes: [], groups: [], segments: [], links: [], figView: null, error: null };
         if (!xmlData) return result;
+        // XML 1.0 で禁止された制御文字(ESC=U+001B, FF=U+000C 等。 タブ \t・改行 \n・復帰 \r は許可)を除去。
+        // テキストノード中の不正文字は DOMParser を parsererror にするため、 パース前に除く
+        xmlData = xmlData.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
         let doc;
         try {
             doc = new DOMParser().parseFromString(xmlData, 'text/xml');
@@ -512,8 +626,13 @@
             result.error = '<figure> 要素が見つかりません';
             return result;
         }
-        // パターンID → 色 の辞書を構築 (f_pat/l_pat 解決に使用)
-        buildPatternMap(figure);
+        // パターンID → 色 の辞書を構築 (f_pat/l_pat 解決に使用)。 背景色を渡しマスクバー白地を同化
+        buildPatternMap(figure, options && options.backgroundColor);
+        // figView (作業領域) を取得 — MOVE ではみ出した図形を作業領域でクリップするのに使う
+        const fvEl = figure.querySelector('figView');
+        if (fvEl) {
+            result.figView = { left: num(fvEl, 'left', 0), top: num(fvEl, 'top', 0), right: num(fvEl, 'right', 0), bottom: num(fvEl, 'bottom', 0) };
+        }
         const children = Array.from(figure.children);
         for (let i = 0; i < children.length; i++) {
             const shape = parseShape(children[i]);
@@ -521,44 +640,7 @@
             result.shapes.push(shape);
             if (shape.kind === 'group') {
                 result.groups.push(shape);
-                const det = detectSegment(shape);
-                if (det.isSegment) {
-                    if (det.labelIndex >= 0) {
-                        shape.children.splice(det.labelIndex, 1);
-                    }
-                    // セグメント境界は「@名前」 ラベル文字枠を除いた可視シェイプのみで再計算する。
-                    // ラベルを含めると .W/.H がラベル分膨らみ (例: 半径＝ボール.W/2 の物理計算が破綻)、
-                    // ラベルが図形の左/上にある場合は原点がずれて MOVE 後の描画位置もずれる
-                    let visL = Infinity, visT = Infinity, visR = -Infinity, visB = -Infinity;
-                    for (let j = 0; j < shape.children.length; j++) {
-                        const bb = shapeBoundingBox(shape.children[j]);
-                        if (!bb) continue;
-                        if (bb[0] < visL) visL = bb[0];
-                        if (bb[1] < visT) visT = bb[1];
-                        if (bb[2] > visR) visR = bb[2];
-                        if (bb[3] > visB) visB = bb[3];
-                    }
-                    if (isFinite(visL) && isFinite(visT) && isFinite(visR) && isFinite(visB)) {
-                        // 子シェイプを可視境界の原点へ再相対化し、 グループ境界も一致させる
-                        for (let j = 0; j < shape.children.length; j++) {
-                            translateShape(shape.children[j], -visL, -visT);
-                        }
-                        if (det.labelShape) translateShape(det.labelShape, -visL, -visT);
-                        shape.left = shape.left + visL;
-                        shape.top = shape.top + visT;
-                        shape.right = shape.left + (visR - visL);
-                        shape.bottom = shape.top + (visB - visT);
-                    }
-                    result.segments.push({
-                        name: det.segmentName,
-                        group: shape,
-                        labelShape: det.labelShape,
-                        baseX: shape.left,
-                        baseY: shape.top,
-                        width: Math.max(shape.right - shape.left, 1),
-                        height: Math.max(shape.bottom - shape.top, 1)
-                    });
-                }
+                collectSegments(shape, result);
             } else if (shape.kind === 'link') {
                 result.links.push(shape);
             }

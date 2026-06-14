@@ -30,6 +30,14 @@ class MicroScriptPlugin extends window.PluginBase {
     setupMessageBusHandlers() {
         this.setupCommonMessageBusHandlers();
 
+        // WMOVE 後にホストから作業領域左上のデスクトップ座標を受け取り $WDX/$WDY に反映する
+        this.messageBus.on('window-geometry', (data) => {
+            if (this.stage && data) {
+                if (typeof data.wdx === 'number') this.stage.wdx = data.wdx;
+                if (typeof data.wdy === 'number') this.stage.wdy = data.wdy;
+            }
+        });
+
         this.messageBus.on('init', async (data) => {
             logger.debug('[MS] init received');
             this.onInit(data);
@@ -155,7 +163,9 @@ class MicroScriptPlugin extends window.PluginBase {
             return;
         }
 
-        this.figure = window.FigureTadReader.parse(this.figureXml);
+        this.figure = window.FigureTadReader.parse(this.figureXml, { backgroundColor: this.windowBgColor });
+        // 作業領域 (figView) を stage に渡し、 MOVE ではみ出した図形を作業領域でクリップ (白帯対策)
+        if (this.stage) this.stage.figView = this.figure.figView;
         console.log('[MS] FigureTadReader: groups=', this.figure.groups.length, 'segments=', this.figure.segments.length, 'links=', this.figure.links.length);
         if (this.figure.error) {
             console.log('[MS] FigureTadReader error:', this.figure.error);
@@ -192,11 +202,13 @@ class MicroScriptPlugin extends window.PluginBase {
                     }
                 }
             }
-            // セグメント内の初期テキスト (ボックス等の数値入力欄の初期値) を抽出
+            // セグメント内の初期テキスト (ボックス等の数値入力欄の初期値) と初期文字色を抽出
             let initText = '';
+            let initTextColor = null;
             for (const ch of segDef.group.children) {
                 if (ch.kind === 'text' && ch !== segDef.labelShape && ch.text) {
                     initText = ch.text;
+                    if (ch.textColor) initTextColor = ch.textColor;
                     break;
                 }
             }
@@ -208,9 +220,25 @@ class MicroScriptPlugin extends window.PluginBase {
                 h: segDef.height,
                 shapes: segDef.group.children,
                 labelShape: segDef.labelShape,
-                text: initText
+                text: initText,
+                initTextColor: initTextColor,
+                labelOffsetX: segDef.labelOffsetX,
+                labelOffsetY: segDef.labelOffsetY
             });
             this.runtime.registerSegment(seg);
+        }
+
+        // 数値欄役者 (Nn) の初期値を $SV[n-1] に同期 (簡単な表の例等。 PROLOGUE が $SV を読む設計のため)。
+        // 数値化できる初期値を持つ役者のみ対象。 localStorage 保存値があれば presetSV 内で永続値を優先
+        for (const segDef of this.figure.segments) {
+            const m = /^N(\d+)$/.exec(segDef.name);
+            if (!m) continue;
+            const seg = this.stage.segments.get(segDef.name);
+            if (!seg) continue;
+            const v = this.runtime.getSegState(seg, 'V');
+            if (typeof v === 'number' && Number.isFinite(v) && v !== -2147483648) {
+                this.runtime.presetSV(parseInt(m[1], 10) - 1, v);
+            }
         }
 
         this.stage.render();
@@ -249,7 +277,7 @@ class MicroScriptPlugin extends window.PluginBase {
             console.log('[MS] sub figures:', scriptResult.subFigures.length);
             for (const sub of scriptResult.subFigures) {
                 try {
-                    const subFigure = window.FigureTadReader.parse(sub.xtad);
+                    const subFigure = window.FigureTadReader.parse(sub.xtad, { backgroundColor: this.windowBgColor });
                     if (subFigure.error) {
                         console.log('[MS] sub figure parse error:', sub.name, subFigure.error);
                         continue;
@@ -275,7 +303,9 @@ class MicroScriptPlugin extends window.PluginBase {
                             w: subSeg.width,
                             h: subSeg.height,
                             shapes: subSeg.group.children,
-                            labelShape: subSeg.labelShape
+                            labelShape: subSeg.labelShape,
+                            labelOffsetX: subSeg.labelOffsetX,
+                            labelOffsetY: subSeg.labelOffsetY
                         });
                         this.runtime.registerSegment(seg);
                         console.log('[MS]     register sub seg:', subSeg.name, 'x=', subSeg.baseX, 'y=', subSeg.baseY, 'w=', subSeg.width, 'h=', subSeg.height);
@@ -317,7 +347,7 @@ class MicroScriptPlugin extends window.PluginBase {
             ast = window.MSParser.parse(tokens);
             console.log('[MS] AST procedures:', ast.procedures.length, 'globals:', ast.globals.length, 'segmentDecls:', ast.segmentDecls.length);
             for (const p of ast.procedures) {
-                console.log('[MS]   proc:', p.type, p.name || '', 'event=', p.event ? (p.event.kind + ' ' + (p.event.targets || []).join(',')) : 'none', 'body=', p.body.length);
+                // [MS] proc 一覧ログ抑制(起動時に手続き数ぶん出るため)
             }
         } catch (e) {
             console.log('[MS] parser error:', e.message);
@@ -337,7 +367,7 @@ class MicroScriptPlugin extends window.PluginBase {
             setTimeout(() => {
                 if (!this.stage) return;
                 this.stage.segments.forEach((seg) => {
-                    console.log('[MS] seg:', seg.name, 'visible=' + seg.visible, 'x=' + seg.x, 'y=' + seg.y, 'w=' + seg.w, 'h=' + seg.h);
+                    // [MS] seg 一覧ログ抑制(起動時にセグメント数ぶん出るため)
                 });
                 console.log('[MS] canvas size:', this.stage.canvas.clientWidth, 'x', this.stage.canvas.clientHeight);
             }, 1000);

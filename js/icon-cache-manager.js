@@ -8,7 +8,9 @@ import { getLogger } from './logger.js';
 
 const logger = getLogger('IconCacheManager');
 
-// 失敗キャッシュのTTL（ミリ秒）: この期間を過ぎると再取得を試行
+// 失敗キャッシュのTTL（ミリ秒）: この期間を過ぎると再取得を試行。
+// loadIconWithRetry は TTL に依存せず clearFailure で即再取得するため、 通常の loadIcon 呼び出しの
+// 抑制期間は長めに保つ (短くすると .ico 恒久不在の実身に対する再描画ごとの無駄な read-icon-file が増える)
 const FAILURE_CACHE_TTL = 30000;
 
 export class IconCacheManager {
@@ -18,6 +20,7 @@ export class IconCacheManager {
      */
     constructor(messageBus, logPrefix = '') {
         this.iconCache = new Map(); // realId -> Base64データ または { failed: true, timestamp: number }
+        this._inFlight = new Map(); // realId -> Promise (未応答リクエストの重複排除)
         this.messageBus = messageBus;
         this.logPrefix = logPrefix;
     }
@@ -45,6 +48,25 @@ export class IconCacheManager {
             }
         }
 
+        // in-flight 重複排除: 同一 realId の未応答リクエストを1本に集約し、 無駄な read-icon-file 往復を防ぐ
+        if (this._inFlight.has(realId)) {
+            return this._inFlight.get(realId);
+        }
+        const promise = this._doLoadIcon(realId);
+        this._inFlight.set(realId, promise);
+        try {
+            return await promise;
+        } finally {
+            this._inFlight.delete(realId);
+        }
+    }
+
+    /**
+     * アイコンを親ウィンドウ経由で実際に読み込む (loadIcon の in-flight 集約の実体)
+     * @param {string} realId - 実身ID
+     * @returns {Promise<string|null>}
+     */
+    async _doLoadIcon(realId) {
         // 親ウィンドウにアイコンファイルのパスを要求
         const messageId = `icon-${realId}-${Date.now()}`;
         this.messageBus.send('read-icon-file', {
@@ -126,5 +148,35 @@ export class IconCacheManager {
     clearCache() {
         this.iconCache.clear();
         logger.debug(`${this.logPrefix} アイコンキャッシュをクリアしました`);
+    }
+
+    /**
+     * 指定 realId の失敗キャッシュを無効化する (再取得を許可)
+     * @param {string} realId - 実身ID
+     */
+    clearFailure(realId) {
+        const c = this.iconCache.get(realId);
+        if (c && c.failed) this.iconCache.delete(realId);
+    }
+
+    /**
+     * アイコンを読み込み、 失敗時は一定間隔で再取得をリトライする。
+     * 書庫解凍直後は .ico の書き込みが仮身描画より遅れるため、 失敗キャッシュを無効化して再取得し、
+     * .ico が揃い次第確実にアイコンを表示する。 既存実身(.ico あり)は初回で成功しリトライしない。
+     * @param {string} realId - 実身ID
+     * @param {number} retries - 最大リトライ回数
+     * @param {number} delay - リトライ間隔(ms)
+     * @returns {Promise<string|null>}
+     */
+    async loadIconWithRetry(realId, retries = 5, delay = 600) {
+        let data = await this.loadIcon(realId);
+        // nested iframe(require不可)環境では .ico を読めず、 リトライしても回復しないため即返す
+        if (typeof require === 'undefined') return data;
+        for (let i = 0; i < retries && !data; i++) {
+            await new Promise(function (r) { setTimeout(r, delay); });
+            this.clearFailure(realId);
+            data = await this.loadIcon(realId);
+        }
+        return data;
     }
 }

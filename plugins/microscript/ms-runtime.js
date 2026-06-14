@@ -97,7 +97,13 @@
         if (decl.shareWith) {
             const shared = this.lookup(decl.shareWith);
             if (shared) {
-                v.data = shared.data;
+                // 配列共有 X:C[5]=A[3] は A の指定オフセットから記憶域を共有する。
+                // offset 付きは Proxy で添字に加算するビューを作る(全アクセス箇所を変更せずに対応)。
+                const off = (decl.shareOffset | 0) || 0;
+                v.data = off ? new Proxy(shared.data, {
+                    get: function (t, p) { const i = +p; return Number.isInteger(i) ? t[i + off] : t[p]; },
+                    set: function (t, p, val) { const i = +p; if (Number.isInteger(i)) { t[i + off] = val; } else { t[p] = val; } return true; }
+                }) : shared.data;
                 v.isScalar = shared.isScalar;
             } else {
                 console.warn('[MS-RT] 配列共有先が未定義:', decl.name, '=', decl.shareWith);
@@ -128,6 +134,9 @@
         this.y = opts.y || 0;
         this.x0 = this.x;
         this.y0 = this.y;
+        // home: 作成位置(MOVE 座標省略時の復帰先)。 SCENE では追従させず、 .X0/.Y0(x0/y0)のみシフトさせる
+        this.home_x = this.x;
+        this.home_y = this.y;
         this.w = opts.w || 0;
         this.h = opts.h || 0;
         this.shapes = opts.shapes || [];
@@ -147,6 +156,11 @@
         // textOverride は TEXT 命令で全体上書き時のみ true。 初期テキストは内部 text shape で描画される
         this.textOverride = false;
         this.labelShape = opts.labelShape || null;
+        // 図形由来の初期文字色 (TEXT/.TX 上書き描画時、 .TFCOL 未設定なら描画に使うフォールバック色)
+        this._initTextColor = opts.initTextColor || null;
+        // 論理原点(ラベル込み左上)と描画原点(可視左上)の差。 SCENE/MOVE の固定オフセット補正に使う
+        this.labelOffsetX = opts.labelOffsetX || 0;
+        this.labelOffsetY = opts.labelOffsetY || 0;
     }
 
     function Runtime(opts) {
@@ -170,7 +184,7 @@
         for (let i = 0; i < prog.globals.length; i++) {
             const g = prog.globals[i];
             const sizeVal = this.evalConst(g.size);
-            const decl = { name: g.name, varType: g.varType, size: sizeVal, shareWith: g.shareWith };
+            const decl = { name: g.name, varType: g.varType, size: sizeVal, shareWith: g.shareWith, shareOffset: g.shareWith ? (this.evalConst(g.shareOffset) | 0) : 0 };
             this.globalScope.declare(decl, { forceArray: sizeVal > 1 });
         }
         // SEGMENT 宣言 (可変セグメント) を globalScope に「シンボル型変数」として登録
@@ -218,6 +232,8 @@
         if (node.type === 'Unary') {
             const v = this.evalConst(node.operand);
             if (node.op === '-') return -v;
+            if (node.op === '~') return ~v;
+            if (node.op === '!') return this.truthy(v) ? 0 : 1;
             return v;
         }
         if (node.type === 'Binary') {
@@ -229,6 +245,12 @@
                 case '*': return l * r;
                 case '/': return r === 0 ? 0 : Math.trunc(l / r);
                 case '%': return r === 0 ? 0 : l - Math.trunc(l / r) * r;
+                // 仕様: ビット演算・シフトは浮動小数を整数に切り捨ててから演算(evalBinary と同一規則)
+                case '&': return (l | 0) & (r | 0);
+                case '|': return (l | 0) | (r | 0);
+                case '^': return (l | 0) ^ (r | 0);
+                case '<<': return (l | 0) << (r | 0);
+                case '>>': return (l | 0) >> (r | 0);
             }
         }
         return 1;
@@ -268,9 +290,9 @@
     };
 
     Runtime.prototype._reportError = function (message) {
-        // DEBUG 0 指定時はエラーパネルを出さず不正値返却+メッセージエリアのみ。
-        // DEBUG 未指定はレベル1相当 (エラーパネル表示) として扱う
-        const lv = (this.program && this.program.debugLevel != null) ? this.program.debugLevel : 1;
+        // DEBUG 0 指定 or DEBUG 文なし (仕様: 未指定=レベル0) はエラーパネルを出さず
+        // 不正値返却 + メッセージエリア表示のみ。 DEBUG 1 以上でエラーパネルを表示する
+        const lv = (this.program && this.program.debugLevel != null) ? this.program.debugLevel : 0;
         if (lv < 1) {
             this.stage.message(message + '\n');
             return;
@@ -291,7 +313,7 @@
             const kind = proc.event.kind;
             if (kind === 'MENU') {
                 if (self.menuItems.length < 8 && proc.event.menu != null) {
-                    self.menuItems.push({ label: String(proc.event.menu), proc: proc });
+                    self.menuItems.push({ label: Array.isArray(proc.event.menu) ? codepointsToString(proc.event.menu) : String(proc.event.menu), proc: proc });
                 }
                 return;
             }
@@ -348,6 +370,7 @@
         this.threads.add(thread);
         this._procRunCount.set(proc, (this._procRunCount.get(proc) || 0) + 1);
         const scope = new Scope(this.globalScope);
+        scope._args = argValues || []; // $ARG[n] 用 (params 無し手続きの引数参照)
         if (proc.params) {
             for (let i = 0; i < proc.params.length; i++) {
                 const p = proc.params[i];
@@ -468,7 +491,8 @@
         for (let i = 0; i < stmt.decls.length; i++) {
             const d = stmt.decls[i];
             const size = typeof d.size === 'object' ? await this.evalExpr(d.size, scope, null) : d.size;
-            scope.declare({ name: d.name, varType: d.varType, size: size, shareWith: d.shareWith }, { forceArray: size > 1, isLocal: true });
+            const shareOffset = d.shareWith ? ((typeof d.shareOffset === 'object' ? await this.evalExpr(d.shareOffset, scope, null) : (d.shareOffset || 0)) | 0) : 0;
+            scope.declare({ name: d.name, varType: d.varType, size: size, shareWith: d.shareWith, shareOffset: shareOffset }, { forceArray: size > 1, isLocal: true });
         }
     };
 
@@ -480,7 +504,7 @@
 
     Runtime.prototype.assignTarget = async function (target, values, scope, thread) {
         if (target.kind === 'sysvar') {
-            this.setSysVar(target.name, target.index ? await this.evalExpr(target.index, scope, thread) : null, values[0]);
+            this.setSysVar(target.name, target.index ? await this.evalExpr(target.index, scope, thread) : null, values[0], scope, thread);
             return;
         }
         if (target.kind === 'segstate') {
@@ -547,26 +571,25 @@
 
     Runtime.prototype.stmtRepeat = async function (stmt, scope, thread) {
         const count = stmt.count != null ? await this.evalExpr(stmt.count, scope, thread) : -1;
-        let i = 0;
         if (!thread._cnt) thread._cnt = { value: 0 };
         const prevCnt = thread._cnt.value;
+        thread._cnt.value = 0;
         try {
+            // $CNT を唯一の真実源(SSOT)とし、 スクリプトからの SET $CNT=N がループ制御に反映されるようにする
             while (!thread.terminated && !this.finished) {
-                if (count >= 0 && i >= count) break;
-                thread._cnt.value = i;
+                if (count >= 0 && thread._cnt.value >= count) break;
                 try {
                     await this.execBlock(stmt.body, scope, thread);
                 } catch (sig) {
                     if (sig instanceof FlowSignal) {
                         if (sig.kind === 'break') break;
-                        if (sig.kind === 'continue') { i++; continue; }
+                        if (sig.kind === 'continue') { thread._cnt.value++; continue; }
                     }
                     throw sig;
                 }
-                i++;
+                thread._cnt.value++;
                 // 無限ループ時もブラウザ UI を生かすため一定間隔 (256回毎) で macrotask へ yield
-                // (間隔を狭めると setTimeout(0) の最小遅延 1〜4ms × yield 回数で長い計算ループが大幅に遅くなる)
-                if ((i & 0xff) === 0) await new Promise(function (r) { setTimeout(r, 0); });
+                if ((thread._cnt.value & 0xff) === 0) await new Promise(function (r) { setTimeout(r, 0); });
             }
         } finally {
             thread._cnt.value = prevCnt;
@@ -588,7 +611,7 @@
                     }
                 }
             }
-            if (!matched && stmt.defaultBody) {
+            if (stmt.defaultBody) { // 仕様: マッチしたCASEからBREAKせず落ちた場合もDEFAULTを実行(fall-through)。BREAK時は上で return 済み
                 try {
                     await this.execBlock(stmt.defaultBody, scope, thread);
                 } catch (sig) {
@@ -603,17 +626,48 @@
     };
 
     Runtime.prototype.stmtCall = async function (stmt, scope, thread) {
-        const proc = this.procedures.get(stmt.name);
-        if (!proc) throw MSRuntimeError('未定義の手続き: ' + stmt.name);
-        console.log('[MS-RT] CALL', stmt.name);
+        let procName = stmt.name;
+        // 配列要素のシンボル変数 (例 CALL ＿t＿func[＿t＿active]) は要素を評価して手続き名を取得
+        if (stmt.nameIndex != null) {
+            const hv = scope.lookup(stmt.name) || this.globalScope.lookup(stmt.name);
+            const ix = (await this.evalExpr(stmt.nameIndex, scope, thread)) | 0;
+            if (hv && hv.data && typeof hv.data[ix] === 'string') procName = hv.data[ix];
+        }
+        let proc = this.procedures.get(procName);
+        if (!proc) {
+            // S型変数に手続き名が格納されている場合 (シンボル変数経由の呼び出し) を解決
+            const hv = scope.lookup(procName) || this.globalScope.lookup(procName);
+            if (hv && hv.data && typeof hv.data[0] === 'string') proc = this.procedures.get(hv.data[0]);
+        }
+        if (!proc) throw MSRuntimeError('未定義の手続き: ' + procName);
+        // [MS-RT] CALL ログは冗長なため抑制(手続き呼び出し毎に大量化するため)
         const args = [];
-        for (let i = 0; i < stmt.args.length; i++) args.push(await this.evalExpr(stmt.args[i], scope, thread));
+        const argVars = []; // 配列引数の参照渡し用 (添字なしの配列変数)
+        for (let i = 0; i < stmt.args.length; i++) {
+            const an = stmt.args[i];
+            let av = null;
+            if (an && an.type === 'Name' && an.index == null && !an.isSlice && !an.stateName) {
+                const vv = scope.lookup(an.name);
+                if (vv && vv.data && vv.size > 1) av = vv;
+            }
+            argVars.push(av);
+            args.push(av ? av.data[0] : await this.evalExpr(an, scope, thread));
+        }
         const callScope = new Scope(this.globalScope);
+        callScope._args = args; // $ARG[n] 用 (params 無し手続きの引数参照)
         if (proc.params) {
             for (let i = 0; i < proc.params.length; i++) {
                 const p = proc.params[i];
-                const variable = callScope.declare(p, { forceArray: p.size > 1 });
-                if (i < args.length) variable.data[0] = args[i];
+                if ((p.size === 0 || p.size > 1) && argVars[i]) {
+                    // 配列引数 (Dist:S[] や固定長): 呼出元配列を参照渡し(複製しない、 変更は呼出元へ反映)
+                    const variable = callScope.declare(p, { forceArray: true });
+                    variable.data = argVars[i].data;
+                    variable.size = argVars[i].size;
+                    variable.isScalar = false;
+                } else {
+                    const variable = callScope.declare(p, { forceArray: p.size > 1 });
+                    if (i < args.length) variable.data[0] = args[i];
+                }
             }
         }
         try {
@@ -630,10 +684,17 @@
         let lastId = INVALID;
         for (let i = 0; i < stmt.handlers.length; i++) {
             const h = stmt.handlers[i];
-            let proc = self.procedures.get(h.name);
+            let procName = h.name;
+            // 配列要素のシンボル変数 (例 EXECUTE ＿v＿func[＿pid]) は要素を評価して手続き名を取得
+            if (h.nameIndex != null) {
+                const hv = scope.lookup(h.name) || self.globalScope.lookup(h.name);
+                const ix = (await self.evalExpr(h.nameIndex, scope, thread)) | 0;
+                if (hv && hv.data && typeof hv.data[ix] === 'string') procName = hv.data[ix];
+            }
+            let proc = self.procedures.get(procName);
             if (!proc) {
                 // BTRON: S型変数に手続き名が格納されている場合 (例: 対応手続き=処理A画面処理) を解決
-                const hv = scope.lookup(h.name) || self.globalScope.lookup(h.name);
+                const hv = scope.lookup(procName) || self.globalScope.lookup(procName);
                 if (hv && hv.data && typeof hv.data[0] === 'string') {
                     proc = self.procedures.get(hv.data[0]);
                 }
@@ -757,16 +818,28 @@
                 if (s) segs.push(s);
             }
         }
+        // 論理原点(ラベル込みグループ左上 = x0 + labelOffset)で最小を求めて左上へ寄せる。
+        // 痩せ再計算で描画原点(x0)が可視左上にずれても、 シーン全体の配置基準は論理原点に統一する
         let minX = Infinity, minY = Infinity;
         segs.forEach(function (s) {
-            if (s.x0 < minX) minX = s.x0;
-            if (s.y0 < minY) minY = s.y0;
+            // 配置基準は home(作成位置)。 SCENE で x0 を更新しても二重シフトしないよう home を基準にする
+            const hx = (s.home_x != null ? s.home_x : s.x0);
+            const hy = (s.home_y != null ? s.home_y : s.y0);
+            const lx = hx + (s.labelOffsetX || 0);
+            const ly = hy + (s.labelOffsetY || 0);
+            if (lx < minX) minX = lx;
+            if (ly < minY) minY = ly;
         });
         if (!isFinite(minX)) minX = 0;
         if (!isFinite(minY)) minY = 0;
         segs.forEach(function (s) {
-            s.x = s.x0 - minX;
-            s.y = s.y0 - minY;
+            const hx = (s.home_x != null ? s.home_x : s.x0);
+            const hy = (s.home_y != null ? s.home_y : s.y0);
+            s.x = hx - minX;
+            s.y = hy - minY;
+            // SCENE では .X0/.Y0(x0/y0)も配置後の元位置に追従させる(home は不変)
+            s.x0 = s.x;
+            s.y0 = s.y;
         });
         for (let i = 0; i < segs.length; i++) this.stage.bringToFront(segs[i]);
         // 文末 ';' (遅延表示): visibility のみ更新し、 描画は次の表示文までまとめる
@@ -854,52 +927,75 @@
             if (!name) continue;
             const seg = this.stage.segments.get(name);
             if (!seg) continue;
-            if (stmt.dup) {
-                // 文字セグメント・仮身セグメントは複製不可
-                const hasLink = (seg.shapes || []).some(function (s) { return s.kind === 'link'; });
-                const isTextSeg = (seg.shapes || []).length > 0 && seg.shapes.every(function (s) { return s.kind === 'text'; });
-                if (hasLink || isTextSeg) continue;
-                // DUP指定: 移動先に新規セグメントを複製して残す (最大16380)
-                this._dupCount = (this._dupCount || 0);
-                if (this._dupCount < 16380) {
-                    const dupName = name + '_dup' + (++this._dupCount);
-                    const dup = new Segment({
-                        name: dupName, x: seg.x, y: seg.y, w: seg.w, h: seg.h,
-                        shapes: seg.shapes, tsize: seg.tsize
-                    });
-                    dup.visible = true;
-                    this.stage.registerSegment(dup);
-                }
-            }
+            // 座標省略: 元位置 (x0/y0) に戻し、 DUP で作った複製はすべて削除する
             if (dx === null && dy === null) {
-                // 座標省略: 元位置 (x0/y0) に戻し、 DUP で作った複製はすべて削除する
-                seg.x = seg.x0;
-                seg.y = seg.y0;
+                // 仕様: 座標省略は作成位置(home, SCENE非追従)へ戻す
+                seg.x = (seg.home_x != null ? seg.home_x : seg.x0);
+                seg.y = (seg.home_y != null ? seg.home_y : seg.y0);
                 const dupPrefix = name + '_dup';
                 const toRemove = [];
                 this.stage.segments.forEach(function (s, key) {
                     if (typeof key === 'string' && key.indexOf(dupPrefix) === 0) toRemove.push(key);
                 });
                 for (let k = 0; k < toRemove.length; k++) this.stage.segments.delete(toRemove[k]);
-            } else if (stmt.baseSeg === '@') {
+                continue;
+            }
+            // 移動先座標を算出
+            let tx, ty;
+            if (stmt.baseSeg === '@') {
                 // @ 基準: ウィンドウ作業エリア基準の絶対位置
-                seg.x = dx;
-                seg.y = dy;
+                tx = dx; ty = dy;
             } else if (baseName) {
-                // base 絶対位置 + dx,dy
+                // base(choice)の可視左上 + dx,dy。 xofs/yofs は図形エディタで可視左上基準に実測された固定値のため
+                // labelOffset 補正は行わない。 SCENE 側の論理原点シフトで base.x は既にシーン座標へ整合済み
                 const base = this.stage.segments.get(baseName);
-                if (base) {
-                    seg.x = base.x + (dx || 0);
-                    seg.y = base.y + (dy || 0);
-                }
+                tx = base ? base.x + (dx || 0) : seg.x;
+                ty = base ? base.y + (dy || 0) : seg.y;
             } else {
                 // 基準省略: 現在位置からの相対増分 (BTRONサンプル慣用、 累積される)
-                seg.x += (dx || 0);
-                seg.y += (dy || 0);
+                tx = seg.x + (dx || 0); ty = seg.y + (dy || 0);
+            }
+            if (stmt.dup) {
+                // :DUP は複製を移動先に置き、 原本はその場に残す (BTRON仕様)。 文字/仮身セグメントは複製不可
+                const hasLink = (seg.shapes || []).some(function (s) { return s.kind === 'link'; });
+                const isTextSeg = (seg.shapes || []).length > 0 && seg.shapes.every(function (s) { return s.kind === 'text'; });
+                if (hasLink || isTextSeg) continue;
+                this._dupCount = (this._dupCount || 0);
+                if (this._dupCount < 16380) {
+                    const dupName = name + '_dup' + (++this._dupCount);
+                    const dup = new Segment({
+                        name: dupName, x: tx, y: ty, w: seg.w, h: seg.h,
+                        shapes: seg.shapes, tsize: seg.tsize,
+                        labelOffsetX: seg.labelOffsetX, labelOffsetY: seg.labelOffsetY
+                    });
+                    dup.visible = true;
+                    this.stage.registerSegment(dup);
+                }
+                // 原本 seg は動かさない (複製が移動先に行く)
+            } else {
+                seg.x = tx; seg.y = ty;
             }
         }
         // 文末 ';' (遅延表示): 位置のみ更新し、 描画は次の表示文までまとめる
         if (!stmt.deferred) this.stage.render();
+    };
+
+    // 鳴っている音を即座に無音化する (BTRON BEEP は単一チャンネル: 新しい音や停止指示が前の音を止める)。
+    // osc.stop() は生成時に dur 後の停止を予約済みのため、 2 回呼ぶと InvalidStateError になり即時停止
+    // できない。 gain を即 0 にして無音化し、 osc は予約時刻に自然終了して onended でリソース解放される
+    Runtime.prototype._stopAllBeep = function (ctx) {
+        if (this._beepNodes) {
+            const ct = ctx.currentTime;
+            this._beepNodes.forEach(function (n) {
+                try {
+                    if (n._gainNode) {
+                        n._gainNode.gain.cancelScheduledValues(ct);
+                        n._gainNode.gain.setValueAtTime(0, ct);
+                    }
+                } catch (e2) { /* 切断済み等は無視 */ }
+            });
+            this._beepNodes = [];
+        }
     };
 
     Runtime.prototype.stmtBeep = async function (stmt, scope, thread) {
@@ -907,23 +1003,11 @@
             const ctx = this._audioCtx || (this._audioCtx = new (window.AudioContext || window.webkitAudioContext)());
             const freq = stmt.freq ? await this.evalExpr(stmt.freq, scope, thread) : 1000;
             const dur = stmt.dur ? await this.evalExpr(stmt.dur, scope, thread) : 200;
+            // 新しい音 (freq≠0) を鳴らす前、 または停止指示 (freq===0) では、 現在鳴っている音を必ず止める。
+            // 例: 鍵盤を離すと sound(0)→BEEP 5,2000 (freq≠0) が発行されるが、 先に前の音を止めるので
+            // 押下中だけ鳴る (BTRON BEEP の単一チャンネル挙動)
+            this._stopAllBeep(ctx);
             if (freq === 0) {
-                // 0 指定: 鳴っている音を止める。
-                // osc.stop() は生成時に dur 後の停止を予約済みのため、 2 回目を呼ぶと
-                // InvalidStateError になり即時停止できない。 gain を即 0 にして無音化する
-                // (osc 自体は予約時刻に自然終了し onended でリソース解放される)
-                if (this._beepNodes) {
-                    const ct = ctx.currentTime;
-                    this._beepNodes.forEach(function (n) {
-                        try {
-                            if (n._gainNode) {
-                                n._gainNode.gain.cancelScheduledValues(ct);
-                                n._gainNode.gain.setValueAtTime(0, ct);
-                            }
-                        } catch (e2) { /* 切断済み等は無視 */ }
-                    });
-                    this._beepNodes = [];
-                }
                 return;
             }
             if (freq < 0) {
@@ -1006,7 +1090,7 @@
         switch (node.type) {
             case 'Int': return node.value;
             case 'Float': return node.value;
-            case 'String': return node.chars.slice();
+            case 'String': { const c = node.chars.slice(); c.push(0); return c; } // 文字列は末尾に自動的に0(ヌル終端)が付く
             case 'Unary': {
                 const v = await this.evalExpr(node.operand, scope, thread);
                 if (node.op === '-') return -v;
@@ -1016,7 +1100,7 @@
                 return v;
             }
             case 'Binary': return await this.evalBinary(node, scope, thread);
-            case 'SysVar': return this.getSysVar(node.name, node.index ? await this.evalExpr(node.index, scope, thread) : null, thread);
+            case 'SysVar': return this.getSysVar(node.name, node.index ? await this.evalExpr(node.index, scope, thread) : null, thread, scope);
             case 'Call': return await this.callBuiltin(node, scope, thread);
             case 'Name': return await this.evalName(node, scope, thread);
         }
@@ -1038,13 +1122,17 @@
         // 不正値の伝播 (BTRON仕様: 式の計算時に異常があれば結果も不正値)
         if (typeof l === 'number' && typeof r === 'number' && (isInvalid(l) || isInvalid(r))) {
             // 比較・論理演算は不正値判定を許容するため除外
-            if (op !== '==' && op !== '!=' && op !== '&&' && op !== '||') return INVALID;
+            if (op !== '=' && op !== '==' && op !== '!=' && op !== '&&' && op !== '||') return INVALID;
         }
         switch (op) {
             case '+': return l + r;
             case '-': return l - r;
             case '*': return l * r;
-            case '/': if (r === 0) return l >= 0 ? 2147483647 : -2147483648; return l / r;
+            case '/':
+                if (r === 0) return l >= 0 ? 2147483647 : -2147483648;
+                // BTRON仕様: 両辺が整数なら整数除算 (切り捨て)、 いずれか浮動小数なら浮動小数除算。
+                // 定数畳み込み (evalConst) も Math.trunc で整数除算しており実行時経路をそれに揃える
+                return (Number.isInteger(l) && Number.isInteger(r)) ? Math.trunc(l / r) : l / r;
             case '%': {
                 // BTRON仕様: % は浮動小数値を整数に切り捨ててから剰余
                 const li = Math.trunc(l), ri = Math.trunc(r);
@@ -1055,6 +1143,7 @@
             case '<=': return l <= r ? 1 : 0;
             case '>': return l > r ? 1 : 0;
             case '>=': return l >= r ? 1 : 0;
+            case '=':
             case '==': return l === r ? 1 : 0;
             case '!=': return l !== r ? 1 : 0;
             case '&': return (l | 0) & (r | 0);
@@ -1083,7 +1172,22 @@
                     }
                 }
             }
-            if (seg) return this.getSegState(seg, node.stateName);
+            if (seg) {
+                const sv = this.getSegState(seg, node.stateName);
+                // 状態名の後の添字/部分配列 (.TX[:] / .TX[i]) を配列結果に適用 (仕様書 .TX[要素数])
+                if (Array.isArray(sv)) {
+                    if (node.stateIsSlice) {
+                        const st = (node.stateSliceStart != null ? await this.evalExpr(node.stateSliceStart, scope, thread) : 0) | 0;
+                        const ln = (node.stateSliceLen != null ? await this.evalExpr(node.stateSliceLen, scope, thread) : (sv.length - st)) | 0;
+                        return sv.slice(st, st + ln);
+                    }
+                    if (node.stateIndex != null) {
+                        const ix = (await this.evalExpr(node.stateIndex, scope, thread)) | 0;
+                        return (ix < 0 || ix >= sv.length) ? INVALID : sv[ix];
+                    }
+                }
+                return sv;
+            }
             // BTRON仕様 09-03-03: 手続き名.S は手続き状態 (0:停止 1:実行中 2:待機)
             if (node.stateName.toUpperCase() === 'S' && this.procedures.has(node.name)) {
                 let state = 0;
@@ -1223,7 +1327,7 @@
                 let vText = codepointsToString(seg.tx);
                 if (global.MSLexer && global.MSLexer.normalize) vText = global.MSLexer.normalize(vText);
                 const n = parseFloat(vText);
-                return isNaN(n) ? INVALID : n;
+                return isNaN(n) ? 0 : n; // 仕様: 数値解釈不可なら0(INVALIDでない)
             }
             case 'TL': return codepointsToString(seg.tx).length;
             case 'TX': return seg.tx.slice();
@@ -1249,11 +1353,19 @@
             if (typeof localStorage !== 'undefined') {
                 const stored = localStorage.getItem(this._svKey());
                 if (stored) {
+                    this._svHadStored = true; // 保存値あり = 2回目以降 (figure 初期値で上書きしない)
                     const arr = JSON.parse(stored);
                     if (Array.isArray(arr)) for (let i = 0; i < 50 && i < arr.length; i++) this.savedVars[i] = arr[i] | 0;
                 }
             }
         } catch (e) {}
+    };
+    // figure の数値欄初期値を $SV に反映する (初回のみ)。 localStorage に保存値があれば
+    // 永続値 (前回入力値) を優先し上書きしない
+    Runtime.prototype.presetSV = function (index, value) {
+        this._loadSV();
+        if (this._svHadStored) return;
+        if (index >= 0 && index < 50) this.savedVars[index] = value | 0;
     };
     Runtime.prototype._storeSV = function () {
         try {
@@ -1287,7 +1399,7 @@
         } catch (e) {}
     };
 
-    Runtime.prototype.getSysVar = function (name, index, thread) {
+    Runtime.prototype.getSysVar = function (name, index, thread, scope) {
         const u = name.toUpperCase();
         if (!this.savedVars) this.savedVars = new Array(50).fill(0);
         switch (u) {
@@ -1300,8 +1412,18 @@
             case 'PDY': return this.stage.pdy || 0;
             case 'KSTAT': return this.stage.kstat || 0;
             case 'PDB': return this.stage.pdb || 0;
-            case 'KEY': return this.stage.lastKey || 0;
+            case 'KEY': { const v = this.stage.lastKey || 0; this.stage.lastKey = 0; return v; } // 仕様: 最初の参照のみ有効、2回目以降は0(参照で消費)
             case 'METAKEY': return this.stage.metaKey || 0;
+            case 'ARG': {
+                // 現在の手続きの引数 (params 無し手続きが $ARG[n] で引数を受ける。 照明等の汎用部品)。
+                // スコープチェーンを辿り最も近い手続きスコープの引数配列を参照する
+                let s = scope;
+                while (s) {
+                    if (s._args) { const i = index | 0; return (i >= 0 && i < s._args.length) ? s._args[i] : 0; }
+                    s = s.parent;
+                }
+                return 0;
+            }
             // BTRON仕様: $DATE の年は「西暦 - 1900」 (スクリプト側で 1900+年 として西暦に戻す)
             case 'DATE': { const d = new Date(); return (d.getFullYear() - 1900) * 10000 + (d.getMonth() + 1) * 100 + d.getDate(); }
             case 'TIME': { const d = new Date(); return d.getHours() * 10000 + d.getMinutes() * 100 + d.getSeconds(); }
@@ -1315,11 +1437,11 @@
             case 'SCRW': return window.screen.width;
             case 'SCRH': return window.screen.height;
             case 'RAND': return Math.floor(Math.random() * 65536);
-            case 'VERS': return (this.program && this.program.version) || 3;
+            case 'VERS': return 0x0300; // 処理系バージョンを 0xMMmm 形式で返す (上位8bit=メジャー3, 下位8bit=マイナー0)
             case 'CPULOAD': return 0;
             case 'CNT': return (thread && thread._cnt) ? thread._cnt.value : 0;
-            case 'GV': this._loadGV(); return this.sharedVars[index | 0] || 0;
-            case 'SV': this._loadSV(); return this.savedVars[index | 0] || 0;
+            case 'GV': { const gi = index | 0; if (gi < 0 || gi >= 50) return INVALID; this._loadGV(); return this.sharedVars[gi] || 0; }
+            case 'SV': { const si = index | 0; if (si < 0 || si >= 50) return INVALID; this._loadSV(); return this.savedVars[si] || 0; }
             case 'PDS': return this.stage.pds || 0;
             case 'KMODE': return this._kmode || 0;
             case 'DSKINS': return (this._dskins == null) ? 1 : this._dskins;
@@ -1331,12 +1453,24 @@
         return 0;
     };
 
-    Runtime.prototype.setSysVar = function (name, index, value) {
+    Runtime.prototype.setSysVar = function (name, index, value, scope, thread) {
         const u = name.toUpperCase();
         if (!this.savedVars) this.savedVars = new Array(50).fill(0);
         switch (u) {
-            case 'GV': this._loadGV(); this.sharedVars[index | 0] = value | 0; this._storeGV(); return;
-            case 'SV': this._loadSV(); this.savedVars[index | 0] = value | 0; this._storeSV(); return;
+            case 'CNT': if (thread && thread._cnt) thread._cnt.value = value | 0; return; // 仕様: REPEAT 内で $CNT に代入するとカウンタを変更できる
+            case 'GV': { const gi = index | 0; if (gi < 0 || gi >= 50) return; this._loadGV(); this.sharedVars[gi] = value | 0; this._storeGV(); return; }
+            case 'SV': { const si = index | 0; if (si < 0 || si >= 50) return; this._loadSV(); this.savedVars[si] = value | 0; this._storeSV(); return; }
+            case 'ARG': {
+                // $ARG[n] への書き込み: 照明等の部品は DEFINE 名 $ARG[n] でテンポラリ変数として使う。
+                // スコープチェーンを遡り最も近い _args 配列の index に書き込む (範囲外は伸長、 文字列も許容)
+                let s = scope;
+                while (s && !s._args) s = s.parent;
+                if (s && s._args) {
+                    const i = index | 0;
+                    if (i >= 0) { while (s._args.length <= i) s._args.push(0); s._args[i] = value; }
+                }
+                return;
+            }
             case 'PDS':
                 this.stage.pds = value | 0;
                 if (this.stage.setCursorShape) this.stage.setCursorShape(value | 0);
@@ -1368,7 +1502,7 @@
             case 'log10': if (args[0] === 0) return -1e300; if (args[0] < 0) return INVALID; return Math.log10(args[0]);
             case 'floor': return Math.floor(args[0]);
             case 'ceil': return Math.ceil(args[0]);
-            case 'round': return Math.round(args[0]);
+            case 'round': return (args[0] < 0 ? -1 : 1) * Math.round(Math.abs(args[0])); // BTRON: -0.5→-1.0 (絶対値で四捨五入)
             case 'fabs': return Math.abs(args[0]);
             case 'pow': {
                 // BTRON仕様: 〈数値1〉=0 で 〈数値2〉≦0、 または 〈数値1〉<0 で 〈数値2〉が整数でないとき 0.0
@@ -1403,25 +1537,32 @@
         }
         if (this.procedures.has(name)) {
             const proc = this.procedures.get(name);
-            console.log('[MS-RT] FUNC call:', name, 'args=', args);
             const callScope = new Scope(this.globalScope);
             if (proc.params) {
                 for (let i = 0; i < proc.params.length; i++) {
                     const p = proc.params[i];
-                    const variable = callScope.declare(p, { forceArray: p.size > 1 });
-                    if (i < args.length) variable.data[0] = args[i];
+                    let av = null;
+                    const an = node.args[i];
+                    if (an && an.type === 'Name' && an.index == null && !an.isSlice && !an.stateName) {
+                        const vv = scope.lookup(an.name);
+                        if (vv && vv.data && vv.size > 1) av = vv;
+                    }
+                    if ((p.size === 0 || p.size > 1) && av) {
+                        // 配列引数: 呼出元配列を参照渡し(複製しない、 変更は呼出元へ反映)
+                        const variable = callScope.declare(p, { forceArray: true });
+                        variable.data = av.data; variable.size = av.size; variable.isScalar = false;
+                    } else {
+                        const variable = callScope.declare(p, { forceArray: p.size > 1 });
+                        if (i < args.length) variable.data[0] = args[i];
+                    }
                 }
             }
             try {
                 await this.execBlock(proc.body, callScope, thread);
             } catch (sig) {
-                if (sig instanceof FlowSignal && sig.kind === 'exit') {
-                    console.log('[MS-RT] FUNC exit:', name, 'value=', sig.value);
-                    return sig.value;
-                }
+                if (sig instanceof FlowSignal && sig.kind === 'exit') return sig.value;
                 throw sig;
             }
-            console.log('[MS-RT] FUNC end:', name, '(no exit)');
             return 0;
         }
         return 0;
@@ -1886,7 +2027,8 @@
             thread._waiting = true;
             try {
                 while (!thread.terminated && !this.finished) {
-                    if (thread._breakSignal) { thread._breakSignal = false; this.lastErr = 0; return; }
+                    // $ERR: BREAK 解除=2 / タイムアウト=1 (待機文で統一)
+                    if (thread._breakSignal) { thread._breakSignal = false; this.lastErr = 2; return; }
                     if ((Date.now() - start) >= timeoutSec * 1000) { this.lastErr = 1; return; }
                     await new Promise(r => setTimeout(r, 50));
                 }
@@ -1941,6 +2083,7 @@
             dst.tx = stringToCodepoints('');
             dst.w = 0;
             dst.h = 0;
+            dst._sharedFrom = null; // 共有関係を解除
             this.stage.render();
             return;
         }
@@ -1955,10 +2098,16 @@
         if (!dst._positioned) {
             dst.x = src.x;
             dst.y = src.y;
-            dst.x0 = src.x0;
-            dst.y0 = src.y0;
             dst._positioned = true;
         }
+        // 「元の位置」(座標省略MOVEの復帰先=x0/y0)と labelOffset は毎回 右辺の値に更新する。
+        // 現在位置(x/y)のみ初回に継承し、 以降は SETSEG で動かさない。
+        dst.x0 = src.x0;
+        dst.y0 = src.y0;
+        dst.home_x = (src.home_x != null ? src.home_x : src.x0);
+        dst.home_y = (src.home_y != null ? src.home_y : src.y0);
+        dst.labelOffsetX = src.labelOffsetX;
+        dst.labelOffsetY = src.labelOffsetY;
         dst._sharedFrom = srcName;
         this.stage.render();
     };
@@ -1968,10 +2117,12 @@
         const dst = target.seg;
         const allShapes = [];
         let totalW = 0, totalH = 0;
+        let firstSrc = null;
         for (const expr of stmt.srcs) {
             const srcName = await this.resolveSegName(expr, scope, thread);
             const src = this.stage.segments.get(srcName);
             if (!src) continue;
+            if (!firstSrc) firstSrc = src;
             for (const s of src.shapes) {
                 const copy = {};
                 for (const k in s) {
@@ -1986,6 +2137,21 @@
         dst.shapes = allShapes;
         dst.w = totalW;
         dst.h = totalH;
+        // SETSEG と同様: 先頭ソースの 元位置(x0/y0)・labelOffset を継承(毎回)、現在位置(x/y)は初回のみ。
+        // 座標省略 MOVE の復帰先(x0/y0)が 0 のままだと原点に飛ぶため必須。
+        if (firstSrc) {
+            if (!dst._positioned) {
+                dst.x = firstSrc.x;
+                dst.y = firstSrc.y;
+                dst._positioned = true;
+            }
+            dst.x0 = firstSrc.x0;
+            dst.y0 = firstSrc.y0;
+            dst.home_x = (firstSrc.home_x != null ? firstSrc.home_x : firstSrc.x0);
+            dst.home_y = (firstSrc.home_y != null ? firstSrc.home_y : firstSrc.y0);
+            dst.labelOffsetX = firstSrc.labelOffsetX;
+            dst.labelOffsetY = firstSrc.labelOffsetY;
+        }
         this.stage.render();
     };
 
@@ -2023,12 +2189,12 @@
         thread._waiting = true;
         try {
             while (!thread.terminated && !this.finished) {
-                // $ERR: スレッド終了=0 / BREAK 解除=1 / タイムアウト=2
+                // $ERR: スレッド終了=0 / タイムアウト=1 / BREAK 解除=2 (待機文で統一)
                 const alive = targets.filter(function (t) { return !t.terminated && self.threads.has(t); });
                 if (alive.length === 0) { this.lastErr = 0; return; }
-                if (thread._breakSignal) { thread._breakSignal = false; this.lastErr = 1; return; }
-                if (timeoutSec === 0) { this.lastErr = 2; return; }
-                if (timeoutSec > 0 && (Date.now() - start) >= timeoutSec * 1000) { this.lastErr = 2; return; }
+                if (thread._breakSignal) { thread._breakSignal = false; this.lastErr = 2; return; }
+                if (timeoutSec === 0) { this.lastErr = 1; return; }
+                if (timeoutSec > 0 && (Date.now() - start) >= timeoutSec * 1000) { this.lastErr = 1; return; }
                 await new Promise(function (r) { setTimeout(r, 50); });
             }
         } finally {
@@ -2236,12 +2402,22 @@
         // BTRON仕様 09-04-11: R 系モード (R/RX/Rx) は読込専用のため書込はエラー
         if (cache.mode && /^R/i.test(cache.mode)) { this.lastErr = 17; return; }
         const records = (cache.data && cache.data.records) || [];
+        // 仕様: 飛び番レコード(既存件数より先)への書込は不可。 新規(末尾に1件追加)は offset=0 必須、
+        // 既存レコードは offset<=レコードサイズ。 違反は $ERR:32。 無条件 NUL パディングは廃止。
+        const origLen = records.length;
+        if (recNo > origLen) { this.lastErr = 32; return; }
+        const isAppend = (recNo === origLen);
         while (records.length <= recNo) records.push({ data: '' });
         const rec = records[recNo];
         let dataStr = typeof rec.data === 'string' ? rec.data : (rec.xtad || '');
         if (offset === -1) {
             dataStr = dataStr.substring(0, size);
         } else {
+            if (isAppend) {
+                if (offset !== 0) { this.lastErr = 32; return; }
+            } else if (offset > dataStr.length) {
+                this.lastErr = 32; return;
+            }
             const src = await this._evalLValue(srcNode, scope, thread);
             if (src) {
                 let bytes = '';
@@ -2249,7 +2425,6 @@
                     if (src.start + i >= src.variable.size) break;
                     bytes += String.fromCharCode(src.variable.data[src.start + i] & 0xFFFF);
                 }
-                if (offset > dataStr.length) dataStr += '\0'.repeat(offset - dataStr.length);
                 dataStr = dataStr.substring(0, offset) + bytes + dataStr.substring(offset + size);
             }
         }
@@ -2288,6 +2463,10 @@
     Runtime.prototype._msgQueueStore = function (q) {
         try { if (typeof localStorage !== 'undefined') localStorage.setItem('ms_msgq', JSON.stringify(q)); } catch (e) {}
     };
+    // 仕様: メッセージ/通信のサイズはバイト数。 型ごとのバイト幅 (B=1, C=2, I/F/W/G=4)
+    Runtime.prototype._typeBytes = function (vt) {
+        return vt === 'B' ? 1 : vt === 'C' ? 2 : 4;
+    };
     Runtime.prototype.stmtMSend = async function (stmt, scope, thread) {
         // MSEND プロセスID式, タイプ式, サイズ式, メッセージ本体
         const args = stmt.args || [];
@@ -2299,10 +2478,13 @@
         if (size === 0) { this.lastErr = 0; return; } // サイズ0は送信しない
         const src = this._resolveVarFromNode(args[3], scope);
         if (!src) { this.lastErr = 48; return; }
+        // 仕様: size はバイト数。 型バイト幅で要素数に変換して本体を取り出し、 バイト長も保存する。
+        const eb = this._typeBytes(src.varType);
+        const nElems = Math.max(0, Math.floor(size / eb));
         const body = [];
-        for (let i = 0; i < Math.min(size, src.size); i++) body.push(src.data[i] | 0);
+        for (let i = 0; i < Math.min(nElems, src.size); i++) body.push(src.data[i] | 0);
         const q = this._msgQueueLoad();
-        q.push({ to: pid, from: this._pid || 0, type: type, body: body, t: Date.now() });
+        q.push({ to: pid, from: this._pid || 0, type: type, body: body, byteLen: size, t: Date.now() });
         if (q.length > 256) q.splice(0, q.length - 256); // キュー暴走防止
         this._msgQueueStore(q);
         this.lastErr = 0;
@@ -2338,7 +2520,7 @@
                     // 自プロセスからのメッセージは送信元 0
                     if (pidVar) pidVar.data[0] = (m.from === myPid) ? 0 : m.from;
                     if (typeVar) typeVar.data[0] = m.type | 0;
-                    if (sizeVar) sizeVar.data[0] = m.body.length;
+                    if (sizeVar) sizeVar.data[0] = (typeof m.byteLen === 'number') ? m.byteLen : m.body.length; // 仕様: サイズはバイト数
                     if (bodyVar) {
                         const n = Math.min(m.body.length, bodyVar.size);
                         for (let i = 0; i < n; i++) bodyVar.data[i] = m.body[i] | 0;
@@ -2402,8 +2584,8 @@
                 else if (spec === 'x') s = (Math.trunc(a) >>> 0).toString(16);
                 else if (spec === 'X') s = (Math.trunc(a) >>> 0).toString(16).toUpperCase();
                 else if (spec === 'f') s = (precision >= 0 ? a.toFixed(precision) : a.toFixed(6));
-                else if (spec === 'e') s = (precision >= 0 ? a.toExponential(precision) : a.toExponential(6));
-                else if (spec === 'E') s = (precision >= 0 ? a.toExponential(precision).toUpperCase() : a.toExponential(6).toUpperCase());
+                else if (spec === 'e') s = (precision >= 0 ? a.toExponential(precision) : a.toExponential(6)).replace(/e([+-])(\d)$/, 'e$10$2'); // 指数2桁(C準拠)
+                else if (spec === 'E') s = (precision >= 0 ? a.toExponential(precision) : a.toExponential(6)).toUpperCase().replace(/E([+-])(\d)$/, 'E$10$2');
                 else if (spec === 'g' || spec === 'G') {
                     // %e/%f 自動切替: |値| < 0.0001 または整数部が桁数 (省略時6) に入り切らない場合は指数形式
                     const p = precision >= 0 ? Math.max(1, precision) : 6;

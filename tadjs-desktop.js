@@ -624,10 +624,20 @@ class TADjsDesktop {
                 logger.warn('[TADjs] move-window: windowElementが見つかりません:', windowId);
                 return;
             }
+            const titleBar = windowElement.querySelector('.window-title-bar');
+            const titleH = titleBar ? titleBar.offsetHeight : 24;
             const x = data.x | 0;
             const y = data.y | 0;
+            // WMOVE は「ウィンドウ作業領域左上」を (x,y) に置く (BTRON仕様)。 フレーム上端はタイトルバー分上
             windowElement.style.left = x + 'px';
-            windowElement.style.top = y + 'px';
+            windowElement.style.top = (y - titleH) + 'px';
+            // プログラム移動 (WMOVE) は window-moved を発火しないため、 新しい作業領域左上のデスクトップ座標を
+            // 返してプラグインの $WDX/$WDY を更新させる
+            const rect = windowElement.getBoundingClientRect();
+            this.parentMessageBus.sendToWindow(windowId, 'window-geometry', {
+                wdx: Math.round(rect.left),
+                wdy: Math.round(rect.top + titleH)
+            });
             logger.debug(`[TADjs] move-window: ${windowId} x=${x} y=${y}`);
         });
 

@@ -214,7 +214,7 @@ class FileImportManager {
         } else {
             // その他のファイル → existing-data-exec プラグイン
             pluginId = 'existing-data-exec';
-            baseFileId = '019a4a5c-7e2f-4b8a-9d3c-1f6e8a9b2c4d';
+            baseFileId = '019a4a5c-7e2f-7b8a-9d3c-1f6e8a9b2c4d';
         }
 
         // 実身名はファイル名から拡張子を除いたものを使用

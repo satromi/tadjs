@@ -5679,7 +5679,7 @@ class VirtualObjectListApp extends window.PluginBase {
 
         // loadIconCallbackオプションでアイコン読み込み機能を提供
         const options = {
-            loadIconCallback: (realId) => this.iconManager.loadIcon(realId),
+            loadIconCallback: (realId) => this.iconManager.loadIconWithRetry(realId),
             vobjIndex: vobjIndex  // 一意のインデックスを渡す
         };
 

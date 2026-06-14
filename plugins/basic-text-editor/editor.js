@@ -1434,7 +1434,7 @@ class BasicTextEditor extends
         if (this.virtualObjectRenderer) {
             // アイコンパス直接指定（プラグインフォルダ内のアイコンファイル）
             const options = {
-                loadIconCallback: (realId) => this.iconManager.loadIcon(realId)
+                loadIconCallback: (realId) => this.iconManager.loadIconWithRetry(realId)
             };
             vobjElement = this.virtualObjectRenderer.createInlineElement(virtualObject, options);
         } else {
@@ -5286,7 +5286,7 @@ class BasicTextEditor extends
 
                 // 仮身要素を作成
                 const vobjElement = this.virtualObjectRenderer.createInlineElement(virtualObject, {
-                    loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIcon(realId) : Promise.resolve(null)
+                    loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIconWithRetry(realId) : Promise.resolve(null)
                 });
 
                 // カーソル位置に挿入

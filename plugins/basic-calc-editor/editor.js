@@ -2355,7 +2355,7 @@ class CalcEditor extends window.CalcChartMixin(window.PluginBase) {
                     // VirtualObjectRendererで仮身要素を作成
                     const options = {
                         iconData: this.iconData || {},
-                        loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIcon(realId) : Promise.resolve(null)
+                        loadIconCallback: (realId) => this.iconManager ? this.iconManager.loadIconWithRetry(realId) : Promise.resolve(null)
                     };
 
                     // 開いた仮身かどうかを判定
