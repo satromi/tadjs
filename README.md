@@ -1,6 +1,6 @@
 # TADjs
 
-ダウンロード： [TADjs Desktop Ver0.43](https://github.com/satromi/tadjs/releases/tag/Ver0.43 "TADjs Desktop Ver0.43 Release")
+ダウンロード： [TADjs Desktop Ver0.44](https://github.com/satromi/tadjs/releases/tag/Ver0.44 "TADjs Desktop Ver0.44 Release")
 
 satromi@gmai.com
 
