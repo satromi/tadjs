@@ -57,6 +57,16 @@
         }
     }
 
+    // 型1要素のバイト幅 (B=1, C=2, I/F/G=4)
+    function _msTypeBytes(vt) { return vt === 'B' ? 1 : vt === 'C' ? 2 : 4; }
+    // 共有 ArrayBuffer 上の typed view を生成 (バイト単位の記憶域共有用)
+    function _msTypedView(buf, vt, byteOff, count) {
+        if (vt === 'B') return new Uint8Array(buf, byteOff, count);
+        if (vt === 'C') return new Uint16Array(buf, byteOff, count);
+        if (vt === 'F') return new Float32Array(buf, byteOff, count);
+        return new Int32Array(buf, byteOff, count); // I / G
+    }
+
     function createVariable(decl, opts) {
         opts = opts || {};
         let sz = decl.size != null ? decl.size : 1;
@@ -97,14 +107,40 @@
         if (decl.shareWith) {
             const shared = this.lookup(decl.shareWith);
             if (shared) {
-                // 配列共有 X:C[5]=A[3] は A の指定オフセットから記憶域を共有する。
-                // offset 付きは Proxy で添字に加算するビューを作る(全アクセス箇所を変更せずに対応)。
                 const off = (decl.shareOffset | 0) || 0;
-                v.data = off ? new Proxy(shared.data, {
-                    get: function (t, p) { const i = +p; return Number.isInteger(i) ? t[i + off] : t[p]; },
-                    set: function (t, p, val) { const i = +p; if (Number.isInteger(i)) { t[i + off] = val; } else { t[p] = val; } return true; }
-                }) : shared.data;
-                v.isScalar = shared.isScalar;
+                const baseBytes = _msTypeBytes(shared.varType);
+                const myBytes = _msTypeBytes(v.varType);
+                if (baseBytes === myBytes) {
+                    // 同型: 従来通り要素単位で共有 (offset 付きは Proxy で添字加算)
+                    v.data = off ? new Proxy(shared.data, {
+                        get: function (t, p) { const i = +p; return Number.isInteger(i) ? t[i + off] : t[p]; },
+                        set: function (t, p, val) { const i = +p; if (Number.isInteger(i)) { t[i + off] = val; } else { t[p] = val; } return true; }
+                    }) : shared.data;
+                    v.isScalar = shared.isScalar;
+                } else {
+                    // 異種型 (例: col:B[4]=pixel:I[1]): バイト単位で記憶域を共有する。
+                    // 共有 ArrayBuffer を作り、 基底と共有側を各々の型の typed view にする。
+                    // これにより col[0..2] へバイト書き込み後 pixel[0] が結合整数(0xRRGGBB)として読める。
+                    try {
+                        if (!shared._buffer) {
+                            const buf = new ArrayBuffer(shared.size * baseBytes);
+                            const baseView = _msTypedView(buf, shared.varType, 0, shared.size);
+                            for (let i = 0; i < shared.size; i++) baseView[i] = shared.data[i] || 0;
+                            shared._buffer = buf;
+                            shared.data = baseView;
+                        }
+                        const byteOff = off * baseBytes;
+                        const avail = Math.floor((shared._buffer.byteLength - byteOff) / myBytes);
+                        const cnt = Math.max(1, Math.min(v.size, avail));
+                        v.data = _msTypedView(shared._buffer, v.varType, byteOff, cnt);
+                        v._buffer = shared._buffer;
+                        v.isScalar = false;
+                    } catch (e) {
+                        console.warn('[MS-RT] バイト共有に失敗、要素共有にフォールバック:', decl.name, e.message);
+                        v.data = shared.data;
+                        v.isScalar = shared.isScalar;
+                    }
+                }
             } else {
                 console.warn('[MS-RT] 配列共有先が未定義:', decl.name, '=', decl.shareWith);
             }
@@ -168,6 +204,9 @@
         this.program = null;
         this.globalScope = new Scope(null);
         this.sharedVars = new Array(50).fill(0);
+        // $SV (保存変数) 枠。 getSysVar/setSysVar は遅延初期化ガードを持つが、 presetSV は
+        // loadProgram より前 (最初の $SV 操作) に呼ばれ得るため、 構築時に初期化しておく。
+        this.savedVars = new Array(50).fill(0);
         this.macros = {};
         this.procedures = new Map();
         this.threads = new Set();
@@ -214,6 +253,8 @@
         // プログラム再ロード時に旧 proc オブジェクトをキーにした実行中カウントを破棄
         // (残存すると ACTION 単一実行判定が旧参照を見て機能しない)
         this._procRunCount = new Map();
+        // segref 配列への同名セグメント分配(カード表[k]=?NN)用の出現順 consume カウンタを初期化
+        this._segConsume = {};
     };
 
     Runtime.prototype.evalConst = function (node) {
@@ -335,16 +376,26 @@
             if (!targetMap) return;
             // BTRON仕様: ACTION 第2引数「番号」 = 発火セグメントが targets リスト内で何番目か (0始まり)
             // (例: PRESS カップ0,カップ1,カップ2 → カップ1 押下で 番号=1)
+            // 同名セグメント共存: targets に同名が複数あるとき(ソリティアの ?01..?13×4=52枚)、 各出現を
+            // 出現順 occ で別インスタンスに束縛する。 ハンドラは「インスタンスの一意キー _key」で登録し、
+            // 押下した具体インスタンスだけが正しい index(=カード番号)で起動する(衝突発火しない)。
+            const occCounter = {};
             targets.forEach(function (segName, targetIndex) {
+                const occ = occCounter[segName] || 0;
+                occCounter[segName] = occ + 1;
+                const inst = self.stage.getSegmentByOcc ? self.stage.getSegmentByOcc(segName, occ) : self.stage.segments.get(segName);
+                const key = inst ? inst._key : segName;
                 const handler = function (seg, num, x, y) {
-                    console.log('[MS-RT] event fired:', kind, 'target=', seg ? seg.name : null, 'index=', targetIndex, '-> spawn', proc.name);
-                    self.spawnThread(proc, null, [seg ? seg.name : null, targetIndex, x, y]).catch(function (e) {
+                    // 第1引数は seg._key(occ込み一意キー)を渡す。 seg.name(裸名)だと同名カード
+                    // (?01..?13×4)を MOVE/COPYSEG する際 segments.get(name)→occ0 に化け、 赤カードの
+                    // ドラッグ中ゴーストが黒スペードになる(COPYSEG カード移動枠＝s)。 occ0 は _key==name。
+                    self.spawnThread(proc, null, [seg ? seg._key : null, targetIndex, x, y]).catch(function (e) {
                         console.log('[MS-RT] spawn error:', proc.name, e.message);
                         self._reportError('[' + proc.name + ' エラー] ' + e.message);
                     });
                 };
-                if (!targetMap.has(segName)) targetMap.set(segName, []);
-                targetMap.get(segName).push(handler);
+                if (!targetMap.has(key)) targetMap.set(key, []);
+                targetMap.get(key).push(handler);
             });
         });
     };
@@ -481,9 +532,14 @@
             case 'MSend': return this.stmtMSend(stmt, scope, thread);
             case 'MRecv': return this.stmtMRecv(stmt, scope, thread);
             case 'DOpen': case 'DClose': case 'DRead': case 'DWrite':
-            case 'RsInit': case 'RsPutc': case 'RsPutn': case 'RsWait':
-            case 'RsGetn': case 'RsGetc': case 'RsCntl':
                 return this.stmtHWNoop(stmt);
+            case 'RsInit': return this.stmtRsInit(stmt, scope, thread);
+            case 'RsPutc': return this.stmtRsPut(stmt, scope, thread, true);  // RSPUTC/RSPUT: 入力バッファクリア
+            case 'RsPutn': return this.stmtRsPut(stmt, scope, thread, false); // RSPUTN: 入力バッファ保持
+            case 'RsWait': return this.stmtRsWait(stmt, scope, thread);
+            case 'RsGetn': return this.stmtRsGet(stmt, scope, thread, false); // RSGETN/RSGET: 保持
+            case 'RsGetc': return this.stmtRsGet(stmt, scope, thread, true);  // RSGETC: クリア
+            case 'RsCntl': return this.stmtRsCntl(stmt, scope, thread);
         }
     };
 
@@ -524,8 +580,17 @@
         if (target.isSlice) {
             const start = (target.sliceStart != null ? await this.evalExpr(target.sliceStart, scope, thread) : 0) | 0;
             const len = (target.sliceLen != null ? await this.evalExpr(target.sliceLen, scope, thread) : (v.size - start)) | 0;
-            let vals = values;
-            if (vals.length === 1 && Array.isArray(vals[0])) vals = vals[0].slice();
+            // 複数値・並び(juxtaposition)連結に対応: 配列値は要素を展開して平坦化し、 スライスへ順に詰める。
+            // 例: buff[i:n] = 文字色[:]　半角[:]　書式T.TX[:] (3配列を連結)。
+            // 単一配列の spread / コンマ区切りscalar も同じ結果になり後方互換。
+            let vals = [];
+            for (let k = 0; k < values.length; k++) {
+                if (Array.isArray(values[k])) {
+                    for (let m = 0; m < values[k].length; m++) vals.push(values[k][m]);
+                } else {
+                    vals.push(values[k]);
+                }
+            }
             for (let i = 0; i < len; i++) {
                 const idx = start + i;
                 if (idx < 0 || idx >= v.size) break;
@@ -537,7 +602,22 @@
         if (target.index != null) {
             // BTRON仕様: 配列インデックスは整数。 不正な index は何もしない
             const idx = (await this.evalExpr(target.index, scope, thread)) | 0;
-            if (idx >= 0 && idx < v.size) v.data[idx] = coerceTyped(v, values[0]);
+            if (idx >= 0 && idx < v.size) {
+                let val = values[0];
+                // segref 配列要素に同名(複数インスタンス)セグメントを代入するとき、 出現順 consume で
+                // 別インスタンスに分配し一意キーを格納する(カード表[k]=?NN を52枚へ正しく割当)。
+                // イベント対象の occ と同順のため index k と カード表[k] が同一インスタンスに整合する。
+                if ((v.isSegRef || v.varType === 'S') && typeof val === 'string' && this.stage.segmentsByName) {
+                    const list = this.stage.segmentsByName.get(val);
+                    if (list && list.length > 1) {
+                        if (!this._segConsume) this._segConsume = {};
+                        const occ = this._segConsume[val] || 0;
+                        this._segConsume[val] = occ + 1;
+                        val = (list[occ] || list[list.length - 1])._key;
+                    }
+                }
+                v.data[idx] = coerceTyped(v, val);
+            }
             return;
         }
         v.data[0] = coerceTyped(v, values[0]);
@@ -556,6 +636,8 @@
     Runtime.prototype.stmtWhile = async function (stmt, scope, thread) {
         while (!thread.terminated && !this.finished) {
             if (!this.truthy(await this.evalExpr(stmt.cond, scope, thread))) break;
+            // yield をループ先頭(条件評価後)に置き、 CONTINUE 経路でも必ず通るようにしてフリーズを防ぐ。
+            await new Promise(function (resolve) { setTimeout(resolve, 0); });
             try {
                 await this.execBlock(stmt.body, scope, thread);
             } catch (sig) {
@@ -565,7 +647,6 @@
                 }
                 throw sig;
             }
-            await new Promise(function (resolve) { setTimeout(resolve, 0); });
         }
     };
 
@@ -578,6 +659,10 @@
             // $CNT を唯一の真実源(SSOT)とし、 スクリプトからの SET $CNT=N がループ制御に反映されるようにする
             while (!thread.terminated && !this.finished) {
                 if (count >= 0 && thread._cnt.value >= count) break;
+                // 無限ループ時もブラウザ UI を生かすため一定間隔 (256回毎) で macrotask へ yield。
+                // ループ先頭に置くことで CONTINUE 経路 (py==ty 等で毎回 CONTINUE するドラッグループ) でも
+                // 必ず通り、 yield 抜けによるフリーズを防ぐ。
+                if ((thread._cnt.value & 0xff) === 0) await new Promise(function (r) { setTimeout(r, 0); });
                 try {
                     await this.execBlock(stmt.body, scope, thread);
                 } catch (sig) {
@@ -588,8 +673,6 @@
                     throw sig;
                 }
                 thread._cnt.value++;
-                // 無限ループ時もブラウザ UI を生かすため一定間隔 (256回毎) で macrotask へ yield
-                if ((thread._cnt.value & 0xff) === 0) await new Promise(function (r) { setTimeout(r, 0); });
             }
         } finally {
             thread._cnt.value = prevCnt;
@@ -1107,6 +1190,30 @@
         return 0;
     };
 
+    // 式が浮動小数型かを宣言型/リテラル/関数から判定する (除算の整数/浮動判定に使用)。
+    // BTRON仕様: Float 変数や浮動小数リテラル(π 等)・三角関数が絡む除算は、 実行時の値が
+    // たまたま整数(例: Float L に整数 50 が入っている)でも浮動小数除算とする。
+    // 値ベース(Number.isInteger)判定だけだと L/max=50/100 が整数除算され 0 になる不具合を防ぐ。
+    Runtime.prototype._exprIsFloat = function (node, scope) {
+        if (!node) return false;
+        switch (node.type) {
+            case 'Float': return true;
+            case 'Int': return false;
+            case 'Name': {
+                const v = scope ? scope.lookup(node.name) : null;
+                return !!(v && v.varType === 'F');
+            }
+            case 'Unary': return this._exprIsFloat(node.operand, scope);
+            case 'Binary': return this._exprIsFloat(node.left, scope) || this._exprIsFloat(node.right, scope);
+            case 'Call': {
+                const fn = (node.name || '').toLowerCase();
+                return fn === 'sin' || fn === 'cos' || fn === 'tan' || fn === 'atan'
+                    || fn === 'asin' || fn === 'acos' || fn === 'sqrt' || fn === 'exp' || fn === 'log';
+            }
+        }
+        return false;
+    };
+
     Runtime.prototype.evalBinary = async function (node, scope, thread) {
         const op = node.op;
         if (op === '&&') {
@@ -1131,7 +1238,9 @@
             case '/':
                 if (r === 0) return l >= 0 ? 2147483647 : -2147483648;
                 // BTRON仕様: 両辺が整数なら整数除算 (切り捨て)、 いずれか浮動小数なら浮動小数除算。
-                // 定数畳み込み (evalConst) も Math.trunc で整数除算しており実行時経路をそれに揃える
+                // 宣言型/リテラルから浮動小数が絡むかを判定する。 Float 変数(L 等)に整数値が入って
+                // いても浮動小数除算とする (値ベース判定のみだと L/max が整数除算され 0 になる)。
+                if (this._exprIsFloat(node.left, scope) || this._exprIsFloat(node.right, scope)) return l / r;
                 return (Number.isInteger(l) && Number.isInteger(r)) ? Math.trunc(l / r) : l / r;
             case '%': {
                 // BTRON仕様: % は浮動小数値を整数に切り捨ててから剰余
@@ -1206,7 +1315,7 @@
         // 配列セグメント要素: カップ[$CNT] 等 (状態名なし) → セグメント名文字列
         if (node.index != null) {
             const v0 = scope.lookup(node.name);
-            if (v0 && v0.isSegRef) {
+            if (v0 && (v0.isSegRef || v0.varType === 'S')) {
                 const idx = (await this.evalExpr(node.index, scope, thread)) | 0;
                 const segName = v0.data[idx];
                 if (typeof segName === 'string') return segName;
@@ -1240,7 +1349,8 @@
         if (node.isSlice) {
             const start = (node.sliceStart != null ? await this.evalExpr(node.sliceStart, scope, thread) : 0) | 0;
             const len = (node.sliceLen != null ? await this.evalExpr(node.sliceLen, scope, thread) : (v.size - start)) | 0;
-            return v.data.slice(start, start + len);
+            // typed array(バイト共有)でもプレーン配列を返す (連結代入の Array.isArray 判定等に揃える)
+            return Array.prototype.slice.call(v.data, start, start + len);
         }
         if (node.index != null) {
             // BTRON仕様: 配列インデックスは整数。 浮動小数は切り捨て。 不正なインデックスは不正値を返す
@@ -1276,38 +1386,31 @@
     Runtime.prototype.setSegState = function (seg, stateName, value) {
         const u = stateName.toUpperCase();
         switch (u) {
-            case 'S':
-                seg.visible = !!value;
-                this.stage.applyVisibility(seg);
-                return;
-            case 'X': seg.x = value; this.stage.applyPosition(seg); return;
-            case 'Y': seg.y = value; this.stage.applyPosition(seg); return;
-            case 'X0': seg.x0 = value; return;
-            case 'Y0': seg.y0 = value; return;
-            case 'V':
-                seg.text = String(value);
-                seg.tx = stringToCodepoints(seg.text);
-                seg.textOverride = true;
-                this.stage.applyText(seg);
-                return;
+            // --- 設定可能な状態名 (仕様: 参照・設定可能) ---
             case 'TFCOL': seg.tfcol = value; this.stage.render(); return;
             // 背景色は初期値 (白) のままでは塗らず、 明示的に設定されたときのみ描画する
             case 'TBCOL': seg.tbcol = value; seg._tbcolSet = true; this.stage.render(); return;
             case 'TSTYL': seg.tstyl = value; this.stage.render(); return;
-            case 'TSIZE': seg.tsize = value; this.stage.render(); return;
+            case 'TSIZE': seg.tsize = (value === 0) ? 16 : value; this.stage.render(); return; // 仕様: 0は標準16ドット
             case 'TCGAP': seg.tcgap = value; this.stage.render(); return;
             case 'TLGAP': seg.tlgap = value; this.stage.render(); return;
-            case 'PID': seg.pid = value; return;
-            case 'TX':
-                if (Array.isArray(value)) {
-                    seg.tx = value.slice();
-                    seg.text = codepointsToString(seg.tx);
-                    seg.textOverride = true;
-                    this.stage.applyText(seg);
-                }
-                return;
             case 'TFONT':
                 if (Array.isArray(value)) seg.tfont = value.slice();
+                return;
+            // --- 参照のみ (仕様: 設定不可) ---
+            // .X/.Y/.X0/.Y0 は MOVE文、 .S は SCENE/APPEAR/DISAPPEAR、 .TX/.V は TEXT文 で変更する。
+            // 状態名への代入は仕様で不可のため no-op (安全に無視)。
+            case 'S':
+            case 'X':
+            case 'Y':
+            case 'X0':
+            case 'Y0':
+            case 'V':
+            case 'PID':
+            case 'TX':
+            case 'TL':
+            case 'W':
+            case 'H':
                 return;
         }
     };
@@ -1410,7 +1513,7 @@
             case 'TID': return thread ? thread.id : 0;
             case 'PDX': return this.stage.pdx || 0;
             case 'PDY': return this.stage.pdy || 0;
-            case 'KSTAT': return this.stage.kstat || 0;
+            case 'KSTAT': { const v = this.stage.kstat || 0; this.stage.kstat = 0; return v; } // 仕様: 最初の参照のみ有効、2回目以降は0(参照で消費)
             case 'PDB': return this.stage.pdb || 0;
             case 'KEY': { const v = this.stage.lastKey || 0; this.stage.lastKey = 0; return v; } // 仕様: 最初の参照のみ有効、2回目以降は0(参照で消費)
             case 'METAKEY': return this.stage.metaKey || 0;
@@ -1437,7 +1540,7 @@
             case 'SCRW': return window.screen.width;
             case 'SCRH': return window.screen.height;
             case 'RAND': return Math.floor(Math.random() * 65536);
-            case 'VERS': return 0x0300; // 処理系バージョンを 0xMMmm 形式で返す (上位8bit=メジャー3, 下位8bit=マイナー0)
+            case 'VERS': return 0x2106; // 仕様準拠: マイクロスクリプト バージョン 2.106
             case 'CPULOAD': return 0;
             case 'CNT': return (thread && thread._cnt) ? thread._cnt.value : 0;
             case 'GV': { const gi = index | 0; if (gi < 0 || gi >= 50) return INVALID; this._loadGV(); return this.sharedVars[gi] || 0; }
@@ -1447,8 +1550,11 @@
             case 'DSKINS': return (this._dskins == null) ? 1 : this._dskins;
             case 'PWID': return 0;
             case 'MMASK': return this._mmask || 0;
-            case 'RSCNT': return 0;
-            case 'RS': return 0;
+            case 'RSCNT': return this._rsCnt || 0;  // 直近 RSGETN/RSGETC でコピーした受信バイト数
+            case 'RS': {                              // $RS[n]: 受信バッファのバイト
+                const i = index | 0;
+                return (this._rsData && i >= 0 && i < this._rsData.length) ? this._rsData[i] : 0;
+            }
         }
         return 0;
     };
@@ -1476,7 +1582,7 @@
                 if (this.stage.setCursorShape) this.stage.setCursorShape(value | 0);
                 return;
             case 'KMODE': this._kmode = value | 0; return;
-            case 'PWID': this._ppid = value | 0; return;
+            case 'PWID': return; // 仕様外。 $PPID(親プロセスID)は参照のみで設定不可のため no-op
             case 'MMASK': this._mmask = value | 0; return;
             case 'DSKINS': this._dskins = value | 0; return;
         }
@@ -2005,7 +2111,11 @@
             return;
         }
         for (const t of targets) {
-            if (this.stage.notifyHost) this.stage.notifyHost('vopen', { target: t.value });
+            // 配列要素 仮身[index] の場合は評価して仮身名を解決 (APPEAR 等と同じ resolveSegName 経路)
+            const target = (t.index != null)
+                ? await this.resolveSegName({ type: 'Name', name: t.value, index: t.index }, scope, thread)
+                : t.value;
+            if (this.stage.notifyHost) this.stage.notifyHost('vopen', { target: target });
         }
     };
     Runtime.prototype.stmtVClose = async function (stmt, scope, thread) {
@@ -2015,7 +2125,11 @@
             return;
         }
         for (const t of targets) {
-            if (this.stage.notifyHost) this.stage.notifyHost('vclose', { target: t.value });
+            // 配列要素 仮身[index] の場合は評価して仮身名を解決
+            const target = (t.index != null)
+                ? await this.resolveSegName({ type: 'Name', name: t.value, index: t.index }, scope, thread)
+                : t.value;
+            if (this.stage.notifyHost) this.stage.notifyHost('vclose', { target: target });
         }
     };
     Runtime.prototype.stmtVWait = async function (stmt, scope, thread) {
@@ -2093,21 +2207,22 @@
         dst.w = src.w;
         dst.h = src.h;
         // BTRON仕様 09-04-04: SETSEG は可変セグメントの「表示位置を変えず」 内容(形状)のみ差し替える。
-        // ただし初回 (未配置の動的セグメント) は src の位置を継承して初期配置する。
-        // 例: SETSEG アニメA=アニメA領域 → □枠位置に配置。 SETSEG アニメA=アニメA0 → 位置保持のまま ☆ に差替
+        // 位置に関わる属性(x/y, x0/y0, home, labelOffset)は「配置を決めた初回 SETSEG」の値だけを継承し、
+        // 2回目以降(フレーム差替)では更新しない。 更新すると、 領域に配置した動的セグメントへフレーム
+        // (別座標のスプライト)を差し替えた際に home/labelOffset がフレーム座標へ化け、 SCENE(home基準
+        // 整列)や座標省略MOVEが配置位置でなくフレーム位置を基準にして表示がズレる(アニメ位置ズレの真因)。
+        // 例: SETSEG アニメA=アニメA領域(初回=配置確定) → SETSEG アニメA=アニメA0(以降=形状のみ差替)。
         if (!dst._positioned) {
             dst.x = src.x;
             dst.y = src.y;
+            dst.x0 = src.x0;
+            dst.y0 = src.y0;
+            dst.home_x = (src.home_x != null ? src.home_x : src.x0);
+            dst.home_y = (src.home_y != null ? src.home_y : src.y0);
+            dst.labelOffsetX = src.labelOffsetX;
+            dst.labelOffsetY = src.labelOffsetY;
             dst._positioned = true;
         }
-        // 「元の位置」(座標省略MOVEの復帰先=x0/y0)と labelOffset は毎回 右辺の値に更新する。
-        // 現在位置(x/y)のみ初回に継承し、 以降は SETSEG で動かさない。
-        dst.x0 = src.x0;
-        dst.y0 = src.y0;
-        dst.home_x = (src.home_x != null ? src.home_x : src.x0);
-        dst.home_y = (src.home_y != null ? src.home_y : src.y0);
-        dst.labelOffsetX = src.labelOffsetX;
-        dst.labelOffsetY = src.labelOffsetY;
         dst._sharedFrom = srcName;
         this.stage.render();
     };
@@ -2189,12 +2304,12 @@
         thread._waiting = true;
         try {
             while (!thread.terminated && !this.finished) {
-                // $ERR: スレッド終了=0 / タイムアウト=1 / BREAK 解除=2 (待機文で統一)
+                // SUSPEND の $ERR は仕様で他の待機文と異なる: 終了=0 / BREAK解除=1 / タイムアウト=2
                 const alive = targets.filter(function (t) { return !t.terminated && self.threads.has(t); });
                 if (alive.length === 0) { this.lastErr = 0; return; }
-                if (thread._breakSignal) { thread._breakSignal = false; this.lastErr = 2; return; }
-                if (timeoutSec === 0) { this.lastErr = 1; return; }
-                if (timeoutSec > 0 && (Date.now() - start) >= timeoutSec * 1000) { this.lastErr = 1; return; }
+                if (thread._breakSignal) { thread._breakSignal = false; this.lastErr = 1; return; }
+                if (timeoutSec === 0) { this.lastErr = 2; return; }
+                if (timeoutSec > 0 && (Date.now() - start) >= timeoutSec * 1000) { this.lastErr = 2; return; }
                 await new Promise(function (r) { setTimeout(r, 50); });
             }
         } finally {
@@ -2242,8 +2357,25 @@
         if (path.indexOf('/') !== -1 || path.indexOf('\\') !== -1) return false;
         return true;
     };
+    // FOPEN/FREAD/FWRITE/FCLOSE の実身名引数を解決する。
+    // バーレ(添字・スライス・状態名なし)のC配列変数は、先頭要素(数値)ではなく文字列全体として扱う。
+    // 例: 出力対象実身[:]="SCRIPT" の後 FOPEN 出力対象実身 → "SCRIPT" (従来は 'S'=83 になっていた)。
+    Runtime.prototype._evalPathArg = async function (expr, scope, thread) {
+        if (expr && expr.type === 'Name' && expr.index == null && !expr.isSlice && !expr.stateName) {
+            const isSeg = this.stage.segments && this.stage.segments.has(expr.name);
+            const isMacro = this.macros && this.macros[expr.name];
+            if (!isSeg && !isMacro) {
+                const v = scope.lookup(expr.name);
+                if (v && v.data) {
+                    const len = (v.size != null ? v.size : v.data.length);
+                    if (len > 1) return this._toStr(Array.prototype.slice.call(v.data, 0, len));
+                }
+            }
+        }
+        return this._toStr(await this.evalExpr(expr, scope, thread));
+    };
     Runtime.prototype.stmtFOpen = async function (stmt, scope, thread) {
-        const rawPath = stmt.args[0] ? this._toStr(await this.evalExpr(stmt.args[0], scope, thread)) : '';
+        const rawPath = stmt.args[0] ? await this._evalPathArg(stmt.args[0], scope, thread) : '';
         const path = this._resolveRealIdPath(rawPath);
         if (!this._isSafeRealPath(path)) { this.lastErr = 17; return; }
         const mode = stmt.args[1] ? this._toStr(await this.evalExpr(stmt.args[1], scope, thread)) : 'U';
@@ -2258,7 +2390,7 @@
         }
     };
     Runtime.prototype.stmtFClose = async function (stmt, scope, thread) {
-        const rawPath = stmt.args[0] ? this._toStr(await this.evalExpr(stmt.args[0], scope, thread)) : '';
+        const rawPath = stmt.args[0] ? await this._evalPathArg(stmt.args[0], scope, thread) : '';
         const path = this._resolveRealIdPath(rawPath);
         this._getFileCache().delete(path);
         this.lastErr = 0;
@@ -2332,7 +2464,7 @@
     };
     Runtime.prototype.stmtFRead = async function (stmt, scope, thread) {
         if (stmt.args.length < 5) { this.lastErr = 17; return; }
-        const rawPath = this._toStr(await this.evalExpr(stmt.args[0], scope, thread));
+        const rawPath = await this._evalPathArg(stmt.args[0], scope, thread);
         const path = this._resolveRealIdPath(rawPath);
         let recNo = await this.evalExpr(stmt.args[1], scope, thread);
         let offset = await this.evalExpr(stmt.args[2], scope, thread);
@@ -2381,7 +2513,7 @@
     };
     Runtime.prototype.stmtFWrite = async function (stmt, scope, thread) {
         if (stmt.args.length < 5) { this.lastErr = 17; return; }
-        const rawPath = this._toStr(await this.evalExpr(stmt.args[0], scope, thread));
+        const rawPath = await this._evalPathArg(stmt.args[0], scope, thread);
         const path = this._resolveRealIdPath(rawPath);
         let recNo = await this.evalExpr(stmt.args[1], scope, thread);
         let offset = await this.evalExpr(stmt.args[2], scope, thread);
@@ -2545,6 +2677,85 @@
     Runtime.prototype.stmtHWNoop = function (stmt) {
         console.warn('[MS-RT] ' + stmt.type + ' は HW 依存のため未対応 (noop)');
         this.lastErr = 16;
+    };
+
+    // ========================================
+    // シリアルポート (RS 系: 09-04-14) — Web Serial API 経由 (serialManager)
+    // ========================================
+    // データ式列 → バイト配列。 数値は下位8bit、 文字列は各文字コードの下位8bit、 配列は各要素下位8bit
+    Runtime.prototype._rsArgsToBytes = async function (argNodes, startIdx, scope, thread) {
+        const bytes = [];
+        for (let i = startIdx; i < argNodes.length; i++) {
+            const v = await this.evalExpr(argNodes[i], scope, thread);
+            if (typeof v === 'string') {
+                for (let k = 0; k < v.length; k++) bytes.push(v.charCodeAt(k) & 0xFF);
+            } else if (Array.isArray(v)) {
+                for (let k = 0; k < v.length; k++) bytes.push((v[k] | 0) & 0xFF);
+            } else {
+                bytes.push((v | 0) & 0xFF);
+            }
+        }
+        return bytes;
+    };
+
+    Runtime.prototype.stmtRsInit = async function (stmt, scope, thread) {
+        if (!this.serialManager) { this.lastErr = 16; return; }
+        const a = stmt.args || [];
+        const port = a.length > 0 ? (await this.evalExpr(a[0], scope, thread) | 0) : 0;
+        const mode = a.length > 1 ? (await this.evalExpr(a[1], scope, thread) | 0) : 0;
+        const baud = a.length > 2 ? (await this.evalExpr(a[2], scope, thread) | 0) : 0;
+        this.lastErr = await this.serialManager.init(port, mode, baud);
+    };
+
+    Runtime.prototype.stmtRsPut = async function (stmt, scope, thread, clearInput) {
+        if (!this.serialManager) { this.lastErr = 16; return; }
+        const a = stmt.args || [];
+        const port = a.length > 0 ? (await this.evalExpr(a[0], scope, thread) | 0) : 0;
+        const bytes = await this._rsArgsToBytes(a, 1, scope, thread);
+        this.lastErr = await this.serialManager.send(port, bytes, clearInput);
+    };
+
+    Runtime.prototype.stmtRsWait = async function (stmt, scope, thread) {
+        if (!this.serialManager) { this.lastErr = 16; return; }
+        const a = stmt.args || [];
+        const port = a.length > 0 ? (await this.evalExpr(a[0], scope, thread) | 0) : 0;
+        const seq = await this._rsArgsToBytes(a, 1, scope, thread);
+        if (seq.length === 0) { this.lastErr = 0; return; }
+        const timeoutSec = stmt.timeout != null ? await this.evalExpr(stmt.timeout, scope, thread) : -1;
+        const start = Date.now();
+        // SLEEP/WAIT と同形の非同期待ち。 $ERR: 受信=0 / タイムアウト=1 / BREAK 解除=2
+        while (true) {
+            if (thread.terminated) return;
+            if (this.serialManager.bufferContains(port, seq)) { this.lastErr = 0; return; }
+            if (thread._breakSignal) { thread._breakSignal = false; this.lastErr = 2; return; }
+            if (timeoutSec === 0) { this.lastErr = 1; return; }
+            if (timeoutSec > 0 && (Date.now() - start) >= timeoutSec * 1000) { this.lastErr = 1; return; }
+            await new Promise(function (r) { setTimeout(r, 20); });
+        }
+    };
+
+    Runtime.prototype.stmtRsGet = async function (stmt, scope, thread, clear) {
+        if (!this.serialManager) { this.lastErr = 16; this._rsData = []; this._rsCnt = 0; return; }
+        const a = stmt.args || [];
+        const port = a.length > 0 ? (await this.evalExpr(a[0], scope, thread) | 0) : 0;
+        const res = this.serialManager.receive(port, clear);
+        this._rsData = res.data;   // $RS[n] が参照
+        this._rsCnt = res.cnt;     // $RSCNT が参照
+        this.lastErr = 0;
+    };
+
+    Runtime.prototype.stmtRsCntl = async function (stmt, scope, thread) {
+        if (!this.serialManager) { this.lastErr = 16; return; }
+        const a = stmt.args || [];
+        const port = a.length > 0 ? (await this.evalExpr(a[0], scope, thread) | 0) : 0;
+        const func = a.length > 1 ? (await this.evalExpr(a[1], scope, thread) | 0) : 0;
+        const res = await this.serialManager.control(port, func);
+        this.lastErr = res.err;
+        // func0: 回線状態を変数へ格納 (bit0=CI,1=CS,2=CD,3=DSR)
+        if (func === 0 && a.length > 2) {
+            const v = this._resolveVarFromNode(a[2], scope);
+            if (v && v.data) v.data[0] = res.status;
+        }
     };
 
     // ========================================

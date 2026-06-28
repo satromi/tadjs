@@ -63,6 +63,7 @@ let currentXmlSlotIndex = -1;  // Track XML slot index for TAD records
 const realIdMap = new Map();  // lHead index -> UUID mapping
 let archiveFiles = [];  // 解凍された実身情報の配列
 let generatedImages = [];  // 生成された画像情報の配列
+let generatedBinaries = [];  // 生成されたバイナリ実身レコード情報の配列 (実行アプリ等のXML非生成レコード)
 let isProcessingBpk = false;  // Flag to indicate BPK processing
 let lheadToCanvasMap = {};  // Map from lHead file index to actual canvas index
 let recordTypeMap = {};  // Map: fileIndex -> array of record types
@@ -981,13 +982,11 @@ function parseColor(raw, offset = 0) {
         } else if (index < BTRON_STANDARD_COLORMAP.length) {
             hex = BTRON_STANDARD_COLORMAP[index];
         } else {
-            logger.debug(`parseColor: カラーマップ番号 ${index} が未定義のため黒にフォールバック`);
             hex = '#000000';
         }
         const r = parseInt(hex.slice(1, 3), 16);
         const g = parseInt(hex.slice(3, 5), 16);
         const b = parseInt(hex.slice(5, 7), 16);
-        logger.debug(`parseColor: transparent=${transparentMode}, modeBits=${modeBits}, cmapIndex=${index} -> ${hex}`);
         return {
             transparent: transparentMode,
             mode: modeBits, // カラーマップ指定
@@ -1001,7 +1000,6 @@ function parseColor(raw, offset = 0) {
         const r = (raw >>> 16) & 0xFF;
         const g = (raw >>> 8) & 0xFF;
         const b = (raw >>> 0) & 0xFF;
-        logger.debug(`parseColor: transparent=${transparentMode}, modeBits=${modeBits}, r=${r}, g=${g}, b=${b}`);
         return {
             transparent: transparentMode,
             mode: modeBits,    // 絶対RGB指定
@@ -1377,6 +1375,17 @@ function parseExecFuncRecord(recordData, fileIndex) {
             ])[0];
         }
 
+        // マイクロスクリプト実行機能付箋: data 部末尾 200 バイトが保存変数 $SV[0..49] (各 int32 LE) の固定枠。
+        // BTRON では $SV はセグメント内永続保存される。 取込で復元するため抽出し実身へ引き継ぐ
+        // (末尾基準なのでヘッダ長変動に堅牢)。 実身管理情報 json 経由で runtime が初期値として読む。
+        if (applKey === '8000.000b.8000' && execFuncRecord.dlen >= 50 * 4 &&
+            recordOffset + execFuncRecord.dlen <= recordData.length) {
+            const svBase = recordOffset + (execFuncRecord.dlen - 50 * 4);
+            const sv = [];
+            for (let _i = 0; _i < 50; _i++) sv.push(execView.getInt32(svBase + _i * 4, true));
+            execFuncRecord.microscriptSV = sv;
+        }
+
         logger.debug(`EXECFUNCRECORD[${execFuncRecordList[fileIndex].length}]: appl=${execFuncRecord.appl.map(v => IntToHex(v, 4).replace('0x', '')).join('.')}, dlen=${execFuncRecord.dlen}`);
 
         execFuncRecordList[fileIndex].push(execFuncRecord);
@@ -1404,12 +1413,14 @@ const EXEC_FUSEN_PLUGIN_MAP = {
  * 実行機能付箋 data 部 (アプリ固有データ) 内のウィンドウ背景色 COLOR のオフセット。
  * 実データ検証: 図形編集 (dlen=46) は 0x1E、 文章編集 (dlen=32) は 0x16。
  * 表計算はサンプル未確認のため文章編集と同位置と仮定。
- * 対象外のアプリ (マイクロスクリプト等) は実身の背景色ソースとしない
+ * マイクロスクリプト (dlen=234) は図形編集互換形式で、 data 部ヘッダ (先頭 0x22) は図形編集の先頭
+ * 0x22 と同一構造のため背景色は同じ 0x1E。 その後ろに $SV[0..49](末尾200B) が続く (0x22+200=234)。
  */
 const EXEC_FUSEN_BGCOL_OFFSET = {
     'basic-figure-editor': 0x1E,
     'basic-text-editor': 0x16,
-    'basic-calc-editor': 0x16
+    'basic-calc-editor': 0x16,
+    'microscript': 0x1E
 };
 
 /**
@@ -1451,6 +1462,8 @@ function pass2(lHead) {
 
     // 生成画像バッファをクリア（TADレコード処理中に蓄積される）
     generatedImages = [];
+    // 生成バイナリ実身バッファもクリア
+    generatedBinaries = [];
 
     // Set BPK processing flag if multiple files
     if (gHead.nfiles > 1) {
@@ -1622,6 +1635,25 @@ function pass2(lHead) {
                     const remaining = new Uint8Array(rhead.size - tempsize);
                     xRead(compMethod, remaining, rhead.size - tempsize);
                     recordData.set(remaining, tempsize);
+                }
+
+                // バイナリ実身レコード(実行アプリ等)を {realId}_{recordNo}_{binNo}.binary として保存対象に追加。
+                // XML非生成のため app.js のレコード単位生成ではドロップされる実身の実体を保全し、リンク整合を保つ。
+                try {
+                    const binRealId = realIdMap.get(i) || `unknown_${i}`;
+                    const binNo = generatedBinaries.filter(b => b.fileId === binRealId && b.recordNo === currentRecordNo).length;
+                    generatedBinaries.push({
+                        fileId: binRealId,
+                        recordNo: currentRecordNo,
+                        binNo: binNo,
+                        fileName: `${binRealId}_${currentRecordNo}_${binNo}.binary`,
+                        data: recordData.slice(),
+                        recordType: rhead.type,
+                        subtype: rhead.subtype
+                    });
+                    logger.debug(`[UnpackJS] バイナリ実身レコード捕捉: ${binRealId}_${currentRecordNo}_${binNo}.binary (type=${rhead.type}, size=${rhead.size})`);
+                } catch (e) {
+                    logger.error('[UnpackJS] バイナリ実身レコードの捕捉に失敗:', e);
                 }
 
                 // その他のレコードタイプの場合はバイナリXMLを生成
@@ -1797,6 +1829,14 @@ function processExtractedFiles(lHead) {
                 colorMap = savedColorMap;
             }
 
+            // マイクロスクリプト実行機能付箋があれば保存変数 $SV を実身へ引き継ぐ (取込時の初期値)
+            let microscriptSV = null;
+            if (execRecords) {
+                for (const rec of execRecords) {
+                    if (rec.microscriptSV) { microscriptSV = rec.microscriptSV; break; }
+                }
+            }
+
             // 実身情報を保存
             archiveFiles.push({
                 fileId: uuid,
@@ -1807,7 +1847,8 @@ function processExtractedFiles(lHead) {
                 recordXmls: recordXmls, // レコードごとのXML配列
                 calcRecordTypes: calcRecordTypes, // 基本表計算形式TADのレコードタイプ配列
                 applist: execApplist, // 実行機能付箋レコード由来の applist (null = 既定を使用)
-                execTbcol: execTbcol // 実行機能付箋の tbcol (null = 既定の背景色を使用)
+                execTbcol: execTbcol, // 実行機能付箋の tbcol (null = 既定の背景色を使用)
+                microscriptSV: microscriptSV // マイクロスクリプト保存変数 $SV[0..49] (null = 非対象)
             });
 
             logger.info(`[UnpackJS] 実身追加: ${lhead.name} (UUID: ${uuid}, nrec: ${nrec}, レコード数: ${recordXmls.length})`);
@@ -1893,6 +1934,13 @@ function tadVer(tadSeg) {
  */
 function tsTextStart(tadSeg) {
 
+    // TRONコードの面は文章(文字枠)セグメント毎に第1面(システムスクリプト)へ戻す。
+    // tronCodeMen はグローバルで持つため、 図形内で一度面16等へ切り替わると後続の文字枠
+    // (＠役者名ラベル等)へ面状態が漏れ、 JISラベルが面16として誤変換され文字化けする。
+    // 親文字枠の面は figureStack に退避し、 tsTextEnd で復元する(入れ子対応)。
+    const _savedTronCodeMen = tronCodeMen;
+    tronCodeMen = 1;
+
     // セグメントスタックに文章セグメントを追加
     segmentStack.push(SEGMENT_TYPE.TEXT);
     currentSegmentType = SEGMENT_TYPE.TEXT;
@@ -1954,7 +2002,8 @@ function tsTextStart(tadSeg) {
         view: { left: textChar.view.left, top: textChar.view.top, right: textChar.view.right, bottom: textChar.view.bottom },
         draw: { left: textChar.draw.left, top: textChar.draw.top, right: textChar.draw.right, bottom: textChar.draw.bottom },
         hUnit: textChar.h_unit,
-        vUnit: textChar.v_unit
+        vUnit: textChar.v_unit,
+        savedTronCodeMen: _savedTronCodeMen
     });
 }
 
@@ -2046,7 +2095,11 @@ function tsTextEnd(tadSeg) {
 
     // 入れ子対応: figureStack からポップ
     if (figureStack.length > 0 && figureStack[figureStack.length - 1].type === 'text') {
-        figureStack.pop();
+        const _popped = figureStack.pop();
+        // 親文字枠の TRONコード面を復元 (tsTextStart で退避した値)
+        if (_popped && typeof _popped.savedTronCodeMen === 'number') {
+            tronCodeMen = _popped.savedTronCodeMen;
+        }
     }
 }
 
@@ -3946,40 +3999,6 @@ function tsImageSegment(segLen, tadSeg) {
     if (imageSeg.colorInfo.palette === 1) {
         const cmapBytes = imageSeg.cinfo[0]; // バイト数
         const cmapOffset = ((imageSeg.cinfo[2] & 0xFFFF) << 16) | (imageSeg.cinfo[3] & 0xFFFF);
-        // 診断データを localStorage に書き出し (palette image 毎に追記、最大5件)
-        try {
-            if (typeof localStorage !== 'undefined') {
-                const existing = JSON.parse(localStorage.getItem('cmap-diag') || '[]');
-                if (existing.length < 5) {
-                    const diag = {
-                        cinfo: [imageSeg.cinfo[0], imageSeg.cinfo[1], imageSeg.cinfo[2], imageSeg.cinfo[3]],
-                        cmapBytes: cmapBytes,
-                        currentOffset: cmapOffset,
-                        altOffsets: {
-                            LE32_3_2: ((imageSeg.cinfo[3] & 0xFFFF) << 16) | (imageSeg.cinfo[2] & 0xFFFF),
-                            cinfo1: imageSeg.cinfo[1],
-                            LE32_2_1: ((imageSeg.cinfo[2] & 0xFFFF) << 16) | (imageSeg.cinfo[1] & 0xFFFF)
-                        },
-                        segDataLen: segData.length,
-                        planes: imageSeg.planes,
-                        pixbits: '0x' + imageSeg.pixbits.toString(16),
-                        rowbytes: imageSeg.rowbytes,
-                        base_off: imageSeg.base_off.map(o => '0x' + o.toString(16)),
-                        bounds: imageSeg.bounds,
-                        colorInfo: imageSeg.colorInfo,
-                        extlen: imageSeg.extlen,
-                        extend: '0x' + imageSeg.extend.toString(16),
-                        mask: '0x' + imageSeg.mask.toString(16),
-                        globalColorMapLen: (typeof colorMap !== 'undefined' && colorMap.length) || 0,
-                        segDataFirst256Hex: Array.from(segData.slice(0, 256)).map(b => b.toString(16).padStart(2,'0')).join(' '),
-                        segDataLast256Hex: Array.from(segData.slice(Math.max(0, segData.length - 256))).map(b => b.toString(16).padStart(2,'0')).join(' ')
-                    };
-                    existing.push(diag);
-                    localStorage.setItem('cmap-diag', JSON.stringify(existing));
-                    console.warn(`[CMAP-DIAG] entry #${existing.length} saved. Run: copy(localStorage.getItem('cmap-diag'))`);
-                }
-            }
-        } catch (e) { /* ignore */ }
         // BTRON エンコーダの一部 (16色画像等) は cinfo[3] が cmap 直前の数バイトを指す不具合があるため
         // cmap がセグメント末尾近くにあるケースのみ末尾に snap させる (一般的な BTRON wallpaper)
         let alignedCmapOffset = cmapOffset;
@@ -3995,10 +4014,6 @@ function tsImageSegment(segLen, tadSeg) {
                 cmap.push(c || { r: 0, g: 0, b: 0, transparent: false });
             }
             imageSeg.cmap = cmap;
-            console.log(`[CMAP-DIAG] cmap loaded from imageSeg: ${colorCount}色`, cmap.map(c => `(${c.r},${c.g},${c.b})`).join(' '));
-        } else {
-            console.warn(`[CMAP-DIAG] cmap from imageSeg unreadable: cmapBytes=${cmapBytes}, cmapOffset=0x${cmapOffset.toString(16)}, segLen=0x${segData.length.toString(16)} - falling back to global colorMap`);
-            console.log(`[CMAP-DIAG] global colorMap state:`, (typeof colorMap !== 'undefined' && colorMap.length > 0) ? colorMap.slice(0, 16).map(c => `(${c.r},${c.g},${c.b})`).join(' ') : 'EMPTY');
         }
     }
 
@@ -5068,7 +5083,6 @@ function tsColorMapDefine(segLen, tadSeg) {
         nentNo += 2;
         colorMap[i] = color;
     }
-    console.log(`[CMAP-DIAG] tsColorMapDefine called: ${nent} colors set in global colorMap. First 16:`, colorMap.slice(0, 16).map(c => `(${c.r},${c.g},${c.b})`).join(' '));
 }
 
 /**
@@ -6011,6 +6025,15 @@ function tsSpecitySegment(segLen, tadSeg, nowPos) {
     }
     logger.debug("書庫形式");
 
+    // 入れ子書庫: 既にBPK処理中(isProcessingBpk)に書庫セグメントを検出した場合は展開しない。
+    // 展開すると pass1() がグローバルな realIdMap/gHead/lHead を clear/上書きし、外側アーカイブの
+    // 実身マップを破壊する (外側39件中8件しか取り込めなくなる)。
+    // 入れ子書庫は1実身として残し、実行機能付箋(applist)経由で後から書庫解凍プラグインで開けるようにする。
+    // gHead 読込・LH5初期化・pass1/pass2 のいずれもグローバル状態を変更するため、その手前で抜ける。
+    if (isProcessingBpk) {
+        logger.info('[UnpackJS] 入れ子書庫を検出: 展開せず実身として保持します (外側アーカイブ状態を保護)');
+        return;
+    }
 
     // グローバルヘッダの読込 330
     let compSeg = [];
@@ -6802,6 +6825,7 @@ function onAddFile(event) {
     tadRawDataArray = {};
     tadRecordDataArray = [];
     generatedImages = [];
+    generatedBinaries = [];
     archiveFiles = [];
     tadRaw = null;
     tadRawBuffer = null;
@@ -6855,6 +6879,10 @@ function getGeneratedImages() {
     return generatedImages;
 }
 
+function getGeneratedBinaries() {
+    return generatedBinaries;
+}
+
 function getRealIdMap() {
     return realIdMap;
 }
@@ -6865,6 +6893,7 @@ if (typeof window !== 'undefined') {
     window.onDrop = onDrop;
     window.getArchiveFiles = getArchiveFiles;
     window.getGeneratedImages = getGeneratedImages;
+    window.getGeneratedBinaries = getGeneratedBinaries;
     window.clearGeneratedImages = clearGeneratedImages;
     window.getRealIdMap = getRealIdMap;
     window.onDragOver = onDragOver;

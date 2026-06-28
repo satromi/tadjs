@@ -101,7 +101,18 @@
             if (c === ' ' || c === '\t') { pendingSpace = true; i++; continue; }
 
             if (c === '#') {
-                while (i < len && src[i] !== '\n') i++;
+                // コメント: 行末まで。 仕様: 行末が ¥(正規化後 \) なら次行もコメント(行継続)。
+                // 通常コメントの改行は消費せず main loop で NL 化する(直前文の終端を保つ)。
+                while (true) {
+                    while (i < len && src[i] !== '\n' && src[i] !== '\r') i++;
+                    let j = i - 1;
+                    while (j >= 0 && (src[j] === ' ' || src[j] === '\t')) j--;
+                    if (j >= 0 && src[j] === '\\') {
+                        while (i < len && (src[i] === '\r' || src[i] === '\n')) { if (src[i] === '\n') line++; i++; }
+                        continue;
+                    }
+                    break;
+                }
                 continue;
             }
 

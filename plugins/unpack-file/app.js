@@ -38,6 +38,23 @@ class UnpackFileManager extends window.PluginBase {
 
         // 右クリックメニュー（PluginBase共通）
         this.setupContextMenu();
+
+        // キーボードショートカット（Ctrl+E: ウィンドウを閉じる）
+        this.setupKeyboardShortcuts();
+    }
+
+    /**
+     * キーボードショートカットを設定。
+     * Ctrl+E でウィンドウを閉じる（virtual-object-list 等の他プラグインと統一）。
+     */
+    setupKeyboardShortcuts() {
+        document.addEventListener('keydown', (e) => {
+            // Ctrl+E: ウィンドウを閉じる
+            if (e.ctrlKey && e.key === 'e') {
+                e.preventDefault();
+                this.requestCloseWindow();
+            }
+        });
     }
 
     /**
@@ -258,7 +275,9 @@ class UnpackFileManager extends window.PluginBase {
                         "basic-text-editor": { name: "基本文章編集", defaultOpen: true },
                         "basic-figure-editor": { name: "基本図形編集", defaultOpen: false },
                         "virtual-object-list": { name: "仮身一覧", defaultOpen: false }
-                    })
+                    }),
+                    // マイクロスクリプト実行機能付箋由来の保存変数 $SV[0..49] (取込時の初期値。 非対象は null)
+                    microscriptSV: file.microscriptSV || null
                 };
 
                 // 各レコードについてファイルエントリを生成
@@ -282,6 +301,22 @@ class UnpackFileManager extends window.PluginBase {
 
                     xtadIndex++;  // 連番をインクリメント
                 }
+
+                // XMLレコードが1件も無い実身（バイナリ/プログラム実身=実行アプリ等）も
+                // 最低限 .json を生成してリンク整合を保つ（取込バグ修正: 宙ぶらりんリンク防止）。
+                // 実体(プログラムデータ)は unpack.js が別途 {realId}_{rec}_{bin}.binary として送る。
+                if (xtadIndex === 0) {
+                    // バイナリ実身は本文XTADレコードを持たないため recordCount=0 とする。
+                    // これにより loadRealObject が存在しない _0.xtad を探して警告を出すのを防ぐ。
+                    jsonData.recordCount = 0;
+                    generatedFiles.push({
+                        fileId: file.fileId,
+                        recordNo: 0,
+                        name: realName,
+                        jsonData: jsonData,
+                        xtadData: ''  // 本文XTADなし（バイナリ実身。実体は .binary で保存）
+                    });
+                }
             }
 
             logger.info('[UnpackFile] 実身ファイルセット生成完了:', generatedFiles.length, '個のファイルエントリ');
@@ -292,6 +327,12 @@ class UnpackFileManager extends window.PluginBase {
                 generatedImages = window.getGeneratedImages();
             }
 
+            // unpack.jsから生成されたバイナリ実身レコード(実行アプリ等)を取得
+            let generatedBinaries = [];
+            if (typeof window.getGeneratedBinaries === 'function') {
+                generatedBinaries = window.getGeneratedBinaries();
+            }
+
             // データを分割して送信（postMessageのサイズ制限対策）
             const CHUNK_SIZE = 10; // 一度に10個ずつ送信
 
@@ -299,12 +340,14 @@ class UnpackFileManager extends window.PluginBase {
                 const chunk = generatedFiles.slice(i, i + CHUNK_SIZE);
                 const isLastChunk = (i + CHUNK_SIZE >= generatedFiles.length);
 
-                // 画像は最後のチャンクでのみ送信
+                // 画像・バイナリ実身は最後のチャンクでのみ送信
                 const imagesToSend = isLastChunk ? generatedImages : [];
+                const binariesToSend = isLastChunk ? generatedBinaries : [];
 
                 this.messageBus.send('archive-files-generated', {
                     files: chunk,
                     images: imagesToSend,
+                    binaries: binariesToSend,
                     chunkInfo: {
                         index: i / CHUNK_SIZE,
                         total: Math.ceil(generatedFiles.length / CHUNK_SIZE),

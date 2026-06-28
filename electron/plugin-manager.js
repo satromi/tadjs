@@ -475,6 +475,11 @@ class PluginManager {
                     frame: fileData.windowConfig.frame !== undefined ? fileData.windowConfig.frame : true,
                     transparent: fileData.windowConfig.transparent !== undefined ? fileData.windowConfig.transparent : false
                 };
+                // プラグイン側で scrollable: false が明示されていれば実身設定より優先
+                // (実身は basic-text-editor 互換属性を持ちつつ、 起動プラグインがスクロール抑止する用途)
+                if (plugin.window && plugin.window.scrollable === false) {
+                    windowOptions.scrollable = false;
+                }
             }
             // プラグインのwindow設定があれば使用
             else if (plugin.window) {

@@ -26,6 +26,9 @@ const { PtyManager } = require('./pty-manager');
 // PTYマネージャー
 const ptyManager = new PtyManager();
 
+// Web Serial: requestPort() のポート選択待ち状態 (select-serial-port → renderer の invoke で受け渡し)
+let mainSerialPending = null;
+
 // winreg は Windows 専用なので条件付きで読み込み
 let winreg = null;
 if (process.platform === 'win32') {
@@ -211,6 +214,28 @@ function createWindow() {
         // カラープロファイル設定
         backgroundColor: '#FFFFFF'
     });
+
+    // ── Web Serial API (マイクロスクリプトの RS 系命令で使用) ──────────────────
+    // serial 権限を許可し、 requestPort() のポート選択を renderer(シリアル割り当てUI)へ委譲する。
+    // main→subframe の push は届かないため、 pending を保持して subframe からの invoke で受け渡す。
+    try {
+        const _ses = mainWindow.webContents.session;
+        _ses.setPermissionCheckHandler(() => true); // ローカル信頼アプリ: serial 含め許可
+        _ses.setDevicePermissionHandler((details) => !!details && details.deviceType === 'serial');
+        _ses.on('select-serial-port', (event, portList, webContents, callback) => {
+            event.preventDefault();
+            mainSerialPending = {
+                callback: callback,
+                portList: (portList || []).map((p) => ({
+                    portId: p.portId, portName: p.portName, displayName: p.displayName,
+                    vendorId: p.vendorId, productId: p.productId
+                }))
+            };
+        });
+        _ses.on('serial-port-removed', () => {});
+    } catch (e) {
+        logger.warn('[Main] Web Serial 初期化に失敗:', e && e.message);
+    }
 
     // カスタムメニューを作成
     // Editメニューは role ベースで定義することでCtrl+C/V/X等のアクセラレータを
@@ -421,6 +446,19 @@ ipcMain.handle('get-plugins', async () => {
     return pluginManager.getPlugins();
 });
 
+// Web Serial (マイクロスクリプト RS 系命令): ポート選択の受け渡し。
+// renderer (シリアル割り当てUI) が requestPort 後に pending を取得し、 選択結果を choose で確定する。
+ipcMain.handle('ms-serial-pending', () => {
+    return mainSerialPending ? mainSerialPending.portList : null;
+});
+ipcMain.handle('ms-serial-choose', (event, portId) => {
+    if (mainSerialPending) {
+        try { mainSerialPending.callback(portId || ''); } catch (_) {}
+        mainSerialPending = null;
+    }
+    return true;
+});
+
 // IPC通信: プラグイン情報取得
 ipcMain.handle('get-plugin', async (event, pluginId) => {
     return pluginManager.getPlugin(pluginId);
@@ -553,6 +591,17 @@ ipcMain.handle('enter-fullscreen', async () => {
 ipcMain.handle('exit-fullscreen', async () => {
     if (mainWindow && mainWindow.isFullScreen()) {
         mainWindow.setFullScreen(false);
+        return { success: true };
+    }
+    return { success: false };
+});
+
+// IPC通信: BrowserWindow の backgroundColor を動的変更
+// presentation mode 中、letterbox 領域に BrowserWindow bg ('#FFFFFF' 白) が透けて見える対策。
+// プレゼン開始時に slideBgColor、終了時に '#FFFFFF' に戻す。
+ipcMain.handle('set-window-background-color', async (event, color) => {
+    if (mainWindow && typeof color === 'string') {
+        mainWindow.setBackgroundColor(color);
         return { success: true };
     }
     return { success: false };

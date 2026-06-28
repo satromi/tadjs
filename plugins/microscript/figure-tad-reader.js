@@ -371,7 +371,11 @@
                 bgColor = (bgPattern.bg && bgPattern.bg !== 'transparent') ? bgPattern.bg : bgPattern.fg;
             }
         }
-        const paragraphs = Array.from(elem.querySelectorAll('p'));
+        let paragraphs = Array.from(elem.querySelectorAll('p'));
+        // <p> 無しで <document> 直下にテキストを書く保存形式 (basic-figure-editor の旧シリアライザ等)
+        // へのフォールバック: document 自身を段落とみなしてテキスト/＠ラベルを抽出する
+        // (<p> が無いと paragraphs 空 → text='' → labelName が null → 役者未検出になる)。
+        if (paragraphs.length === 0) paragraphs = [elem];
         const lines = paragraphs.map(function (p) {
             const clone = p.cloneNode(true);
             clone.querySelectorAll('docView,docDraw,docScale,text,font').forEach(function (el) { el.remove(); });
@@ -384,6 +388,17 @@
         for (let pi = 0; pi < paragraphs.length; pi++) {
             if (pi > 0) runs.push({ text: '\n', xScale: runState.xScale, yScale: runState.yScale });
             collectRuns(paragraphs[pi], runState, runs);
+        }
+        // runs 先頭/末尾の改行を除去し、 text の .trim() と整合させる。
+        // 図形の <tcode/> 直後等にある整形改行が先頭 '\n' として残ると、 _drawTextRuns が
+        // それを改行扱いして空の先頭行を作り、 後続文字をクリップ枠(セグメント矩形)の外へ
+        // 押し出して不可視化する(得点盤の緑▬ マーカー son0/son1 等)。 改行のみ除去し
+        // 水平位置(先頭空白)は変えない。 段落間の改行 run は先頭/末尾以外なので保持される。
+        if (runs.length) {
+            runs[0].text = runs[0].text.replace(/^[\r\n]+/, '');
+            runs[runs.length - 1].text = runs[runs.length - 1].text.replace(/[\r\n]+$/, '');
+            while (runs.length && runs[0].text === '') runs.shift();
+            while (runs.length && runs[runs.length - 1].text === '') runs.pop();
         }
         return {
             kind: 'text',
@@ -520,23 +535,84 @@
      * @param group - parseGroup で得たオブジェクト
      * @returns { isSegment, segmentName, labelShape, labelIndex }
      */
-    function detectSegment(group) {
+    // 「@名前」 ラベル文字枠から正規化済みセグメント名を得る。 ラベルでなければ null
+    function labelName(child) {
+        if (!child || child.kind !== 'text') return null;
+        const t = child.text || '';
+        if (t.length === 0) return null;
+        const first = t.charAt(0);
+        if (first !== '@' && first !== '＠') return null;
+        // セグメント名はレクサーと同じ正規化 (全角英数字→半角) を通す。
+        // スクリプト側の名前はレクサー正規化済みのため、 図形ラベル側も揃えないと照合に失敗する
+        let name = t.substr(1).replace(/[\r\n].*/, '');
+        if (global.MSLexer && global.MSLexer.normalize) name = global.MSLexer.normalize(name);
+        return name.trim().slice(0, 12);
+    }
+
+    // 部分木(group 配下の任意の深さ)を走査して @ラベル文字枠を収集する。 detectSegment ケース3
+    // (単一セグメント＋装飾を 3 階層以上の容器にまとめた図形)のフォールバック判定に使う。
+    // acc.count は部分木全体のラベル総数、 残りのフィールドは最初に見つけた 1 個の位置情報。
+    // 役者化時の境界再計算は最外 group の直下子から行うため、 ここでは labelParent (ラベルを直接
+    // 含む親グループ)と labelIndex を返し、 collectSegments がそのラベルだけを除去できるようにする。
+    function collectLabelsDeep(group, acc) {
+        acc = acc || { count: 0, name: null, labelShape: null, labelParent: null, labelIndex: -1 };
+        if (!group || !group.children) return acc;
         for (let i = 0; i < group.children.length; i++) {
-            const child = group.children[i];
-            if (child.kind !== 'text') continue;
-            const t = child.text || '';
-            if (t.length === 0) continue;
-            const first = t.charAt(0);
-            if (first === '@' || first === '＠') {
-                // セグメント名はレクサーと同じ正規化 (全角英数字→半角) を通す。
-                // スクリプト側の名前はレクサー正規化済みのため、 図形ラベル側も揃えないと照合に失敗する
-                let name = t.substr(1).replace(/[\r\n].*/, '');
-                if (global.MSLexer && global.MSLexer.normalize) name = global.MSLexer.normalize(name);
-                name = name.trim().slice(0, 12);
-                return { isSegment: true, segmentName: name, labelShape: child, labelIndex: i };
+            const ch = group.children[i];
+            const nm = labelName(ch);
+            if (nm != null) {
+                acc.count++;
+                if (!acc.labelShape) {
+                    acc.name = nm; acc.labelShape = ch; acc.labelParent = group; acc.labelIndex = i;
+                }
+            }
+            if (ch && ch.kind === 'group' && ch.children) collectLabelsDeep(ch, acc);
+        }
+        return acc;
+    }
+
+    function detectSegment(group) {
+        // (1) 直下にラベル文字枠がある通常ケース。 labelParent=group (splice 対象は group.children)
+        for (let i = 0; i < group.children.length; i++) {
+            const name = labelName(group.children[i]);
+            if (name != null) {
+                return { isSegment: true, segmentName: name, labelShape: group.children[i], labelParent: group, labelIndex: i };
             }
         }
-        return { isSegment: false, segmentName: null, labelShape: null, labelIndex: -1 };
+        // (2) ラベルが直下の子グループ内に入っているネストケース (ソリティアの確認パネル sw0T/sw1T/sw2T
+        //     ボタンは「外グループ = {内グループ(枠+@ラベル), 表示文字}」 構造)。 内グループだけを役者に
+        //     すると兄弟の表示文字 (取り消し 等) がどの役者にも属さず描画されない。 外グループを役者と
+        //     判定し、 ラベルは内グループから除去する。 これにより外グループ配下の全可視シェイプ(枠と文字)
+        //     が役者 shapes に含まれ、 _drawGroup の再帰描画でボタン文字も表示される。
+        // 安全策: @ラベルを直下に持つ子グループが「ちょうど1個」のときだけ親を役者化する。
+        // 複数あるとき(カードパレット ?01..?13 等、 各子が独立した役者)は親を役者化せず、 容器として
+        // 再帰検出に委ねる(誤って全カードを1役者に統合しないため)。
+        let _found = null, _cnt = 0;
+        for (let i = 0; i < group.children.length; i++) {
+            const sub = group.children[i];
+            if (!sub || sub.kind !== 'group' || !sub.children) continue;
+            for (let j = 0; j < sub.children.length; j++) {
+                const name = labelName(sub.children[j]);
+                if (name != null) {
+                    _cnt++;
+                    if (!_found) _found = { isSegment: true, segmentName: name, labelShape: sub.children[j], labelParent: sub, labelIndex: j };
+                    break; // 子グループ1個につき @ラベルは1個
+                }
+            }
+        }
+        if (_cnt === 1 && _found) return _found;
+        // (3) フォールバック: ケース(1)(2)が不成立。 部分木全体に @ラベルが「ちょうど1個」だけ
+        //     存在するなら、 その(最外)グループを役者化する。 単一セグメント＋装飾(タイトル/見出し)を
+        //     セグメント境界の外側で 1 つの容器にまとめた 3 階層以上の図形(ソリティア得点選択盤 card1:
+        //     G_f{ G_e{ G_d(枠+@card1), タイトル }, 見出しA, 見出しB })に対応する。 容器 G_f を役者化
+        //     することで G_f 直下の見出しも shapes に含まれ、 パネルと一体に表示・移動する。
+        //     トップダウン処理のため最外容器が先に成立し再帰は停止する。 ラベルが複数(カードパレット
+        //     ?01..?13 や図形ルート)なら容器として再帰検出に委ねるため対象外。
+        const deep = collectLabelsDeep(group, null);
+        if (deep.count === 1 && deep.labelShape) {
+            return { isSegment: true, segmentName: deep.name, labelShape: deep.labelShape, labelParent: deep.labelParent, labelIndex: deep.labelIndex };
+        }
+        return { isSegment: false, segmentName: null, labelShape: null, labelParent: null, labelIndex: -1 };
     }
 
     /**
@@ -553,11 +629,18 @@
     // 「@名前」ラベル付きグループを役者とし、 その内部は探索を打ち切る。
     // ラベルの無いグループは入れ子の子グループを再帰的に探す
     // (図形全体を入れ子グループ化した舞台で役者が深くネストするケースに対応)。
-    function collectSegments(shape, result) {
+    function collectSegments(shape, result, offX, offY) {
+        // offX/offY: 祖先グループの絶対オフセット累積。 parseGroup は子を「親グループ相対」へ平行移動
+        // するため、 入れ子セグメント(card0 等のパネル)の left/top は親相対値になっている。 ここで
+        // 祖先の left/top を足し戻さないと、 深くネストしたセグメントが原点(0,0)付近に誤配置される
+        // (ソリティアの模様選択盤=card0 が y0=0 になり、 パネル中身がパネル外へ飛ぶ不具合の真因)。
+        // トップレベル呼び出しは offX/offY=0 のため既存の非ネストセグメントには影響しない。
+        offX = offX || 0; offY = offY || 0;
         const det = detectSegment(shape);
         if (det.isSegment) {
-            if (det.labelIndex >= 0) {
-                shape.children.splice(det.labelIndex, 1);
+            // ラベルは labelParent (通常は shape 自身、 ネストケースでは内側の子グループ) から除去する
+            if (det.labelIndex >= 0 && det.labelParent && det.labelParent.children) {
+                det.labelParent.children.splice(det.labelIndex, 1);
             }
             // セグメント境界は「@名前」 ラベル文字枠を除いた可視シェイプのみで再計算する。
             // ラベルを含めると .W/.H がラベル分膨らみ、 原点がずれて MOVE 後の描画位置もずれる。
@@ -587,8 +670,8 @@
                 name: det.segmentName,
                 group: shape,
                 labelShape: det.labelShape,
-                baseX: shape.left,
-                baseY: shape.top,
+                baseX: offX + shape.left,
+                baseY: offY + shape.top,
                 labelOffsetX: labelOffX,
                 labelOffsetY: labelOffY,
                 width: Math.max(shape.right - shape.left, 1),
@@ -596,10 +679,11 @@
             });
             return;
         }
-        // ラベル無しグループ: 入れ子の子グループを再帰探索
+        // ラベル無しグループ: 入れ子の子グループを再帰探索。 子は親相対座標なので、 このグループの
+        // left/top を累積オフセットに足して渡す(子セグメントの絶対位置を復元するため)。
         for (let j = 0; j < shape.children.length; j++) {
             const ch = shape.children[j];
-            if (ch && ch.kind === 'group') collectSegments(ch, result);
+            if (ch && ch.kind === 'group') collectSegments(ch, result, offX + shape.left, offY + shape.top);
         }
     }
 

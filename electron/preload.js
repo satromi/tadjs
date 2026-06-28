@@ -21,6 +21,9 @@ window.electronAPI = {
     enterFullscreen: () => ipcRenderer.invoke('enter-fullscreen'),
     exitFullscreen: () => ipcRenderer.invoke('exit-fullscreen'),
 
+    // BrowserWindow の背景色を動的変更 (presentation mode で letterbox 透け対策用)
+    setWindowBackgroundColor: (color) => ipcRenderer.invoke('set-window-background-color', color),
+
     // クリップボード操作
     clipboardReadText: () => ipcRenderer.invoke('clipboard-read-text'),
     clipboardWriteText: (text) => ipcRenderer.invoke('clipboard-write-text', text),

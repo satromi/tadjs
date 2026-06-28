@@ -4850,13 +4850,27 @@ export class PluginBase {
         img.loading = 'lazy';
         img.decoding = 'async';
 
-        // 画像パスを解決
+        // 画像パスを解決: 相対hrefをプラグインiframeのベースURLで解決すると404になるため、
+        // 親の getImageFilePath() で dataフォルダ基準の絶対パス(file://)を取得して設定する。
         if (href) {
-            // basePathがある場合は相対パスを解決
-            if (basePath && !href.startsWith('http') && !href.startsWith('data:')) {
-                img.src = `../data/${href}`;
-            } else {
+            if (href.startsWith('http') || href.startsWith('data:') || href.startsWith('file:')) {
                 img.src = href;
+            } else if (typeof this.getImageFilePath === 'function' && this.messageBus) {
+                // 非同期で絶対パスを解決してから src を設定（解決前に相対srcを入れて404を出さない）
+                this.getImageFilePath(href).then((absPath) => {
+                    if (absPath) {
+                        img.src = String(absPath).startsWith('file:')
+                            ? absPath
+                            : ('file:///' + String(absPath).replace(/\\/g, '/'));
+                    } else {
+                        img.src = basePath ? `../data/${href}` : href; // フォールバック（従来動作）
+                    }
+                }).catch(() => {
+                    img.src = basePath ? `../data/${href}` : href; // フォールバック（従来動作）
+                });
+            } else {
+                // getImageFilePath/messageBus が無い環境は従来動作
+                img.src = (basePath && !href.startsWith('http') && !href.startsWith('data:')) ? `../data/${href}` : href;
             }
         }
 

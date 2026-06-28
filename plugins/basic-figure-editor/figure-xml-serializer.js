@@ -564,7 +564,10 @@ export const FigureXmlSerializerMixin = (Base) => class extends Base {
                     xmlParts.push(this.generateTextElement({ zIndex: shape.zIndex }));
                     xmlParts.push(`<font size="${fontSize}"/>\r\n`);
                     xmlParts.push(`<font color="${shape.strokeColor || DEFAULT_FRCOL}"/>\r\n`);
-                    xmlParts.push(`${textContent}\r\n`);
+                    // 本文は <p> で包む。 取込形式 (BPK→unpack) と揃え、 microscript の figure-tad-reader
+                    // parseDocument が querySelectorAll('p') でテキスト/＠ラベルを抽出できるようにする
+                    // (<p> 無しだと役者セグメントが検出されない)。
+                    xmlParts.push(`<p>${textContent}</p>\r\n`);
                     xmlParts.push('</document>\r\n');
                 }
                 break;

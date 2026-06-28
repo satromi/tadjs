@@ -24,18 +24,53 @@ class MicroScriptPlugin extends window.PluginBase {
         this.initializeCommonComponents('[MS]');
         this.setupMessageBusHandlers();
         this.setupContextMenu();
+        this.setupKeyboardShortcuts();
         logger.debug('[MS] プラグイン準備完了');
+    }
+
+    // Ctrl+E でウィンドウを閉じる (virtual-object-list/unpack-file 等の他プラグインと統一)。
+    // canvas の keydown(canvas-stage) は preventDefault/stopPropagation しないため document 側と競合しない。
+    setupKeyboardShortcuts() {
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'e') {
+                e.preventDefault();
+                this.requestCloseWindow();
+            }
+        });
     }
 
     setupMessageBusHandlers() {
         this.setupCommonMessageBusHandlers();
 
-        // WMOVE 後にホストから作業領域左上のデスクトップ座標を受け取り $WDX/$WDY に反映する
+        // --- WMOVE ウィンドウ移動 (ポインタ追従) の座標同期 ---------------------------------
+        // 設計: WMOVE $PDX+$WDX が安定する条件は「$PDX + $WDX が常にポインタ絶対位置に等しい(和が不変)」
+        // こと。 そこで追従中は親(デスクトップ)を唯一の権威とし、 1 回の mousemove から
+        // $PDX/$PDY/$WDX/$WDY を同時に算出して原子的に送る(wmove-pointer)。 プラグインは保存するだけで
+        // 再計算しない。 和が構造的に常にポインタ位置になるため発振・ドリフトが原理的に起きない。
+
+        // 通常時(非追従)のウィンドウ位置 $WDX/$WDY。 init 応答や非追従 WMOVE 後に届く。
+        // 追従中(_wmoveCaptureActive)は親の wmove-pointer が $WDX/$WDY を担うため無視する。
         this.messageBus.on('window-geometry', (data) => {
-            if (this.stage && data) {
-                if (typeof data.wdx === 'number') this.stage.wdx = data.wdx;
-                if (typeof data.wdy === 'number') this.stage.wdy = data.wdy;
-            }
+            if (!this.stage || !data || this._wmoveCaptureActive) return;
+            if (typeof data.wdx === 'number') this.stage.wdx = data.wdx;
+            if (typeof data.wdy === 'number') this.stage.wdy = data.wdy;
+        });
+
+        // ドラッグ中、 親から原子的に届くポインタ&作業領域座標。 そのまま保存する(再計算しない)。
+        // $PDX/$PDY は作業領域相対、 $WDX/$WDY は作業領域のコンテナ相対位置。 pdx+wdx = ポインタ位置。
+        this.messageBus.on('wmove-pointer', (data) => {
+            if (!this.stage || !data) return;
+            if (typeof data.pdx === 'number') this.stage.pdx = data.pdx;
+            if (typeof data.pdy === 'number') this.stage.pdy = data.pdy;
+            if (typeof data.wdx === 'number') this.stage.wdx = data.wdx;
+            if (typeof data.wdy === 'number') this.stage.wdy = data.wdy;
+        });
+
+        // 追従終了通知。 WMOVE が途絶えると親がタイマで解除して送る。 これを受けて以降の
+        // window-geometry を再び受け付ける(_wmoveCaptureActive=false)。 次の WMOVE で再追従する。
+        this.messageBus.on('wmove-capture-end', () => {
+            if (this.stage) this.stage.pdb = 0;
+            this._wmoveCaptureActive = false;
         });
 
         this.messageBus.on('init', async (data) => {
@@ -70,6 +105,9 @@ class MicroScriptPlugin extends window.PluginBase {
 
             this.figureXml = data.fileData ? data.fileData.xmlData : null;
             await this.bootRuntime();
+
+            // $WDX/$WDY (ウィンドウ作業領域左上座標) を初期化する。 ドラッグ前の WMOVE のために必要。
+            this.messageBus.send('request-window-geometry', { windowId: this.windowId });
         });
     }
 
@@ -79,6 +117,8 @@ class MicroScriptPlugin extends window.PluginBase {
                 { label: '再起動', action: 'restart' },
                 { label: '停止', action: 'stop' },
                 { label: 'ソース表示', action: 'show-source' },
+                { separator: true },
+                { label: 'シリアルポート割り当て', action: 'serial-grant-port' },
                 { separator: true },
                 { label: '閉じる', action: 'close' }
             ]}
@@ -115,8 +155,33 @@ class MicroScriptPlugin extends window.PluginBase {
             case 'restart': this.restart(); break;
             case 'stop': this.stopRuntime(); break;
             case 'show-source': this.showSource(); break;
+            case 'serial-grant-port': this.grantSerialPort(); break;
             case 'close': this.messageBus.send('close-window'); break;
         }
+    }
+
+    // シリアルポート割り当てUI (Web Serial requestPort をユーザージェスチャ内で起動)
+    grantSerialPort() {
+        if (!this.serialManager && window.SerialPortManager) {
+            this.serialManager = new window.SerialPortManager();
+        }
+        if (this.serialManager) this.serialManager.showGrantUI();
+    }
+
+    // シリアル(RS系)を使う台本で、 ポート未割当なら起動前に割り当てUIを出して待つ。
+    // 「起動時にポート指定画面が出ないと使えない」問題への対応。 既に割当済みならそのまま起動する。
+    async ensureSerialPortIfNeeded() {
+        const src = this.scriptSource || '';
+        if (!/RS(INIT|PUT|GET|WAIT|CNTL)/i.test(src)) return; // シリアル未使用台本はスキップ
+        if (!this.serialManager && window.SerialPortManager) this.serialManager = new window.SerialPortManager();
+        const mgr = this.serialManager;
+        if (!mgr || !mgr.isAvailable()) return; // Web Serial 非対応環境は黙ってスキップ(RSは$ERR=16)
+        let ports = [];
+        try { ports = await navigator.serial.getPorts(); } catch (e) {}
+        if (ports && ports.length > 0) { this.runtime.serialManager = mgr; return; } // 既に割当済み
+        // 未割当: 起動前にポート選択UIを表示し、 ユーザ操作(割当 or 閉じる)を待つ
+        try { await mgr.showGrantUI({ startup: true }); } catch (e) {}
+        this.runtime.serialManager = mgr;
     }
 
     async bootRuntime() {
@@ -154,6 +219,11 @@ class MicroScriptPlugin extends window.PluginBase {
         this.runtime = new window.MSRuntime.Runtime({ stage: this.stage });
         // $SV (仮身ごとの不揮発変数) の保存キー隔離に実身 ID を使う
         this.runtime.realId = this.realIdBase;
+        // シリアル通信 (RS 系命令 / Web Serial)。 割り当てメニューと共有する単一インスタンス
+        if (!this.serialManager && window.SerialPortManager) {
+            this.serialManager = new window.SerialPortManager();
+        }
+        this.runtime.serialManager = this.serialManager || null;
         this.scriptLoader = new window.ScriptLoader(this);
 
         console.log('[MS] bootRuntime start. figureXml length:', this.figureXml ? this.figureXml.length : 0);
@@ -241,9 +311,29 @@ class MicroScriptPlugin extends window.PluginBase {
             }
         }
 
+        // 取込時に実行機能付箋から復元した保存変数 $SV を初期値として反映する。
+        // 図形(この実身)の管理情報 json に microscriptSV があれば各枠へ preset する
+        // (localStorage 保存があれば presetSV 内で優先するため非破壊)。
+        try {
+            const figRO = await this.loadRealObjectData(this.realIdBase);
+            const meta = figRO && (figRO.metadata || figRO.json);
+            if (meta && Array.isArray(meta.microscriptSV)) {
+                for (let i = 0; i < meta.microscriptSV.length && i < 50; i++) {
+                    this.runtime.presetSV(i, meta.microscriptSV[i] | 0);
+                }
+                console.log('[MS] microscriptSV preset (取込$SV復元):', meta.microscriptSV.slice(0, 4));
+            }
+        } catch (e) {
+            logger.warn('[MS] microscriptSV preset 失敗:', e.message);
+        }
+
         this.stage.render();
 
-        if (this.figure.segments.length === 0) {
+        // 役者0でもリンク(SCRIPT: 台本や、 役者を持つサブ図形)がある実身は正常系。
+        // 例: リモコン初期化 = 表示役者を持たずシリアル初期化だけ行う台本専用図形(親から VOPEN で開かれる)。
+        // リンクも無い「完全に空の図形」のときだけ警告する。 台本が無い場合は後続(389行付近)の
+        // SCRIPT 未検出エラーで別途案内されるため、 ここで二重に役者エラーを出さない(誤報防止)。
+        if (this.figure.segments.length === 0 && (!this.figure.links || this.figure.links.length === 0)) {
             this.showErrorDialog('役者セグメントが見つかりません。 グループに「@名前」 文字枠を含めてください。');
         }
 
@@ -362,6 +452,13 @@ class MicroScriptPlugin extends window.PluginBase {
                 this.messageBus.send('close-window');
             };
             console.log('[MS] loadProgram done. segments registered=', this.stage.segments.size);
+            // 同名インスタンスの occ 順を原位置(x列=スート)順へ整列してから起動する。
+            // 図形の登場順崩れ(例 ?12)による「表示スートと配置可否の不一致」を防ぐ。
+            // start() 前=カード未移動=x が原位置なので、 ここで整列する。
+            this.stage.sortSegmentInstancesByPosition();
+            // シリアル(RS系)を使う台本で未割当なら、 起動前にポート選択UIを出す
+            // (PROLOGUE の RSINIT に間に合わせる。 メニューからの事前割当でも可)
+            await this.ensureSerialPortIfNeeded();
             this.runtime.start();
             console.log('[MS] runtime.start() called');
             setTimeout(() => {
@@ -436,6 +533,18 @@ class MicroScriptPlugin extends window.PluginBase {
                 return;
             case 'move-window':
                 this.messageBus.send('move-window', { windowId: this.windowId, x: payload.x, y: payload.y });
+                // WMOVE 追従中は親にポインタ追従(キャプチャ)を依頼する。 親は全 iframe を
+                // pointer-events:none にして全域(他ウィンドウ上含む)でポインタを追跡し、
+                // $PDX/$PDY/$WDX/$WDY を原子送信する。 ボタンに依存しない(実例は無限 REPEAT 追従)。
+                // WMOVE が高頻度でも親へのメッセージは間引く(300ms)。 親は WMOVE 途絶で自動解除。
+                this._wmoveCaptureActive = true;
+                {
+                    const now = Date.now();
+                    if (!this._lastWmoveActive || now - this._lastWmoveActive > 300) {
+                        this._lastWmoveActive = now;
+                        this.messageBus.send('wmove-active', { windowId: this.windowId });
+                    }
+                }
                 return;
             case 'save-window-geometry':
                 this.messageBus.send('save-window-geometry', { windowId: this.windowId });
@@ -469,9 +578,10 @@ class MicroScriptPlugin extends window.PluginBase {
         const messageId = this.generateMessageId('ms-vopen');
         // データフォルダの実身を指定プラグインで開く正規メッセージ
         // ('open-virtual-object' は BPK タブ表示用で raw データ前提のため使わない)
+        // pluginId は指定しない: ホストが対象実身の applist から defaultOpen プラグインを解決する
+        // (テキスト文書→basic-text-editor、 サブmicroscript→microscript が正しく選ばれる)
         this.messageBus.send('open-virtual-object-real', {
             virtualObj: { link_id: realId + '_0.xtad' },
-            pluginId: 'microscript',
             messageId: messageId
         });
         // VCLOSE (引数なし = 全閉じ) 用に開いたウィンドウ ID を記録

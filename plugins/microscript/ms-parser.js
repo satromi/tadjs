@@ -149,6 +149,14 @@
                 throw MSParseError('宣言または手続き定義が必要: ' + JSON.stringify(t.value), t);
             }
             const kw = t.value.toUpperCase();
+            // 連結された複数スクリプトの 2 つ目以降にも VERSION 宣言が現れる。 値を読み捨てて続行する。
+            if (kw === 'VERSION') {
+                this.next();
+                const v = this.peek();
+                if (v.type === 'INT') { prog.version = v.value; this.next(); }
+                this.expectNL();
+                continue;
+            }
             if (kw === 'DEFINE') { this.parseDefine(prog); continue; }
             if (kw === 'VARIABLE') { this.parseVarDecl(prog.globals); this.expectNL(); continue; }
             if (kw === 'SEGMENT') { this.parseSegmentDecl(prog.segmentDecls); this.expectNL(); continue; }
@@ -233,7 +241,12 @@
             }
             target.push({ name: name, varType: varType, size: size, shareWith: shareWith, shareOffset: shareOffset });
             if (this.peek().type === 'OP' && this.peek().value === ',') { this.next(); continue; }
-            if (this.peek().type === 'IDENT' && !isKeyword(this.peek().value)) continue;
+            if (this.peek().type === 'IDENT') {
+                // キーワード(例: END)と同名でも、 直後が ':'(型)/'['(サイズ) なら宣言名として継続 (例: end:C[2])
+                if (!isKeyword(this.peek().value)) continue;
+                const _n1 = this.peek(1);
+                if (_n1 && _n1.type === 'OP' && (_n1.value === ':' || _n1.value === '[')) continue;
+            }
             break;
         }
     };
@@ -251,7 +264,12 @@
             }
             target.push({ name: name, size: size });
             if (this.peek().type === 'OP' && this.peek().value === ',') { this.next(); continue; }
-            if (this.peek().type === 'IDENT' && !isKeyword(this.peek().value)) continue;
+            if (this.peek().type === 'IDENT') {
+                // キーワード(例: END)と同名でも、 直後が ':'(型)/'['(サイズ) なら宣言名として継続 (例: end:C[2])
+                if (!isKeyword(this.peek().value)) continue;
+                const _n1 = this.peek(1);
+                if (_n1 && _n1.type === 'OP' && (_n1.value === ':' || _n1.value === '[')) continue;
+            }
             break;
         }
     };
@@ -261,7 +279,12 @@
         while (true) {
             this.expect('IDENT');
             if (this.peek().type === 'OP' && this.peek().value === ',') { this.next(); continue; }
-            if (this.peek().type === 'IDENT' && !isKeyword(this.peek().value)) continue;
+            if (this.peek().type === 'IDENT') {
+                // キーワード(例: END)と同名でも、 直後が ':'(型)/'['(サイズ) なら宣言名として継続 (例: end:C[2])
+                if (!isKeyword(this.peek().value)) continue;
+                const _n1 = this.peek(1);
+                if (_n1 && _n1.type === 'OP' && (_n1.value === ':' || _n1.value === '[')) continue;
+            }
             break;
         }
     };
@@ -360,7 +383,13 @@
             if (t.type === 'NL') { this.next(); continue; }
             if (t.type === 'IDENT') {
                 const kw = t.value.toUpperCase();
-                if (endKeywords.indexOf(kw) >= 0) return stmts;
+                if (endKeywords.indexOf(kw) >= 0) {
+                    // キーワードと同名の変数が lvalue(end[..]=.. / end=.. / end.X) で文頭に来る場合は
+                    // ブロック終端ではなく文として処理する (END 等の終端キーワードは直後が NL)。
+                    const n1 = this.peek(1);
+                    const usedAsVar = n1 && n1.type === 'OP' && (n1.value === '[' || n1.value === '=' || n1.value === '.');
+                    if (!usedAsVar) return stmts;
+                }
             }
             const stmt = this.parseStatement();
             if (stmt) stmts.push(stmt);
@@ -459,6 +488,9 @@
             if (this.peek().type === 'OP' && this.peek().value === ',') { this.next(); continue; }
             const nx = this.peek();
             if (nx.type === 'IDENT' && !isBlockBoundary(nx.value)) continue;
+            // 空白/タブ区切りの引数 (BTRON 仕様: RSPUT 0 0xA2 0x10 … 等の数値列)。 _parseBareArgList と
+            // 同じ継続判定で、 カンマ無しでも式開始トークンが続くなら次の引数として読む。
+            if (nx.type === 'INT' || nx.type === 'FLOAT' || nx.type === 'STRING' || nx.type === 'SYSVAR') continue;
             break;
         }
         let timeout = null;
@@ -481,6 +513,10 @@
             if (this.peek().type === 'OP' && this.peek().value === ':') break;
             args.push(this.parseExpr());
             if (this.peek().type === 'OP' && this.peek().value === ',') { this.next(); continue; }
+            // 空白/タブ区切りの引数 (BTRON 仕様)。 parseGenericCmd と同形の継続判定。
+            const nx = this.peek();
+            if (nx.type === 'IDENT' && !isBlockBoundary(nx.value)) continue;
+            if (nx.type === 'INT' || nx.type === 'FLOAT' || nx.type === 'STRING' || nx.type === 'SYSVAR') continue;
             break;
         }
         this.expectNL();
@@ -530,7 +566,12 @@
             }
             decls.push({ name: name, varType: varType, size: size });
             if (this.peek().type === 'OP' && this.peek().value === ',') { this.next(); continue; }
-            if (this.peek().type === 'IDENT' && !isKeyword(this.peek().value)) continue;
+            if (this.peek().type === 'IDENT') {
+                // キーワード(例: END)と同名でも、 直後が ':'(型)/'['(サイズ) なら宣言名として継続 (例: end:C[2])
+                if (!isKeyword(this.peek().value)) continue;
+                const _n1 = this.peek(1);
+                if (_n1 && _n1.type === 'OP' && (_n1.value === ':' || _n1.value === '[')) continue;
+            }
             break;
         }
         this.expectNL();
@@ -549,9 +590,23 @@
             this.expect('OP', '=');
         }
         const exprs = [this.parseExpr()];
-        while (this.peek().type === 'OP' && this.peek().value === ',') {
-            this.next();
-            exprs.push(this.parseExpr());
+        while (true) {
+            if (this.peek().type === 'OP' && this.peek().value === ',') {
+                this.next();
+                exprs.push(this.parseExpr());
+                continue;
+            }
+            // 空白区切りの並び (juxtaposition) による配列連結: 次が式の開始トークンなら値として続ける。
+            // 例: buff[i:n] = 文字色[:]　半角[:]　書式T.TX[:] (3配列を連結してスライスへ詰める)
+            const t = this.peek();
+            const isExprStart = (t.type === 'INT' || t.type === 'FLOAT' || t.type === 'STRING')
+                || (t.type === 'IDENT' && !isKeyword(t.value))
+                || (t.type === 'OP' && t.value === '(');
+            if (isExprStart) {
+                exprs.push(this.parseExpr());
+                continue;
+            }
+            break;
         }
         this.expectNL();
         return { type: 'Set', target: target, values: exprs };
@@ -946,10 +1001,10 @@
         let freq = null, dur = null;
         if (this.peek().type !== 'NL' && this.peek().type !== 'EOF') {
             freq = this.parseExpr();
-            if (this.peek().type === 'OP' && this.peek().value === ',') {
-                this.next();
-                dur = this.parseExpr();
-            }
+            // 継続時間: カンマ区切り または 空白/タブ区切り (BTRON 仕様: BEEP 2000 100)。
+            // 旧実装は ',' の時だけ dur を読み、 空白区切りだと dur が残り「文末が必要」エラーになっていた。
+            if (this.peek().type === 'OP' && this.peek().value === ',') this.next();
+            if (this._isExprStart()) dur = this.parseExpr();
         }
         this.expectNL();
         return { type: 'Beep', freq: freq, dur: dur };
@@ -1005,7 +1060,15 @@
                 targets.push({ kind: 'string', value: this.next().value });
             } else {
                 if (isKeyword(this.peek().value)) break;
-                targets.push({ kind: 'name', value: this.expect('IDENT').value });
+                const nm = this.expect('IDENT').value;
+                // 配列要素 仮身[index] に対応 (例: VOPEN 仮身[選択番号])。
+                let index = null;
+                if (this.peek().type === 'OP' && this.peek().value === '[') {
+                    this.next();
+                    index = this.parseExpr();
+                    this.expect('OP', ']');
+                }
+                targets.push({ kind: 'name', value: nm, index: index });
             }
             if (this.peek().type === 'OP' && this.peek().value === ',') { this.next(); continue; }
             break;
@@ -1149,9 +1212,12 @@
         }
         if (t.type === 'IDENT') {
             this.next();
-            // 関数呼び出しは '(' が空白を挟まず識別子に密着している場合のみ。
-            // 空白付きの "off0 （－17）" は関数呼び出しではなく、 別個の引数 (off0 と (-17)) として扱う。
-            if (this.peek().type === 'OP' && this.peek().value === '(' && !this.peek().spaced) {
+            // 関数呼び出しの判定:
+            // - 通常の式 (IF条件・代入RHS等, _argMode=false) では空白の有無に関わらず関数呼び出しとする
+            //   (例: IF scmp （...）≠0 のように関数名と '(' の間に空白があっても呼び出し)。
+            // - 表示文の引数リスト (_argMode=true) でのみ、空白付き "off0 （－17）" は呼び出しでなく
+            //   別個の引数 (off0 と (-17)) として扱う (juxtaposition 引数の曖昧性回避)。
+            if (this.peek().type === 'OP' && this.peek().value === '(' && (!this.peek().spaced || !this._argMode)) {
                 this.next();
                 const args = [];
                 if (!(this.peek().type === 'OP' && this.peek().value === ')')) {

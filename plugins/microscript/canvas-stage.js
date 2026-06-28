@@ -94,34 +94,56 @@
             const c = eventCoords(e);
             self.pdx = c.x; self.pdy = c.y;
             self.pdb = 1;
-            const seg = self.hitTest(c.x, c.y);
-            // [MS-Stage] mousedown ログ抑制
+            // この相互作用を占有する単一セグメントを決定 (いずれかのポインタハンドラを持つ最前面)。
+            // PRESS はそのセグメントの press ハンドラのみ発火する。 PRESS を持たなければ何も発火しない
+            // (下層の別セグメントへは漏らさない)。
+            const seg = self.hitTestAnyHandler(c.x, c.y);
             if (!seg) return;
-            const handlers = self.pressHandlers.get(seg.name) || [];
-            // [MS-Stage] press handlers ログ抑制
-            // 第2引数 (番号) は runtime 側で ACTION targets の index から決定するため、 ここでは未使用 (0 固定)
-            handlers.forEach(function (h) { h(seg, 0, c.x - seg.x, c.y - seg.y); });
+            const handlers = self.pressHandlers.get(seg._key) || [];
+            // 第2引数 (番号) は runtime 側で ACTION targets の index から決定するため、 ここでは未使用 (0 固定)。
+            // 第3/第4引数は仕様(CLICK/PRESS/DCLICK/QPRESS): 発生 X/Y 座標 = ウィンドウ左上(0,0)基準の相対値。
+            // (セグメント相対ではない。 ソリティアの掴みオフセット sx=x-カード.X はこの前提)
+            handlers.forEach(function (h) { h(seg, 0, c.x, c.y); });
         });
         const onMouseUp = function (e) { if (e.button === 0) self.pdb = 0; };
         listen(this.canvas, 'mouseup', onMouseUp);
         listen(document, 'mouseup', onMouseUp);
+        self._pendingClickTimers = {};
         listen(this.canvas, 'click', function (e) {
             const c = eventCoords(e);
-            const seg = self.hitTest(c.x, c.y);
-            // [MS-Stage] click ログ抑制
+            // mousedown と同じ占有セグメントへ CLICK/QPRESS を発火する。 このセグメントが CLICK を
+            // 持たなければ何も発火しない(下層 back の 背景がクリックされた 等へは漏らさない)。
+            const seg = self.hitTestAnyHandler(c.x, c.y);
             if (!seg) return;
-            const handlers = self.clickHandlers.get(seg.name) || [];
-            handlers.forEach(function (h) { h(seg, 0, c.x - seg.x, c.y - seg.y); });
-            // QPRESS (クイックプレス) は click イベントで代用発火する
-            const qhandlers = self.qpressHandlers.get(seg.name) || [];
-            qhandlers.forEach(function (h) { h(seg, 0, c.x - seg.x, c.y - seg.y); });
+            const fireClick = function () {
+                (self.clickHandlers.get(seg._key) || []).forEach(function (h) { h(seg, 0, c.x, c.y); });
+                // QPRESS (クイックプレス) は click イベントで代用発火する
+                (self.qpressHandlers.get(seg._key) || []).forEach(function (h) { h(seg, 0, c.x, c.y); });
+            };
+            // 仕様(PRESS⊂CLICK⊂QPRESS⊂DCLICK): 同一セグメントに DCLICK が定義されていると、
+            // ダブルクリックでは CLICK でなく DCLICK を起動する。 ブラウザは ダブルクリックで
+            // click→click→dblclick を発火するため、 DCLICK 在時は CLICK を短時間遅延し、
+            // dblclick が来たらキャンセルする(=DCLICK のみ起動)。DCLICK 不在なら即時発火(従来通り)。
+            if (self.dclickHandlers.has(seg._key)) {
+                const k = seg._key;
+                const arr = self._pendingClickTimers[k] || (self._pendingClickTimers[k] = []);
+                const id = setTimeout(function () {
+                    const idx = arr.indexOf(id); if (idx >= 0) arr.splice(idx, 1);
+                    fireClick();
+                }, 300);
+                arr.push(id);
+            } else {
+                fireClick();
+            }
         });
         listen(this.canvas, 'dblclick', function (e) {
             const c = eventCoords(e);
-            const seg = self.hitTest(c.x, c.y);
-            if (!seg) return;
-            const handlers = self.dclickHandlers.get(seg.name) || [];
-            handlers.forEach(function (h) { h(seg, 0, c.x - seg.x, c.y - seg.y); });
+            const seg = self.hitTestAnyHandler(c.x, c.y);
+            if (!seg || !self.dclickHandlers.has(seg._key)) return;
+            // 保留中の CLICK(同セグメント)をキャンセルして DCLICK のみ起動する
+            const arr = self._pendingClickTimers[seg._key];
+            if (arr) { arr.forEach(function (id) { clearTimeout(id); }); arr.length = 0; }
+            (self.dclickHandlers.get(seg._key) || []).forEach(function (h) { h(seg, 0, c.x, c.y); });
         });
         listen(this.canvas, 'keydown', function (e) {
             const kc = e.keyCode || e.which || 0;
@@ -228,8 +250,14 @@
     };
 
     CanvasStage.prototype.beginInput = function (seg, kanji, onDone, x, y) {
-        // x,y: INPUT/KINPUT のカーソル初期位置 (セグメント相対、 省略可)
-        this._activeInput = { seg: seg, kanji: !!kanji, onDone: onDone, buffer: seg.text || '', x: (x != null ? x : null), y: (y != null ? y : null) };
+        // x,y: INPUT/KINPUT のカーソル初期位置 (セグメント相対、 省略可)。
+        // 仕様: 座標が省略/負値/セグメント外 のときは既定位置 (INPUT=末尾, KINPUT=先頭) にする。
+        let cx = (typeof x === 'number') ? x : null;
+        let cy = (typeof y === 'number') ? y : null;
+        if (cx != null && (cx < 0 || cx >= (seg.w || 0))) cx = null;
+        if (cy != null && (cy < 0 || cy >= (seg.h || 0))) cy = null;
+        if (cx == null || cy == null) { cx = null; cy = null; } // どちらか無効なら既定位置
+        this._activeInput = { seg: seg, kanji: !!kanji, onDone: onDone, buffer: seg.text || '', x: cx, y: cy };
         const el = this._ensureInputEl();
         // KINPUT(kanji=true) は IME 有効、 INPUT(kanji=false) は IME 抑止 (ローマ字/数字直接入力)
         el.style.imeMode = kanji ? 'active' : 'disabled';
@@ -324,11 +352,11 @@
             const seg = self.hitTest(tx, ty);
             if (!seg) return;
             if (kind === 'BUTD' || kind === 'BUTC') {
-                const ph = self.pressHandlers.get(seg.name) || [];
+                const ph = self.pressHandlers.get(seg._key) || [];
                 ph.forEach(function (h) { h(seg, 0, tx - seg.x, ty - seg.y); });
             }
             if (kind === 'BUTC') {
-                const ch = self.clickHandlers.get(seg.name) || [];
+                const ch = self.clickHandlers.get(seg._key) || [];
                 ch.forEach(function (h) { h(seg, 0, tx - seg.x, ty - seg.y); });
             }
         }
@@ -340,7 +368,42 @@
 
     CanvasStage.prototype.registerSegment = function (seg) {
         seg._z = ++this._segmentSeq;
-        this.segments.set(seg.name, seg);
+        // 同名セグメント共存: 図形は同名カード(?01..?13)を4スート分=4インスタンス持つ。 名前キーで
+        // 上書きすると39枚消える(赤カード消失・ドラッグ不能の原因)ため、 インスタンス単位で保持する。
+        // segments Map のキーは「一意キー _key」(同名の2個目以降は接尾辞付き)。 occ=0 は _key=name の
+        // ため既存の segments.get(name) は occ0 を返し後方互換。 segmentsByName で出現順アクセスを提供。
+        if (!this.segmentsByName) this.segmentsByName = new Map();
+        let list = this.segmentsByName.get(seg.name);
+        if (!list) { list = []; this.segmentsByName.set(seg.name, list); }
+        const occ = list.length;
+        seg._key = (occ === 0) ? seg.name : (seg.name + '' + occ);
+        list.push(seg);
+        this.segments.set(seg._key, seg);
+    };
+
+    // 同名セグメントの occ 番目インスタンスを返す (無ければ occ0、 それも無ければ null)
+    CanvasStage.prototype.getSegmentByOcc = function (name, occ) {
+        const list = this.segmentsByName ? this.segmentsByName.get(name) : null;
+        if (!list || list.length === 0) return this.segments.get(name) || null;
+        return list[occ] || list[0];
+    };
+
+    // 同名インスタンスの occ 順を「図形の登場順」から「原位置 (x優先,y次) 順」へ整列する。
+    // ソリティアのカード ?01..?13×4 は occ=スート(x列)順である前提だが、 図形データの並びが
+    // 一部ランク(例 ?12)で崩れ occ とスート列がズレることがある。 occ を空間配置(x列=スート)に
+    // 揃えることで、 表示束縛(カード表[i])・イベント index(n)・配置可否(floor(n/13))を整合させる。
+    // occ を消費・参照する getSegmentByOcc / stmtSet は同一配列を見るため、 この1回の整列で両者に効く。
+    // 全セグメント登録後・start()(イベント束縛/PROLOGUE)前に呼ぶこと(=カード未移動で x が原位置=スート列)。
+    CanvasStage.prototype.sortSegmentInstancesByPosition = function () {
+        if (!this.segmentsByName) return;
+        this.segmentsByName.forEach(function (list) {
+            if (list && list.length > 1) {
+                list.sort(function (a, b) {
+                    if (a.x !== b.x) return a.x - b.x;
+                    return a.y - b.y;
+                });
+            }
+        });
     };
 
     CanvasStage.prototype.applyVisibility = function (seg) {
@@ -363,6 +426,43 @@
             if (!seg.visible) return;
             if (x >= seg.x && x < seg.x + seg.w && y >= seg.y && y < seg.y + seg.h) {
                 if (seg._z >= bestZ) { bestZ = seg._z; best = seg; }
+            }
+        });
+        return best;
+    };
+
+    // 指定イベントの「ハンドラを持つ」最前面の可視セグメントを返す。 ハンドラの無い最前面セグメント
+    // (例: ソリティア確認パネルのボタン枠 sw2U は枠だけでハンドラ無し)は透過し、 下層の
+    // ハンドラ持ちセグメント(背景 back の CLICK、 パターンの PRESS 等)へイベントを伝播させる。
+    // BTRON: イベントは「そのイベントが定義されたセグメント」で起動する。
+    CanvasStage.prototype.hitTestWithHandler = function (x, y, handlerMap) {
+        let best = null, bestZ = -1;
+        this.segments.forEach(function (seg) {
+            if (!seg.visible) return;
+            if (seg._z >= bestZ && handlerMap.has(seg._key) &&
+                x >= seg.x && x < seg.x + seg.w && y >= seg.y && y < seg.y + seg.h) {
+                bestZ = seg._z; best = seg;
+            }
+        });
+        return best;
+    };
+
+    // 1つのポインタ相互作用は「いずれかのポインタイベント(PRESS/CLICK/QPRESS/DCLICK)ハンドラを持つ
+    // 最前面の可視セグメント」が占有する。 この単一セグメントを返し、 各イベント種別はこのセグメントの
+    // 該当ハンドラのみ発火させる(イベント種別ごとに別々の下層セグメントへ漏らさない)。
+    // 例: 得点パネルのセレクタ stx01 を押すと、 PRESS は stx01 が占有し、 下層 back の CLICK
+    // (背景がクリックされた=カード選択)は発火しない。 ハンドラ無しの枠(sc0U 等)は透過する。
+    CanvasStage.prototype.hitTestAnyHandler = function (x, y) {
+        const self = this;
+        let best = null, bestZ = -1;
+        this.segments.forEach(function (seg) {
+            if (!seg.visible) return;
+            if (seg._z <= bestZ) return;
+            if (!(x >= seg.x && x < seg.x + seg.w && y >= seg.y && y < seg.y + seg.h)) return;
+            const k = seg._key;
+            if (self.pressHandlers.has(k) || self.clickHandlers.has(k) ||
+                self.dclickHandlers.has(k) || self.qpressHandlers.has(k)) {
+                bestZ = seg._z; best = seg;
             }
         });
         return best;
@@ -419,16 +519,16 @@
 
         for (let i = 0; i < visibles.length; i++) {
             const seg = visibles[i];
-            if (!seg._renderLogged) {
-                seg._renderLogged = true;
-                // [MS-Stage] render seg ログは冗長なため抑制(描画毎×全セグメントで大量化するため)
-            }
             // SETSEG 内容共有: 共有元の最新 shapes を辿って描画 (X0 差し替えで X1/X2/X3 も同時追従)
             const drawShapes = this._resolveSharedContent(seg).shapes;
             if (!drawShapes) continue;
+            // BTRON仕様: セグメントに .TFCOL が設定されていれば、 そのセグメント内の図形テキストの
+            // 文字色を tfcol で上書きする (例: 色見本スウォッチ 色表示 は「■」文字の色を色表示.TFCOL で変える)。
+            this._curSegTfcol = (typeof seg.tfcol === 'number' && seg.tfcol >= 0) ? seg.tfcol : null;
             for (let j = 0; j < drawShapes.length; j++) {
                 this._drawShape(drawShapes[j], seg.x, seg.y);
             }
+            this._curSegTfcol = null;
             if (seg.textOverride) {
                 this._drawTextOverride(seg);
             }
@@ -792,7 +892,10 @@
             this._applyFill(s);
         }
         ctx.save();
-        ctx.fillStyle = s.textColor || '#000000';
+        // セグメントに .TFCOL 指定があれば図形テキストの文字色をそれで上書き (色表示スウォッチ等)
+        ctx.fillStyle = (this._curSegTfcol != null)
+            ? this._colorRGBA(this._curSegTfcol, s.textColor || '#000000')
+            : (s.textColor || '#000000');
         const fontSize = s.fontSize || 14;
         ctx.font = fontSize + 'px ' + (s.fontFamily || 'sans-serif');
         ctx.textBaseline = 'top';

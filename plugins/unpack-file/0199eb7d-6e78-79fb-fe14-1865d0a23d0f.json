@@ -34,12 +34,12 @@
     "backgroundColor": "#ffffff"
   },
   "applist": {
-    "tadjs-view": {
-      "name": "TADjs View",
-      "defaultOpen": true
-    },
     "unpack-file": {
       "name": "書庫解凍",
+      "defaultOpen": true
+    },
+    "tadjs-view": {
+      "name": "TADjs View",
       "defaultOpen": false
     }
   }

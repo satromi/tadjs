@@ -631,14 +631,52 @@ class TADjsDesktop {
             // WMOVE は「ウィンドウ作業領域左上」を (x,y) に置く (BTRON仕様)。 フレーム上端はタイトルバー分上
             windowElement.style.left = x + 'px';
             windowElement.style.top = (y - titleH) + 'px';
-            // プログラム移動 (WMOVE) は window-moved を発火しないため、 新しい作業領域左上のデスクトップ座標を
-            // 返してプラグインの $WDX/$WDY を更新させる
-            const rect = windowElement.getBoundingClientRect();
+            // プログラム移動 (WMOVE) は window-moved を発火しないため、 新しい作業領域左上の座標を
+            // 返してプラグインの $WDX/$WDY を更新させる。
+            // WMOVE は style.left/top (= デスクトップコンテナ相対 = offsetLeft/Top) を設定するため、
+            // $WDX/$WDY も同じコンテナ相対で返す。getBoundingClientRect (ビューポート相対) を使うと、
+            // デスクトップコンテナのビューポート位置(上部ツールバー等)分だけ恒常的にずれる。
             this.parentMessageBus.sendToWindow(windowId, 'window-geometry', {
-                wdx: Math.round(rect.left),
-                wdy: Math.round(rect.top + titleH)
+                wdx: Math.round(windowElement.offsetLeft),
+                wdy: Math.round(windowElement.offsetTop + titleH)
             });
             logger.debug(`[TADjs] move-window: ${windowId} x=${x} y=${y}`);
+        });
+
+        // request-window-geometry: プラグイン初期化時に現在の作業領域左上座標を返し $WDX/$WDY を初期化する
+        // (ドラッグ前の WMOVE で $WDX/$WDY が 0 のままだと初回移動でウィンドウが大きくずれるため)
+        this.parentMessageBus.on('request-window-geometry', (data, event) => {
+            const windowId = data.windowId || this.parentMessageBus.getWindowIdFromSource(event.source);
+            const windowElement = document.getElementById(windowId);
+            if (!windowElement) return;
+            const titleBar = windowElement.querySelector('.window-title-bar');
+            const titleH = titleBar ? titleBar.offsetHeight : 24;
+            this.parentMessageBus.sendToWindow(windowId, 'window-geometry', {
+                wdx: Math.round(windowElement.offsetLeft),
+                wdy: Math.round(windowElement.offsetTop + titleH)
+            });
+        });
+
+        // マイクロスクリプト WMOVE のポインタ追従:
+        // 設計 — 追従中は親(デスクトップ)を唯一の座標権威とし、 1 回の mousemove から
+        // $PDX/$PDY/$WDX/$WDY を同一座標系・同一時刻で算出して原子的に送る(wmove-pointer)。
+        // これにより pdx+wdx は常にポインタ位置に等しく(和が不変)、 WMOVE は冪等で発振しない。
+        // 追従中は全 iframe を pointer-events:none にするので、 ポインタが他ウィンドウ上に来ても
+        // 親の document mousemove が発火し全域で追従する(既存のウィンドウリサイズと同手法)。
+        //
+        // トリガは「WMOVE が呼ばれたこと」自体(wmove-active)。 実例スクリプトは PROLOGUE から
+        // ボタン無しの無限 REPEAT で 1 秒ごとに WMOVE するため、 ボタン($PDB)では検出できない。
+        // WMOVE が途絶える(ウィンドウを閉じる等)と一定時間後にタイマで自動解除する。
+        this.parentMessageBus.on('wmove-active', (data, event) => {
+            const windowId = data.windowId || this.parentMessageBus.getWindowIdFromSource(event.source);
+            if (!windowId) return;
+            if (this._wmoveCaptureWindowId !== windowId) {
+                if (this._wmoveCaptureWindowId) this._endWmoveCapture();
+                this._engageWmoveCapture(windowId);
+            }
+            // WMOVE が来続ける限り追従を維持。 途絶えたら解除(SLEEP 1000 周期 < 1500ms タイマ)。
+            if (this._wmoveReleaseTimer) clearTimeout(this._wmoveReleaseTimer);
+            this._wmoveReleaseTimer = setTimeout(() => this._endWmoveCapture(), 1500);
         });
 
         // save-window-geometry: ウィンドウ位置/サイズ保存 (マイクロスクリプト WSAVE 由来)
@@ -2916,6 +2954,7 @@ ${url}
             <iframe id="${iframeId}"
                     style="width: 100%; height: 100%; border: none;"
                     tabindex="0"
+                    allow="serial"
                     data-iframe-src="${iframeSrc}">
             </iframe>
         `;
@@ -4531,8 +4570,8 @@ ${url}
      * unpack-fileから受信した実身ファイルセットを処理
      * @param {Array} files - 生成されたファイル情報の配列
      */
-    async handleArchiveFilesGenerated(files, images = []) {
-        logger.info('[TADjs] 実身ファイルセット受信処理開始:', files.length, '個のファイルエントリ、', images.length, '個の画像');
+    async handleArchiveFilesGenerated(files, images = [], binaries = []) {
+        logger.info('[TADjs] 実身ファイルセット受信処理開始:', files.length, '個のファイルエントリ、', images.length, '個の画像、', binaries.length, '個のバイナリ');
 
         try {
             // fileIdごとにJSONは1度だけ保存
@@ -4607,6 +4646,27 @@ ${url}
                     }
                 } else {
                     logger.warn(`[TADjs] 画像データがありません: ${imgFileName}`);
+                }
+            }
+
+            // バイナリ実身レコード(実行アプリ等)を {realId}_{recordNo}_{binNo}.binary として保存
+            for (let i = 0; i < binaries.length; i++) {
+                const bin = binaries[i];
+                const binFileName = bin.fileName || `${bin.fileId}_${bin.recordNo}_${bin.binNo}.binary`;
+                try {
+                    let bytes = bin.data;
+                    // 構造化複製で型が変わった場合に Uint8Array へ復元
+                    if (bytes && !(bytes instanceof Uint8Array)) {
+                        bytes = (bytes instanceof ArrayBuffer) ? new Uint8Array(bytes) : new Uint8Array(Object.values(bytes));
+                    }
+                    if (!bytes) {
+                        logger.warn(`[TADjs] バイナリデータがありません: ${binFileName}`);
+                        continue;
+                    }
+                    await this.saveDataFile(binFileName, bytes);
+                    logger.info(`[TADjs] バイナリ実身保存（ディスク）: ${binFileName} (${bytes.length} bytes, type=${bin.recordType})`);
+                } catch (error) {
+                    logger.error(`[TADjs] バイナリ実身保存エラー: ${binFileName}`, error);
                 }
             }
 
@@ -4932,6 +4992,22 @@ ${url}
             const jsonText = await jsonFile.text();
             const jsonData = JSON.parse(jsonText);
             logger.debug('[TADjs] JSON読み込み完了:', jsonData.name);
+
+            // pluginId 未指定時は対象実身の applist から defaultOpen プラグインを解決する。
+            // (microscript の VOPEN 等、 呼び出し元が対象の種別を知らずプラグインを特定できない場合。
+            //  これによりテキスト文書→basic-text-editor、 サブmicroscript→microscript が正しく選ばれる)
+            if (!pluginId) {
+                if (jsonData.applist) {
+                    for (const [pid, info] of Object.entries(jsonData.applist)) {
+                        if (info && info.defaultOpen === true) { pluginId = pid; break; }
+                    }
+                }
+                if (!pluginId) {
+                    logger.error('[TADjs] defaultOpenプラグインが見つかりません:', realId);
+                    throw new Error(`defaultOpenプラグインが見つかりません: ${realId}`);
+                }
+                logger.info('[TADjs] pluginId未指定のためdefaultOpenで解決:', pluginId, 'for', realId);
+            }
 
             // accessDateを更新
             jsonData.accessDate = new Date().toISOString();
@@ -6002,6 +6078,74 @@ ${url}
         }
 
         return windowId;
+    }
+
+    /**
+     * マイクロスクリプト WMOVE のポインタ追従キャプチャを開始する。
+     * 全 iframe を pointer-events:none にして親の document が全域の mousemove を受けられるようにし、
+     * mousemove ごとに $PDX/$PDY/$WDX/$WDY を同一時刻・同一座標系で算出して原子送信する。
+     */
+    _engageWmoveCapture(windowId) {
+        this._wmoveCaptureWindowId = windowId;
+        this._wmoveCapturedIframes = Array.from(document.querySelectorAll('iframe'));
+        this._wmoveCapturedIframes.forEach((f) => {
+            f.dataset._msPrevPe = f.style.pointerEvents || '';
+            f.style.pointerEvents = 'none';
+        });
+        this._wmoveOnMove = (e) => {
+            const wid = this._wmoveCaptureWindowId;
+            if (!wid) return;
+            const el = document.getElementById(wid);
+            if (!el) { this._endWmoveCapture(); return; }
+            const titleBar = el.querySelector('.window-title-bar');
+            const titleH = titleBar ? titleBar.offsetHeight : 24;
+            const container = el.offsetParent || document.body;
+            const cr = container.getBoundingClientRect();
+            // 全てコンテナ相対・同一時刻で算出。 wdx/wdy は作業領域左上(= offsetLeft, offsetTop+title)、
+            // pdx/pdy はポインタの作業領域相対。 pdx+wdx = ポインタのコンテナ相対位置(常に成立=和が不変)。
+            const wdx = Math.round(el.offsetLeft);
+            const wdy = Math.round(el.offsetTop + titleH);
+            const px = Math.round(e.clientX - cr.left);
+            const py = Math.round(e.clientY - cr.top);
+            this.parentMessageBus.sendToWindow(wid, 'wmove-pointer', {
+                pdx: px - wdx, pdy: py - wdy, wdx: wdx, wdy: wdy
+            });
+        };
+        document.addEventListener('mousemove', this._wmoveOnMove);
+        // 初回ポインタ移動まで現在位置に留める($PDX=0, $WDX=現在位置 → WMOVE は移動なし)ため、
+        // 開始時に現在ジオメトリを即送る(初期ジャンプ防止)。
+        const el0 = document.getElementById(windowId);
+        if (el0) {
+            const tb0 = el0.querySelector('.window-title-bar');
+            const th0 = tb0 ? tb0.offsetHeight : 24;
+            this.parentMessageBus.sendToWindow(windowId, 'wmove-pointer', {
+                pdx: 0, pdy: 0, wdx: Math.round(el0.offsetLeft), wdy: Math.round(el0.offsetTop + th0)
+            });
+        }
+    }
+
+    /**
+     * マイクロスクリプト WMOVE のポインタ追従キャプチャを終了する。
+     * iframe の pointer-events を元に戻し、 追従ウィンドウへ wmove-capture-end を通知して、
+     * リスナ/タイマを解除して後始末する。
+     */
+    _endWmoveCapture() {
+        if (this._wmoveReleaseTimer) { clearTimeout(this._wmoveReleaseTimer); this._wmoveReleaseTimer = null; }
+        if (this._wmoveCapturedIframes) {
+            this._wmoveCapturedIframes.forEach((f) => {
+                f.style.pointerEvents = f.dataset._msPrevPe || '';
+                delete f.dataset._msPrevPe;
+            });
+            this._wmoveCapturedIframes = null;
+        }
+        if (this._wmoveOnMove) {
+            document.removeEventListener('mousemove', this._wmoveOnMove);
+            this._wmoveOnMove = null;
+        }
+        if (this._wmoveCaptureWindowId) {
+            this.parentMessageBus.sendToWindow(this._wmoveCaptureWindowId, 'wmove-capture-end', {});
+            this._wmoveCaptureWindowId = null;
+        }
     }
 
     /**
@@ -9059,9 +9203,10 @@ ${url}
     async handleArchiveFilesGeneratedRouter(data, event) {
         const filesCount = data.files ? data.files.length : 0;
         const imagesCount = data.images ? data.images.length : 0;
+        const binariesCount = data.binaries ? data.binaries.length : 0;
         const chunkInfo = data.chunkInfo || { index: 0, total: 1, isLast: true };
-        logger.info(`[TADjs] 実身ファイルセットチャンク受信 (${chunkInfo.index + 1}/${chunkInfo.total}):`, filesCount, '個のファイル、', imagesCount, '個の画像');
-        await this.handleArchiveFilesGenerated(data.files, data.images);
+        logger.info(`[TADjs] 実身ファイルセットチャンク受信 (${chunkInfo.index + 1}/${chunkInfo.total}):`, filesCount, '個のファイル、', imagesCount, '個の画像、', binariesCount, '個のバイナリ');
+        await this.handleArchiveFilesGenerated(data.files, data.images, data.binaries || []);
     }
 
     /**
